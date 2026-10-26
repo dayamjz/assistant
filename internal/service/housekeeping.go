@@ -83,8 +83,12 @@ import (
 // relaunch its worker, whatever the interval. Off the loop's goroutine and
 // under the task's slot, it reads that run's latest checkpoint and goes on
 // only when its recorded position says the rebase stage found nothing left
-// to change (pipeline.NothingLeft). It then ends the worker as a landed
-// task's is ended, through the session this service holds and with no hold,
+// to change (pipeline.NothingLeft). It then reads the pass again and asks
+// the store whether the retirement would be refused as the records stand
+// (store.CheckRetirement), so a run started, a relaunch, or a hold offering
+// to relaunch the worker since the loop chose the pass ends nothing (P6).
+// Only then does it end the worker as a landed task's is ended, through the
+// session this service holds and with no hold,
 // verifies the end by a probe reading the terminal dead, closes the pass's
 // stall holds on that reading as stallhold.go's closure does, and writes the
 // retirement record through store.RetireHousekeepingPass, which refuses it
@@ -116,6 +120,10 @@ import (
 //   - The due check runs off the loop's goroutine, so a pass report does not
 //     carry it, and a check that is slower than the interval is not begun a
 //     second time until it returns.
+//   - A run that starts between the on-proof retirement's check and its end
+//     of the worker finds the worker ended, and the retirement's own
+//     transaction then refuses, writing nothing; the check narrows that
+//     window to the end itself and does not close it.
 //   - The on-proof retirement is tried once per run whose position read
 //     nothing left; one refused because something moved the pass is tried
 //     again only when a later run of the pass passes, and is otherwise left
@@ -609,6 +617,15 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 		return err
 	}
 	attempt := latestSequence(o.Snapshot.Attempts)
+	r := retirementOf(id, attempt, run)
+	r.OnProof = true
+	// The proof is checked as current before anything is ended: a newer
+	// run, a relaunch, or a hold that offers to relaunch the worker since
+	// the loop chose the pass refuses here, and the worker keeps running
+	// (P6). The retirement's own transaction reads the pass again below.
+	if err := s.store.CheckRetirement(ctx, r); err != nil {
+		return err
+	}
 	if ref := latestRef(o.Snapshot.Attempts); ref != "" {
 		if _, err := s.endHeldWorker(id, ref); err != nil {
 			return fmt.Errorf("ending its worker: %w", err)
@@ -623,8 +640,6 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 		}
 		s.closeStallsOnDead(ctx, id, attempt, ref, "", probed)
 	}
-	r := retirementOf(id, attempt, run)
-	r.OnProof = true
 	retired, err := s.store.RetireHousekeepingPass(ctx, r)
 	if err != nil {
 		return err

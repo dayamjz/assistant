@@ -114,7 +114,8 @@ assistant coordinator create --housekeeping --project NAME \
   files and nothing else. A report with no drift and no decision is recorded
   as relayed with nothing said to the person. Its decisions (a question
   about a rule, a principle or a specification) are holds for the person.
-- The run a promoted pass's push starts holds at review with an `ask` for
+- Every run of a promoted pass's branch, the one its push starts and a
+  person's push or rerun of it alike, holds at review with an `ask` for
   every path its commits touched outside `housekeeping.paths`.
 - With the operator's global `housekeeping.interval` set, the program raises
   a `housekeeping-due` wake about a repository once the interval has passed

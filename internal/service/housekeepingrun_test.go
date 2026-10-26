@@ -100,8 +100,10 @@ func passKeyOfAStartedRun(t *testing.T, h *home.Home, subject string) bool {
 }
 
 // PRD section 6's housekeeping: a run of a pass's branch begins with
-// pipeline.KeyHousekeepingPass set, decided from the task records, so the
-// review stage holds it to the pass's scope; a run of a branch no pass works
+// pipeline.KeyHousekeepingPass set, decided from the task records by its
+// repository and branch, so the review stage holds it to the pass's scope.
+// The run here is one a person starts, not the pass's own push, which is the
+// key's stated reach: every run of the branch, whoever started it; a run of a branch no pass works
 // on begins with it unset, which is the control that the key is read from
 // the records and not set on every run.
 func TestARunOfAPassBranchCarriesThePassKey(t *testing.T) {

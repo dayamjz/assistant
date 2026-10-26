@@ -16,7 +16,9 @@ import (
 // and it adds no stage."
 //
 // Whether the run is a pass's is pipeline.KeyHousekeepingPass, set at begin
-// from the pushing task's record and never from the push. The scope is the
+// from the task records by the run's repository and branch, so every run of
+// a pass's branch carries it, whoever pushed, and nothing the push says sets
+// it. The scope is the
 // run's configuration's HousekeepingPaths, a trusted-only key, so a pushed
 // copy cannot widen it; an empty list, housekeeping turned off after the
 // pass was created, leaves every touched path outside. The paths are the

@@ -301,6 +301,40 @@ func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retir
 	return out, nil
 }
 
+// CheckRetirement answers, writing nothing, what RetireHousekeepingPass
+// would refuse r for as the records stand now, read in one snapshot: nil, or
+// the same ErrPassClosed, ErrPassMoves and not-a-pass refusals, wrapped. It
+// is the check an on-proof retirement makes before it ends the pass's worker,
+// so a proof that is no longer current ends nothing (P6); it decides
+// nothing by itself, because a write may land between it and the
+// retirement's own transaction, which reads the pass again.
+func (s *Store) CheckRetirement(ctx context.Context, r Retirement) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
+	err := s.snapshotTx(ctx, func(q querier) error {
+		task, err := scanTask(q.QueryRowContext(ctx, taskColumns+` FROM task WHERE id = ?`, r.Task))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if !task.Housekeeping {
+			return fmt.Errorf("task %s is not a housekeeping pass, so it has no retirement", r.Task)
+		}
+		snap, err := snapshotOf(ctx, q, task)
+		if err != nil {
+			return err
+		}
+		if !PassOpen(snap, r.Delivered) {
+			return ErrPassClosed
+		}
+		return passStillTx(snap, r)
+	})
+	if err != nil {
+		return fmt.Errorf("store: checking the retirement of housekeeping pass %s: %w", r.Task, err)
+	}
+	return nil
+}
+
 // passStillTx refuses, with ErrPassMoves, a pass that something moves as
 // the retirement's transaction reads it, on RetireHousekeepingPass's terms.
 func passStillTx(snap TaskSnapshot, r Retirement) error {

@@ -197,14 +197,16 @@ const (
 	// skip when it is set. A late key: runs checkpointed before it existed
 	// behave as if it is false.
 	KeyNoCodeHost Key = "no_code_host"
-	// KeyHousekeepingPass says this run was started by the push of a
-	// housekeeping pass's worker, PRD section 6's housekeeping, so the
-	// review stage holds with an ask on every path the change touched
-	// outside the repository's housekeeping.paths. It is a run input set at
-	// begin from the pushing task's record; a person's push of the same
-	// branch does not carry it. A late key: runs checkpointed before it
-	// existed behave as if it is false, which is what every run but a
-	// pass's is.
+	// KeyHousekeepingPass says this run is of a housekeeping pass's branch,
+	// PRD section 6's housekeeping, so the review stage holds with an ask on
+	// every path the change touched outside the repository's
+	// housekeeping.paths. It is a run input internal/service sets at begin
+	// from the task records, by the run's repository and branch and never by
+	// who pushed: a pass's own push, a rerun of its run and a person's push
+	// of its branch all carry it, which is wider than section 6's "the run
+	// that a pass's push starts" and never narrower. A late key: runs
+	// checkpointed before it existed behave as if it is false, which is what
+	// every run of a branch no pass works on is.
 	KeyHousekeepingPass Key = "housekeeping.pass"
 	// KeyCancelled says a person cancelled the run at a hold. This package's
 	// own cancel node writes it.

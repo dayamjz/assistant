@@ -420,9 +420,9 @@ type Start struct {
 	// so the pull request and checks stages skip after push. Begin sets it
 	// from forge.ClassifyRemote; a caller does not invent it.
 	NoCodeHost bool
-	// HousekeepingPass says the run was started by a housekeeping pass's
-	// push. internal/service sets it from the pushing task's record; a
-	// caller does not invent it.
+	// HousekeepingPass says the run is of a housekeeping pass's branch, on
+	// KeyHousekeepingPass's terms, whoever pushed it. internal/service sets
+	// it at begin from the task records; a caller does not invent it.
 	HousekeepingPass bool
 }
 

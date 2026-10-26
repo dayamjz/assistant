@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -131,5 +132,52 @@ func TestARetiredPassIsNeverRelaunched(t *testing.T) {
 	}
 	if err := refusalOf(errRelaunchRetired); !errors.Is(err, ipc.ErrRefused) {
 		t.Fatalf("the refusal reaches the wire as %v, want refused", err)
+	}
+}
+
+// PRD principle P6 and section 6's "an end it cannot verify ... writes
+// nothing": an on-proof retirement whose proof is no longer current, because
+// a newer run of the pass started after the proven one passed, refuses
+// before it ends anything, so the worker this service holds keeps running.
+// The run here starts after the loop chose the pass and before the
+// retirement reads it again, which is the window the read-again closes.
+func TestAnOnProofRetirementWhoseProofIsStaleEndsNoWorker(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	ctx := t.Context()
+	dispatch := newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}
+	})
+	sub := launchSubjectOver(t, workerStandIn(t), dispatch)
+	sub.service.terminals = heldTerminals{sub.service}
+	sub.service.checkpoints = checkpoints.New(sub.records)
+	d, err := sub.service.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching the pass: %v", err)
+	}
+	worker, err := sub.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching the pass: %v", err)
+	}
+	promotePass(t, sub.records, sub.task)
+	proven := passRun(t, sub.records, "run-proven", store.RunPassed, true)
+	passRun(t, sub.records, "run-newer", store.RunRunning, false)
+
+	err = sub.service.retireOnProof(ctx, sub.task, proven.ID)
+	if !errors.Is(err, store.ErrPassMoves) {
+		t.Fatalf("the on-proof retirement after a newer run started = %v, want ErrPassMoves", err)
+	}
+	provider, _, held := sub.service.sessionOf(sub.task)
+	if !held {
+		t.Fatal("the refused retirement let go of the pass's worker")
+	}
+	if got := provider.Probe(ctx, worker.Reference().String()).Liveness; got != taskstate.Live {
+		t.Fatalf("the refused retirement left the worker %s, want it still live", got)
+	}
+	if _, found, err := sub.records.RetirementOf(ctx, sub.task); err != nil || found {
+		t.Fatalf("the refused retirement wrote a record (%v)", err)
 	}
 }

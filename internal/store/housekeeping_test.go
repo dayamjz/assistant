@@ -444,3 +444,27 @@ func TestALoopRegisteredHoldIsFencedAndAnchored(t *testing.T) {
 		t.Fatalf("the current registration = %+v, %v, want the hold open", got, err)
 	}
 }
+
+// CheckRetirement answers what RetireHousekeepingPass would refuse, writing
+// nothing: a newer run than the one decided against moves the pass, and the
+// same request against the newest run is answered nil without a record.
+func TestCheckRetirementAnswersTheRefusalAndWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	attempt, run := promotedPassWithRun(t, s, "taskhkaaaafa", "housekeeping/one", RunPassed)
+	r := Retirement{Task: "taskhkaaaafa", Attempt: attempt.Sequence, Run: run.ID, OnProof: true,
+		Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}
+	if err := s.CheckRetirement(ctx, r); err != nil {
+		t.Fatalf("checking a current proof = %v, want nil", err)
+	}
+	stale := r
+	stale.Run = "run-older"
+	if err := s.CheckRetirement(ctx, stale); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("checking a stale proof = %v, want ErrPassMoves", err)
+	}
+	if snap, err := s.TaskSnapshot(ctx, "taskhkaaaafa"); err != nil || snap.Retirement.IsKnown() {
+		t.Fatalf("a check wrote %+v (%v)", snap.Retirement, err)
+	}
+}
