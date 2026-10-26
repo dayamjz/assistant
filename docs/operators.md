@@ -536,11 +536,11 @@ stays open.
 
 `assistant eject --confirm` is refused while the repository has an open
 kept-work entry, before the gate is touched, and the refusal names each
-entry's copy, whose it was and the commits it holds. Until answering kept
-work ships (#411 part 2), the way past it is the work landing: once its
-commits are on the upstream branch or in the default branch, the next
-service start removes the copy on that proof and closes the entry. Part 2's
-discard will be your other way.
+entry's copy, whose it was and the commits it holds. The ways past it are
+an answer that closes the entry (land or carry on, below) or the work
+landing: once its commits are on the upstream branch or in the default
+branch, the next service start removes the copy on that proof and closes
+the entry. Removal on a discard is not in this build.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
@@ -605,10 +605,7 @@ there, and the task dispatches into the copy as any task
 does. The entry stays open and listed until the new task owns the copy,
 and only then is it answered carry on; if the new task cannot be created
 (its role is no longer configured, say), nothing is moved, the answer is
-refused naming why, and the entry stays open for another answer. Anything
-a discard of the copy that did not finish left beside it is put back
-first; while something cannot be put back (a file was written where it
-goes), the carry on is refused naming it.
+refused naming why, and the entry stays open for another answer.
 Carrying on points the gate's remote at the gate and puts HEAD where
 the task's shape has it, and removes no remote and moves or renames no
 branch, since any of that can leave a commit with nothing naming it: a
@@ -619,11 +616,11 @@ the copy's is in the way of its name (a branch `topic/side` beside the
 task branch `topic`, or `topic` beside `topic/x`), is refused with
 nothing recorded and the refusal says what to change. A run's copy is not
 carried on in this build (it is a worktree of the gate on a branch of
-yours, which a task's copy cannot be): land it, push its commit yourself,
-or discard it.
+yours, which a task's copy cannot be): land it, or push its commit
+yourself.
 
-Discard, `--answer discard` with the same flags, is given twice. Alone it
-shows exactly what removing the copy would lose, in the structured answer
+Discard, `--answer discard` with the same flags, shows exactly what
+removing the copy would lose, in the structured answer
 (`--json`): what neither the default branch nor the upstream holds,
 the only two places counted as keeping work. That is the
 commits anything in the copy names that neither the default branch nor
@@ -647,31 +644,16 @@ file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),
 a directory lost whole named once with a trailing slash; whether git
 reports a change, a file or a stash; and a digest of exactly what is
-shown, each file by what it holds. It records and removes nothing. Given
-again with `--confirm DIGEST` it deletes what you were shown and nothing
-else, and only while everything shown is as it was: a commit, an edit, a
-file or a stash made since is refused and you are told to look again, and
-so is a commit you were shown that the default branch or the upstream has
-taken up since, since the loss is then not the one you confirmed; a change
-that loses nothing more, such as a branch made at a commit already listed,
-is not. It first sets aside, beside the copy so it can be put back, only
-what the removal needs gone of what you were shown (files, index entries,
-and for a task's copy its lost branches, tags, stash and HEAD with their
-reflogs), then reads the copy again, and removes the copy only when
-removing it would lose nothing you were not shown: a run's copy by git's own
-worktree removal without force, which refuses when anything is left, and
-a task's copy only when one of the cleanup proofs then holds for what
-remains, so a task's copy whose remaining commits no proof covers (for
-example a branch the upstream holds under another name) is refused and
-stays. Anything written into the copy after your last look, even while it
-is being set aside, refuses the discard and everything set aside is put
-back; only what a program writes through a file it already had open there
-as the discard moves that file aside is lost with it. If something was
-written exactly where a file set aside goes back, both are kept: the new
-one in the copy, yours beside it in a directory named after the copy with
-`.discarding` at the end, the refusal names it, and the entry is not shown
-again until you move one of the two out of the way. A copy is shown,
-discarded or landed only in the one repository layout this supports, and
+shown, each file by what it holds. It records and removes nothing.
+Removing the copy on that answer is not in this build: given again with
+`--confirm DIGEST` it is refused, with nothing read or changed, the copy
+and its entry exactly as they were, and new tasks in the project still
+wait on it. To let them go ahead, answer land or carry-on, or push the
+copy's work somewhere safe: the program then removes the copy on that
+proof the next time it examines it, at the latest when the service next
+starts, and that closes the entry. Removing it by hand does not: an entry
+whose copy is gone with no proof that its work landed stays open. A copy is shown
+or landed only in the one repository layout this supports, and
 anything else is refused naming why, with nothing of it read or changed:
 a task's copy needs a `.git` directory of its own (not a link or a file
 pointing elsewhere) with no `commondir` file and no linked worktree, a
@@ -683,20 +665,12 @@ rather than a reftable, and its whole history: not shallow, no graft file
 partial clone (no `extensions.partialClone`, no remote with `promisor`
 set, no promisor pack), since in each the commits a preview is read from
 are not all the copy holds. Land reads the copy the same way and is refused
-the same; put the copy back in that layout to discard or land it. Your
-confirmation is recorded first, with what it was shown and who gave it,
-and the entry stays open and listed until the copy is gone; only then is
-it answered discard. If the service stops in between, the next start
-puts back anything set aside and removes the copy if it still holds what
-you were shown; if the copy changed meanwhile, your confirmation is withdrawn, the copy stays, and
-the entry is listed again for you to look at and answer afresh. A copy
-kept again at another state has an entry for each state; discarding the
-copy answers and closes all of them kept by the time its removal went
-ahead, also when the service stopped after the removal and the next start
-finishes it; carrying it on answers and closes all of them, since the
-whole copy moves to the new task. While one entry of a copy has an answer still being
-carried out (a landing whose run is not started yet, a carry on or a
-discard not finished), the copy's other entries are not answered, and the
+the same; put the copy back in that layout to see it or land it. A copy
+kept again at another state has an entry for each state; carrying it on
+answers and closes all of them, since the whole copy moves to the new
+task. While one entry of a copy has an answer still being
+carried out (a landing whose run is not started yet, or a carry on not
+finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the
 next start. An entry whose "what the default branch lacks" is
 not established (the upstream could not be read when the copy was kept) is
@@ -706,23 +680,12 @@ unchanged copy establishes it.
 A promotion of an investigation whose copy has a kept-work entry (its
 worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
-the entry closes with the promotion and never without it. As with carry
-on, anything a discard of that copy that did not finish left beside it is
-put back first, and the promotion is refused while it cannot be.
+the entry closes with the promotion and never without it.
 
-Discard is yours alone. The service admits a confirmation only from a
-process in the foreground of its controlling terminal, the same relation a
-local task's approval is held to, decided from what the kernel reports of
-the caller and not from anything the caller says, so a coordinator agent, a
-script, a cron job or a call over the socket from no terminal is refused
-and removes nothing; the command line refuses `--confirm` under `--json` or
-off a terminal before it asks the service; and a task's worker and a
-subordinate coordinator are refused it too. Nothing in the program discards
-on its own, and the preview is not restricted. What the record says about
-who discarded is what the service witnesses, which is the machine interface
-and not a person: an agent you run in a terminal's foreground can confirm
-as you would, so the answer is recorded as the machine interface's and
-never claims a person decided (section 8's resolver rule).
+Nothing in the program discards a copy, on its own or on an answer: the
+preview is open to any caller that may answer kept work, and a
+confirmation is refused for everyone in this build. Removal on a confirmed
+discard is deferred (docs/prd.md, sections 6 and 9).
 
 ## Waiting on a fleet
 

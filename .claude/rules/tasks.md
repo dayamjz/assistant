@@ -32,7 +32,8 @@ paths: ["internal/tasks/**"]
   `NewCleaner`), so neither a cleanup proof nor a discard's loss reads a
   commit's parents as anything but what its object records; a copy that
   has either, or is shallow or a partial clone, is refused by
-  `supportedLayout` before any loss, discard, land or put-back reads it.
+  `supportedLayout` before any loss reads it, a land's or a discard
+  preview's.
 - It is also the one writer of the kept work record: `Keep` reads what a
   kept copy holds from the copy (the entry's identity), reads what of it
   the default branch, fresh and fetched by identifier, lacks (`lacking` in
@@ -46,8 +47,10 @@ paths: ["internal/tasks/**"]
   proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
-- `kept_discard.go` is the copy's half of PRD section 6's discard, and
-  `Loss` is also what `internal/service`'s land answer decides from: `Loss`
+- `kept_discard.go` is the copy's half of PRD section 6's discard as far
+  as this build takes it, the preview (removal on a confirmed discard is
+  deferred to AGE-486, on the branch feat/age-407-discard), and `Loss` is
+  also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose: the commits that anything the
   removal destroys names reaches (HEAD, a reference, a root reference such
   as ORIG_HEAD, a reflog entry by either of its values, `vcs.ReflogValues`;
@@ -70,25 +73,14 @@ paths: ["internal/tasks/**"]
   and nothing else (`seal`: HEAD, the commits and objects lost, each path
   lost with what it holds, decided from the copy and never from what git
   reports changed, and the indicators; the header names what it does not
-  cover), refusing an unestablished entry; `Discard` deletes only what
-  that digest names, the commits lost held to those shown exactly, and
-  never removes a copy by force (the owner's decision of 2026-10-24):
-  `kept_aside.go` sets aside, recoverably and journalled, only the items
-  the removal needs gone, each held to what was read before the loss (a
-  clone's lost branches, tags and stash with their own reflogs, HEAD and
-  its reflog, the index entries by path, the working tree's lost paths),
-  reads the loss again, which may lose nothing the confirmed loss did not
-  name (`beyondShown`), and only then removes the directory, a run's worktree by git's removal
-  without force and a task's clone on P12's proof, putting everything back
-  on any refusal; a run's record in the gate is taken from the gate's own
-  registry (`vcs.WorktreeRecords`, read from the gate and held to git's
-  listing) and never by following the copy's `.git`, the copy refused when
-  its files disagree with it (`copyRecord`); what a discard that did not
-  finish set aside is put back by the next `Discard` or `PutBack` before
-  anything is read, and `Loss` refuses until then (`ErrAsideStands`).
-  `Loss`, `Discard` and `PutBack` support one repository layout and refuse
-  every other before reading anything (`supportedLayout`,
-  `ErrLayoutUnsupported`): an unusual layout is refused, never handled.
+  cover), refusing an unestablished entry. Nothing in this package
+  removes a copy on a discard answer. A run's record in the gate is taken
+  from the gate's own registry (`vcs.WorktreeRecords`, read from the gate
+  and held to git's listing) and never by following the copy's `.git`,
+  the copy refused when its files disagree with it (`copyRecord`). `Loss`
+  supports one repository layout and refuses every other before reading
+  anything (`supportedLayout` in `kept_layout.go`, `ErrLayoutUnsupported`):
+  an unusual layout is refused, never handled.
   Its first step is `Cleaner.VerifyKeptCopy`, the one call into
   `internal/safety`'s verification that a kept copy is the one its registry
   recorded, which carry on in `internal/service` asks too.

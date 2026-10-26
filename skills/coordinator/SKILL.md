@@ -290,11 +290,12 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   the same project and branch in the kept copy, with a note, and names it
   in the answer (`task`), so the old task stays as it ended; a run's copy
   cannot be carried on; `--answer discard` shows what would be lost with a
-  digest, which you may read, and removes the copy only on
-  `--confirm DIGEST` given by a person at a terminal: the command surface
-  refuses a confirmation under `--json` or from a process with no
-  terminal, so from where you run you cannot confirm one; tell the person
-  the digest and leave it to them. Promoting an investigation
+  digest, which you may read, and removes nothing: removing the copy on a
+  confirmation is not in this build, and `--confirm` is refused. To let
+  the project's new tasks go ahead, tell the person their answers are land
+  and carry-on, or pushing the copy's work somewhere safe, after which the
+  program removes the copy itself; removing it by hand leaves the entry
+  open. Promoting an investigation
   whose copy has an entry answers that entry carry on by itself. While the
   project has an open entry, a task you create in it is recorded and not
   started: it reads `dispatched` and its answer (`task.get`) names the

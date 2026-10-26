@@ -50,7 +50,7 @@ paths: ["internal/store/**"]
   `KeptWorkOf` is the read of the entry standing for a copy state. It is
   otherwise written once;
   its one revision closes it, once: a person's answer, written only with
-  its outcome after a claim or confirmation on the open entry, or
+  its outcome after a claim on the open entry, or
   the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
@@ -88,27 +88,16 @@ paths: ["internal/store/**"]
   `MarkKeptWorkCarriedOn`, given the task the claim names, once that task
   exists and owns the copy, which the triggers enforce, and
   `KeptWorkCarriedOnBy` reads the answered entries back for that task, the
-  copy identity dispatch holds the adopted copy to; keptWorkDiscardMigration records a
-  discard as two facts: the person's confirmation (`discard_digest`, what
-  it was shown, with the commits, who and when), written whole on an open
-  entry by `ConfirmKeptWorkDiscard`, which leaves it open and listed, and
-  withdrawn whole by `WithdrawKeptWorkDiscard`; and the answer, written
-  only with `discarded_at` by `MarkKeptWorkDiscarded` once the copy is
-  gone, which the triggers enforce. Carry on and discard each move or
-  remove the whole copy, so each mark answers and marks every other open
-  entry of the copy, for a carry on whenever it was kept, since its state
-  moved with the copy, and for a discard those kept by the moment the
-  removal went ahead, the copy found as shown, which `RecordKeptWorkDiscardRead`
-  records on the entry before the removal (migration 61's
-  `discard_read_at`, written only under an owed confirmation and withdrawn
-  with it) so a mark the next start completes is bounded by that moment;
-  and no answer, claim
-  or confirmation is written while an entry of the copy holds one not yet
-  carried out, a claim or confirmation on the entry itself included
+  copy identity dispatch holds the adopted copy to. A carry on moves the
+  whole copy, so its mark answers and marks every other open entry of the
+  copy, whenever it was kept, since its state moved with the copy; and no
+  answer or claim is written while an entry of the copy holds one not yet
+  carried out, a claim on the entry itself included
   (`ErrKeptWorkCopyOwed`), and
   `TransitionTaskShape` refuses a promotion over one. Each
   answer's claim and outcome are its own accessors, and there is no
-  generic answer write. `TransitionTaskShape` answers the promoted task's own copy's open
+  generic answer write, so nothing writes an answer of discard: its
+  removal and record are deferred to AGE-486. `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`

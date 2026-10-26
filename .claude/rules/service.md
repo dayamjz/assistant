@@ -64,30 +64,26 @@ paths: ["internal/service/**"]
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
   name the entries.
   `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
-  hold answer with `--hold kept-work/N`): every answer is claimed or
-  confirmed on the open entry first and written only with its outcome, so
+  hold answer with `--hold kept-work/N`): every answer is claimed on the
+  open entry first and written only with its outcome, so
   an answer under way never hides the entry. Land, decided from the copy
   as it stands through `internal/tasks`' `Loss`, the reading a discard
   shows and never the entry's recorded `Lacks`, refused for any lost path
   of the working tree or index and anything lost HEAD does not carry
   (`tasks.Cleaner.LeftBehind`, read as `Loss` reads), claimed once (`ClaimKeptWorkLanding`), carried out
   through `startPushedBranch` and answered with its run, the claim
-  withdrawn when no run could start; land, carry on and a promotion each
-  first put back what a discard of the copy that did not finish set aside
-  (`putBackDiscard`), refusing while it cannot be; carry on (`keptcarryon.go`), claimed first with the
+  withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
   entry left open, which creates a new task through `queue.Create` with
   the identifier the claim named, a promoted task's recorded
   `DeliveryIntent` as its instructions, and adopts the kept copy, the answer
   written only with the adoption and the claim withdrawn when intake
-  refuses the task; and discard (`keptdiscard.go`), shown with a digest and
-  removed only on it through `internal/tasks`' `Loss` and `Discard`, the
-  person's confirmation recorded first with the entry left open and the
-  answer written only with the removal (two facts, so an entry is never
-  answered over a copy that stands; a copy that changed has the
-  confirmation withdrawn), and what "person-only" is and is not enforced
-  by stated in its header, a confirmation held to `foreground.go`'s
-  relation as the approval hold is; all three completed at open when a
-  stopped service left them. A promotion answers its copy's entry carry on in the
+  refuses the task; land and carry on are each completed at open when a
+  stopped service left them. Discard (`keptdiscard.go`) is the preview
+  alone, what would be lost with a digest through `internal/tasks`'
+  `Loss`, recording and removing nothing; a confirmation is refused before
+  anything is read (`discardDeferred`, the row
+  `machine.PhraseDiscardRemovalDeferred`), its removal deferred to AGE-486
+  (docs/prd.md, sections 6 and 9). A promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes.
 - Run activity: whether anything is advancing a run is a third fact neither
