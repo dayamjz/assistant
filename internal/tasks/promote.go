@@ -33,6 +33,24 @@ import (
 // keeps the entry from closing without the promotion or the promotion from
 // leaving it open. store.TransitionTaskShape owns the write.
 //
+// Those entries are answered only for a copy the kept-copy verification
+// takes, the check every answer to a kept copy asks (verifyKeptCopy,
+// Cleaner.VerifyKeptCopy's body): before the flip, Promote reads the task's
+// open entries (keptOfCopy, which refuses one recorded for another path)
+// and verifies the copy for each, refusing with ErrLayoutUnsupported
+// before anything is written; the flip is given those entries and refuses
+// any other open entry of the task (store.ErrKeptWorkUnverified), so one
+// recorded in between is not answered for a copy nothing verified; and
+// after the flip the copy is verified again before it is read or written,
+// a refusal there being a *PromotionRefusal as not isolated with nothing
+// written, the flip and its answers standing as after any refusal past the
+// flip. The verification is a check at one moment, on
+// safety.VerifyKeptCopy's terms. A copy with no open entry is not asked
+// it, and the assertion before shaping does not resolve a .git that is a
+// symbolic link, so such a copy linked to another clone has the gate's
+// remote and the branch written into that clone before the assertion after
+// shaping refuses it; that gap is the assertion's and is not closed here.
+//
 // store.TransitionTaskShape writes the shape, the repository, the branch,
 // the delivery posture and the delivery intent on the task row together with
 // the "promoted" entry, in one transaction,
@@ -310,7 +328,14 @@ type Promoted struct {
 // store.ErrCleanupRecorded, come back as they are. The exclusion is given
 // back after the flip, before the copy is touched.
 //
-// After the flip the copy is asserted, shaped, asserted again, and the
+// Before the flip, the copy is verified for each of the task's open kept
+// work entries, which the flip answers carry on, and a copy the
+// verification refuses is refused with ErrLayoutUnsupported with nothing
+// written; an open entry not verified, recorded after that read, refuses
+// the flip with store.ErrKeptWorkUnverified, and nothing is written.
+//
+// After the flip the copy is verified again for those entries, then
+// asserted, shaped, asserted again, and the
 // intent and the delivery second check are appended to the instructions
 // file; a copy that fails either assertion is a *PromotionRefusal with the
 // refusal in the task's history, and a copy that cannot be opened as a
@@ -367,6 +392,17 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	if err != nil {
 		return Promoted{}, err
 	}
+	kept, err := q.keptOfCopy(ctx, req.Task, copyPath)
+	if err != nil {
+		return Promoted{}, err
+	}
+	if err := q.verifyKept(ctx, req.Task, kept); err != nil {
+		return Promoted{}, err
+	}
+	verified := make([]int64, len(kept))
+	for i, entry := range kept {
+		verified[i] = entry.ID
+	}
 
 	var out Promoted
 	flip := func() error {
@@ -392,7 +428,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			q.betweenReadAndWrite()
 		}
 		out.Task, out.Event, err = q.store.TransitionTaskShape(ctx, req.Task, store.TaskInvestigation, store.TaskDelivery,
-			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail, req.By)
+			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail, req.By, verified)
 		return err
 	}
 	release, err := q.hold(ctx, repository.ID, branch)
@@ -418,6 +454,12 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			return Promoted{}, err
 		}
 		return Promoted{}, &PromotionRefusal{Task: req.Task, Reason: reason, Event: event, Written: written, Cause: cause}
+	}
+	// The copy is verified again for the entries the flip answered, just
+	// before anything of it is read or written, which narrows the check's
+	// one-moment gap to the instant between this and the writes below.
+	if err := q.verifyKept(ctx, req.Task, kept); err != nil {
+		return refuse(taskstate.RefusedNotIsolated, false, err)
 	}
 	obs, err := vcs.Observe(ctx, copyPath, q.git...)
 	if err != nil {
@@ -586,4 +628,42 @@ func PromotionBrief(branch, intent, line string) string {
 // later, is told there what the contract now is.
 func appendPromotion(path, brief string) error {
 	return AppendNote(path, PromotionHeading, brief)
+}
+
+// keptOfCopy is the open kept work entries of the task, the ones the flip
+// answers carry on, each held to the copy the promotion writes into: an
+// entry recorded for another path is refused, since verifying it would say
+// nothing of this copy.
+func (q *Queue) keptOfCopy(ctx context.Context, task, copyPath string) ([]store.KeptWork, error) {
+	open, err := q.store.OpenKeptWork(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: reading the kept work of task %s: %w", task, err)
+	}
+	var kept []store.KeptWork
+	for _, entry := range open {
+		if entry.TaskID.Or("") != task {
+			continue
+		}
+		if entry.CopyPath != copyPath {
+			return nil, fmt.Errorf("%w: task %s is not promoted: kept work entry %d was recorded for the copy at %s, and the task's copy is at %s",
+				ErrLayoutUnsupported, task, entry.ID, entry.CopyPath, copyPath)
+		}
+		kept = append(kept, entry)
+	}
+	return kept, nil
+}
+
+// verifyKept asks the kept-copy verification every answer to a kept copy
+// asks (verifyKeptCopy, Cleaner.VerifyKeptCopy's body) of the copy for each
+// entry the flip answers, with this Queue's git options and replacement
+// references off, as a Cleaner's are. A refusal matches
+// ErrLayoutUnsupported and safety.ErrCopyNotVerified.
+func (q *Queue) verifyKept(ctx context.Context, task string, kept []store.KeptWork) error {
+	git := append(slices.Clone(q.git), vcs.WithoutReplaceObjects())
+	for _, entry := range kept {
+		if err := verifyKeptCopy(ctx, git, entry, ""); err != nil {
+			return fmt.Errorf("tasks: the copy of task %s, which kept work entry %d records: %w", task, entry.ID, err)
+		}
+	}
+	return nil
 }

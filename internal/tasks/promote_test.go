@@ -763,3 +763,52 @@ func TestPromoteHoldsTheBranchToIntakesRules(t *testing.T) {
 		s.untouched(t, tk, n)
 	})
 }
+
+// A promotion over kept work verifies the copy again after its flip, just
+// before it reads or writes the copy: the copy has an open kept work entry
+// and verifies at the start, and between the flip and the copy its .git is
+// made a link to another clone's .git. The promotion is refused as not
+// isolated with nothing written, the other clone's remotes and branches are
+// as they were, and the flip stands, the entry answered carry on, as a
+// refusal after the flip leaves it. Without the second verification the
+// promotion writes the gate's remote and the branch into the other clone.
+func TestPromoteVerifiesTheKeptCopyAgainBeforeWritingIt(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P1)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	entry, _, err := s.store.RecordKeptWork(ctx, store.KeptCopy{TaskID: tk.id, CopyPath: tk.copy,
+		Holds: []string{rawGit(t, tk.copy, "rev-parse", "HEAD")}, Reason: string(ReasonUnproven), Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", s.primary, other)
+	remotes, branches := rawGit(t, other, "remote"), rawGit(t, other, "branch", "--list")
+	own := filepath.Join(tk.copy, ".git")
+	s.queue.betweenFlipAndCopy = func() {
+		if err := os.Rename(own, own+".own"); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+			t.Error(err)
+		}
+	}
+
+	_, err = s.queue.Promote(ctx, request(tk.id))
+	var refusal *PromotionRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != taskstate.RefusedNotIsolated || refusal.Written ||
+		!errors.Is(err, ErrLayoutUnsupported) {
+		t.Fatalf("promoting a kept copy whose .git became a link after the flip = %v; want refused as not isolated, nothing written", err)
+	}
+	if got := rawGit(t, other, "remote"); got != remotes {
+		t.Errorf("the other clone's remotes became %q, were %q", got, remotes)
+	}
+	if got := rawGit(t, other, "branch", "--list"); got != branches {
+		t.Errorf("the other clone's branches became %q, were %q", got, branches)
+	}
+	if closed, err := s.store.KeptWorkEntry(ctx, entry.ID); err != nil || closed.Answer.Or("") != store.KeptCarryOn {
+		t.Fatalf("after the refusal the entry reads %+v, %v; want the flip's carry-on answer standing", closed, err)
+	}
+}

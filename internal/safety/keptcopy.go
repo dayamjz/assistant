@@ -19,7 +19,8 @@ import (
 // before it reads or writes anything of it, and acts on nothing it refuses
 // (round 28: the same gap had been closed path by path, and the next
 // review found it open in another path): the loss a discard shows and a
-// land reads, and carry on. internal/tasks' Keep, which records a copy as
+// land reads, carry on, and a promotion, whose flip answers its copy's
+// entries carry on. internal/tasks' Keep, which records a copy as
 // the cleanup decision keeps it, is not one of them: it reads the copy as
 // git reads it there, so a copy whose .git was made to point at another
 // repository is recorded with what git reads through it, and every answer

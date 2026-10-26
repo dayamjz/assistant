@@ -85,7 +85,10 @@ paths: ["internal/service/**"]
   `machine.PhraseDiscardRemovalDeferred`), its removal deferred to AGE-486
   (docs/prd.md, sections 6 and 9). A promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
-  `promoteTask` passes.
+  `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the
+  copy for; `refusalOf` refuses a copy it does not take
+  (`tasks.ErrLayoutUnsupported`) and an entry recorded since
+  (`store.ErrKeptWorkUnverified`).
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

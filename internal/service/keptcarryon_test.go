@@ -246,7 +246,7 @@ func TestCarryingOnAPromotedTaskTransfersItsDeliveryIntent(t *testing.T) {
 		t.Fatalf("reading the investigation's history: %v (%d entries)", err, len(events))
 	}
 	if _, _, err := records.TransitionTaskShape(t.Context(), old, store.TaskInvestigation, store.TaskDelivery, repository.ID, branch,
-		config.DeliveryGated, intent, events[len(events)-1].Sequence, "promoted in the test", store.ResolvedByMachineInterface()); err != nil {
+		config.DeliveryGated, intent, events[len(events)-1].Sequence, "promoted in the test", store.ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatalf("promoting the investigation: %v", err)
 	}
 	_ = records.Close()

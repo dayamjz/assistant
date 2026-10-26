@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/config"
@@ -84,8 +85,17 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // carry on claimed and not yet carried out is refused with
 // ErrKeptWorkCopyOwed, wrapped, and nothing is written: that carry on is
 // moving the copy to another task, and is carried out or withdrawn first.
+//
+// verified is the entries the caller verified the copy for before this
+// write (internal/tasks' Promote asks the kept-copy verification of each).
+// An open entry of the task that is not among them, one recorded after the
+// caller read the entries among the ways, is refused with
+// ErrKeptWorkUnverified, wrapped, and nothing is written, so no entry is
+// answered for a copy nothing verified; a caller that reads and verifies
+// again may promote. A verified id that is not an open entry of the task
+// answers nothing.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
-	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver) (Task, TaskEvent, error) {
+	delivery config.Delivery, intent string, anchor int64, detail string, by Resolver, verified []int64) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: a shape transition names no task")
 	}
@@ -146,6 +156,32 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, claimed, what)
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
+		}
+		// Every open entry the flip would answer must be one the caller
+		// verified the copy for.
+		open, err := tx.QueryContext(ctx, `SELECT id FROM kept_work WHERE task_id = ? AND answer IS NULL AND closure IS NULL ORDER BY id`, id)
+		if err != nil {
+			return err
+		}
+		var unverified []int64
+		for open.Next() {
+			var entry int64
+			if err := open.Scan(&entry); err != nil {
+				_ = open.Close()
+				return err
+			}
+			if !slices.Contains(verified, entry) {
+				unverified = append(unverified, entry)
+			}
+		}
+		if err := open.Close(); err != nil {
+			return err
+		}
+		if err := open.Err(); err != nil {
+			return err
+		}
+		if len(unverified) > 0 {
+			return fmt.Errorf("%w: entry %d of its copy", ErrKeptWorkUnverified, unverified[0])
 		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ?, delivery_intent = ? WHERE id = ?`,

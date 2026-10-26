@@ -4,6 +4,9 @@ package service_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -150,6 +153,63 @@ func TestAPromotionTouchesNoKeptWorkButItsCopys(t *testing.T) {
 		}
 		if _, err := recordsOf(t, w.home).KeptWorkEntry(ctx, max(own.ID, other.ID)+1); !errors.Is(err, store.ErrNotFound) {
 			t.Fatalf("the promotion wrote an entry of its own: %v", err)
+		}
+	})
+}
+
+// A promotion answers its copy's kept work only for a copy the kept-copy
+// verification takes, the final full review of 3124096: as above, a
+// running investigation's copy has an open entry, and the copy's .git is
+// then made a link to another clone's .git. The promotion is refused before
+// anything is written, the same refusal every other answer to that copy
+// meets (tasks.ErrLayoutUnsupported): the task is still the investigation
+// it was, the entry is still open, and the other clone's remotes and HEAD
+// are as they were. Without the verification the flip answers the entry
+// carry on and the promotion writes the gate's remote into the other clone
+// before its isolation assertion refuses the shaped copy.
+func TestAPromotionRefusesACopyThatIsNotTheOneItsRegistryRecorded(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P1)
+	streamWorkerOf(t, store.TaskInvestigation, "", nil, func(w launched, _ *standin.Agent) {
+		ctx := t.Context()
+		entry := keptOnCopyOf(t, w)
+		copyPath, err := w.home.TaskCopy(w.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(t.TempDir(), "other")
+		git(t, w.repository.WorkingPath, "clone", "--quiet", w.repository.WorkingPath, other)
+		remotes, head := git(t, other, "remote", "-v"), git(t, other, "symbolic-ref", "HEAD")
+		own := filepath.Join(copyPath, ".git")
+		if err := os.Rename(own, own+".own"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.Remove(own); err != nil {
+				t.Error(err)
+			}
+			if err := os.Rename(own+".own", own); err != nil {
+				t.Error(err)
+			}
+		}()
+
+		_, err = promoteRunningInvestigation(t, w, "task/promoted", "")
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "the kept copy at "+copyPath) {
+			t.Fatalf("promoting a copy whose .git links to another clone = %v; want it refused by the kept-copy verification", err)
+		}
+		stillAnInvestigation(t, w, "the refused promotion")
+		if still, err := recordsOf(t, w.home).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+			t.Fatalf("after the refused promotion the entry reads %+v, %v; want it open", still, err)
+		}
+		if got := git(t, other, "remote", "-v"); got != remotes {
+			t.Errorf("the other clone's remotes became %q, were %q", got, remotes)
+		}
+		if got := git(t, other, "symbolic-ref", "HEAD"); got != head {
+			t.Errorf("the other clone's HEAD became %s, was %s", got, head)
 		}
 	})
 }

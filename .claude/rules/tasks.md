@@ -83,7 +83,9 @@ paths: ["internal/tasks/**"]
   an unusual layout is refused, never handled.
   Its first step is `Cleaner.VerifyKeptCopy`, the one call into
   `internal/safety`'s verification that a kept copy is the one its registry
-  recorded, which carry on in `internal/service` asks too.
+  recorded, which carry on in `internal/service` asks too, and promotion
+  through the same body (`verifyKeptCopy`) before its flip answers the
+  copy's entries and again before it writes into the copy.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

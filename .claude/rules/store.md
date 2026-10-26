@@ -101,7 +101,9 @@ paths: ["internal/store/**"]
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`
-  for that.
+  for that, and the entries the caller verified the copy for, refusing
+  any other open entry of the task with `ErrKeptWorkUnverified` and
+  writing nothing.
 - taskMachineMigration's `task.machine` is PRD section 8's machine a task
   runs on, the one place it is stored: written once, for a remote host, by
   `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on

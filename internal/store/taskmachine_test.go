@@ -181,7 +181,7 @@ func TestATasksMachineIsWrittenOnceAtDispatch(t *testing.T) {
 			t.Fatalf("BeginFirstTaskAttempt: %v", err)
 		}
 		promoted, _, err := s.TransitionTaskShape(ctx, inv.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
-			config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface())
+			config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface(), nil)
 		if err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
@@ -624,7 +624,7 @@ func TestTheMachineIsStoredInTheTaskRowAndNowhereElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := s.TransitionTaskShape(ctx, inv.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
-		config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface()); err != nil {
+		config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatal(err)
 	}
 	promoted, err := s.Task(ctx, inv.ID)

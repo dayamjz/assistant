@@ -287,6 +287,13 @@ var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when i
 // after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
+// ErrKeptWorkUnverified is TransitionTaskShape's refusal of a flip over a
+// copy with an open kept work entry the caller did not verify the copy for:
+// the flip would answer it carry on, and every answer to a kept copy is
+// given only for a copy the kept-copy verification took. Nothing is
+// written.
+var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before the promotion")
+
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
 // by every answer for an entry that already
 // holds a carry-on claim: it stands until it is carried out or withdrawn,

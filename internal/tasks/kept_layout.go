@@ -155,12 +155,23 @@ func partialHistory(ctx context.Context, copied *vcs.Repository, refuse func(str
 // a stopped carry on is
 // taken up, on the copy where it stands, at the reserved task's path once
 // moved (internal/service's verifyCarriedCopy, with the entry's copy path
-// set to where it stands). A refusal matches ErrLayoutUnsupported, and
-// safety.ErrCopyNotVerified or ErrRecordNotTheCopys as well.
+// set to where it stands); and a promotion, whose flip answers its copy's
+// entries carry on, before the flip and again before it writes into the
+// copy (Queue.Promote, through verifyKeptCopy, this method's body). A
+// refusal matches ErrLayoutUnsupported, and safety.ErrCopyNotVerified or
+// ErrRecordNotTheCopys as well.
 func (c *Cleaner) VerifyKeptCopy(ctx context.Context, entry store.KeptWork, gatePath string) error {
+	return verifyKeptCopy(ctx, c.git, entry, gatePath)
+}
+
+// verifyKeptCopy is VerifyKeptCopy over the git options given, so a Queue,
+// which holds no Cleaner, asks the one check and not a second one; it
+// passes its own options with replacement references off, as a Cleaner's
+// are.
+func verifyKeptCopy(ctx context.Context, git []vcs.Option, entry store.KeptWork, gatePath string) error {
 	want := safety.KeptCopy{Worktree: entry.CopyPath, GitDir: filepath.Join(entry.CopyPath, ".git")}
 	if !entry.TaskID.IsKnown() {
-		bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+		bare, err := vcs.OpenBare(ctx, gatePath, git...)
 		if err != nil {
 			return fmt.Errorf("tasks: opening the gate repository at %s: %w", gatePath, err)
 		}
@@ -168,7 +179,7 @@ func (c *Cleaner) VerifyKeptCopy(ctx context.Context, entry store.KeptWork, gate
 			return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)
 		}
 	}
-	if err := safety.VerifyKeptCopy(ctx, want, c.git...); err != nil {
+	if err := safety.VerifyKeptCopy(ctx, want, git...); err != nil {
 		return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)
 	}
 	return nil
