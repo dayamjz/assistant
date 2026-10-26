@@ -1396,3 +1396,61 @@ func TestALossRunsGitUnderTheConfiguredDeadline(t *testing.T) {
 		t.Fatalf("Loss with the upstream answering = %+v, %v; want the task's commit lost", l, err)
 	}
 }
+
+// A file of the repository directory is lost when its mode differs from
+// what git writes into a new repository, not only its bytes: git's
+// template holds hooks/pre-push not executable, and the kept clone holds
+// the same bytes there. Not executable, it is the template's and is not
+// named; made executable, which enables the hook, it is named as a
+// repository file and the digest moves.
+func TestALossNamesARepositoryFileWhoseModeDiffersFromTheTemplate(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/hook-mode")
+	commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Entry.Established() {
+		t.Fatalf("Keep = %+v, %v", got, err)
+	}
+
+	const hook = "#!/bin/sh\necho the template's hook\n"
+	template := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(template, "hooks"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "hooks", "pre-push"), []byte(hook), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := os.Getenv("GIT_CONFIG_GLOBAL")
+	original, err := os.ReadFile(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, append(slices.Clone(original), []byte("[init]\n\ttemplateDir = "+filepath.ToSlash(template)+"\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inCopy := filepath.Join(tk.copy, ".git", "hooks", "pre-push")
+	if err := os.WriteFile(inCopy, []byte(hook), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	named := func(l Loss) bool { return slices.Contains(l.Files, LostPath{LostRepository, "hooks/pre-push"}) }
+
+	as, err := s.cleaner.Loss(ctx, got.Entry, "")
+	if err != nil || named(as) {
+		t.Fatalf("Loss with the template's hook as it is = %+v, %v; want hooks/pre-push not named", as.Files, err)
+	}
+	if err := os.Chmod(inCopy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := s.cleaner.Loss(ctx, got.Entry, "")
+	if err != nil || !named(enabled) || enabled.Digest == as.Digest {
+		t.Fatalf("Loss with the hook made executable = %+v (digest %s), %v; want hooks/pre-push named and the digest moved from %s",
+			enabled.Files, enabled.Digest, err, as.Digest)
+	}
+}

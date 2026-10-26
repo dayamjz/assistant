@@ -187,7 +187,9 @@ func holding(d *digest, rel string, info os.FileInfo, held string) {
 }
 
 // repository is the visit that decides the repository directory's entries
-// against fresh, what git writes into a new repository.
+// against fresh, what git writes into a new repository: an entry is the
+// template's, and not lost, when its type matches and, for anything but a
+// directory, its bytes and its mode do too; every other is LostRepository.
 func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 	whole := ""
 	var under *digest
@@ -200,7 +202,7 @@ func (l *lostPaths) repository(fresh map[string]freshEntry) treeVisit {
 		kind := entryKind(info)
 		f, ok := fresh[rel]
 		switch {
-		case ok && f.kind == kind && (kind == "dir" || (kind != "other" && f.held == held)):
+		case ok && f.kind == kind && (kind == "dir" || (kind != "other" && f.held == held && f.mode == gitMode(info))):
 		case kind == "dir":
 			whole = rel + "/"
 			under = l.add(LostRepository, whole)
@@ -324,9 +326,12 @@ func gitMode(info os.FileInfo) string {
 	return ""
 }
 
-// freshEntry is one entry of a new repository's directory: its type and
-// what walkTree read it to hold.
-type freshEntry struct{ kind, held string }
+// freshEntry is one entry of a new repository's directory: its type, what
+// walkTree read it to hold, and its mode as gitMode reads it, the mode the
+// digest seals, so a file of the copy's repository directory with the
+// template's bytes and another mode, a hook made executable among them, is
+// not taken for the template's.
+type freshEntry struct{ kind, held, mode string }
 
 // entryKind is an entry's type as walkTree reads it.
 func entryKind(info os.FileInfo) string {
@@ -359,7 +364,7 @@ func freshRepository(ctx context.Context, skip func(rel string, info os.FileInfo
 	}
 	fresh := map[string]freshEntry{}
 	err = walkTree(path, skip, func(rel string, info os.FileInfo, held string) error {
-		fresh[rel] = freshEntry{kind: entryKind(info), held: held}
+		fresh[rel] = freshEntry{kind: entryKind(info), held: held, mode: gitMode(info)}
 		return nil
 	})
 	return fresh, err
