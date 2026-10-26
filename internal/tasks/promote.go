@@ -46,10 +46,14 @@ import (
 // written, the flip and its answers standing as after any refusal past the
 // flip. The verification is a check at one moment, on
 // safety.VerifyKeptCopy's terms. A copy with no open entry is not asked
-// it, and the assertion before shaping does not resolve a .git that is a
-// symbolic link, so such a copy linked to another clone has the gate's
-// remote and the branch written into that clone before the assertion after
-// shaping refuses it; that gap is the assertion's and is not closed here.
+// it: what stands between such a copy and the writes is the assertion
+// before shaping, which refuses a .git under the copy that is a symbolic
+// link (ComparisonGitDir, round 37) before anything is written through it,
+// and which does not walk the inside of the repository directory, so a
+// refs or objects directory that is itself a link into another repository
+// has the branch or the remote written there; the verification walks it,
+// so a copy with an open entry is refused for that and one with none is
+// not.
 //
 // store.TransitionTaskShape writes the shape, the repository, the branch,
 // the delivery posture and the delivery intent on the task row together with

@@ -812,3 +812,64 @@ func TestPromoteVerifiesTheKeptCopyAgainBeforeWritingIt(t *testing.T) {
 		t.Fatalf("after the refusal the entry reads %+v, %v; want the flip's carry-on answer standing", closed, err)
 	}
 }
+
+// A copy whose .git is a symbolic link to another clone's .git is refused
+// before anything is written into that clone, whether or not the copy has
+// an open kept work entry (round 37). The clone linked to has no remote and
+// stands on its own branch, which is the case that escaped: with no entry
+// nothing asked the kept-copy verification, every identity comparison of
+// the assertion followed the link, and once the shaping had written the
+// gate's remote and the task's branch into that clone, it was exactly the
+// delivery shape, so the assertion after shaping passed it and the
+// promotion succeeded. Now the assertion before shaping refuses the link
+// as the repository directory comparison, with the refusal recorded and
+// the clone linked to unchanged.
+func TestPromoteRefusesACopyWhoseRepositoryDirectoryIsALink(t *testing.T) {
+	principles.Cite(t, principles.P11)
+	principles.Cite(t, principles.P1)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", s.primary, other)
+	rawGit(t, other, "remote", "remove", "origin")
+	if remotes := rawGit(t, other, "remote"); remotes != "" {
+		t.Fatalf("the other clone has remotes %q, want none", remotes)
+	}
+	head, branches := rawGit(t, other, "symbolic-ref", "HEAD"), rawGit(t, other, "branch", "--list")
+	own := filepath.Join(tk.copy, ".git")
+	if err := os.RemoveAll(own); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+
+	_, err := s.queue.Promote(ctx, request(tk.id))
+	var refusal *PromotionRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != taskstate.RefusedNotIsolated || refusal.Written ||
+		!errors.Is(err, ErrNotIsolated) {
+		t.Fatalf("promoting a copy whose .git links to another clone = %v; want refused as not isolated, nothing written", err)
+	}
+	var ie *IsolationError
+	if !errors.As(err, &ie) || ie.Comparison != ComparisonGitDir {
+		t.Errorf("refused on %v, want the repository directory comparison", err)
+	}
+	if got := rawGit(t, other, "remote"); got != "" {
+		t.Errorf("the other clone's remotes became %q, were none", got)
+	}
+	if got := rawGit(t, other, "symbolic-ref", "HEAD"); got != head {
+		t.Errorf("the other clone's HEAD became %s, was %s", got, head)
+	}
+	if got := rawGit(t, other, "branch", "--list"); got != branches {
+		t.Errorf("the other clone's branches became %q, were %q", got, branches)
+	}
+	if record := s.record(t, tk.id); record.Shape != store.TaskDelivery {
+		t.Fatalf("after the refusal the task is %+v, want a delivery task whose history says its copy was refused", record)
+	}
+	history := s.history(t, tk.id)
+	if last := history[len(history)-1]; last.Kind != isolationRefusedKind || last.Detail != string(taskstate.RefusedNotIsolated) ||
+		history[len(history)-2].Kind != store.PromotedEventKind {
+		t.Fatalf("the history ends %+v, want the refusal right after the promoted entry", history[len(history)-2:])
+	}
+}

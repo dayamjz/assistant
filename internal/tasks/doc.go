@@ -29,7 +29,9 @@
 // typed *IsolationError naming the comparison that failed. The comparisons
 // are the ones isolation.go lists in order; every path comparison is by file
 // identity and never by string, so a symbolic link into the primary and a
-// case variant of it on a case-insensitive filesystem are both the primary.
+// case variant of it on a case-insensitive filesystem are both the primary,
+// and .git under the copy is read once more without following a link, since
+// by identity a link there is the other repository's directory it reaches.
 // The remote set is exact, assistant at this home's gate for a delivery copy
 // and none for an investigation copy, because any other route is a push the
 // gate's hooks never see. The environment is refused when vcs.StripRedirecting
