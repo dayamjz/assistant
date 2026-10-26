@@ -188,11 +188,36 @@ func (r *Repository) WorkingRoot(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	root := strings.TrimSpace(string(out))
+	root := gitPath(out)
 	if root == "" {
 		return "", fmt.Errorf("%w: %s reported no working copy root", ErrNotARepository, r.path)
 	}
 	return absolutePath(root)
+}
+
+// gitPath is a path git printed on a line of its own: the output without the
+// one newline git ends it with, and nothing else removed. A path's own
+// leading or trailing spaces are part of it, and trimming them would name
+// another directory, such as a sibling whose name lacks the space.
+func gitPath(out []byte) string {
+	return strings.TrimSuffix(string(out), "\n")
+}
+
+// atRoot returns a handle on the working copy's root with r's settings, or
+// r itself when r is opened there. git lists the index and untracked files
+// relative to, and only beneath, the directory it runs in, while diff-files
+// names paths from the root, so an operation that reads paths from git and
+// opens them in the worktree runs at the root: every path it reads, takes or
+// returns is then repository-relative, whichever directory r was opened on.
+func (r *Repository) atRoot(ctx context.Context) (*Repository, error) {
+	root, err := r.WorkingRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if root == r.path {
+		return r, nil
+	}
+	return &Repository{path: root, kind: r.kind, set: r.set}, nil
 }
 
 // isOccupiedByOtherThanABareRepo reports whether path already holds something

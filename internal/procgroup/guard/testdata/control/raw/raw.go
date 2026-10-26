@@ -36,6 +36,13 @@ func Process() {
 	_, _ = os.StartProcess("/bin/true", nil, &os.ProcAttr{})
 }
 
+// Combined hands out CombinedOutput without calling it. The guard's list
+// names that method, so a fixture that never does leaves the string unchecked.
+func Combined() func() ([]byte, error) {
+	cmd := &run.Cmd{}
+	return cmd.CombinedOutput
+}
+
 // Excepted builds a command, and the control's exception list covers it.
 func Excepted() *run.Cmd { return run.Command("true") }
 

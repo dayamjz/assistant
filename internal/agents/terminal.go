@@ -376,7 +376,7 @@ const tmuxClientGrace = time.Second
 // wrapping ctx's error instead, which runTmux decides in one place.
 var ErrTerminalClientTimedOut = errors.New("agents: a tmux client ran past its bound and its process group was ended")
 
-// runTmux runs one tmux client, cmd, built with exec.Command and not yet
+// runTmux runs one tmux client, cmd, built with procgroup.Command and not yet
 // started, through procgroup.Run, under ctx and bound, whichever ends first.
 // A client that failed is answered with an error wrapping ctx's error when
 // ctx has ended, since the caller's cancellation is then the explanation,
