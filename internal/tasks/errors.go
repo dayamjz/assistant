@@ -3,6 +3,7 @@ package tasks
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -98,6 +99,36 @@ func (e *OutrankedError) Unwrap() error { return ErrOutranked }
 // gated; a loosening copy is refused on the same terms.
 var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be established from its trusted configuration " +
 	"(read, parsed, or it loosened the home's)")
+
+// ErrKeptWorkUnheld is the class every *KeptWorkUnheldError belongs to: a
+// promotion would answer a kept work entry of its copy carry on while the
+// copy no longer holds what the entry recorded it standing on.
+var ErrKeptWorkUnheld = errors.New("tasks: the copy no longer holds what its kept work entry recorded, so the entry cannot be answered carry on")
+
+// KeptWorkUnheldError refuses a promotion whose flip would answer a kept
+// work entry carry on over a copy that has lost what the entry recorded
+// (Cleaner.Unheld's reading): the entry stays open and listed, as a carry
+// on refuses the same copy, so the missing work is never closed out of
+// sight (P15).
+type KeptWorkUnheldError struct {
+	// Task is the task whose promotion was refused.
+	Task string
+	// Entry is the kept work entry.
+	Entry int64
+	// Unheld is what the entry recorded that the copy no longer holds, in
+	// the entry's order.
+	Unheld []string
+}
+
+// Error names the task, the entry and what is missing.
+func (e *KeptWorkUnheldError) Error() string {
+	return fmt.Sprintf("tasks: task %s is not promoted: its copy no longer holds %s, which kept work entry %d recorded it standing on, "+
+		"so the entry cannot be answered carry on; land what the copy holds now, or answer the entry otherwise",
+		e.Task, strings.Join(e.Unheld, ", "), e.Entry)
+}
+
+// Unwrap makes every such refusal match ErrKeptWorkUnheld.
+func (e *KeptWorkUnheldError) Unwrap() error { return ErrKeptWorkUnheld }
 
 // ErrLighterPosture is the class every *PostureError belongs to.
 var ErrLighterPosture = errors.New("tasks: a task may not be recorded under a lighter delivery posture than its project's")

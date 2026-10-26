@@ -82,7 +82,12 @@ paths: ["internal/service/**"]
   and the completion after it each hold to what every open entry of the
   copy recorded, the set the mark closes (`store.OpenKeptWorkOfCopy`),
   through `internal/tasks`' one reading of it (`holdsKeptWork`,
-  `tasks.Cleaner.Unheld`), the answer
+  `tasks.Cleaner.Unheld`), the last reading's set given to the mark, which
+  closes no entry kept after it; a copy git reads a `core.worktree` for is
+  refused before the claim, since the move would leave it naming the old
+  path; the successor's posture floor is what the outlived task's push is
+  held to (`carriedPosture` through `localPosture`, gated for a row with
+  none recorded); the answer
   written only with the adoption and the claim withdrawn when intake
   refuses the task; land and carry on are each completed at open when a
   stopped service left them. Discard (`keptdiscard.go`) is the preview

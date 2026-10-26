@@ -48,8 +48,10 @@ paths: ["internal/tasks/**"]
   stays open until answered or until a cleanup removes the copy on a
   proof. `Unheld` is the one reading of what of its entry's holds a copy
   no longer holds, by what the copy names now (`copyNames`, HEAD, root
-  references and reflog values included), which `internal/service`'s carry
-  on asks before it claims, moves or adopts the copy. And
+  references and reflog values included, and the trees and blobs a named
+  commit's history records), which `internal/service`'s carry on asks
+  before it claims, moves or adopts the copy, and `Queue.Promote` asks for
+  each entry its flip answers (`*KeptWorkUnheldError`). And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far

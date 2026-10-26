@@ -220,7 +220,7 @@ func TestAClosedEntrysUnfinishedCarryOnHoldsNothing(t *testing.T) {
 	if err != nil || !closed.Closure.IsKnown() || closed.CarriedOnAt.IsKnown() || closed.CarriedOnTask.Or("") != "tasknewcopya" {
 		t.Fatalf("after the removal on a proof the entry reads %+v, %v; want it closed with the claim not carried out", closed, err)
 	}
-	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID, "tasknewcopya"); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, entry.ID, "tasknewcopya", nil); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("the carry on's mark on the closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	if held, err := s.KeptWorkHolding(ctx, "tasknewcopya"); err != nil || len(held) != 0 {

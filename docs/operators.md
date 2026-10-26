@@ -617,12 +617,18 @@ copy), or a delivery copy whose task branch stands somewhere other than
 HEAD, or whose task branch cannot be created at HEAD because a branch of
 the copy's is in the way of its name (a branch `topic/side` beside the
 task branch `topic`, or `topic` beside `topic/x`), is refused with
-nothing recorded and the refusal says what to change. A copy that no
+nothing recorded and the refusal says what to change. So is a copy git
+reads a `core.worktree` for, since the move would leave it naming the old
+path: unset it in the copy and answer again. A copy that no
 longer holds a commit or object it was kept on, nothing it names reaching
 it, neither HEAD, a reference, a root reference such as `ORIG_HEAD` nor a
 reflog entry (amended away and then expired and pruned, say), is refused
-the same way, naming what is missing; a copy whose reflog or `ORIG_HEAD`
-still records it is carried on. A run's copy is not
+the same way, naming what is missing and the entry that recorded it,
+every entry of the copy being read; a copy whose reflog or `ORIG_HEAD`
+still records it, or a commit of which records the object in its tree,
+is carried on. An entry kept after the copy was last read, in the moment
+before it is answered, refuses the answer rather than being closed unread:
+answer again. A run's copy is not
 carried on in this build (it is a worktree of the gate on a branch of
 yours, which a task's copy cannot be): land it, or push its commit
 yourself.
@@ -692,7 +698,9 @@ the same; put the copy back in that layout to see it or land it. A copy
 kept again at another state has an entry for each state; carrying it on
 answers and closes all of them, since the whole copy moves to the new
 task, and so is refused unless the copy still holds what every one of
-them recorded. While one entry of a copy has an answer still being
+them recorded. A successor carries the posture the outlived task's own
+push is held to as its floor, gated for a task recorded before a posture
+was, so continued work is never held to less. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, or a carry on not
 finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the
@@ -704,7 +712,9 @@ unchanged copy establishes it.
 A promotion of an investigation whose copy has a kept-work entry (its
 worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
-the entry closes with the promotion and never without it.
+the entry closes with the promotion and never without it, and the
+promotion is refused, naming what is missing, when the copy no longer
+holds what the entry recorded, as a carry on of it would be.
 
 Nothing in the program discards a copy, on its own or on an answer: the
 preview is open to any caller that may answer kept work, and a

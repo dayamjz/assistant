@@ -19,9 +19,11 @@ import (
 // through HEAD's reflog alone, an amend writing no root reference; with
 // HEAD reset to C's parent and the reflogs expired it holds C through
 // ORIG_HEAD, the root reference the reset wrote; with ORIG_HEAD deleted
-// too, C is unheld while the blob the tag names is still held; and with
-// the tag deleted the blob is unheld as well. The copy at a path where
-// nothing stands is an error, not an answer.
+// too, C is unheld while the blob the tag names is still held; with the
+// tag deleted the blob is unheld as well; and with the same bytes then
+// committed as a file, the blob is held through HEAD's tree, as any object
+// a commit the copy names records is (the carry-on audit of b448115). The
+// copy at a path where nothing stands is an error, not an answer.
 func TestUnheldIsWhatNothingTheCopyNamesReaches(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -87,6 +89,15 @@ func TestUnheldIsWhatNothingTheCopyNamesReaches(t *testing.T) {
 	unheld(own)
 	rawGit(t, tk.copy, "tag", "-d", "data")
 	unheld(own, blob)
+	if err := os.WriteFile(filepath.Join(tk.copy, "data.bin"), []byte("bytes the tag names\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "data.bin")
+	rawGit(t, tk.copy, "commit", "-q", "-m", "the bytes as a file")
+	if got := rawGit(t, tk.copy, "rev-parse", "HEAD:data.bin"); got != blob {
+		t.Fatalf("HEAD:data.bin is %s, want the blob %s", got, blob)
+	}
+	unheld(own)
 
 	gone := entry
 	gone.CopyPath = tk.copy + "-gone"

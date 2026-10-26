@@ -35,9 +35,13 @@ import (
 //
 // Those entries are answered only for a copy the kept-copy verification
 // takes, the check every answer to a kept copy asks (verifyKeptCopy,
-// Cleaner.VerifyKeptCopy's body): before the flip, Promote reads the task's
+// Cleaner.VerifyKeptCopy's body), and that still holds what each entry
+// recorded it standing on (unheld, Cleaner.Unheld's body, the reading a
+// carry on makes), so no entry is closed over work the copy has lost: before
+// the flip, Promote reads the task's
 // open entries (keptOfCopy, which refuses one recorded for another path)
-// and verifies the copy for each, refusing with ErrLayoutUnsupported
+// and verifies the copy for each, refusing with ErrLayoutUnsupported, or
+// with a *KeptWorkUnheldError naming what is missing,
 // before anything is written; the flip is given those entries and refuses
 // any other open entry of the task (store.ErrKeptWorkUnverified), so one
 // recorded in between is not answered for a copy nothing verified; and
@@ -335,9 +339,11 @@ type Promoted struct {
 //
 // Before the flip, the copy is verified for each of the task's open kept
 // work entries, which the flip answers carry on, and a copy the
-// verification refuses is refused with ErrLayoutUnsupported with nothing
-// written; an open entry not verified, recorded after that read, refuses
-// the flip with store.ErrKeptWorkUnverified, and nothing is written.
+// verification refuses is refused with ErrLayoutUnsupported, or with a
+// *KeptWorkUnheldError when it no longer holds what an entry recorded,
+// with nothing written; an open entry not verified, recorded after that
+// read, refuses the flip with store.ErrKeptWorkUnverified, and nothing is
+// written.
 //
 // After the flip the copy is verified again for those entries, then
 // asserted, shaped, asserted again, and the
@@ -658,16 +664,28 @@ func (q *Queue) keptOfCopy(ctx context.Context, task, copyPath string) ([]store.
 	return kept, nil
 }
 
-// verifyKept asks the kept-copy verification every answer to a kept copy
-// asks (verifyKeptCopy, Cleaner.VerifyKeptCopy's body) of the copy for each
-// entry the flip answers, with this Queue's git options and replacement
-// references off, as a Cleaner's are. A refusal matches
-// ErrLayoutUnsupported and safety.ErrCopyNotVerified.
+// verifyKept asks, of the copy for each entry the flip answers, what every
+// answer that closes an entry asks, with this Queue's git options and
+// replacement references off, as a Cleaner's are: the kept-copy
+// verification (verifyKeptCopy, Cleaner.VerifyKeptCopy's body), whose
+// refusal matches ErrLayoutUnsupported and safety.ErrCopyNotVerified; and
+// then the reading of what the entry recorded the copy standing on that
+// the copy no longer holds (unheld, Cleaner.Unheld's body), anything
+// missing being a *KeptWorkUnheldError, so the flip never answers an
+// entry carry on over work the copy has lost, which a carry on of the
+// same copy refuses too (the carry-on audit of b448115, P15).
 func (q *Queue) verifyKept(ctx context.Context, task string, kept []store.KeptWork) error {
 	git := append(slices.Clone(q.git), vcs.WithoutReplaceObjects())
 	for _, entry := range kept {
 		if err := verifyKeptCopy(ctx, git, entry, ""); err != nil {
 			return fmt.Errorf("tasks: the copy of task %s, which kept work entry %d records: %w", task, entry.ID, err)
+		}
+		missing, err := unheld(ctx, git, entry)
+		if err != nil {
+			return fmt.Errorf("tasks: the copy of task %s, which kept work entry %d records: %w", task, entry.ID, err)
+		}
+		if len(missing) > 0 {
+			return &KeptWorkUnheldError{Task: task, Entry: entry.ID, Unheld: missing}
 		}
 	}
 	return nil

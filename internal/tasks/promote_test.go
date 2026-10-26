@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -871,5 +872,48 @@ func TestPromoteRefusesACopyWhoseRepositoryDirectoryIsALink(t *testing.T) {
 	if last := history[len(history)-1]; last.Kind != isolationRefusedKind || last.Detail != string(taskstate.RefusedNotIsolated) ||
 		history[len(history)-2].Kind != store.PromotedEventKind {
 		t.Fatalf("the history ends %+v, want the refusal right after the promoted entry", history[len(history)-2:])
+	}
+}
+
+// A promotion refuses, before its flip and with nothing written, a copy
+// that no longer holds what an open kept work entry recorded it standing
+// on (the carry-on audit of b448115, P15): the entry records the copy at
+// C, the copy is detached at C's parent with the reflogs expired and C
+// pruned, so nothing the copy names reaches C. The flip would answer the
+// entry carry on and close it out of the open listing while the work is
+// gone, which a carry on of the same copy refuses, so the promotion refuses
+// the same: the task stays an investigation, nothing is appended, the
+// entry stays open. The control is the copy before the prune, which a
+// promotion takes.
+func TestPromoteRefusesACopyThatNoLongerHoldsItsKeptWork(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	if err := os.WriteFile(filepath.Join(tk.copy, "finding.txt"), []byte("what the worker found\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "finding.txt")
+	rawGit(t, tk.copy, "commit", "-q", "-m", "the worker's own commit")
+	kept := rawGit(t, tk.copy, "rev-parse", "HEAD")
+	entry, _, err := s.store.RecordKeptWork(ctx, store.KeptCopy{TaskID: tk.id, CopyPath: tk.copy,
+		Holds: []string{kept}, Lacks: []string{kept}, Reason: string(ReasonUnproven), Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	rawGit(t, tk.copy, "checkout", "-q", "--detach", "HEAD~1")
+	rawGit(t, tk.copy, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+	rawGit(t, tk.copy, "prune", "--expire=now")
+	n := len(s.history(t, tk.id))
+
+	_, err = s.queue.Promote(ctx, request(tk.id))
+	var unheld *KeptWorkUnheldError
+	if !errors.As(err, &unheld) || !errors.Is(err, ErrKeptWorkUnheld) || unheld.Entry != entry.ID || !slices.Equal(unheld.Unheld, []string{kept}) {
+		t.Fatalf("promoting a copy that no longer holds %s = %v; want a *KeptWorkUnheldError naming entry %d and the commit", kept, err, entry.ID)
+	}
+	s.untouched(t, tk, n)
+	if still, err := s.store.KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+		t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)
 	}
 }

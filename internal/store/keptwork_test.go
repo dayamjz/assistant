@@ -339,8 +339,10 @@ func TestARemovalReservationStopsNewRunsAndNeverRefusesKeptWork(t *testing.T) {
 // entries of a run's copy at two states and one of another copy are
 // recorded, one of the copy's is answered land and so left out, and the
 // listing is the copy's two open entries and never the other copy's.
-// Marking the older open entry carried on closes the listed set and
-// nothing else, the positive control that the listing is the mark's.
+// Marking the older open entry carried on without naming the other as
+// verified is refused with nothing written (the carry-on audit of
+// b448115), and naming it closes the listed set and nothing else, the
+// positive control that the listing is the mark's.
 func TestOpenKeptWorkOfCopyListsWhatACarryOnCloses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -388,7 +390,13 @@ func TestOpenKeptWorkOfCopyListsWhatACarryOnCloses(t *testing.T) {
 		WorktreePath: "/home/tasks/next/copy"}, Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next); err != nil {
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next, nil); !errors.Is(err, ErrKeptWorkUnverified) {
+		t.Fatalf("marking with the copy's other open entry unverified = %v, want ErrKeptWorkUnverified", err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, first.ID); err != nil || got.CarriedOnAt.IsKnown() || !got.CarryOnClaimed() {
+		t.Fatalf("after the refused mark entry %d reads %+v, %v; want it claimed and not marked", first.ID, got, err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next, []int64{second.ID}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []int64{first.ID, second.ID} {

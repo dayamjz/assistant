@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -287,12 +288,12 @@ var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when i
 // after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
-// ErrKeptWorkUnverified is TransitionTaskShape's refusal of a flip over a
+// ErrKeptWorkUnverified is TransitionTaskShape's and MarkKeptWorkCarriedOn's refusal of a flip or a mark over a
 // copy with an open kept work entry the caller did not verify the copy for:
 // the flip would answer it carry on, and every answer to a kept copy is
 // given only for a copy the kept-copy verification took. Nothing is
 // written.
-var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before the promotion")
+var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before it would be answered")
 
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
 // by every answer for an entry that already
@@ -1009,15 +1010,21 @@ var ErrKeptWorkCarriedOn = errors.New("store: the kept work entry is already car
 // the copy that moved is the caller's, which marks only once the copy
 // stands at the task's path and no longer at its own; nothing here reads
 // the copy. While the claim stands no other entry of the copy can take a
-// claim or confirmation of its own (ErrKeptWorkCopyOwed). The task's row must exist; one
-// that does not is ErrNotFound. An entry already marked is
+// claim or confirmation of its own (ErrKeptWorkCopyOwed). verified is the
+// other open entries of the copy the caller held the copy to before this
+// (OpenKeptWorkOfCopy's listing as it read it, by identifier): an open
+// entry of the copy that is not among them, one kept after that reading,
+// refuses the mark with ErrKeptWorkUnverified, wrapped, and nothing is
+// written, so no entry is closed over work nothing verified the copy still
+// holds; the caller reads and verifies again and marks then. The task's
+// row must exist; one that does not is ErrNotFound. An entry already marked is
 // ErrKeptWorkCarriedOn, one answered otherwise ErrKeptWorkAnswered, one
 // closed on a proof ErrKeptWorkClosed, one with no claim naming task
 // ErrKeptWorkNotCarryOn, so a caller carrying out a claim since withdrawn
 // and claimed again for another task marks nothing, and an unknown
 // identifier ErrNotFound. It records and moves nothing else; the adoption
 // is the caller's, made before this.
-func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string) (KeptWork, error) {
+func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string, verified []int64) (KeptWork, error) {
 	var out KeptWork
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
@@ -1047,6 +1054,33 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string
 		}
 		if stands == 0 {
 			return fmt.Errorf("the task %s the claim names: %w", task, ErrNotFound)
+		}
+		// Every other open entry of the copy the mark would close must be
+		// one the caller held the copy to; one kept since is refused
+		// unread.
+		open, err := tx.QueryContext(ctx, `SELECT id FROM kept_work WHERE `+openKeptWorkOfCopy+` AND id != ? ORDER BY id`, k.CopyPath, id)
+		if err != nil {
+			return err
+		}
+		var unverified []int64
+		for open.Next() {
+			var other int64
+			if err := open.Scan(&other); err != nil {
+				_ = open.Close()
+				return err
+			}
+			if !slices.Contains(verified, other) {
+				unverified = append(unverified, other)
+			}
+		}
+		if err := open.Close(); err != nil {
+			return err
+		}
+		if err := open.Err(); err != nil {
+			return err
+		}
+		if len(unverified) > 0 {
+			return fmt.Errorf("%w: entry %d of the copy was kept after the carry on last read it", ErrKeptWorkUnverified, unverified[0])
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'carry-on', answered_by = ?, answered_at = ?, carried_on_task = ?,
 			carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?

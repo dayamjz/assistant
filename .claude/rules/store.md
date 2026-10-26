@@ -91,7 +91,9 @@ paths: ["internal/store/**"]
   copy identity dispatch holds the adopted copy to. A carry on moves the
   whole copy, so its mark answers and marks every other open entry of the
   copy, whenever it was kept, since its state moved with the copy, the set
-  `OpenKeptWorkOfCopy` lists for the caller to hold the copy to first; and no
+  `OpenKeptWorkOfCopy` lists for the caller to hold the copy to first and
+  name to the mark, which refuses an open entry it was not given
+  (`ErrKeptWorkUnverified`) and writes nothing; and no
   answer or claim is written while an entry of the copy holds one not yet
   carried out, a claim on the entry itself included
   (`ErrKeptWorkCopyOwed`), and

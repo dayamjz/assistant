@@ -225,18 +225,28 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 // name points at and what that peels to, so a tag on a blob names the
 // blob. A hold that is one of those values is held, whatever its type;
 // one that is a commit a commit value descends from is held, reached by
-// ancestry; any other, a commit nothing names or reaches, a tag, tree or
-// blob nothing names, or an object the copy no longer has, is unheld, in
-// Holds' order. A copy that cannot be read is an error, never an answer.
-// It is read in the Cleaner's layout, without replacement references or a
-// graft file, as Keep reads. internal/service's carry on asks it of the
-// kept copy wherever it stands, by the entry with CopyPath set there, before
-// it claims, before it moves and after it has moved the copy, so the three
-// accept and refuse the same copies: a copy whose kept commit was amended
-// away is carried on while its reflog records it, and refused once that
-// entry has expired and the object is pruned.
+// ancestry; one that is a tree or a blob a commit value's history records,
+// in any commit it reaches (vcs.NotHeldBy), is held; any other, a commit
+// nothing names or reaches, a tag nothing names, a tree or blob no commit
+// records, or an object the copy no longer has, is unheld, in Holds'
+// order. A copy that cannot be read is an error, never an answer. It is
+// read in the Cleaner's layout, without replacement references or a graft
+// file, as Keep reads. internal/service's carry on asks it of the kept
+// copy wherever it stands, by the entry with CopyPath set there, before it
+// claims, before it moves and after it has moved the copy, and a promotion
+// asks it of its copy for each entry its flip answers (Queue.Promote,
+// through unheld), so every answer that would close an entry accepts and
+// refuses the same copies: a copy whose kept commit was amended away is
+// carried on while its reflog records it, and refused once that entry has
+// expired and the object is pruned.
 func (c *Cleaner) Unheld(ctx context.Context, entry store.KeptWork) ([]string, error) {
-	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
+	return unheld(ctx, c.git, entry)
+}
+
+// unheld is Unheld over the git options given, so a Queue, which holds no
+// Cleaner, asks the one reading and not a second one.
+func unheld(ctx context.Context, git []vcs.Option, entry store.KeptWork) ([]string, error) {
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, git...)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
 	}
@@ -266,29 +276,59 @@ func (c *Cleaner) Unheld(ctx context.Context, entry store.KeptWork) ([]string, e
 	for _, v := range logged {
 		add(v)
 	}
-	var unheld []string
+	// The commits among the values, each once, are what ancestry and a
+	// history's objects are read from.
+	var commits []string
+	for _, v := range values {
+		id, err := copied.ResolveCommit(ctx, v)
+		if errors.Is(err, vcs.ErrRefNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tasks: reading whether %s names a commit in the kept copy at %s: %w", v, entry.CopyPath, err)
+		}
+		if !slices.Contains(commits, id) {
+			commits = append(commits, id)
+		}
+	}
+	var missing []string
 	for _, h := range entry.Holds {
 		if slices.Contains(values, h) {
 			continue
 		}
 		held := false
-		if kind, err := copied.ObjectType(ctx, h); err == nil && kind == "commit" {
-			for _, v := range values {
-				reaches, err := copied.IsAncestor(ctx, h, v)
-				if err != nil && !errors.Is(err, vcs.ErrRefNotFound) {
-					return nil, fmt.Errorf("tasks: reading whether the kept copy at %s reaches %s from %s: %w", entry.CopyPath, h, v, err)
+		kind, err := copied.ObjectType(ctx, h)
+		switch {
+		case err != nil:
+			// Not an object the copy has: unheld.
+		case kind == "commit":
+			for _, c := range commits {
+				reaches, err := copied.IsAncestor(ctx, h, c)
+				if err != nil {
+					return nil, fmt.Errorf("tasks: reading whether the kept copy at %s reaches %s from %s: %w", entry.CopyPath, h, c, err)
 				}
-				if err == nil && reaches {
+				if reaches {
+					held = true
+					break
+				}
+			}
+		case kind == "tree" || kind == "blob":
+			for _, c := range commits {
+				notHeld, err := copied.NotHeldBy(ctx, c, []string{h})
+				if err != nil {
+					return nil, fmt.Errorf("tasks: reading whether the history of %s in the kept copy at %s records %s: %w", c, entry.CopyPath, h, err)
+				}
+				if len(notHeld) == 0 {
 					held = true
 					break
 				}
 			}
 		}
-		if !held && !slices.Contains(unheld, h) {
-			unheld = append(unheld, h)
+		if !held && !slices.Contains(missing, h) {
+			missing = append(missing, h)
 		}
 	}
-	return unheld, nil
+	return missing, nil
 }
 
 // establish is what Keep does with an entry already standing for the copy
