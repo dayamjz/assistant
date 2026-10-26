@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -83,12 +84,18 @@ import (
 // moves the whole copy, so the mark answers and marks every open entry of
 // the same copy, the copy kept again at another state, in its one write,
 // one kept after the claim and before the move included, since its state
-// moved with the copy; the mark is made only once verifyAdopted, or the
-// move itself, has the copy at the new path and gone from its own, so
-// every entry naming that path is of the copy that moved. The residual: a
-// directory put at the old path after that and kept there before the mark
-// would be answered with the copy too; nothing in this build puts one
-// there, since the task that path belongs to has ended. A claim is refused while another
+// moved with the copy; and the copy is held to what every one of those
+// entries recorded, not the answered one alone, by each reading of it
+// (holdsKeptWork over store.OpenKeptWorkOfCopy), so no entry is closed
+// over work the copy has since lost. The mark is made only once
+// verifyAdopted, or the move itself, has the copy at the new path and gone
+// from its own, so every entry naming that path is of the copy that moved.
+// The residual: a directory put at the old path after that and kept there
+// before the mark would be answered with the copy too; nothing in this
+// build puts one there, since the task that path belongs to has ended; and
+// an entry kept between the last reading and the mark is closed unread,
+// the window the completion's reading before the move narrows to the move
+// and the mark. A claim is refused while another
 // entry of the copy holds an answer not yet carried out, as every answer
 // is (store.ErrKeptWorkCopyOwed).
 //
@@ -608,33 +615,49 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 	return s.holdsKeptWork(ctx, entry, newPath)
 }
 
-// holdsKeptWork refuses the copy at path, with ipc.ErrRefused naming what
-// is missing, unless it still holds everything the entry recorded the kept
-// copy standing on, on tasks.Cleaner.Unheld's terms, the one reading of
-// what a kept copy holds: each recorded commit or object is a value a name
-// of the copy records, HEAD, a reference, a root reference or a reflog
-// entry, or a commit one of those reaches. So a commit amended or reset
-// away after the copy was kept is held while a reflog or ORIG_HEAD records
-// it, a tag on a blob holds the blob, and a copy that has lost a recorded
-// commit altogether, its reflog entries expired and the object pruned, no
-// longer holds what it was kept on and is refused rather than recorded
-// over: the person lands what the copy holds now or answers otherwise. It
-// is asked by the answer before its claim, by the completion before the
-// move and by verifyAdopted after it, so the three accept and refuse the
-// same copies (the final full review of feddd14, and the delta review of
-// 9ef7722 for the names a reading of the copy's own left out). A copy that
-// cannot be read is an error, never a refusal.
+// holdsKeptWork refuses the copy at path, with ipc.ErrRefused naming the
+// entry and what is missing, unless it still holds everything every open
+// entry of the copy recorded it standing on, on tasks.Cleaner.Unheld's
+// terms, the one reading of what a kept copy holds: each recorded commit
+// or object is a value a name of the copy records, HEAD, a reference, a
+// root reference or a reflog entry, or a commit one of those reaches. So
+// a commit amended or reset away after the copy was kept is held while a
+// reflog or ORIG_HEAD records it, a tag on a blob holds the blob, and a
+// copy that has lost a recorded commit altogether, its reflog entries
+// expired and the object pruned, no longer holds what it was kept on and
+// is refused rather than recorded over: the person lands what the copy
+// holds now or answers otherwise. Every open entry of the copy is read,
+// not the answered one alone (store.OpenKeptWorkOfCopy, the entries the
+// mark closes with it), since the mark answers them all with the one
+// task and a copy that has lost what a later entry recorded would
+// otherwise be carried on as if the successor received it (the final
+// full review of ff040fc, P15). It is asked by the answer before its
+// claim, by the completion before the move and by verifyAdopted after it,
+// so the three accept and refuse the same copies (the final full review
+// of feddd14, and the delta review of 9ef7722 for the names a reading of
+// the copy's own left out). A copy that cannot be read is an error, never
+// a refusal.
 func (s *Service) holdsKeptWork(ctx context.Context, entry store.KeptWork, path string) error {
-	at := entry
-	at.CopyPath = path
-	unheld, err := s.cleaner.Unheld(ctx, at)
+	entries, err := s.store.OpenKeptWorkOfCopy(ctx, entry.CopyPath)
 	if err != nil {
 		return err
 	}
-	if len(unheld) > 0 {
-		return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s no longer holds %s, which it stood on when it was "+
-			"kept: nothing the copy names, HEAD, a reference, a root reference or a reflog entry, is or reaches it; land what the copy "+
-			"holds now, or answer otherwise", ipc.ErrRefused, entry.ID, path, strings.Join(unheld, ", "))
+	if !slices.ContainsFunc(entries, func(k store.KeptWork) bool { return k.ID == entry.ID }) {
+		entries = append(entries, entry)
+	}
+	for _, k := range entries {
+		at := k
+		at.CopyPath = path
+		unheld, err := s.cleaner.Unheld(ctx, at)
+		if err != nil {
+			return err
+		}
+		if len(unheld) > 0 {
+			return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s no longer holds %s, which it stood on when it was "+
+				"kept as entry %d, and carrying it on would close that entry too: nothing the copy names, HEAD, a reference, a root "+
+				"reference or a reflog entry, is or reaches it; land what the copy holds now, or answer otherwise",
+				ipc.ErrRefused, entry.ID, path, strings.Join(unheld, ", "), k.ID)
+		}
 	}
 	return nil
 }

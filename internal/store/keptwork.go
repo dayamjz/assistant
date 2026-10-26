@@ -580,6 +580,32 @@ func (s *Store) OpenKeptWork(ctx context.Context) ([]KeptWork, error) {
 	return out, nil
 }
 
+// OpenKeptWorkOfCopy returns every open entry recorded at copyPath, neither
+// answered nor closed, oldest first: the copy kept at each state it was
+// kept at. It is the set a carry on of any one of them closes
+// (MarkKeptWorkCarriedOn), so it is the read internal/service makes to
+// hold the copy to every one of them before it claims, moves or adopts
+// the copy, and never the answered entry alone.
+func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work WHERE `+openKeptWorkOfCopy+` ORDER BY id`, copyPath)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the open kept work at %s: %w", copyPath, err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the open kept work at %s: %w", copyPath, err)
+	}
+	return out, nil
+}
+
+// openKeptWorkOfCopy is the one spelling of an open entry of a copy, by
+// its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn
+// closes beside the entry marked.
+const openKeptWorkOfCopy = `copy_path = ? AND answer IS NULL AND closure IS NULL`
+
 // MarkKeptWorkSurfaced records that the entry was raised to someone at at.
 // An earlier instant than the one recorded is refused by the schema's seal;
 // an unknown identifier is ErrNotFound.
@@ -1024,7 +1050,7 @@ func (s *Store) MarkKeptWorkCarriedOn(ctx context.Context, id int64, task string
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'carry-on', answered_by = ?, answered_at = ?, carried_on_task = ?,
 			carried_on_copy = ?, carry_on_by = ?, carry_on_claimed_at = ?, carried_on_at = ?
-			WHERE id = ? OR (copy_path = ? AND answer IS NULL AND closure IS NULL AND carried_on_task IS NULL)`,
+			WHERE id = ? OR (`+openKeptWorkOfCopy+` AND carried_on_task IS NULL)`,
 			by, claimed, task, copied, by, claimed, encodeTime(nowUTC()), id, k.CopyPath); err != nil {
 			return err
 		}

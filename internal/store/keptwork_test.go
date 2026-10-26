@@ -333,3 +333,73 @@ func TestARemovalReservationStopsNewRunsAndNeverRefusesKeptWork(t *testing.T) {
 		t.Fatalf("kept work for a copy removed on a proof = %v, want ErrCleanupRemoved", err)
 	}
 }
+
+// OpenKeptWorkOfCopy lists the open entries of one copy, oldest first, and
+// exactly the entries a carry on of any one of them closes beside it: two
+// entries of a run's copy at two states and one of another copy are
+// recorded, one of the copy's is answered land and so left out, and the
+// listing is the copy's two open entries and never the other copy's.
+// Marking the older open entry carried on closes the listed set and
+// nothing else, the positive control that the listing is the mark's.
+func TestOpenKeptWorkOfCopyListsWhatACarryOnCloses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	task, next := seedTask(t, s, "keptofcopyaa").ID, "keptofcopyab"
+	const copyPath, other = "/home/tasks/one/copy", "/home/tasks/two/copy"
+	record := func(path, hold string) KeptWork {
+		t.Helper()
+		k, wrote, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: task, CopyPath: path, Holds: []string{hold}, Reason: "unproven", Against: "dddd"})
+		if err != nil || !wrote {
+			t.Fatalf("RecordKeptWork(%s, %s) = %+v, wrote %v, %v", path, hold, k, wrote, err)
+		}
+		return k
+	}
+	landed := record(copyPath, "aaaa")
+	first := record(copyPath, "bbbb")
+	second := record(copyPath, "cccc")
+	elsewhere := record(other, "dddd")
+	if _, err := s.ClaimKeptWorkLanding(ctx, landed.ID, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordKeptWorkLanding(ctx, landed.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(entries []KeptWork) []int64 {
+		out := make([]int64, len(entries))
+		for i, k := range entries {
+			out[i] = k.ID
+		}
+		return out
+	}
+	listed, err := s.OpenKeptWorkOfCopy(ctx, copyPath)
+	if err != nil || !slices.Equal(ids(listed), []int64{first.ID, second.ID}) {
+		t.Fatalf("OpenKeptWorkOfCopy = %v, %v; want the copy's two open entries, oldest first", ids(listed), err)
+	}
+	if none, err := s.OpenKeptWorkOfCopy(ctx, "/home/tasks/none/copy"); err != nil || len(none) != 0 {
+		t.Fatalf("OpenKeptWorkOfCopy of a path with no entry = %v, %v; want none", none, err)
+	}
+
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, first.ID, next, "1:2:3:4", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateTask(ctx, Task{ID: next, Shape: TaskInvestigation, Project: "one", Mode: "interactive",
+		WorktreePath: "/home/tasks/next/copy"}, Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		if got, err := s.KeptWorkEntry(ctx, id); err != nil || !got.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the mark entry %d reads %+v, %v; want it carried on, as the listing said", id, got, err)
+		}
+	}
+	if got, err := s.KeptWorkEntry(ctx, elsewhere.ID); err != nil || !got.Open() {
+		t.Fatalf("the other copy's entry reads %+v, %v after the mark; want it open", got, err)
+	}
+	if still, err := s.OpenKeptWorkOfCopy(ctx, copyPath); err != nil || len(still) != 0 {
+		t.Fatalf("after the mark OpenKeptWorkOfCopy = %v, %v; want none", ids(still), err)
+	}
+}

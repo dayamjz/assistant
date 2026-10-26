@@ -79,8 +79,9 @@ paths: ["internal/service/**"]
   intake's floor (`carriedPosture`, `tasks.Request.DeliveryFloor`, so the
   stricter of it and the project's is decided in intake's one read), and
   adopts the kept copy, which the answer, the completion before the move
-  and the completion after it each hold to what the entry recorded through
-  `internal/tasks`' one reading of it (`holdsKeptWork`,
+  and the completion after it each hold to what every open entry of the
+  copy recorded, the set the mark closes (`store.OpenKeptWorkOfCopy`),
+  through `internal/tasks`' one reading of it (`holdsKeptWork`,
   `tasks.Cleaner.Unheld`), the answer
   written only with the adoption and the claim withdrawn when intake
   refuses the task; land and carry on are each completed at open when a

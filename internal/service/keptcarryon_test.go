@@ -1994,3 +1994,64 @@ func TestACarryOnTakesACopyWhoseKeptObjectsAreStillNamed(t *testing.T) {
 		})
 	}
 }
+
+// A carry on closes every open entry of the copy, so it holds the copy to
+// every one of them, not to the answered one alone (the final full review
+// of ff040fc, P15): the copy is kept at C as entry A, kept again at B as a
+// second entry, and then put back at C with B expired and pruned. Answering
+// the second entry is refused naming B, and so is answering A, though A's
+// own commit stands: the mark would close the second entry over work the
+// successor never receives. Nothing is claimed and no task is created.
+// Before, answering A succeeded and marked both entries carried on.
+func TestACarryOnHoldsTheCopyToEveryEntryItWouldClose(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, first := plantKeptInvestigation(t, h, subject, repository.ID)
+	c := git(t, first.CopyPath, "rev-parse", "HEAD")
+	if err := writeFile(first.CopyPath+"/more.txt", "what the worker found next\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, first.CopyPath, "add", "-A")
+	git(t, first.CopyPath, "commit", "--quiet", "-m", "the worker's second commit")
+	b := git(t, first.CopyPath, "rev-parse", "HEAD")
+	second := keepTaskCopy(t, h, old)
+	if second.ID == first.ID || !second.Open() || !slices.Contains(second.Holds, b) || slices.Contains(first.Holds, b) {
+		t.Fatalf("the copy kept again reads %+v beside %+v; want a second open entry holding %s, which the first does not", second, first, b)
+	}
+	// Back to C without a root reference naming B, then B expired and
+	// pruned, so nothing the copy names reaches it.
+	git(t, first.CopyPath, "checkout", "--quiet", "--detach", c)
+	git(t, first.CopyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+	git(t, first.CopyPath, "prune", "--expire=now")
+	if _, err := vcsResolve(t, first.CopyPath, b); err == nil {
+		t.Fatalf("the second commit %s is still in the copy after the prune", b)
+	}
+	before := taskCount(t, h)
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		for _, entry := range []store.KeptWork{second, first} {
+			var out machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), b) {
+				t.Fatalf("carrying entry %d on while the copy no longer holds %s = %+v, %v; want it refused naming the commit", entry.ID, b, out, err)
+			}
+		}
+		for _, id := range []int64{first.ID, second.ID} {
+			got, err := recordsOf(t, h).KeptWorkEntry(ctx, id)
+			if err != nil || !got.Open() || got.CarryOnClaimed() {
+				t.Fatalf("after the refusals entry %d reads %+v, %v; want it open and unclaimed", id, got, err)
+			}
+		}
+		if n := taskCount(t, h); n != before {
+			t.Fatalf("the refusals created %d task(s)", n-before)
+		}
+	})
+}

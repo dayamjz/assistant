@@ -90,7 +90,8 @@ paths: ["internal/store/**"]
   `KeptWorkCarriedOnBy` reads the answered entries back for that task, the
   copy identity dispatch holds the adopted copy to. A carry on moves the
   whole copy, so its mark answers and marks every other open entry of the
-  copy, whenever it was kept, since its state moved with the copy; and no
+  copy, whenever it was kept, since its state moved with the copy, the set
+  `OpenKeptWorkOfCopy` lists for the caller to hold the copy to first; and no
   answer or claim is written while an entry of the copy holds one not yet
   carried out, a claim on the entry itself included
   (`ErrKeptWorkCopyOwed`), and

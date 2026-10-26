@@ -691,7 +691,8 @@ are not all the copy holds. Land reads the copy the same way and is refused
 the same; put the copy back in that layout to see it or land it. A copy
 kept again at another state has an entry for each state; carrying it on
 answers and closes all of them, since the whole copy moves to the new
-task. While one entry of a copy has an answer still being
+task, and so is refused unless the copy still holds what every one of
+them recorded. While one entry of a copy has an answer still being
 carried out (a landing whose run is not started yet, or a carry on not
 finished), the copy's other entries are not answered, and the
 task is not promoted; the answer under way finishes on its own or at the
