@@ -598,7 +598,10 @@ out is carried out at the next start, checked again the same way.
 Carry on, `--answer carry-on` with the same flags, creates a new task of
 the same project, shape and branch whose copy is the kept copy, moved to
 the new task's own place and asserted the way every task's copy is before
-anything is written into it; the task the copy outlived keeps its record,
+anything is written into it; a delivery task's successor is recorded under
+the outlived task's delivery posture when that is stricter than the
+project's now, and under the project's otherwise, so continued work is
+never held to less than the task it continues was; the task the copy outlived keeps its record,
 the new task's instructions are the old intake text, or for a promoted
 task the intent it was promoted with, with a note saying what is already
 there, and the task dispatches into the copy as any task
@@ -614,7 +617,11 @@ copy), or a delivery copy whose task branch stands somewhere other than
 HEAD, or whose task branch cannot be created at HEAD because a branch of
 the copy's is in the way of its name (a branch `topic/side` beside the
 task branch `topic`, or `topic` beside `topic/x`), is refused with
-nothing recorded and the refusal says what to change. A run's copy is not
+nothing recorded and the refusal says what to change. A copy that no
+longer holds a commit it was kept on, neither on HEAD, on a reference nor
+in a reflog entry (amended away and then expired and pruned, say), is
+refused the same way, naming the commit; a copy whose reflog still records
+it is carried on. A run's copy is not
 carried on in this build (it is a worktree of the gate on a branch of
 yours, which a task's copy cannot be): land it, or push its commit
 yourself.

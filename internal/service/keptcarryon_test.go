@@ -1638,3 +1638,288 @@ func refFiles(t *testing.T, clone string) string {
 	slices.Sort(lines)
 	return strings.Join(lines, "\n")
 }
+
+// A carry on stopped after the move is completed from the entry alone,
+// as the header promises of every step after the claim, when the kept copy
+// amended the commit it was kept on (the final full review of feddd14): the
+// entry holds C, the copy's HEAD was amended to D before the answer, so C
+// stands on no reference and in HEAD's reflog alone. The uninterrupted
+// answer takes that copy, so the completion of the stopped one must too:
+// the next start adopts the copy at the new task's path, marks the entry
+// and launches the worker. Before the reflog counted, the completion
+// refused the copy as not containing C and left the claim and the
+// project's dispatch held for good.
+func TestACarryOnStoppedAfterTheMoveAdoptsACopyWhoseKeptCommitWasAmended(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "a carry on stopped after the move launching in the amended copy")
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	if !slices.Contains(entry.Holds, kept) {
+		t.Fatalf("the entry holds %v; want the worker's commit %s among them", entry.Holds, kept)
+	}
+	if err := writeFile(entry.CopyPath+"/finding.txt", "what the worker found, reworded\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "-A")
+	git(t, entry.CopyPath, "commit", "--quiet", "--amend", "-m", "the worker's commit, amended")
+	if amended := git(t, entry.CopyPath, "rev-parse", "HEAD"); amended == kept {
+		t.Fatal("the amend left HEAD where it was")
+	}
+
+	stopped := errors.New("the service stopped between the copy's move and the entry's mark")
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, func() error { return stopped }), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil || !strings.Contains(err.Error(), "stopped between") {
+			t.Fatalf("the carry on past the stopped seam = %+v, %v; want the stop", out, err)
+		}
+	})
+	answered, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+	if err != nil || answered.CarriedOnAt.IsKnown() {
+		t.Fatalf("after the stop the entry reads %+v, %v; want it owed", answered, err)
+	}
+	reserved := answered.CarriedOnTask.Or("")
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		if done := waitCarriedOn(t, h, entry.ID); done.CarriedOnTask.Or("") != reserved {
+			t.Fatalf("the completed carry on names task %s, want %s", done.CarriedOnTask.Or(""), reserved)
+		}
+		waitLaunched(t, h, reserved)
+	})
+}
+
+// A copy that no longer holds a commit it was kept on at all is not
+// carried on, and the same reading decides before the claim as the
+// completion's does after the move (the final full review of feddd14): the
+// kept commit C is amended away, its reflog entries expired and the object
+// pruned, so neither HEAD, a reference nor a reflog of the copy reaches C.
+// The answer is refused naming C before anything is claimed: the entry is
+// open and unclaimed, no task is created and the copy stands where it was,
+// so a land of what the copy holds now stays open to it. The copy whose
+// reflog still records C is the control, carried on in
+// TestACarryOnStoppedAfterTheMoveAdoptsACopyWhoseKeptCommitWasAmended.
+func TestACarryOnIsRefusedForACopyThatNoLongerHoldsWhatItWasKeptOn(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	if err := writeFile(entry.CopyPath+"/finding.txt", "what the worker found, reworded\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, entry.CopyPath, "add", "-A")
+	git(t, entry.CopyPath, "commit", "--quiet", "--amend", "-m", "the worker's commit, amended")
+	git(t, entry.CopyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+	git(t, entry.CopyPath, "prune", "--expire=now")
+	if _, err := vcsResolve(t, entry.CopyPath, kept); err == nil {
+		t.Fatalf("the kept commit %s is still in the copy after the prune", kept)
+	}
+	before := taskCount(t, h)
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+			t.Fatalf("carrying on a copy that no longer holds %s = %+v, %v; want it refused naming the commit", kept, out, err)
+		}
+		still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !still.Open() || still.CarryOnClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+		if n := taskCount(t, h); n != before {
+			t.Fatalf("the refusal created %d task(s)", n-before)
+		}
+		if _, err := os.Stat(entry.CopyPath + "/finding.txt"); err != nil {
+			t.Fatalf("the refusal moved the copy: %v", err)
+		}
+	})
+}
+
+// vcsResolve resolves rev in the repository at path through internal/vcs,
+// as the service reads a copy.
+func vcsResolve(t *testing.T, path, rev string) (string, error) {
+	t.Helper()
+	copied, err := vcs.OpenWorktree(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return copied.ResolveCommit(t.Context(), rev)
+}
+
+// A carry on completed from a standing claim, before the copy is moved,
+// reads the copy the way the answer and the completion after the move do
+// (the final full review of feddd14): the answer claims the entry, and
+// before the completion reads it the kept commit C is amended away,
+// expired and pruned from the copy. The completion refuses naming C with
+// nothing moved: the claim stands owed, the copy at the kept path, and the
+// next start refuses it the same way. Without the check before the move
+// the copy is moved and marked while it no longer holds what the entry
+// recorded.
+func TestACarryOnCompletedBeforeTheMoveReadsTheCopyAsTheAnswerDid(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	prune := func() error {
+		if err := writeFile(entry.CopyPath+"/finding.txt", "what the worker found, reworded\n"); err != nil {
+			return err
+		}
+		git(t, entry.CopyPath, "add", "-A")
+		git(t, entry.CopyPath, "commit", "--quiet", "--amend", "-m", "the worker's commit, amended")
+		git(t, entry.CopyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+		git(t, entry.CopyPath, "prune", "--expire=now")
+		return nil
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnClaimInterruptForTest(t, o, prune), func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+			t.Fatalf("completing a carry on of a copy that lost %s after the claim = %+v, %v; want it refused naming the commit", kept, out, err)
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.Open() || !owed.CarryOnClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open with its claim owed", owed, err)
+		}
+		if _, err := os.Stat(entry.CopyPath + "/finding.txt"); err != nil {
+			t.Fatalf("the refusal moved the copy: %v", err)
+		}
+		newPath, err := h.TaskCopy(owed.CarriedOnTask.Or(""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(newPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("something stands at the reserved task's path after the refusal: %v", err)
+		}
+	})
+}
+
+// Carrying on records the new task under the outlived task's posture when
+// that is stricter than the project's, and under the project's otherwise
+// (the final full review of feddd14): in a project whose trusted copy says
+// local, a delivery task recorded gated is carried on, and its successor
+// reads gated, so its own push starts a validation run as the outlived
+// task's would have; with the trusted copy tightened to gated, a task
+// recorded local is carried on and its successor reads gated, the
+// project's. Without the posture carried the first successor read local,
+// and the continued work's push started no run.
+func TestCarryingOnKeepsTheOutlivedTasksStricterPosture(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	homeDelivery(t, h, config.DeliveryLocal)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	publishTrusted(t, subject, `{"delivery": "local"}`)
+	// Both copies are cut before either is kept, since a kept entry holds
+	// every later dispatch of its project.
+	gatedOld := plantDeliveryCopyUnder(t, h, subject, repository, "task/gated", config.DeliveryGated)
+	localOld := plantDeliveryCopyUnder(t, h, subject, repository, "task/local", config.DeliveryLocal)
+	gatedEntry, localEntry := keepTaskCopy(t, h, gatedOld), keepTaskCopy(t, h, localOld)
+	if !gatedEntry.Open() || !localEntry.Open() {
+		t.Fatalf("the copies were kept as %+v and %+v; want two open entries", gatedEntry, localEntry)
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(gatedOld, gatedEntry), &out); err != nil {
+			t.Fatalf("carrying the gated task's copy on in a local project: %v", err)
+		}
+		if created, err := recordsOf(t, h).Task(ctx, out.Task); err != nil || created.Delivery != store.Known(config.DeliveryGated) {
+			t.Fatalf("the gated task's successor reads %+v, %v; want it recorded gated, the outlived task's stricter posture", created, err)
+		}
+
+		publishTrusted(t, subject, `{"delivery": "gated"}`)
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(localOld, localEntry), &out); err != nil {
+			t.Fatalf("carrying the local task's copy on in a project tightened to gated: %v", err)
+		}
+		if created, err := recordsOf(t, h).Task(ctx, out.Task); err != nil || created.Delivery != store.Known(config.DeliveryGated) {
+			t.Fatalf("the local task's successor reads %+v, %v; want it recorded gated, the project's posture now", created, err)
+		}
+	})
+}
+
+// plantDeliveryCopyUnder records a failed delivery task of the repository
+// on branch under the posture, with its copy shaped as dispatch shapes one
+// and holding its own commit, ready for keepTaskCopy. It returns the task.
+func plantDeliveryCopyUnder(t *testing.T, h *home.Home, subject string, repository store.Repository, branch string,
+	posture config.Delivery) string {
+	t.Helper()
+	ctx := t.Context()
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(ctx, store.Task{
+		ID: id, Shape: store.TaskDelivery, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+		RepositoryID: store.Known(repository.ID), Branch: store.Known(branch), Delivery: store.Known(posture),
+	}, store.Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
+		t.Fatal(err)
+	}
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-gone", store.SessionHost{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.AppendTaskEvent(ctx, id, "failed", "the worker gave up"); err != nil {
+		t.Fatal(err)
+	}
+	_ = records.Close()
+	instructions, err := h.TaskInstructions(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFile(instructions, "Fix the parser.\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, filepath.Dir(copyPath), "clone", "--quiet", repository.UpstreamURL, copyPath)
+	git(t, copyPath, "remote", "remove", "origin")
+	git(t, copyPath, "remote", "add", "assistant", gateRepositoryOf(t, h, subject))
+	git(t, copyPath, "checkout", "--quiet", "-b", branch)
+	if err := writeFile(filepath.Join(copyPath, "own.txt"), "the task's own work on "+branch+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	git(t, copyPath, "add", "-A")
+	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
+	return id
+}

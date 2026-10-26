@@ -75,7 +75,11 @@ paths: ["internal/service/**"]
   withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
   entry left open, which creates a new task through `queue.Create` with
   the identifier the claim named, a promoted task's recorded
-  `DeliveryIntent` as its instructions, and adopts the kept copy, the answer
+  `DeliveryIntent` as its instructions and the outlived task's posture when
+  stricter than the project's (`carriedPosture`), and adopts the kept copy,
+  which the answer, the completion before the move and the completion
+  after it each hold to the commits the entry recorded, from HEAD, a
+  reference or a reflog entry (`holdsKeptCommits`), the answer
   written only with the adoption and the claim withdrawn when intake
   refuses the task; land and carry on are each completed at open when a
   stopped service left them. Discard (`keptdiscard.go`) is the preview

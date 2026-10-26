@@ -458,7 +458,10 @@ func (s *Service) releaseLanding(id int64) {
 // run. A run with no reference or no checkpoint, a create stopped before
 // its reference was written or a run ended before it executed, is not that
 // run: nothing of the work reached validation through it, so the retry
-// starts another, which supersedes it.
+// starts another, which supersedes it. A reference or a checkpoint that
+// cannot be read is an error and not that absence (the final full review
+// of feddd14): the completion fails, the claim stands, and the next call
+// or start looks again.
 func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan landing, bare *vcs.Repository) (string, error) {
 	claimed, ok := entry.LandingClaimedAt.Get()
 	if !ok {
@@ -472,7 +475,15 @@ func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan
 		if r.Branch != plan.branch || r.SubmittedHead != plan.head || r.CreatedAt.Before(claimed) {
 			continue
 		}
-		if at, err := bare.ResolveCommit(ctx, "refs/assistant/runs/"+r.ID); err != nil || at != plan.head {
+		// A reference that cannot be read is a read that failed, never a
+		// run that is not the landing's: taking it for no run would start a
+		// second run that supersedes the one validating the work.
+		switch at, err := bare.ResolveCommit(ctx, "refs/assistant/runs/"+r.ID); {
+		case errors.Is(err, vcs.ErrRefNotFound):
+			continue
+		case err != nil:
+			return "", fmt.Errorf("service: reading the submitted reference of run %s in the gate of %s: %w", r.ID, plan.repository.ID, err)
+		case at != plan.head:
 			continue
 		}
 		if _, err := s.store.LatestGraphCheckpoint(ctx, r.ID); errors.Is(err, store.ErrNotFound) {
