@@ -30,6 +30,7 @@ func TestAnAnswerExitsWithFailureExactlyWhenARetryBeganNoWork(t *testing.T) {
 		machine.AnswerStopped:             true,
 		machine.AnswerWorkerStopped:       true,
 		machine.AnswerLanded:              true,
+		machine.AnswerRetired:             true,
 	}
 	for _, effect := range machine.AnswerEffects() {
 		ok, decided := succeeds[effect]
