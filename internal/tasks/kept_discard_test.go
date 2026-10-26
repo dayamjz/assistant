@@ -307,20 +307,6 @@ func rawGitErr(dir string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
-// rawGitIn runs git directly in dir with stdin as its input, and fails the
-// test when git fails.
-func rawGitIn(t *testing.T, dir, stdin string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Stdin = strings.NewReader(stdin)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // The digest is framed, so no byte string can stand for a boundary, and it
 // carries every entry's type and permission bits. The reviewer's forgery,
 // inside an untracked nested repository, which is walked entry by entry: a
