@@ -586,3 +586,98 @@ func TestAPassUnchangedInAStageSurfacesAtTheEscalationWindow(t *testing.T) {
 		t.Fatalf("a held pass nothing moves had its screen captured %d time(s)", n)
 	}
 }
+
+// PRD principle P15, for a pass that never filed its report: an
+// investigation pass whose worker committed work and ended before it
+// reported is retired on an answer, and its copy, which the cleanup decision
+// keeps for want of a report nothing will now store, is a kept-work entry
+// rather than a copy nothing surfaces.
+func TestRetiringAnUnreportedPassWithCommittedWorkKeepsItAsKeptWork(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	const pass = "taskhkunrepa"
+	var copyPath string
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		var err error
+		if copyPath, err = sub.h.TaskCopy(pass); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		heldGit(t, filepath.Dir(copyPath), "clone", "--quiet", sub.upstream, copyPath)
+		writeDocument(t, copyPath, "AGENTS.md", "a correction never reported\n")
+		heldGit(t, copyPath, "add", "-A")
+		heldGit(t, copyPath, "commit", "--quiet", "-m", "correct the drift")
+		if _, err := records.CreateTask(t.Context(), store.Task{
+			ID: pass, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+			RepositoryID: store.Known(hkRepository), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}); err != nil {
+			t.Fatal(err)
+		}
+		launched(t, records, pass, "", "pane-unreported")
+		sub.terminals.dead("pane-unreported")
+	})
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 {
+		t.Fatalf("the pass carries %+v, want one retirement hold", holds)
+	}
+	if answered, err := sub.answer(t, pass, holds[0].Key, machine.AnswerRetire); err != nil || answered.Effect != machine.AnswerRetired {
+		t.Fatalf("retire answered %+v, %v", answered, err)
+	}
+	if _, err := os.Stat(filepath.Join(copyPath, "AGENTS.md")); err != nil {
+		t.Fatalf("retiring removed the pass's copy: %v", err)
+	}
+	kept, err := sub.records(t).OpenKeptWork(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].TaskID != store.Known(pass) {
+		t.Fatalf("the open kept work is %+v, want one entry about pass %s", kept, pass)
+	}
+}
+
+// A pass the program can retire on proof, older than an interval, is never
+// left retired with its retirement hold open: the loop offers the hold and
+// starts the on-proof retirement from the same reading, and whichever lands
+// first, the other gives way. Retired with an open retirement hold is the
+// state refused, since answering that hold could only be refused. An open
+// stop hold keeps the first pass from starting the retirement, so the pass
+// an interval later is the one that does both.
+func TestARetiredPassIsNeverLeftWithItsRetirementHoldOpen(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhkbothaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-both")
+		sub.terminals.dead("pane-both")
+		passRun(t, records, "run-both", store.RunPassed, true)
+		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: stoppedKey(pass, 1), TaskID: store.Known(pass),
+			Subject: "whether to begin the work again", Detail: "d"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if len(sub.retired) != 0 {
+		t.Fatal("the first pass started an on-proof retirement with the stop's hold open")
+	}
+	if _, err := sub.records(t).ResolveHold(t.Context(), stoppedKey(pass, 1), "stop", store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	<-sub.retired
+	_, retired := sub.retirement(t, pass)
+	open := 0
+	for _, h := range sub.retireHolds(t, pass) {
+		if h.Open() {
+			open++
+		}
+	}
+	if retired && open != 0 {
+		t.Fatalf("the pass was retired and still carries %d open retirement hold(s)", open)
+	}
+	if !retired && open != 1 {
+		t.Fatalf("the pass was not retired and carries %d open retirement hold(s), want the one a person answers", open)
+	}
+}

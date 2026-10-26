@@ -494,3 +494,38 @@ func TestCheckRetirementRefusesAnAnsweredHold(t *testing.T) {
 		t.Fatalf("the retirement itself = %v, want ErrHoldResolved", err)
 	}
 }
+
+// A retired pass is offered no retirement hold, and a pass with one open is
+// not retired on proof, whichever of the two the store sees first: the
+// program never answers a hold that waits on a person, and a hold on a pass
+// whose claim is released could only be refused.
+func TestARetirementHoldAndAnOnProofRetirementExcludeEachOther(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	isRetireHold := func(key string) bool { return strings.Contains(key, "/housekeeping-retire/") }
+	for _, holdFirst := range []bool{true, false} {
+		s := openStore(t)
+		seedRepository(t, s)
+		attempt, run := promotedPassWithRun(t, s, "taskhkaaaaha", "housekeeping/one", RunPassed)
+		inc := incarnationOf(t, s)
+		h := Hold{Key: "task/taskhkaaaaha/housekeeping-retire/1/1/" + run.ID, TaskID: Known("taskhkaaaaha"),
+			Subject: "retire?", Detail: "d"}
+		onProof := Retirement{Task: "taskhkaaaaha", Attempt: attempt.Sequence, Run: run.ID, OnProof: true,
+			Relaunches: isRetireHold, Ended: ended, Delivered: relayed}
+		if holdFirst {
+			if _, err := s.RegisterHoldUnder(ctx, inc, attempt.Sequence, h); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.RetireHousekeepingPass(ctx, onProof); !errors.Is(err, ErrPassMoves) {
+				t.Fatalf("an on-proof retirement with the retirement hold open = %v, want ErrPassMoves", err)
+			}
+			continue
+		}
+		if _, err := s.RetireHousekeepingPass(ctx, onProof); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.RegisterHoldUnder(ctx, inc, attempt.Sequence, h); !errors.Is(err, ErrPassRetired) {
+			t.Fatalf("a retirement hold for a retired pass = %v, want ErrPassRetired", err)
+		}
+	}
+}

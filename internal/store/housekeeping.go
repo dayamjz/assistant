@@ -171,9 +171,12 @@ type Retirement struct {
 	Note string
 	By   Resolver
 	// Relaunches reports whether an open hold key offers to relaunch the
-	// pass's worker. An on-proof retirement is refused while one is open;
-	// an answered one closes each with AnswerStop under By. Its owner is
-	// internal/service, which keys those holds.
+	// pass's worker. An answered retirement closes each with AnswerStop
+	// under By. An on-proof retirement is refused while one it names is
+	// open, so for one the caller names every hold that waits on a person
+	// about the pass's end, its retirement hold among them: the program
+	// never answers such a hold. Its owner is internal/service, which keys
+	// those holds.
 	Relaunches func(key string) bool
 	// Ended reports whether a run status is one a run has ended in, which
 	// internal/runs' move table owns.
@@ -440,7 +443,8 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 // latest attempt, attempt, which is zero for a task never dispatched: a loop
 // the watchdog replaced registers nothing, and a hold decided against an
 // attempt the task has moved past is refused with a *TaskMovedError, nothing
-// written. It is how the loop offers a housekeeping pass's retirement hold.
+// written, and so is a retired housekeeping pass, with ErrPassRetired. It is
+// how the loop offers a housekeeping pass's retirement hold.
 func (s *Store) RegisterHoldUnder(ctx context.Context, inc Incarnation, attempt int64, h Hold) (Hold, error) {
 	if err := validateHold(h); err != nil {
 		return Hold{}, err
@@ -460,6 +464,13 @@ func (s *Store) RegisterHoldUnder(ctx context.Context, inc Incarnation, attempt 
 		}
 		if stands != attempt {
 			return &TaskMovedError{Task: task, Anchor: AnchoredAttempt, Expected: attempt, Stands: stands}
+		}
+		// A retired pass's claim is released, so a hold offering to retire
+		// it could only be refused; the read is in the registering
+		// transaction, so a retirement and a registration are wholly
+		// ordered.
+		if err := refuseRetiredTx(ctx, tx, task); err != nil {
+			return err
 		}
 		return insertHold(ctx, tx, h)
 	})

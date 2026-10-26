@@ -111,7 +111,12 @@ import (
 //
 // After either retirement the pass's copy is asked the cleanup decision with
 // the terminal read dead, so a copy holding work that has not landed becomes
-// a kept work entry (P15) and nothing is removed without a proof. A retired
+// a kept work entry (P15) and nothing is removed without a proof; a copy
+// refused for a report never stored or a decision never registered is kept
+// the same way (tasks.KeptOnRetirement), since no later cleanup is asked for
+// a retired pass. An on-proof retirement gives way to an open retirement
+// hold, which waits on a person, and the store refuses a retirement hold for
+// a pass already retired, so the two are never both left standing. A retired
 // pass is never begun again: every attempt claim refuses it in the store
 // (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
 // anything.
@@ -267,8 +272,9 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	cancel()
 	var moved *store.TaskMovedError
 	switch {
-	case errors.As(err, &moved):
-		// Begun again since the pass read it: it moves, and is owed none.
+	case errors.As(err, &moved), errors.Is(err, store.ErrPassRetired):
+		// Begun again since the pass read it, so it moves, or retired on
+		// proof since, so its claim is released: either way it is owed none.
 	case err != nil:
 		out.Err = errors.Join(out.Err, err)
 	default:
@@ -539,6 +545,16 @@ func passRelaunches(task string) func(string) bool {
 	return func(key string) bool { return isRetryHold(key, task) }
 }
 
+// passWaits is the Relaunches an on-proof retirement of task is decided
+// with: every hold that waits on a person about whether the pass ends, the
+// relaunch holds and its retirement hold, since the program answers none.
+func passWaits(task string) func(string) bool {
+	return func(key string) bool {
+		_, retire := parseRetireHold(key, task)
+		return retire || isRetryHold(key, task)
+	}
+}
+
 // retirementOf is the store request for a retirement of o, with the
 // owners' predicates.
 func retirementOf(task string, attempt int64, run string) store.Retirement {
@@ -560,8 +576,9 @@ func (s *Service) retireOnProofFromPass(o taskstate.Observed) {
 			return
 		}
 	}
+	waits := passWaits(snap.Task.ID)
 	for _, h := range snap.Holds {
-		if h.Open() && isRetryHold(h.Key, snap.Task.ID) {
+		if h.Open() && waits(h.Key) {
 			return
 		}
 	}
@@ -622,7 +639,7 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 	}
 	attempt := latestSequence(o.Snapshot.Attempts)
 	r := retirementOf(id, attempt, run)
-	r.OnProof = true
+	r.OnProof, r.Relaunches = true, passWaits(id)
 	branch, ok := o.Snapshot.Task.Branch.Get()
 	repository, hasRepository := o.Snapshot.Task.RepositoryID.Get()
 	if !ok || !hasRepository {
@@ -670,14 +687,24 @@ func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
 }
 
 // askRetiredCleanup asks the cleanup decision for a retired pass's copy,
-// whose worker a retirement has read dead, and logs what it answered; a
-// copy kept for its work becomes a kept work entry through logCleanup.
+// whose worker a retirement has read dead, and logs what it answered. A copy
+// kept for its work becomes a kept work entry through logCleanup, and so
+// does a copy tasks.KeptOnRetirement keeps for a report or hold its
+// retirement means will never come (P15).
 func (s *Service) askRetiredCleanup(ctx context.Context, id string) {
 	if s.cleaner == nil {
 		s.log.Printf("the isolated copy of retired housekeeping pass %s was not cleaned up: this service was built without a cleanup decision", id)
 		return
 	}
 	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: taskstate.Dead})
+	var refused *tasks.CleanupRefusal
+	if errors.As(err, &refused) && !refused.Unlanded() {
+		if kept, ok := tasks.KeptOnRetirement(refused); ok {
+			s.log.Printf("the isolated copy of retired housekeeping pass %s is kept (%s): %s", id, refused.Reason, refused.Detail)
+			s.keepWork(ctx, kept)
+			return
+		}
+	}
 	s.logCleanup(ctx, done, err)
 }
 

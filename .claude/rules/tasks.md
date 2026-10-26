@@ -39,7 +39,10 @@ paths: ["internal/tasks/**"]
   stays open until answered or until a cleanup removes the copy on a
   proof. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
-  refusals are a copy kept for its work; `kept_test.go` places every reason.
+  refusals are a copy kept for its work, and `KeptOnRetirement` the one
+  statement for a retired housekeeping pass's copy, which also keeps a copy
+  refused for a report or hold its retirement means will never come;
+  `kept_test.go` places every reason for both.
 
 Read `doc.go` before changing the floor or the clear condition, and for the
 residual gaps; read `promote.go`'s opening comment and `doc.go` before

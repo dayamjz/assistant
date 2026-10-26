@@ -59,3 +59,49 @@ func TestEveryRefusalIsPlacedAsKeptWorkOrNot(t *testing.T) {
 		t.Error("KeptOf of no refusal answered a kept copy")
 	}
 }
+
+// keptOnRetirement is which refusals keep a retired housekeeping pass's copy
+// for its work, written from PRD section 6's housekeeping and P15 one reason
+// at a time: the reasons keptForWork keeps, and a report or a hold that
+// retirement means nothing will now store or register, since no later
+// cleanup is asked for a retired pass. A terminal, a changed or missing copy
+// and a moved shape are no fact about the copy's work.
+var keptOnRetirement = map[CleanupReason]bool{
+	ReasonUnproven:           true,
+	ReasonCopyDirty:          true,
+	ReasonCopyUntracked:      true,
+	ReasonCopyStash:          true,
+	ReasonReportUnstored:     true,
+	ReasonHoldUnregistered:   true,
+	ReasonTerminalUnobserved: false,
+	ReasonTerminalLive:       false,
+	ReasonCopyChanged:        false,
+	ReasonCopyMissing:        false,
+	ReasonShapeMoved:         false,
+}
+
+// Every reason is placed for a retired pass's copy too, and KeptOnRetirement
+// carries the refusal's owner and reason for the ones it keeps.
+func TestEveryRefusalIsPlacedForARetiredPass(t *testing.T) {
+	t.Parallel()
+	for reason := range remedies {
+		want, placed := keptOnRetirement[reason]
+		if !placed {
+			t.Errorf("%s is not placed for a retired pass", reason)
+			continue
+		}
+		kept, ok := KeptOnRetirement(&CleanupRefusal{Task: "t", Reason: reason, Detail: "found"})
+		switch {
+		case ok != want:
+			t.Errorf("KeptOnRetirement(%s) answered %v, want %v", reason, ok, want)
+		case ok && (kept.Task != "t" || kept.Reason != string(reason) || !strings.Contains(kept.Detail, "found")):
+			t.Errorf("KeptOnRetirement(%s) = %+v, want the refusal's owner and reason", reason, kept)
+		}
+	}
+	if len(keptOnRetirement) != len(remedies) {
+		t.Errorf("the placement names %d reasons and the refusals carry %d", len(keptOnRetirement), len(remedies))
+	}
+	if _, ok := KeptOnRetirement(nil); ok {
+		t.Error("KeptOnRetirement of no refusal answered a kept copy")
+	}
+}
