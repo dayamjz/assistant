@@ -42,6 +42,16 @@ type Request struct {
 	// never lighter, which is a *PostureError. It is refused on an
 	// investigation task, which has no posture.
 	Delivery string
+	// DeliveryFloor is a delivery posture the task is recorded under unless
+	// the project's is stricter, which is then recorded: the stricter of
+	// the two, decided against the one read of the project's posture that
+	// records it, never a *PostureError. It is what a carry on asks for
+	// from the task the copy outlived, so continued work is held to what
+	// that task was held to and never to less, whichever way the project
+	// has moved since. It is text decoded by config.ParseDelivery, refused
+	// on an investigation task and beside Delivery, which asks for one
+	// posture exactly.
+	DeliveryFloor string
 	// Repository names the repository the task works in. A delivery task
 	// must name one; an investigation task may, so its copy is cut from the
 	// right primary, and may name none.
@@ -179,10 +189,23 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 			return Created{}, fmt.Errorf("%w: an investigation task delivers nothing and has no delivery posture, and %q was asked for",
 				ErrRequest, req.Delivery)
 		}
+		if strings.TrimSpace(req.DeliveryFloor) != "" {
+			return Created{}, fmt.Errorf("%w: an investigation task delivers nothing and has no delivery posture, and a floor of %q was asked for",
+				ErrRequest, req.DeliveryFloor)
+		}
 	}
-	var requested config.Delivery
+	var requested, floor config.Delivery
 	if text := strings.TrimSpace(req.Delivery); text != "" {
 		if requested, err = config.ParseDelivery(text); err != nil {
+			return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
+		}
+	}
+	if text := strings.TrimSpace(req.DeliveryFloor); text != "" {
+		if requested != "" {
+			return Created{}, fmt.Errorf("%w: a posture, %q, and a floor, %q, were both asked for, and a request asks for one or the other",
+				ErrRequest, req.Delivery, req.DeliveryFloor)
+		}
+		if floor, err = config.ParseDelivery(text); err != nil {
 			return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
 		}
 	}
@@ -211,7 +234,7 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	}
 	if shape == store.TaskDelivery {
 		task.Branch = store.Known(branch)
-		posture, err := q.recordedPosture(ctx, repository, id, requested)
+		posture, err := q.recordedPosture(ctx, repository, id, requested, floor)
 		if err != nil {
 			return Created{}, err
 		}
@@ -307,14 +330,19 @@ func (q *Queue) CompleteIntake(ctx context.Context, id, text string) (string, er
 
 // recordedPosture is the posture a delivery task is recorded under, at
 // intake or at promotion, which are its two callers: the project's, read
-// through the posture reader, or the coordinator's request when it asked for
-// one no lighter. The project's is read whether or not a request was made,
-// because "never lighter" is a comparison against it and a request cannot
-// stand in for a read that failed: an unreadable trusted copy refuses with
-// ErrPostureUnreadable, and a request no stricter than nothing is not one
-// this can establish.
+// through the posture reader; the coordinator's request when it asked for
+// one no lighter; or, given a floor and no request, the stricter of the
+// floor and the project's, which is never a refusal. The project's is read
+// whether or not a request or a floor was made, once, because "never
+// lighter" and "the stricter of" are each a comparison against it and
+// neither can stand in for a read that failed: an unreadable trusted copy
+// refuses with ErrPostureUnreadable, and a request or a floor no stricter
+// than nothing is not one this can establish. The one read is what makes
+// a floor hold: the project's posture is compared and recorded in the
+// same read, so a project that moves between two reads cannot put the
+// task below the floor.
 func (q *Queue) recordedPosture(ctx context.Context, repository store.Repository, id string,
-	requested config.Delivery) (config.Delivery, error) {
+	requested, floor config.Delivery) (config.Delivery, error) {
 	project, err := q.posture(ctx, repository, id)
 	if err != nil {
 		return "", fmt.Errorf("%w: repository %s: %w", ErrPostureUnreadable, repository.ID, err)
@@ -323,13 +351,15 @@ func (q *Queue) recordedPosture(ctx context.Context, repository store.Repository
 		return "", fmt.Errorf("%w: repository %s declares %q, which is not a posture this build defines",
 			ErrPostureUnreadable, repository.ID, project)
 	}
-	if requested == "" {
-		return project, nil
-	}
-	if requested.Lighter(project) {
+	switch {
+	case requested != "" && requested.Lighter(project):
 		return "", &PostureError{Requested: requested, Project: project}
+	case requested != "":
+		return requested, nil
+	case floor != "" && project.Lighter(floor):
+		return floor, nil
 	}
-	return requested, nil
+	return project, nil
 }
 
 // dispose decides a new task's disposition from the tasks it read. The claim

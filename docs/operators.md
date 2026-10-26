@@ -618,10 +618,11 @@ HEAD, or whose task branch cannot be created at HEAD because a branch of
 the copy's is in the way of its name (a branch `topic/side` beside the
 task branch `topic`, or `topic` beside `topic/x`), is refused with
 nothing recorded and the refusal says what to change. A copy that no
-longer holds a commit it was kept on, neither on HEAD, on a reference nor
-in a reflog entry (amended away and then expired and pruned, say), is
-refused the same way, naming the commit; a copy whose reflog still records
-it is carried on. A run's copy is not
+longer holds a commit or object it was kept on, nothing it names reaching
+it, neither HEAD, a reference, a root reference such as `ORIG_HEAD` nor a
+reflog entry (amended away and then expired and pruned, say), is refused
+the same way, naming what is missing; a copy whose reflog or `ORIG_HEAD`
+still records it is carried on. A run's copy is not
 carried on in this build (it is a worktree of the gate on a branch of
 yours, which a task's copy cannot be): land it, or push its commit
 yourself.

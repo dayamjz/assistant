@@ -1923,3 +1923,74 @@ func plantDeliveryCopyUnder(t *testing.T, h *home.Home, subject string, reposito
 	git(t, copyPath, "commit", "--quiet", "-m", "the task's own commit")
 	return id
 }
+
+// A kept copy is carried on when everything the entry recorded it standing
+// on is still named in it, whatever names it (the delta review of 9ef7722):
+// a tag on a blob, which Keep records by the blob, since the tag stands on
+// it, is named by the tag still; and a commit HEAD was reset away from,
+// with the reflogs expired, is named by ORIG_HEAD, the root reference the
+// reset wrote. Both copies are carried on and their workers start. Before
+// the reading took every name, each was refused as no longer holding what
+// it was kept on, though nothing of it had gone, and the project stayed
+// held.
+func TestACarryOnTakesACopyWhoseKeptObjectsAreStillNamed(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	for _, c := range []struct {
+		name string
+		make func(t *testing.T, copyPath string) (object string, after func())
+	}{
+		{"a tag on a blob", func(t *testing.T, copyPath string) (string, func()) {
+			if err := writeFile(copyPath+"/data.bin", "bytes the tag names\n"); err != nil {
+				t.Fatal(err)
+			}
+			blob := git(t, copyPath, "hash-object", "-w", "data.bin")
+			if err := os.Remove(copyPath + "/data.bin"); err != nil {
+				t.Fatal(err)
+			}
+			git(t, copyPath, "tag", "data", blob)
+			return blob, func() {}
+		}},
+		{"a commit ORIG_HEAD names after a reset", func(t *testing.T, copyPath string) (string, func()) {
+			kept := git(t, copyPath, "rev-parse", "HEAD")
+			return kept, func() {
+				git(t, copyPath, "reset", "--quiet", "--hard", "HEAD~1")
+				git(t, copyPath, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+				if got := git(t, copyPath, "rev-parse", "ORIG_HEAD"); got != kept {
+					t.Fatalf("ORIG_HEAD is %s after the reset, want the kept commit %s", got, kept)
+				}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			service.RequireSweepClearsHere(t, "the carried-on task launching in the copy still naming its kept objects")
+			h := newHome(t)
+			subject := newSubject(t)
+			repository := recordRepository(t, h, subject)
+			old, _ := plantInvestigationCopy(t, h, subject, repository.ID, "")
+			copyPath, err := h.TaskCopy(old)
+			if err != nil {
+				t.Fatal(err)
+			}
+			object, after := c.make(t, copyPath)
+			entry := keepTaskCopy(t, h, old)
+			if !entry.Open() || !slices.Contains(entry.Holds, object) {
+				t.Fatalf("the real Keep recorded %+v; want an open entry holding %s", entry, object)
+			}
+			after()
+
+			o, _ := workerOptions(t, h)
+			withServiceOptions(t, o, func(under serviceUnderTest) {
+				var out machine.KeptWorkAnswered
+				if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err != nil {
+					t.Fatalf("carrying on a copy still naming %s: %v", object, err)
+				}
+				waitLaunched(t, h, out.Task)
+			})
+		})
+	}
+}

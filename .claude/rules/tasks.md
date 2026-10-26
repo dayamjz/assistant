@@ -14,7 +14,9 @@ paths: ["internal/tasks/**"]
   a repository file may tighten it and a looser one is a
   `*config.LoosenError`). They refuse with `ErrPostureUnreadable` when that
   read fails rather than assuming one, and let a request tighten it and never
-  loosen it (`*PostureError`).
+  loosen it (`*PostureError`); a floor (`Request.DeliveryFloor`, a carry
+  on's) records the stricter of itself and the project's, decided in the
+  one read, and is never a refusal.
 - A local task's cleanup proof is the content check against the working
   copy's default branch and nothing else.
 - The remote-branch and merged-pull-request proofs follow a commit the gate
@@ -44,7 +46,10 @@ paths: ["internal/tasks/**"]
   records the entry or `NothingKept`, which sees what `vcs.Inventory` sees
   and so not an ignored file; an entry established with nothing lacking
   stays open until answered or until a cleanup removes the copy on a
-  proof. And
+  proof. `Unheld` is the one reading of what of its entry's holds a copy
+  no longer holds, by what the copy names now (`copyNames`, HEAD, root
+  references and reflog values included), which `internal/service`'s carry
+  on asks before it claims, moves or adopts the copy. And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far

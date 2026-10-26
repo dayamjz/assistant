@@ -381,7 +381,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: the repository the delivery works in: %w", err)
 	}
-	posture, err := q.recordedPosture(ctx, repository, req.Task, requested)
+	posture, err := q.recordedPosture(ctx, repository, req.Task, requested, "")
 	if err != nil {
 		return Promoted{}, err
 	}

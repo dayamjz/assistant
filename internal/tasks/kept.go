@@ -215,6 +215,82 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	return c.establish(ctx, entry, held)
 }
 
+// Unheld is what the entry recorded its copy standing on that the copy no
+// longer holds: each of store.KeptWork.Holds, the commits and other
+// objects HEAD and the references stood on when the copy was kept, as Keep
+// records them, that no value a name of the copy records now is or reaches.
+// The names are the copy's as copyNames reads them for a discard's loss,
+// HEAD, every reference, every root reference such as ORIG_HEAD, and every
+// reflog entry by either of its values (reflogValues); a value is what a
+// name points at and what that peels to, so a tag on a blob names the
+// blob. A hold that is one of those values is held, whatever its type;
+// one that is a commit a commit value descends from is held, reached by
+// ancestry; any other, a commit nothing names or reaches, a tag, tree or
+// blob nothing names, or an object the copy no longer has, is unheld, in
+// Holds' order. A copy that cannot be read is an error, never an answer.
+// It is read in the Cleaner's layout, without replacement references or a
+// graft file, as Keep reads. internal/service's carry on asks it of the
+// kept copy wherever it stands, by the entry with CopyPath set there, before
+// it claims, before it moves and after it has moved the copy, so the three
+// accept and refuse the same copies: a copy whose kept commit was amended
+// away is carried on while its reflog records it, and refused once that
+// entry has expired and the object is pruned.
+func (c *Cleaner) Unheld(ctx context.Context, entry store.KeptWork) ([]string, error) {
+	copied, err := vcs.OpenWorktree(ctx, entry.CopyPath, c.git...)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: opening the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	inv, err := copied.Inventory(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: reading the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	refs, _, err := copyNames(ctx, entry, copied)
+	if err != nil {
+		return nil, err
+	}
+	logged, err := reflogValues(ctx, entry, copied, refs)
+	if err != nil {
+		return nil, err
+	}
+	values := []string{}
+	add := func(v string) {
+		if v != "" && !slices.Contains(values, v) {
+			values = append(values, v)
+		}
+	}
+	add(inv.Head.Commit)
+	for _, ref := range refs {
+		add(ref.Object)
+		add(ref.Commit)
+	}
+	for _, v := range logged {
+		add(v)
+	}
+	var unheld []string
+	for _, h := range entry.Holds {
+		if slices.Contains(values, h) {
+			continue
+		}
+		held := false
+		if kind, err := copied.ObjectType(ctx, h); err == nil && kind == "commit" {
+			for _, v := range values {
+				reaches, err := copied.IsAncestor(ctx, h, v)
+				if err != nil && !errors.Is(err, vcs.ErrRefNotFound) {
+					return nil, fmt.Errorf("tasks: reading whether the kept copy at %s reaches %s from %s: %w", entry.CopyPath, h, v, err)
+				}
+				if err == nil && reaches {
+					held = true
+					break
+				}
+			}
+		}
+		if !held && !slices.Contains(unheld, h) {
+			unheld = append(unheld, h)
+		}
+	}
+	return unheld, nil
+}
+
 // establish is what Keep does with an entry already standing for the copy
 // state: fills in its basis when it is open, unestablished and the set is
 // now established, and otherwise returns it as it stands.

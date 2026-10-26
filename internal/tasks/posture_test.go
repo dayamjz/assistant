@@ -110,3 +110,65 @@ func TestAnUnreadablePostureRefusesTheIntake(t *testing.T) {
 		t.Fatalf("the control was recorded under %v", got.Task.Delivery)
 	}
 }
+
+// A floor records the stricter of itself and the project's posture, in the
+// one read that records it, and never refuses (the delta review of
+// 9ef7722, which found a carry on reading the project's posture once in
+// the service and once in intake, so a project loosened between the two
+// put the successor below the outlived task's): gated asked as the floor
+// of a local project records gated, local as the floor of a gated project
+// records gated, the project's, with no *PostureError, and local of a
+// local project records local, each after one read of the project's
+// posture. A floor beside a posture, a floor on an investigation task and
+// a floor that is no posture are malformed requests, and a floor over an
+// unreadable trusted copy is refused as any intake is, since the stricter
+// of two cannot be decided against a posture nobody read.
+func TestIntakeRecordsTheStricterOfAFloorAndTheProjectsPosture(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	ctx := context.Background()
+	for _, c := range []struct {
+		project, floor, want config.Delivery
+	}{
+		{config.DeliveryLocal, config.DeliveryGated, config.DeliveryGated},
+		{config.DeliveryGated, config.DeliveryLocal, config.DeliveryGated},
+		{config.DeliveryLocal, config.DeliveryLocal, config.DeliveryLocal},
+	} {
+		f := newFixture(t)
+		f.posture = c.project
+		req := delivery("")
+		req.DeliveryFloor = string(c.floor)
+		got := f.create(t, req)
+		if posture, _ := got.Task.Delivery.Get(); posture != c.want {
+			t.Fatalf("a floor of %s in a %s project was recorded as %v, want %s", c.floor, c.project, got.Task.Delivery, c.want)
+		}
+		if f.postureAsked.Load() != 1 {
+			t.Fatalf("the posture was read %d times for one intake with a floor", f.postureAsked.Load())
+		}
+	}
+
+	f := newFixture(t)
+	f.posture = config.DeliveryLocal
+	both := delivery("")
+	both.Delivery, both.DeliveryFloor = "gated", "gated"
+	if _, err := f.queue.Create(ctx, both); !errors.Is(err, ErrRequest) {
+		t.Fatalf("a floor beside a posture = %v, want ErrRequest", err)
+	}
+	if _, err := f.queue.Create(ctx, Request{Shape: "investigation", Project: "one", Instructions: "look",
+		DeliveryFloor: "gated"}); !errors.Is(err, ErrRequest) {
+		t.Fatalf("a floor on an investigation = %v, want ErrRequest", err)
+	}
+	word := delivery("")
+	word.DeliveryFloor = "direct"
+	if _, err := f.queue.Create(ctx, word); !errors.Is(err, ErrRequest) {
+		t.Fatalf("a floor of %q = %v, want ErrRequest", word.DeliveryFloor, err)
+	}
+	f.postureErr = errors.New("the trusted copy could not be fetched")
+	floored := delivery("")
+	floored.DeliveryFloor = "gated"
+	if _, err := f.queue.Create(ctx, floored); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("a floor over an unreadable copy = %v, want ErrPostureUnreadable", err)
+	}
+	if tasks, _ := f.store.Tasks(ctx); len(tasks) != 0 {
+		t.Fatalf("refused intakes recorded %d tasks", len(tasks))
+	}
+}

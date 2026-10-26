@@ -32,13 +32,14 @@ import (
 //
 // The copy is asserted with tasks.AssertIsolated under the worker's
 // environment before anything is written into it, against the expectation
-// of the task it outlived, and read for the commits the entry recorded it
-// standing on (holdsKeptCommits: from HEAD, a reference or a reflog
-// entry), the one reading of what the copy holds that the answer, the
-// completion before the move and the completion after it all make, so a
-// copy whose kept commit was amended away but stands in its reflog is
-// carried on by each, and one that has lost it altogether is refused by
-// each. A refusal on the remote set or HEAD is tolerated
+// of the task it outlived, and read for the commits and objects the entry
+// recorded it standing on (holdsKeptWork, tasks.Cleaner.Unheld: each a
+// value HEAD, a reference, a root reference or a reflog entry records, or
+// a commit one reaches), the one reading of what the copy holds that the
+// answer, the completion before the move and the completion after it all
+// make, so a copy whose kept commit was amended away but stands in its
+// reflog or in ORIG_HEAD is carried on by each, and one that has lost it
+// altogether is refused by each. A refusal on the remote set or HEAD is tolerated
 // only as far as the reshape below repairs it, each read on its own: for a
 // delivery copy, a missing gate remote or one whose one URL is elsewhere,
 // which it points at the gate, and HEAD off the task's branch while no
@@ -74,7 +75,7 @@ import (
 // already stands at the new task's path only when it is the kept one
 // (verifyAdopted): the copy the answer was given for by its file identity,
 // tasks.CopyIdentity, which the answer records, with the old path gone and
-// every commit the entry recorded still held in it, on holdsKeptCommits'
+// every commit the entry recorded still held in it, on holdsKeptWork's
 // terms. Holding them alone is not identity: a fresh clone of an upstream
 // that took the recorded commits up holds them all and lacks the copy's
 // own work. The kept copy is checked to be that copy, and to hold those
@@ -103,8 +104,8 @@ import (
 // pass cuts a fresh clone at the path the copy is about to stand at; between
 // the claim and the slot no task row exists yet, so no pass can find the task
 // to dispatch. Then, in the order intake keeps, the task is created with that
-// identifier, under the outlived task's delivery posture when that is
-// stricter than the project's now and the project's otherwise
+// identifier, with the outlived task's delivery posture as the floor intake
+// records it under unless the project's, read once there, is stricter
 // (carriedPosture), the copy is moved to the task's own path and reshaped as dispatch
 // shapes a fresh clone, the note is appended to the instructions file, and the
 // entry is answered carry-on and marked in one write
@@ -165,7 +166,7 @@ func (s *Service) carryOnKeptWork(ctx context.Context, req ipc.Request, entry st
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		if err := s.holdsKeptCommits(ctx, entry, entry.CopyPath); err != nil {
+		if err := s.holdsKeptWork(ctx, entry, entry.CopyPath); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
 		kept, err := tasks.IdentifyCopy(entry.CopyPath)
@@ -466,15 +467,11 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	// without it and left alone where it stands.
 	instructionsText := s.carryOnInstructions(plan.old)
 	if _, err := s.store.Task(ctx, id); errors.Is(err, store.ErrNotFound) {
-		posture, err := s.carriedPosture(ctx, id, plan)
-		if err == nil {
-			_, err = s.queue.Create(ctx, tasks.Request{
-				ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: plan.old.Role,
-				Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch, Delivery: posture,
-				Instructions: instructionsText,
-			})
-		}
-		if err != nil {
+		if _, err := s.queue.Create(ctx, tasks.Request{
+			ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: plan.old.Role,
+			Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch, DeliveryFloor: carriedPosture(plan),
+			Instructions: instructionsText,
+		}); err != nil {
 			// The task could not be created, so nothing was moved: the
 			// claim is withdrawn and the entry is open again, listed and
 			// holding its project's dispatch as before. The store refuses
@@ -522,7 +519,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		if err := s.isCarriedOnCopy(entry, entry.CopyPath); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		if err := s.holdsKeptCommits(ctx, entry, entry.CopyPath); err != nil {
+		if err := s.holdsKeptWork(ctx, entry, entry.CopyPath); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
 		if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
@@ -588,7 +585,7 @@ func (s *Service) isCarriedOnCopy(entry store.KeptWork, path string) error {
 // not however much history it shares; the kept copy's own path is gone,
 // which a rename of it leaves; and the copy at the new path still holds
 // every commit the entry recorded the kept copy's references and HEAD
-// standing on, on holdsKeptCommits' terms, the reading the answer and the
+// standing on, on holdsKeptWork's terms, the reading the answer and the
 // completion before the move make of the copy too. Holding them alone
 // proves nothing about which copy this is: a fresh clone of an upstream that
 // has since received those commits holds them all and still lacks the kept
@@ -608,65 +605,36 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	return s.holdsKeptCommits(ctx, entry, newPath)
+	return s.holdsKeptWork(ctx, entry, newPath)
 }
 
-// holdsKeptCommits refuses the copy at path, with ipc.ErrRefused naming the
-// commit, unless it still holds every commit the entry recorded the kept
-// copy's references and HEAD standing on (store.KeptWork.Holds): each
-// reachable from the copy's HEAD, from one of its references, or from a
-// value one of its reflogs records (vcs.ReflogValues, either value of an
-// entry). Reachable and not a tip, since the copy may have gone on to
-// commits past those after it was kept, and its references moving forward
-// is the copy carrying on; and the reflogs count because a commit amended
-// or reset away after the copy was kept stands on no reference and in a
-// reflog alone, and the copy is still the kept one (the final full review
-// of feddd14). A commit none of those reaches is gone from the copy, its
-// reflog entries expired and the object pruned, and the copy no longer
-// holds what it was kept on, so the carry on is refused rather than
-// recorded over it: the person lands what the copy holds now or answers
-// otherwise. It is one reading, asked by the answer before its claim, by
-// the completion before the move and by verifyAdopted after it, so the
-// three accept and refuse the same copies. A copy that cannot be read is
-// an error, never a refusal.
-func (s *Service) holdsKeptCommits(ctx context.Context, entry store.KeptWork, path string) error {
-	copied, err := vcs.OpenWorktree(ctx, path, s.git()...)
+// holdsKeptWork refuses the copy at path, with ipc.ErrRefused naming what
+// is missing, unless it still holds everything the entry recorded the kept
+// copy standing on, on tasks.Cleaner.Unheld's terms, the one reading of
+// what a kept copy holds: each recorded commit or object is a value a name
+// of the copy records, HEAD, a reference, a root reference or a reflog
+// entry, or a commit one of those reaches. So a commit amended or reset
+// away after the copy was kept is held while a reflog or ORIG_HEAD records
+// it, a tag on a blob holds the blob, and a copy that has lost a recorded
+// commit altogether, its reflog entries expired and the object pruned, no
+// longer holds what it was kept on and is refused rather than recorded
+// over: the person lands what the copy holds now or answers otherwise. It
+// is asked by the answer before its claim, by the completion before the
+// move and by verifyAdopted after it, so the three accept and refuse the
+// same copies (the final full review of feddd14, and the delta review of
+// 9ef7722 for the names a reading of the copy's own left out). A copy that
+// cannot be read is an error, never a refusal.
+func (s *Service) holdsKeptWork(ctx context.Context, entry store.KeptWork, path string) error {
+	at := entry
+	at.CopyPath = path
+	unheld, err := s.cleaner.Unheld(ctx, at)
 	if err != nil {
-		return fmt.Errorf("%w: kept work entry %d was not carried on: what stands at %s is not a copy: %w", ipc.ErrRefused, entry.ID, path, err)
+		return err
 	}
-	inv, err := copied.Inventory(ctx)
-	if err != nil {
-		return fmt.Errorf("service: reading the copy at %s: %w", path, err)
-	}
-	tips := []string{}
-	if inv.Head.Commit != "" {
-		tips = append(tips, inv.Head.Commit)
-	}
-	for _, ref := range inv.Refs {
-		tips = append(tips, ref.Commit)
-	}
-	logged, err := copied.ReflogValues(ctx)
-	if err != nil {
-		return fmt.Errorf("service: reading what the reflogs of the copy at %s record: %w", path, err)
-	}
-	tips = append(tips, logged...)
-	for _, h := range entry.Holds {
-		held := false
-		for _, tip := range tips {
-			reaches, err := copied.IsAncestor(ctx, h, tip)
-			if err != nil && !errors.Is(err, vcs.ErrRefNotFound) {
-				return fmt.Errorf("service: reading whether the copy at %s holds %s: %w", path, h, err)
-			}
-			if err == nil && reaches {
-				held = true
-				break
-			}
-		}
-		if !held {
-			return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s no longer holds %s, which it stood on when it was "+
-				"kept: neither HEAD, a reference nor a reflog entry of the copy reaches it; land what the copy holds now, or answer otherwise",
-				ipc.ErrRefused, entry.ID, path, h)
-		}
+	if len(unheld) > 0 {
+		return fmt.Errorf("%w: kept work entry %d was not carried on: the copy at %s no longer holds %s, which it stood on when it was "+
+			"kept: nothing the copy names, HEAD, a reference, a root reference or a reflog entry, is or reaches it; land what the copy "+
+			"holds now, or answer otherwise", ipc.ErrRefused, entry.ID, path, strings.Join(unheld, ", "))
 	}
 	return nil
 }
@@ -708,34 +676,23 @@ func (s *Service) reshapeAdoptedCopy(ctx context.Context, path string, plan carr
 	return nil
 }
 
-// carriedPosture is the delivery posture the new task is asked to be
-// recorded under, as intake's request text, or "" for the project's own:
-// the outlived task's recorded posture when it is stricter than the
-// project's now, read through the same reader intake reads it with
-// (projectPosture, under the new task's identifier), so the continued work
-// is held to what the outlived task was held to and never to less, and
-// the project's otherwise, intake's own default, which tightens a task
-// recorded under a project since tightened. An investigation records no
-// posture and asks for none. A project whose posture cannot be read is the
-// error intake would refuse with (tasks.ErrPostureUnreadable), so the
-// caller withdraws the claim as for any intake refused. What that leaves:
-// the project's posture is read here and again by intake, so a project
-// tightened between the two reads past the outlived task's posture refuses
-// the intake as a lighter request (tasks.ErrLighterPosture), the claim is
-// withdrawn, and the same answer given again records the project's.
-func (s *Service) carriedPosture(ctx context.Context, id string, plan carryOn) (string, error) {
+// carriedPosture is the floor the new task is asked to be recorded under,
+// as intake's request text (tasks.Request.DeliveryFloor), or "" for none:
+// the outlived task's recorded posture, which intake records unless the
+// project's, read once in the same intake, is stricter, in which case it
+// records the project's. So the continued work is held to what the
+// outlived task was held to and never to less, and to the project's when
+// that has tightened since, decided against one read of the project's
+// posture, never two (the delta review of 9ef7722: a read here and another
+// in intake let a project loosened between them put the successor below
+// the outlived task's). An investigation records no posture and asks for
+// none.
+func carriedPosture(plan carryOn) string {
 	old, ok := plan.old.Delivery.Get()
 	if !ok || plan.old.Shape != store.TaskDelivery {
-		return "", nil
+		return ""
 	}
-	project, err := s.projectPosture(ctx, plan.repository, id)
-	if err != nil {
-		return "", fmt.Errorf("%w: repository %s: %w", tasks.ErrPostureUnreadable, plan.repository.ID, err)
-	}
-	if project.Lighter(old) {
-		return string(old), nil
-	}
-	return "", nil
+	return string(old)
 }
 
 // carryOnInstructions is what the new task is created with: what the
