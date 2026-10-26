@@ -317,7 +317,7 @@ A contract lives in one place. Everything else points at it. This applies to doc
 
 Every process, terminal session, agent session, wait, isolated copy and lock the program creates has exactly one recorded owner: a run, a task, a delegation, or the service itself. When the owner ends, what it owns ends with it: a process by its whole group and within a stated bound, a wait by its deadline. An external program the service invokes (an agent, a check command, a notify command, a version probe) runs under a deadline, and when the deadline passes it is ended together with everything it started. A task's worker is the exception: a long-lived worker agent session has no invocation deadline. It runs in a process group of its own with a recorded owner, and it ends when its task lands, when it is stopped, and when the service stops, within `stop_grace`, on the terms and in the further cases section 8 states. The liveness probe ends nothing: it is how the service learns a worker has ended. A live worker that has stalled is surfaced, by `escalation_window` at the latest, and never ended; a bound that ends one is not yet specified. <kbd>proposed</kbd> Section 6's [stalled worker](#stall-hold) would specify it and replace that clause: a stall that outlasts the coordinator's inspection holds its task for you, the stall itself never ends the worker, and your answer to that hold may end it through section 6's stop, beside every other end section 8 lists. On stop and on restart, the service ends or reclaims what a previous incarnation left under its home. Whatever it finds there that no record owns, it reports; it never ignores it.
 
-Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project until you make it, or until everything it holds turns up safe elsewhere and P12 cleanup removes it on that proof: you land it, you have it carried on, or you discard it yourself (<kbd>deferred</kbd> to AGE-486, until which a discard shows the loss and removes nothing). The program never discards it on its own. Ending a process never discards work.
+Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project (section 6 says which tasks are new) until you make it, by landing it, having it carried on, or discarding it yourself, or until everything it holds turns up safe elsewhere and P12 cleanup removes it on that proof. Discarding's removal is <kbd>deferred</kbd> to AGE-486: until it ships, a discard shows what would be lost and records and removes nothing. The program never discards it on its own. Ending a process never discards work.
 
 This binds the program, its tests, and the tooling that builds it. A test that starts a process ends it, and a development fleet's watchers, reviews and repairs end what they start.
 
@@ -898,14 +898,19 @@ and through the private channel when one is configured.
 Kept work is answered before new task work starts. While a project has an open kept-work
 entry, neither answered nor closed on a proof, no new task in that project dispatches; it waits,
 naming the kept work and the three answers, and dispatches as soon as the entry is answered or
-closed. Your own push is never held by it: a
+closed. A new task is one no worker has started for. The hold is checked when a dispatch claims
+the task and again immediately before its worker starts, so an entry recorded after the claim
+still stops the worker; a worker whose start was already under way when the entry was recorded
+is work already running. A task whose worker has started is never held, its relaunch included.
+Your own push is never held by it: a
 run your push starts proceeds as it always does, and its answer names the kept work. Work
-already running is not interrupted, and kept work in one project never holds another. The three
+already running is not interrupted, kept work in one project never holds another, and an entry
+that names no project holds nothing. The three
 answers are:
 
 - **land**: the program carries the work to the gate as a delivery and asks nothing it would not ask of a push;
 - **carry on**: a worker is relaunched in that same copy with a note saying what is already there. The worker is a new task's, of the same project and branch, whose copy is the kept copy; the task the copy outlived stays finished, since work that continues on it is a new task, and the entry closes once the new task owns the copy;
-- **discard**: you name the copy, the program shows exactly what will be lost, and it removes the copy only on that answer, recording who discarded what. <kbd>deferred</kbd> The removal is deferred to AGE-486: until it ships, a discard shows exactly what would be lost and removes nothing, and its confirmation is refused. Until then an entry that is not landed or carried on closes only when P12 cleanup removes its copy on a proof, which needs everything the copy holds to be safe elsewhere: its commits where a proof finds them, and anything uncommitted, untracked or stashed committed with them, removed or dropped.
+- **discard**: you name the copy, the program shows exactly what will be lost, and it removes the copy only on that answer, recording who discarded what. <kbd>deferred</kbd> The removal is deferred to AGE-486: until it ships, a discard shows exactly what would be lost, as section 9 says, and records and removes nothing, and its confirmation is refused. Until then an entry that is not landed or carried on closes only when P12 cleanup removes its copy on a proof, which needs everything the copy holds to be safe elsewhere: its commits where a proof finds them, and anything uncommitted, untracked or stashed committed with them, removed or dropped.
 
 A kept-work entry is answered as a hold, with section 9's hold answer and no verb of its own;
 section 9 says how, including how a discard is shown before it is confirmed. <kbd>deferred</kbd> The confirmation is deferred with the removal.
@@ -1679,7 +1684,7 @@ one place its fact is read from. Appended means rows are added and never edited.
 | **merge record** | Authoritative, appended | Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's `passed` on a merge and the task's Landed are both derived from this one record, and neither stores the fact again. |
 | **local landing record** | Authoritative, appended | Append-only and written once, by the approved fast-forward that delivers a `local` task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a `local` task is derived from it, read in the same tier as the merge record. |
 | **cleanup record** | Authoritative, appended | Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier. |
-| **kept work** | Authoritative | One row per copy kept because its work has not landed: the owner it outlived, what it holds, when it was kept, when it last surfaced, and its answer. It is written once when the copy is kept. Its one revision is the answer: yours, given as a hold answer, or carry on, recorded by a promotion of the investigation whose copy it is. |
+| **kept work** | Authoritative | One row per copy kept because its work has not landed: the owner it outlived, what it holds, when it was kept, when it last surfaced, and its answer. It is written once when the copy is kept. Its one revision closes it: the answer, yours, given as a hold answer, or carry on, recorded by a promotion of the investigation whose copy it is, or, when P12 cleanup removes its copy on a proof, the record of that removal (section 6). |
 | **housekeeping retirement** <kbd>proposed</kbd> | Authoritative, appended | Written once per housekeeping pass that ends without a terminal record: the pass, how it was retired, and when. How it was retired is either the run whose recorded position found nothing left to change, which is to be replaced by AGE-487's end for that case once it lands, or the resolution of the retirement hold your answer closed. It is the one record that ends a pass's claim on its repository other than the terminal tier ([housekeeping](#housekeeping)). The state resolver does not read it, so a retired pass still shows the state its own records give. Section 11's anchored relaunch does read it, and refuses a retired pass. |
 | **hold** | Authoritative | A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when `checks_timeout` elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule. |
 | **message** | Authoritative, appended | One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each. |
@@ -2065,9 +2070,13 @@ left, `--run=RUN` names the run. That is an optional value on the same flag, the
 Discard is answered twice: `--answer discard` alone shows exactly what would be
 lost, with a short digest of it, and removes nothing; repeating it with
 `--confirm DIGEST` removes the copy only if the copy still holds exactly what that
-digest names. <kbd>deferred</kbd> The second half is deferred to AGE-486: until it ships,
-`--confirm` is refused and removes nothing, and section 6 says what closes the entry
-meanwhile.
+digest names. What would be lost and the digest are in the answer's machine-readable form
+(`--json`), and its plain line says nothing was removed and points there. When what would be
+lost cannot be read exactly, the answer is refused and shows nothing. `--confirm` is read with
+`--answer discard` alone and takes a digest; anything else is incorrect usage.
+<kbd>deferred</kbd> The second half is deferred to AGE-486: until it ships, a discard records
+nothing, `--confirm` is refused before the copy is read and removes nothing, and section 6 says
+what closes the entry meanwhile.
 <kbd>proposed</kbd> A housekeeping
 pass's retirement hold is answered the same way, with `--answer retire` or
 `--answer keep` and `--task` naming the pass, on the terms section 6's
@@ -2710,7 +2719,7 @@ Everything here is load-bearing. Removing any one of them removes a promise.
 - **Away mode.** Requires the supervision loop to be trustworthy first.
 - **Evidence publishing to a branch.** Store evidence locally and link it. Publishing is an optimization.
 - **Review evaluation corpus.** A quality tool for when review quality is your bottleneck.
-- **Removing a copy on a confirmed discard (AGE-486).** The removal has to delete exactly what the person was shown and put everything back on any refusal, and review kept finding ways that machinery could lose work. The preview ships first; meanwhile a kept copy closes only on P12's proof (section 6).
+- **Removing a copy on a confirmed discard (AGE-486).** The removal has to delete exactly what the person was shown and put everything back on any refusal, and review kept finding ways that machinery could lose work. The preview ships first, recording and removing nothing (section 9); meanwhile an entry that is not landed or carried on closes only when P12 cleanup removes its copy on a proof (section 6).
 - **Decision-model checks.** Extra scrutiny that adds a provider dependency and is never part of what a pass means. The review stage has to work without them first.
 - **Fan-out and fan-in in the graph.** Nothing in phase one needs parallel nodes. Keep the checker rule; skip the feature.
 
