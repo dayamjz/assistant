@@ -317,7 +317,7 @@ A contract lives in one place. Everything else points at it. This applies to doc
 
 Every process, terminal session, agent session, wait, isolated copy and lock the program creates has exactly one recorded owner: a run, a task, a delegation, or the service itself. When the owner ends, what it owns ends with it: a process by its whole group and within a stated bound, a wait by its deadline. An external program the service invokes (an agent, a check command, a notify command, a version probe) runs under a deadline, and when the deadline passes it is ended together with everything it started. A task's worker is the exception: a long-lived worker agent session has no invocation deadline. It runs in a process group of its own with a recorded owner, and it ends when its task lands, when it is stopped, and when the service stops, within `stop_grace`, on the terms and in the further cases section 8 states. The liveness probe ends nothing: it is how the service learns a worker has ended. A live worker that has stalled is surfaced, by `escalation_window` at the latest, and never ended; a bound that ends one is not yet specified. <kbd>proposed</kbd> Section 6's [stalled worker](#stall-hold) would specify it and replace that clause: a stall that outlasts the coordinator's inspection holds its task for you, the stall itself never ends the worker, and your answer to that hold may end it through section 6's stop, beside every other end section 8 lists. On stop and on restart, the service ends or reclaims what a previous incarnation left under its home. Whatever it finds there that no record owns, it reports; it never ignores it.
 
-Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project (section 6 says which tasks are new) until you make it, by landing it, having it carried on, or discarding it yourself, or until everything it holds turns up safe elsewhere and P12 cleanup removes it on that proof. Discarding's removal is <kbd>deferred</kbd> to AGE-486: until it ships, a discard shows what would be lost and records and removes nothing. The program never discards it on its own. Ending a process never discards work.
+Work is the one exception, and the exception is loud. An isolated copy holding work that has not landed is kept, on P6's and P12's terms, because a leaked copy costs disk while a deleted one costs work. A kept copy is not a leftover. It is a decision owed to you: it is surfaced the moment it is kept, and no new task starts in its project until you make it, by landing it, having it carried on, or discarding it yourself, or until everything it holds turns up safe elsewhere and P12 cleanup removes it on that proof. Discarding's removal is <kbd>deferred</kbd> to AGE-486: until it ships, a discard shows what would be lost and records and removes nothing. The program never discards it on its own. Ending a process never discards work.
 
 This binds the program, its tests, and the tooling that builds it. A test that starts a process ends it, and a development fleet's watchers, reviews and repairs end what they start.
 
@@ -898,14 +898,9 @@ and through the private channel when one is configured.
 Kept work is answered before new task work starts. While a project has an open kept-work
 entry, neither answered nor closed on a proof, no new task in that project dispatches; it waits,
 naming the kept work and the three answers, and dispatches as soon as the entry is answered or
-closed. A new task is one no worker has started for. The hold is checked when a dispatch claims
-the task and again immediately before its worker starts, so an entry recorded after the claim
-still stops the worker; a worker whose start was already under way when the entry was recorded
-is work already running. A task whose worker has started is never held, its relaunch included.
-Your own push is never held by it: a
+closed. Your own push is never held by it: a
 run your push starts proceeds as it always does, and its answer names the kept work. Work
-already running is not interrupted, kept work in one project never holds another, and an entry
-that names no project holds nothing. The three
+already running is not interrupted, and kept work in one project never holds another. The three
 answers are:
 
 - **land**: the program carries the work to the gate as a delivery and asks nothing it would not ask of a push;
@@ -2070,10 +2065,9 @@ left, `--run=RUN` names the run. That is an optional value on the same flag, the
 Discard is answered twice: `--answer discard` alone shows exactly what would be
 lost, with a short digest of it, and removes nothing; repeating it with
 `--confirm DIGEST` removes the copy only if the copy still holds exactly what that
-digest names. What would be lost and the digest are in the answer's machine-readable form
-(`--json`), and its plain line says nothing was removed and points there. When what would be
-lost cannot be read exactly, the answer is refused and shows nothing. `--confirm` is read with
-`--answer discard` alone and takes a digest; anything else is incorrect usage.
+digest names. When what would be lost cannot be read exactly, the answer is refused and
+shows nothing. `--confirm` is read with `--answer discard` alone and takes a digest; anything
+else is incorrect usage.
 <kbd>deferred</kbd> The second half is deferred to AGE-486: until it ships, a discard records
 nothing, `--confirm` is refused before the copy is read and removes nothing, and section 6 says
 what closes the entry meanwhile.
