@@ -299,7 +299,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 // here. A role the configuration no longer has is refused, and nothing else
 // is started in its place.
 func (s *Service) routeWorker(ctx context.Context, roleName string) (agents.Selection, config.Role, error) {
-	role, err := s.cfg.Roles.ForTask(roleName)
+	role, err := s.cfg.Roles.ForRecorded(roleName)
 	if err != nil {
 		return agents.Selection{}, config.Role{}, err
 	}
