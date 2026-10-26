@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1483,10 +1484,15 @@ func TestACarryOnVerifiesTheCopyBeforeAdoptingIt(t *testing.T) {
 // written, round 29's sequence: a failed delivery task's clone, its own
 // commit made on a detached HEAD, is kept, and the carry on is claimed and
 // stopped right after the move. The moved copy's .git/refs/heads is then a
-// link into another clone holding that commit. The next service's carry
-// on answer is refused naming the link, with the other clone's references
-// as they were (read as files: git skips a reference naming an object the
-// clone lacks), the entry owed and not marked. Before, the recovery took
+// link into another clone holding that commit. The next service takes the
+// carry on up at open (completeCarryOnsAtOpen), before it serves anything,
+// and refuses it naming the link, which its log records, with the other
+// clone's references as they were (read as files: git skips a reference
+// naming an object the clone lacks), the entry owed and not marked. The
+// take-up is read at open and not through an answer sent once the service
+// serves: the refusal at open asks for a dispatch pass, which holds the new
+// task's slot for a moment, and an answer landing then is refused as busy
+// instead, as CI's repeat run on macOS saw. Before, the recovery took
 // the moved copy through verifyAdopted, the reshape and the assertion
 // without the verification, and the reshape wrote refs/heads/task/kept
 // into the other clone.
@@ -1584,10 +1590,16 @@ func TestACarryOnTakenUpAfterTheMoveVerifiesTheCopyWhereItStands(t *testing.T) {
 
 	o, _ = workerOptions(t, h)
 	withServiceOptions(t, o, func(under serviceUnderTest) {
-		var out machine.KeptWorkAnswered
-		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(id, entry), &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "symbolic link") {
-			t.Fatalf("the carry on taken up over a copy with refs/heads linked into another clone = %+v, %v; want it refused naming the link", out, err)
+		owed := fmt.Sprintf("kept work entry %d holds a carry-on claim that could not be completed: ", entry.ID)
+		var refused string
+		for _, line := range strings.Split(readServiceLog(t, h), "\n") {
+			if strings.Contains(line, owed) {
+				refused = line
+			}
+		}
+		if !strings.Contains(refused, "symbolic link") {
+			t.Fatalf("the carry on taken up at open over a copy with refs/heads linked into another clone logged %q; want it refused naming the link:\n%s",
+				refused, readServiceLog(t, h))
 		}
 		if refs := refFiles(t, other); refs != refsBefore {
 			t.Fatalf("the other clone's references read\n%s\nafter the refusal; want them as they were\n%s", refs, refsBefore)
