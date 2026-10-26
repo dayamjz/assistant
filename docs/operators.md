@@ -620,8 +620,9 @@ yours, which a task's copy cannot be): land it, or push its commit
 yourself.
 
 Discard, `--answer discard` with the same flags, shows exactly what
-removing the copy would lose, in the structured answer
-(`--json`): what neither the default branch nor the upstream holds,
+removing the copy would lose, read out after its line with each commit,
+object and file on a line of its own after a label and the digest last,
+and in the structured answer (`--json`): what neither the default branch nor the upstream holds,
 the only two places counted as keeping work. That is the
 commits anything in the copy names that neither the default branch nor
 the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old

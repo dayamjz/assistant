@@ -3,6 +3,8 @@ package cli_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -180,18 +182,38 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
 		}
 	}
+	// A file only the copy holds, so what a person is shown names a file as
+	// well as the commits the run left.
+	if err := os.WriteFile(filepath.Join(entry.CopyPath, "notes.txt"), []byte("only here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	shown := run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key())
 	var answered machine.KeptWorkAnswered
 	if shown.code != machine.ExitOK || json.Unmarshal([]byte(shown.stdout), &answered) != nil ||
-		answered.Effect != machine.KeptWorkDiscardShown || answered.Loss == nil || answered.Loss.Digest == "" {
+		answered.Effect != machine.KeptWorkDiscardShown || answered.Loss == nil || answered.Loss.Digest == "" ||
+		len(answered.Loss.Lacks) == 0 || !slices.Contains(answered.Loss.Files, machine.KeptWorkLostPath{Kind: "new", Path: "notes.txt"}) {
 		t.Fatalf("the discard shown exited %s with %+v:\n%s%s", shown.code, answered, shown.stdout, shown.stderr)
 	}
+	// What a person reads, without --json, is the row and then exactly what
+	// would be lost, each commit and file on a line of its own after its
+	// label, and the digest sealing it: PRD section 9's "shows exactly what
+	// would be lost, with a short digest of it".
 	read := run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key())
 	shownRow := machine.KeptWorkAnsweredPhrase(answered).String()
-	if read.code != machine.ExitOK || !strings.Contains(read.stdout, shownRow) {
+	if read.code != machine.ExitOK || !strings.Contains(read.stdout, shownRow+"\n") {
 		t.Fatalf("the discard shown reads out as:\n%s%s\nwant the row %q", read.stdout, read.stderr, shownRow)
 	}
-	vocabtest.Assert(t, shownRow)
+	want := []string{"New file: notes.txt", "Digest: " + answered.Loss.Digest}
+	for _, commit := range answered.Loss.Lacks {
+		want = append(want, "Commit: "+commit)
+	}
+	for _, line := range want {
+		if !strings.Contains(read.stdout, line+"\n") {
+			t.Errorf("the discard shown does not read out %q:\n%s", line, read.stdout)
+		}
+	}
+	vocabtest.Assert(t, read.stdout)
+	t.Logf("a discard shown reads out:\n%s", read.stdout)
 	if _, err := os.Stat(entry.CopyPath); err != nil {
 		t.Fatalf("showing the discard removed the copy: %v", err)
 	}

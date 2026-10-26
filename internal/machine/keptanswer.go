@@ -164,14 +164,26 @@ var phraseKeptWorkCarriedOn = Phrase{
 }
 
 // phraseKeptWorkDiscardShown is the row a discard shown reads as. What
-// would be lost and the digest are the structured rendering's, which the
-// row points at (P13). Removing the copy on a confirmed discard is not in
-// this build (docs/prd.md, sections 6 and 9), so the row says what lets
-// the project's new work go ahead instead.
+// would be lost and the digest follow it, as internal/cli's renderer
+// prints them: each commit, object and file of KeptWorkLoss on a line of
+// its own after a label, as machine text a person copies exactly, and the
+// digest last, or PhraseKeptWorkLosesNothing when nothing is listed.
+// Removing the copy on a confirmed discard is not in this build
+// (docs/prd.md, sections 6 and 9), so the row says what lets the
+// project's new work go ahead instead.
 var phraseKeptWorkDiscardShown = Phrase{
-	Outcome:     "Nothing was removed: this is what discarding that local copy would lose.",
+	Outcome:     "Nothing was removed: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
 	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "Read exactly what would be lost with --json; to let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
+	Decision:    "To let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself, and the program removes the copy only once it finds everything in it there.",
+}
+
+// PhraseKeptWorkLosesNothing is the row a discard shown prints in place
+// of a list when KeptWorkLoss names no commit, object or file, before the
+// digest, which still seals that empty list.
+var PhraseKeptWorkLosesNothing = Phrase{
+	Outcome:     "Discarding that local copy would lose nothing that the default branch or the upstream does not hold.",
+	Consequence: "Nothing is listed, and the digest under this seals that.",
+	Decision:    "Nothing to decide about what would be lost.",
 }
 
 // PhraseDiscardRemovalDeferred is the row for a discard given --confirm:
@@ -198,5 +210,6 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
-	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseDiscardRemovalDeferred}
+	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseKeptWorkLosesNothing,
+		PhraseDiscardRemovalDeferred}
 }
