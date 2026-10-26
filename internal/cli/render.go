@@ -780,6 +780,12 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 		}
 		writef(w, "%s %s\n", machine.QueuedKeptWorkWakePhrase(row), machine.QueuedKeptWorkWakeStanding(row))
 	}
+	// A notice about a repository's housekeeping is listed by the
+	// repository's record identifier, escaped, which assistant --json
+	// status shows beside the repository.
+	for _, row := range q.HousekeepingWakes {
+		writef(w, "%s: %s %s\n", printable(row.Repository), machine.QueuedHousekeepingWakePhrase(row), machine.QueuedHousekeepingWakeStanding(row))
+	}
 }
 
 // waitingLine is one decision waiting on the person: a run's branch and the

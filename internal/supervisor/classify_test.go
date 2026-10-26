@@ -196,14 +196,22 @@ var oracle = map[cell]supervisor.Level{
 	// stall hold the program closed on a changed screen. Section 5's
 	// flowchart does not draw it; it is always actionable on section 6's
 	// terms, whatever the evidence, the window and the flag say.
-	{supervisor.KindStallClosed, absent, open, false}:    supervisor.Surface,
-	{supervisor.KindStallClosed, absent, open, true}:     supervisor.Surface,
-	{supervisor.KindStallClosed, absent, elapsed, false}: supervisor.Surface,
-	{supervisor.KindStallClosed, absent, elapsed, true}:  supervisor.Surface,
-	{supervisor.KindStallClosed, proof, open, false}:     supervisor.Surface,
-	{supervisor.KindStallClosed, proof, open, true}:      supervisor.Surface,
-	{supervisor.KindStallClosed, proof, elapsed, false}:  supervisor.Surface,
-	{supervisor.KindStallClosed, proof, elapsed, true}:   supervisor.Surface,
+	{supervisor.KindStallClosed, absent, open, false}:        supervisor.Surface,
+	{supervisor.KindStallClosed, absent, open, true}:         supervisor.Surface,
+	{supervisor.KindStallClosed, absent, elapsed, false}:     supervisor.Surface,
+	{supervisor.KindStallClosed, absent, elapsed, true}:      supervisor.Surface,
+	{supervisor.KindStallClosed, proof, open, false}:         supervisor.Surface,
+	{supervisor.KindStallClosed, proof, open, true}:          supervisor.Surface,
+	{supervisor.KindStallClosed, proof, elapsed, false}:      supervisor.Surface,
+	{supervisor.KindStallClosed, proof, elapsed, true}:       supervisor.Surface,
+	{supervisor.KindHousekeepingDue, absent, open, false}:    supervisor.Surface,
+	{supervisor.KindHousekeepingDue, absent, open, true}:     supervisor.Surface,
+	{supervisor.KindHousekeepingDue, absent, elapsed, false}: supervisor.Surface,
+	{supervisor.KindHousekeepingDue, absent, elapsed, true}:  supervisor.Surface,
+	{supervisor.KindHousekeepingDue, proof, open, false}:     supervisor.Surface,
+	{supervisor.KindHousekeepingDue, proof, open, true}:      supervisor.Surface,
+	{supervisor.KindHousekeepingDue, proof, elapsed, false}:  supervisor.Surface,
+	{supervisor.KindHousekeepingDue, proof, elapsed, true}:   supervisor.Surface,
 }
 
 // recipient is PRD section 8's wake row, written out one kind at a time
@@ -235,7 +243,8 @@ var recipient = map[supervisor.Kind]bool{
 	// A stall hold's closure tells whoever the hold reached that the
 	// decision is no longer needed, and a hold reaches the first
 	// coordinator.
-	supervisor.KindStallClosed: false,
+	supervisor.KindStallClosed:     false,
+	supervisor.KindHousekeepingDue: false,
 }
 
 // eventKindWithRole picks a task event kind of the given role from

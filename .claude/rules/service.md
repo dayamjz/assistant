@@ -99,6 +99,13 @@ paths: ["internal/service/**"]
   `stop_grace`; past it, or on a forced stop, it ends every group it
   registered by force and the caller exits. Its header owns which groups and
   the gaps.
+- Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
+  program's part of it (it creates no pass): the due check off the loop's
+  goroutine, once per interval per repository, the open pass's wake and
+  retirement hold, the on-proof retirement of a pass whose run rebased to
+  nothing (to be removed once AGE-487 lands), the retirement hold's
+  answers, and `passBranch`, which marks every run of a pass's branch for
+  the review's scope ask. Its header owns the residual gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps.
 

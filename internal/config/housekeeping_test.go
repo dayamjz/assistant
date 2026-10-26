@@ -155,6 +155,10 @@ func TestTheHousekeepingRoleIsAssignedAndResolvesToTheFixer(t *testing.T) {
 	if got := named.Roles.ForHousekeeping(); got.Agent != "claude" {
 		t.Errorf("ForHousekeeping() = %+v, want the table's housekeeping row", got)
 	}
+	// A table that names the role still gives no task the right to name it.
+	if _, err := named.Roles.ForTask(RoleHousekeeping); !errors.Is(err, ErrTaskRole) {
+		t.Errorf("ForTask(housekeeping) with the role configured = %v, want ErrTaskRole", err)
+	}
 	l = mustParse(t, OriginGlobal, `{"roles": {"fix": {"agent": "codex"}}}`)
 	fixOnly := resolve(t, l, Absent(OriginPushed)).Config
 	if got := fixOnly.Roles.ForHousekeeping(); got.Agent != "codex" {

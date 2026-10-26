@@ -523,6 +523,18 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		out.Task = s.taskView(ctx, o)
 		return out, nil
 	}
+	if rh, ok := parseRetireHold(hold.Key, r.Task); ok {
+		out, err := s.answerRetirement(ctx, req, r, hold, rh)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		o, err := s.tasks().ObserveTask(ctx, r.Task)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		out.Task = s.taskView(ctx, o)
+		return out, nil
+	}
 	retryHold := isRetryHold(hold.Key, r.Task)
 	if retryHold && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",

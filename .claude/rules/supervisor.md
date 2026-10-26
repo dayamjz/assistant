@@ -23,6 +23,13 @@ paths: ["internal/supervisor/**"]
   subordinate's, raised once per kept work entry: on the task wake, or on
   `internal/store`'s kept-work wake for an entry no task names, whose
   queued rows `InFlightOf` counts with the domain wakes.
+- `housekeeping-due` is PRD section 6's housekeeping, actionable and never
+  a subordinate's, carried on `internal/store`'s housekeeping wake about a
+  repository, whose queued rows `InFlightOf` counts with the other untasked
+  shapes. `PassMoves` is the one statement of "something moves the pass",
+  and `InFlightRegardless` of the tasks in flight whatever they resolve (an
+  open stall hold or a pass something moves), which the loop, the stop
+  guard and the catch-up read all count.
 
 Read both `doc.go` files (`doc.go` and `feed/doc.go`) before changing any of
 that, and for the residual gaps; `kind.go` is the one owner of what a wake kind

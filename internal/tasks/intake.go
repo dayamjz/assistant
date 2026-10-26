@@ -64,6 +64,11 @@ type Request struct {
 	// caller's claim. A name home.ValidDomain refuses is refused with
 	// ErrRequest.
 	Domain string
+	// Housekeeping is PRD section 9's housekeeping mark: the request is
+	// for a housekeeping pass of Repository, created on housekeeping.go's
+	// terms, with Instructions as the coordinator's notes, which may be
+	// empty because the program writes the first part.
+	Housekeeping bool
 }
 
 // Cause says why a task was queued.
@@ -136,6 +141,9 @@ type Created struct {
 // intakes of one service and which a caller then reads again and decides
 // again.
 func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
+	if req.Housekeeping {
+		return q.createPass(ctx, req)
+	}
 	shape, err := decodeShape(req.Shape)
 	if err != nil {
 		return Created{}, err
@@ -249,6 +257,53 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		return Created{}, err
 	}
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
+}
+
+// createPass is Create for a marked request, on housekeeping.go's terms.
+func (q *Queue) createPass(ctx context.Context, req Request) (Created, error) {
+	if err := validPass(req); err != nil {
+		return Created{}, err
+	}
+	if strings.TrimSpace(req.Project) == "" {
+		return Created{}, fmt.Errorf("%w: no project", ErrRequest)
+	}
+	if req.Domain != "" {
+		if err := home.ValidDomain(req.Domain); err != nil {
+			return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
+		}
+	}
+	repository, err := q.store.Repository(ctx, req.Repository)
+	if err != nil {
+		return Created{}, fmt.Errorf("tasks: the repository the pass keeps: %w", err)
+	}
+	id, err := home.NewTaskID()
+	if err != nil {
+		return Created{}, err
+	}
+	copyPath, err := q.home.TaskCopy(id)
+	if err != nil {
+		return Created{}, err
+	}
+	facts, err := q.readPassFacts(ctx, repository, id)
+	if err != nil {
+		return Created{}, err
+	}
+	task := store.Task{
+		ID: id, Shape: store.TaskInvestigation, Project: req.Project, Mode: req.Mode, Role: config.RoleHousekeeping,
+		WorktreePath: copyPath, Domain: req.Domain, RepositoryID: store.Known(repository.ID), Housekeeping: true,
+	}
+	if q.betweenReadAndWrite != nil {
+		q.betweenReadAndWrite()
+	}
+	created, err := q.store.CreateTask(ctx, task, passDisposition())
+	if err != nil {
+		return Created{}, err
+	}
+	instructions, err := q.writeInstructions(id, passInstructions(facts, req.Instructions))
+	if err != nil {
+		return Created{}, err
+	}
+	return Created{Task: created, Cause: CauseIndependent, Instructions: instructions}, nil
 }
 
 // recordedPosture is the posture a delivery task is recorded under, at
@@ -422,10 +477,12 @@ func decodeShape(text string) (store.TaskShape, error) {
 
 // IsRefusal reports whether err is one of this package's typed refusals of an
 // intake, as opposed to a failure to read or write: a malformed request, a
-// person's branch, an unknown record, or a posture lighter than the project's.
+// person's branch, an unknown record, a posture lighter than the project's,
+// a housekeeping pass refused by its repository's trusted scope, or a second
+// open pass of one repository.
 // A caller relaying the result to the coordinator reports a refusal as an
 // answer and a failure as a failure.
 func IsRefusal(err error) bool {
 	return errors.Is(err, ErrRequest) || errors.Is(err, ErrBranchTaken) || errors.Is(err, store.ErrNotFound) ||
-		errors.Is(err, ErrLighterPosture)
+		errors.Is(err, ErrLighterPosture) || errors.Is(err, ErrPassRefused) || errors.Is(err, store.ErrPassOpen)
 }

@@ -374,6 +374,21 @@ func NoCodeHost(s graph.State) bool {
 	return flag
 }
 
+// NothingLeft reports whether the run's rebase stage found nothing left to
+// change after rebasing onto the latest upstream, the short circuit
+// KeyDiffEmpty carries, which passes every later stage over so the run ends
+// successfully with nothing pushed. It is PRD section 6's "that run's
+// recorded position says its rebase stage found nothing left to change",
+// read from the position and never from the run's status.
+func NothingLeft(s graph.State) bool {
+	v, ok := s.Get(string(KeyDiffEmpty))
+	if !ok {
+		return false
+	}
+	flag, _ := v.Bool()
+	return flag
+}
+
 // decodeReport reads a recorded report. The empty string is the key's zero
 // value and means the stage recorded nothing, which is not a decoding failure.
 func decodeReport(text string, stage Stage) (findings.Report, error) {

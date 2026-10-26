@@ -710,6 +710,14 @@ const (
 	// fast-forward is refused is not an effect: the answer is refused, the
 	// hold stays open, and nothing is recorded.
 	AnswerLanded AnswerEffect = "landed-locally"
+	// AnswerRetired is a retire on a housekeeping pass's retirement hold
+	// that wrote the pass's retirement record: its claim on its repository
+	// is released, so the next pass can be created, every open hold that
+	// would have begun its worker again was answered stop under the same
+	// decision, its copy was asked the cleanup decision, and nothing was
+	// removed for want of a proof or discarded. The pass still resolves
+	// what its own records give.
+	AnswerRetired AnswerEffect = "retired"
 )
 
 // AnswerEffects is the closed set of AnswerEffect, in declaration order. The
@@ -718,6 +726,7 @@ func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
 		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped, AnswerWorkerStopped, AnswerLanded,
+		AnswerRetired,
 	}
 }
 
@@ -1154,6 +1163,10 @@ type Wakes struct {
 	// wakes about a kept work entry no task names, on DomainWakes' terms
 	// and numbered apart from both.
 	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the rows of the queue's fourth shape handed
+	// out, the housekeeping wakes about a repository, on DomainWakes' terms
+	// and numbered apart from every other shape.
+	HousekeepingWakes []store.HousekeepingWake `json:"housekeeping_wakes,omitempty"`
 }
 
 // QueuedWakes is the answer to a person's reading of the wake queue: every
@@ -1170,6 +1183,10 @@ type QueuedWakes struct {
 	// names, oldest first under the same limit, on Wakes.KeptWorkWakes'
 	// terms.
 	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the queued housekeeping wakes about a
+	// repository, oldest first under the same limit, on
+	// Wakes.HousekeepingWakes' terms.
+	HousekeepingWakes []store.HousekeepingWake `json:"housekeeping_wakes,omitempty"`
 }
 
 // QueuedWake is one queued row and the project of the task it is about,
@@ -1196,6 +1213,9 @@ type Acknowledged struct {
 	// KeptWorkWakes are the kept-work wake identifiers the batch closed, as
 	// the request named them.
 	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the housekeeping wake identifiers the batch
+	// closed, as the request named them.
+	HousekeepingWakes []int64 `json:"housekeeping_wakes,omitempty"`
 	// By is who the rows record as having acknowledged them, rendered the
 	// way internal/store renders the closed set.
 	By string `json:"by"`

@@ -197,6 +197,15 @@ const (
 	// skip when it is set. A late key: runs checkpointed before it existed
 	// behave as if it is false.
 	KeyNoCodeHost Key = "no_code_host"
+	// KeyHousekeepingPass says this run was started by the push of a
+	// housekeeping pass's worker, PRD section 6's housekeeping, so the
+	// review stage holds with an ask on every path the change touched
+	// outside the repository's housekeeping.paths. It is a run input set at
+	// begin from the pushing task's record; a person's push of the same
+	// branch does not carry it. A late key: runs checkpointed before it
+	// existed behave as if it is false, which is what every run but a
+	// pass's is.
+	KeyHousekeepingPass Key = "housekeeping.pass"
 	// KeyCancelled says a person cancelled the run at a hold. This package's
 	// own cancel node writes it.
 	KeyCancelled Key = "cancelled"
@@ -253,6 +262,7 @@ var sharedKeys = []keySpec{
 	{KeySubmittedSubject, graph.KindText, graph.MergeNone, ownerRun, true},
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
 	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
+	{KeyHousekeepingPass, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
 	// A fix round writes it each time it changes the copy, so it carries
 	// the head's merge rule for the head's reason.

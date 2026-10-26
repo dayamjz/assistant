@@ -22,6 +22,16 @@ var runStates = map[store.RunStatus]State{
 	store.RunTerminated: Failed,
 }
 
+// RunSettled reports whether a run in this status has ended, passed, failed
+// or terminated, as runStates reads it: a run whose task state is Ready or
+// Failed. A pending, running or held run, and a status with no entry, has
+// not. internal/runs' move table owns which statuses a run moves out of,
+// and a test holds the two to the same answer over every status.
+func RunSettled(status store.RunStatus) bool {
+	state, ok := runStates[status]
+	return ok && (state == Ready || state == Failed)
+}
+
 // Resolve answers what is true of a task now, from the records that own the
 // facts, in PRD section 6's fixed precedence and first match wins:
 //
@@ -177,7 +187,8 @@ func Resolve(in Inputs) Resolution {
 		out.Superseded = supersededBy(events, out.State, out.Source)
 	}
 	out.Progress = (out.State == Validating && out.Source == SourceRun && in.Advancing) ||
-		(out.State == Running && out.Source == SourceProcess && in.Process == Live)
+		(out.State == Running && out.Source == SourceProcess && in.Process == Live) ||
+		(in.Task.Housekeeping && out.Source == SourceHold && in.Advancing && ok && !RunSettled(run.Status))
 	return out
 }
 

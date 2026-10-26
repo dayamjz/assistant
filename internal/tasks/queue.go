@@ -66,6 +66,11 @@ type Deps struct {
 	// Posture answers a repository's declared delivery posture, which a
 	// delivery task's intake and an investigation's promotion record.
 	Posture ProjectPosture
+	// Housekeeping answers a repository's trusted housekeeping.paths,
+	// which a housekeeping pass's intake reads. It may be nil, and a marked
+	// create on a queue built without it is refused with
+	// ErrPassScopeUnreadable rather than given a scope nobody read.
+	Housekeeping HousekeepingScope
 	// Roles is the configuration a task's role is resolved against. Nil
 	// means no role is configured, so a task that names one is refused and
 	// a task that names none runs as the worker role on the agent list.
@@ -94,6 +99,7 @@ type Queue struct {
 	inGate   BranchInGate
 	gatePath GatePath
 	posture  ProjectPosture
+	scope    HousekeepingScope
 	roles    config.Roles
 	// git are the options every repository this Queue opens is opened with,
 	// from gitOptions.
@@ -133,7 +139,7 @@ func New(d Deps) (*Queue, error) {
 		return nil, fmt.Errorf("%w: no git deadline", ErrIncomplete)
 	}
 	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate,
-		gatePath: d.GatePath, posture: d.Posture, roles: d.Roles, git: gitOptions(d.GitDeadline)}, nil
+		gatePath: d.GatePath, posture: d.Posture, scope: d.Housekeeping, roles: d.Roles, git: gitOptions(d.GitDeadline)}, nil
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks

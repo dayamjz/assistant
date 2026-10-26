@@ -41,6 +41,19 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 // with role, so a launch resolves that role rather than the worker role.
 func newDispatchSubjectAs(t *testing.T, role string) *dispatchSubject {
 	t.Helper()
+	return newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Branch: store.Known("task/one"), Role: role,
+		}, store.Disposition{}
+	})
+}
+
+// newDispatchSubjectOf is newDispatchSubject over the task record recorded
+// returns for the identifier and copy path it is handed, with the
+// disposition it returns, in place of the delivery task.
+func newDispatchSubjectOf(t *testing.T, recorded func(id, copyPath string) (store.Task, store.Disposition)) *dispatchSubject {
+	t.Helper()
 	ctx := t.Context()
 	h, err := home.Open(t.TempDir())
 	if err != nil {
@@ -55,7 +68,7 @@ func newDispatchSubjectAs(t *testing.T, role string) *dispatchSubject {
 		t.Fatalf("opening the store: %v", err)
 	}
 	t.Cleanup(func() { _ = records.Close() })
-	id, copyPath := plantLaunchableAs(t, h, records, role)
+	id, copyPath := plantLaunchableOf(t, h, records, recorded)
 	log, err := h.OpenLog(0)
 	if err != nil {
 		t.Fatalf("opening the log: %v", err)
@@ -80,13 +93,27 @@ func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copy
 // plantLaunchableAs is plantLaunchable with the task recorded under role.
 func plantLaunchableAs(t *testing.T, h *home.Home, records *store.Store, role string) (id, copyPath string) {
 	t.Helper()
+	return plantLaunchableOf(t, h, records, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Branch: store.Known("task/one"), Role: role,
+		}, store.Disposition{}
+	})
+}
+
+// plantLaunchableOf is plantLaunchable with the task record recorded
+// returns for the identifier and copy path it is handed, recorded with the
+// disposition it returns.
+func plantLaunchableOf(t *testing.T, h *home.Home, records *store.Store,
+	recorded func(id, copyPath string) (store.Task, store.Disposition)) (id, copyPath string) {
+	t.Helper()
 	ctx := t.Context()
 	primary, upstream, _ := heldSubject(t)
 	for _, dir := range []string{primary, upstream} {
 		heldGit(t, dir, "config", "gc.auto", "0")
 		heldGit(t, dir, "config", "maintenance.auto", "false")
 	}
-	repository, err := records.UpsertRepository(ctx, store.Repository{
+	_, err := records.UpsertRepository(ctx, store.Repository{
 		ID: "subject", WorkingPath: primary, UpstreamURL: upstream, DefaultBranch: "main",
 	})
 	if err != nil {
@@ -108,10 +135,8 @@ func plantLaunchableAs(t *testing.T, h *home.Home, records *store.Store, role st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.CreateTask(ctx, store.Task{
-		ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
-		RepositoryID: store.Known(repository.ID), Branch: store.Known("task/one"), Role: role,
-	}, store.Disposition{}); err != nil {
+	task, disposition := recorded(id, copyPath)
+	if _, err := records.CreateTask(ctx, task, disposition); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
 	instructions, err := h.TaskInstructions(id)
