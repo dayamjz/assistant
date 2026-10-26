@@ -621,8 +621,10 @@ yourself.
 
 Discard, `--answer discard` with the same flags, shows exactly what
 removing the copy would lose, read out after its line with each commit,
-object and file on a line of its own after a label and the digest last,
-and in the structured answer (`--json`): what neither the default branch nor the upstream holds,
+object and file on a line of its own after a label and the digest last
+(a value holding a backslash, a quote, a space at either end, or anything
+that does not print is written quoted and escaped, as a Go string literal,
+so no two values read the same), and in the structured answer (`--json`): what neither the default branch nor the upstream holds,
 the only two places counted as keeping work. That is the
 commits anything in the copy names that neither the default branch nor
 the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old

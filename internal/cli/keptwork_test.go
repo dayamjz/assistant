@@ -187,6 +187,14 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(entry.CopyPath, "notes.txt"), []byte("only here\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Two more whose names differ only in that one holds a line break and
+	// the other a backslash and the escape a line break would print as:
+	// what a person reads must tell them apart.
+	for _, name := range []string{"notes\n.txt", `notes\x0a.txt`} {
+		if err := os.WriteFile(filepath.Join(entry.CopyPath, name), []byte("only here too\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	shown := run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key())
 	var answered machine.KeptWorkAnswered
 	if shown.code != machine.ExitOK || json.Unmarshal([]byte(shown.stdout), &answered) != nil ||
@@ -203,7 +211,7 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	if read.code != machine.ExitOK || !strings.Contains(read.stdout, shownRow+"\n") {
 		t.Fatalf("the discard shown reads out as:\n%s%s\nwant the row %q", read.stdout, read.stderr, shownRow)
 	}
-	want := []string{"New file: notes.txt", "Digest: " + answered.Loss.Digest}
+	want := []string{"New file: notes.txt", `New file: "notes\n.txt"`, `New file: "notes\\x0a.txt"`, "Digest: " + answered.Loss.Digest}
 	for _, commit := range answered.Loss.Lacks {
 		want = append(want, "Commit: "+commit)
 	}

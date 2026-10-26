@@ -2,7 +2,9 @@ package cli
 
 import (
 	"io"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/dayamjz/assistant/internal/machine"
 )
@@ -33,7 +35,7 @@ func keptLostFileLabel(kind string) string {
 	if label, ok := keptLostFileLabels[kind]; ok {
 		return label
 	}
-	return "File (" + kind + "):"
+	return "File (" + exactText(kind) + "):"
 }
 
 // readOutKeptWorkAnswer is a person's reading of an answer to kept work:
@@ -60,26 +62,64 @@ func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 // keptLossLines is what a discard shown prints of its loss, in order: one
 // line per lost commit, then per other object with the names the removal
 // destroys of it, then per lost file, and the digest last, each value
-// escaped. The digest's line is always present, so a loss naming nothing
-// is the digest's line alone.
+// written by exactText, so two distinct paths or names never print the
+// same. The digest's line is always present, so a loss naming nothing is
+// the digest's line alone.
 func keptLossLines(l machine.KeptWorkLoss) []string {
 	lines := make([]string, 0, len(l.Lacks)+len(l.Objects)+len(l.Files)+1)
 	for _, commit := range l.Lacks {
-		lines = append(lines, keptLostCommitLabel+" "+printable(commit))
+		lines = append(lines, keptLostCommitLabel+" "+exactText(commit))
 	}
 	for _, o := range l.Objects {
-		line := keptLostObjectLabel + " " + printable(o.Object) + " (" + printable(o.Type) + ")"
+		line := keptLostObjectLabel + " " + exactText(o.Object) + " (" + exactText(o.Type) + ")"
 		if len(o.Names) > 0 {
 			names := make([]string, len(o.Names))
 			for i, n := range o.Names {
-				names[i] = printable(n)
+				names[i] = exactText(n)
 			}
 			line += " " + strings.Join(names, ", ")
 		}
 		lines = append(lines, line)
 	}
 	for _, f := range l.Files {
-		lines = append(lines, keptLostFileLabel(f.Kind)+" "+printable(f.Path))
+		lines = append(lines, keptLostFileLabel(f.Kind)+" "+exactText(f.Path))
 	}
-	return append(lines, keptLostDigestLabel+" "+printable(l.Digest))
+	return append(lines, keptLostDigestLabel+" "+exactText(l.Digest))
+}
+
+// exactText writes a value a person must tell apart from every other, a
+// path, a reference's name, a commit or the digest, so that two distinct
+// values never print the same and none acts on the terminal. A value that
+// is valid UTF-8 of printable runes (strconv.IsPrint: letters, marks,
+// numbers, punctuation, symbols and the ASCII space), holds no backslash
+// or double quote, and neither starts nor ends with a space, prints as it
+// is. Any other is written quoted, as strconv.Quote writes a Go string
+// literal: a backslash, a quote, a control or format character, a space
+// other than the ASCII one and a byte that is not UTF-8 are each escaped,
+// and strconv.Unquote reads the value back exactly. A plain value never
+// starts with a quote and a quoted one always does, so the two forms
+// cannot meet.
+//
+// What it does not cover: two distinct values that a terminal draws alike
+// though each is printable, letters of two scripts that look the same or a
+// precomposed letter beside the same letter with a combining mark, print
+// as their runes and look alike.
+func exactText(value string) string {
+	if plainText(value) {
+		return value
+	}
+	return strconv.Quote(value)
+}
+
+// plainText is whether exactText prints value as it is.
+func plainText(value string) bool {
+	if value == "" || !utf8.ValidString(value) || value[0] == ' ' || value[len(value)-1] == ' ' {
+		return false
+	}
+	for _, r := range value {
+		if r == '\\' || r == '"' || !strconv.IsPrint(r) {
+			return false
+		}
+	}
+	return true
 }
