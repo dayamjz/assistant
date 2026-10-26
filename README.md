@@ -159,11 +159,13 @@ roles:
     agent: cursor
 ```
 
-These are **example pins**, not guaranteed entitlements or the default configuration. `context: 1m` is currently declared for Claude Opus 5.5 only; the Codex adapter does not declare a selectable context window. Explicit `effort` is supported by Claude and Codex, not every adapter. Installed CLI support, authentication, and available models still matter. General worker tasks use the configured agent list unless a task selects a named role; review and fix are reserved system roles. For adapter capabilities, model mappings, and fallback rules, see [multi-agent support](docs/multi-agent-support.md).
+These are **example pins**, not guaranteed entitlements or the default configuration. `context: 1m` is currently declared for Claude Opus 5.5 only; the Codex adapter does not declare a selectable context window. Explicit `effort` is supported by Claude and Codex, not every adapter. Installed CLI support, authentication, and available models still matter. General worker tasks use the configured agent list unless a task selects a named role; review, fix and housekeeping are reserved system roles, and housekeeping runs on the `fix` row unless the table names it. For adapter capabilities, model mappings, and fallback rules, see [multi-agent support](docs/multi-agent-support.md).
 
 ## 2. Run independent work without losing control
 
 Each task gets an isolated repository copy. Workers can investigate a problem and report findings without immediately editing or shipping code; a subsequent promotion can turn an investigation into delivery work. The supervisor watches progress, raises decisions and stalled-work signals, and maintains durable records through service restarts.
+
+With `housekeeping.interval` set, the supervisor also tells the coordinator when a repository's agent context (its `AGENTS.md`, `CLAUDE.md`, rules folders and README) is due a **housekeeping pass**, a task that corrects factual drift in those files through the gate; see [the operator guide](docs/operators.md#keeping-a-repositorys-agent-context-true).
 
 Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state rather than silently deleting work. The full answer/dispatch-hold workflow is still being completed, so do not assume every recovery path is automated.
 
