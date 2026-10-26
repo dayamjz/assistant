@@ -74,23 +74,32 @@ func TestAPassLaunchesOnTheFixRow(t *testing.T) {
 	}
 }
 
-// PRD section 13 and principle P6: a retired pass is never begun again.
-// The coordinator's relaunch, a retry on a relaunch hold left open, and
-// reconciliation at a restart are each refused and start no worker. The
-// positive control is the same relaunch of a pass not retired, which begins
-// one attempt.
-func TestARetiredPassIsNeverRelaunched(t *testing.T) {
+// The positive control for TestARetiredPassIsNeverRelaunched: the same
+// relaunch of a dead pass that is not retired begins one attempt, so the
+// refusals there are the retirement's and not a pass's. It needs a process
+// sweep that clears on this host, which the retired pass's refusal, made
+// before any sweep, does not.
+func TestAPassNotRetiredIsRelaunched(t *testing.T) {
 	t.Parallel()
-	principles.Cite(t, principles.P6)
-	ctx := t.Context()
-
+	requireSweepClearsHere(t, "that a pass not retired is relaunched")
 	control := passRelaunchSubject(t)
-	if _, err := control.restart.relaunchTask(ctx, control.task); err != nil {
+	if _, err := control.restart.relaunchTask(t.Context(), control.task); err != nil {
 		t.Fatalf("relaunching a pass not retired: %v", err)
 	}
 	if got := attemptsOf(t, control.records, control.task); got != 2 {
 		t.Fatalf("the control relaunch left %d attempts, want 2", got)
 	}
+}
+
+// PRD section 13 and principle P6: a retired pass is never begun again.
+// The coordinator's relaunch, a retry on a relaunch hold left open, and
+// reconciliation at a restart are each refused and start no worker, each
+// before any sweep of its copy. The positive control is
+// TestAPassNotRetiredIsRelaunched.
+func TestARetiredPassIsNeverRelaunched(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	ctx := t.Context()
 
 	sub := passRelaunchSubject(t)
 	retire := store.Hold{Key: retireHold{Task: sub.task, Epoch: 1, Attempt: 1}.key(), TaskID: store.Known(sub.task),
