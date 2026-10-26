@@ -135,8 +135,10 @@ repository more than one round of review.
 - A lease, an incorporation check, or a force decision belongs in
   `internal/safety` even when shorter at the git call; `internal/vcs` stays
   mechanism only. So does whether a kept copy is the one its registry
-  recorded: every path that reads or writes one asks
-  `tasks.Cleaner.VerifyKeptCopy`, which asks `safety.VerifyKeptCopy`, first. `internal/custody` is the only path that moves a person's
+  recorded: every path that answers one asks
+  `tasks.Cleaner.VerifyKeptCopy`, which asks `safety.VerifyKeptCopy`, before
+  it reads or writes the copy (`tasks.Cleaner.Keep`, which records a copy as
+  it is kept, reads it as git does and is not one of them). `internal/custody` is the only path that moves a person's
   branch.
 - Only `internal/store` opens the database or writes SQL; add a typed accessor
   there rather than a query elsewhere. The sealed `task_state` table (migration

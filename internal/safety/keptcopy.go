@@ -13,12 +13,17 @@ import (
 // The third question: whether a kept copy is the one its registry
 // recorded, asked before anything of it is read or written. A kept copy
 // is a task's clone or a run's linked worktree that a person answers
-// (land, carry on, discard) and the program sets aside and puts back; its
-// registry is the record that names it, the task's copy path for a clone
-// and the gate's worktree registry for a run's worktree. Every path that
-// reads or writes a kept copy asks VerifyKeptCopy first, and acts on
-// nothing it refuses (round 28: the same gap had been closed path by path,
-// and the next review found it open in another path).
+// (land, carry on, discard); its registry is the record that names it, the
+// task's copy path for a clone and the gate's worktree registry for a
+// run's worktree. Every path that answers a kept copy asks VerifyKeptCopy
+// before it reads or writes anything of it, and acts on nothing it refuses
+// (round 28: the same gap had been closed path by path, and the next
+// review found it open in another path): the loss a discard shows and a
+// land reads, and carry on. internal/tasks' Keep, which records a copy as
+// the cleanup decision keeps it, is not one of them: it reads the copy as
+// git reads it there, so a copy whose .git was made to point at another
+// repository is recorded with what git reads through it, and every answer
+// to that entry is then refused here.
 //
 // What it verifies, each through git or the file system as it stands:
 //

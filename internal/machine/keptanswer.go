@@ -130,10 +130,13 @@ const (
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
-// it stands after the answer, with the answer recorded on it, what the
-// answer did, and for a landing the run it started.
+// it stands after the answer, what the answer did, and for a landing the
+// run it started. A land or a carry on records its answer on the entry; a
+// discard shown records nothing, so its entry is as it was, still open
+// (KeptWorkDiscardShown).
 type KeptWorkAnswered struct {
-	// Entry is the entry, answered.
+	// Entry is the entry as the answer left it: answered for a land or a
+	// carry on, and unchanged and open for a discard shown.
 	Entry store.KeptWork `json:"entry"`
 	// Effect is what the answer did.
 	Effect KeptWorkEffect `json:"effect"`

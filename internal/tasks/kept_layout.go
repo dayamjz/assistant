@@ -150,8 +150,8 @@ func partialHistory(ctx context.Context, copied *vcs.Repository, refuse func(str
 // entry's copy path and its own .git for a task's clone, and for a run's
 // worktree the gate at gatePath, whose registry names the worktree's
 // record (copyRecord, which also holds the worktree's .git file to it).
-// Every path that reads or writes a kept copy asks it first: the loss a
-// discard shows and a land reads, and carry on, before its claim and, when
+// Every path that answers a kept copy asks it first: the loss a discard
+// shows and a land reads, and carry on, before its claim and, when
 // a stopped carry on is
 // taken up, on the copy where it stands, at the reserved task's path once
 // moved (internal/service's verifyCarriedCopy, with the entry's copy path
