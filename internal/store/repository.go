@@ -308,6 +308,7 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		for _, forget := range []string{
 			`DELETE FROM housekeeping_notification WHERE housekeeping_wake_id IN (SELECT id FROM housekeeping_wake WHERE repository_id = ?)`,
 			`DELETE FROM housekeeping_wake WHERE repository_id = ?`,
+			`DELETE FROM housekeeping_marker WHERE repository_id = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, forget, id); err != nil {
 				return fmt.Errorf("store: forgetting the housekeeping records of repository %s: %w", id, err)
