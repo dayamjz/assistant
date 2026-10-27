@@ -105,6 +105,16 @@ import (
 // carries no posture and is still followed as the gate, because nothing
 // writes one onto a delivery task after its promotion.
 //
+// A housekeeping pass is promoted as a request for gated, the strictest
+// posture, so it is recorded gated whatever its project declares (PRD
+// section 6's housekeeping: its scope is held at the review of the run its
+// push starts, and a local task starts no run), and its project's posture
+// is read all the same, so an unreadable trusted copy refuses a pass's
+// promotion as it refuses any (P7). A retired pass is refused in the flip
+// itself, store.ErrPassRetired, read in the transaction that would write
+// it: every attempt claim refuses a retired pass, so the delivery would be
+// work that could never begin.
+//
 // # The copy is written to after the flip, and asserted on both sides of it
 //
 // The copy is the clone the task's dispatch cut and proved: it is given the
@@ -281,6 +291,11 @@ type Promotion struct {
 	// record the project's own, on Request.Delivery's terms: it may be
 	// stricter than the project's and never lighter, which is a
 	// *PostureError.
+	// A housekeeping pass is recorded gated whatever the project declares,
+	// as a request for gated would be, and a request for another posture on
+	// a pass is refused as malformed (ErrRequest), since its scope is held
+	// at review and a local task starts no run. The project's posture is
+	// read for a pass as for any task.
 	Delivery string
 	// By is who promotes, which the copy's open kept work entries, if any,
 	// are answered carry-on as in the flip, on store.TransitionTaskShape's
@@ -343,10 +358,12 @@ type Promoted struct {
 // posture read before it: the project's, from its trusted copy through the
 // queue's ProjectPosture, or the request's when that is no lighter. A copy
 // that cannot be read refuses with ErrPostureUnreadable and a lighter request
-// with a *PostureError, and under either nothing is written. Its refusals,
-// *store.TaskMovedError, store.ErrTaskShapeMoved and
-// store.ErrCleanupRecorded, come back as they are. The exclusion is given
-// back after the flip, before the copy is touched.
+// with a *PostureError, and under either nothing is written. A housekeeping
+// pass is read the same way and recorded gated, as a request for gated is.
+// Its refusals, *store.TaskMovedError, store.ErrTaskShapeMoved,
+// store.ErrCleanupRecorded and, for a retired housekeeping pass, whose
+// delivery could never begin, store.ErrPassRetired, come back as they are.
+// The exclusion is given back after the flip, before the copy is touched.
 //
 // Before the flip, the copy is verified for each of the task's open kept
 // work entries, which the flip answers carry on, and a copy the
@@ -399,6 +416,26 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	repository, err := q.store.Repository(ctx, req.Repository)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: the repository the delivery works in: %w", err)
+	}
+	record, err := q.store.Task(ctx, req.Task)
+	if err != nil {
+		return Promoted{}, fmt.Errorf("tasks: the task to promote: %w", err)
+	}
+	if record.Housekeeping {
+		// A housekeeping pass is delivered through the gate whatever its
+		// project declares, PRD section 6's housekeeping: its scope is
+		// held at the review of the run its push starts, and a task under
+		// the local posture starts no run, so a pass under it would change
+		// files outside housekeeping.paths with no ask. So the pass is
+		// promoted as a request for gated, the strictest posture, which
+		// recordedPosture records over any posture the project declares;
+		// the project's is still read, because a trusted copy that cannot
+		// be read refuses the promotion (P7) for a pass as for any task.
+		if requested != "" && requested != config.DeliveryGated {
+			return Promoted{}, fmt.Errorf("%w: a housekeeping pass is delivered through the gate, under the %s posture and not %s",
+				ErrRequest, config.DeliveryGated, requested)
+		}
+		requested = config.DeliveryGated
 	}
 	posture, err := q.recordedPosture(ctx, repository, req.Task, requested, "")
 	if err != nil {

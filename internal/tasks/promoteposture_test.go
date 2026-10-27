@@ -124,3 +124,100 @@ func TestPromoteTightensAPostureAndNeverLoosensIt(t *testing.T) {
 		}
 	}
 }
+
+// A housekeeping pass is delivered through the gate whatever posture its
+// project declares, PRD section 6's housekeeping ("delivery through the
+// gate, pull request"; "reaches a shared branch only through the gate"):
+// its scope is held at the review of the run its push starts, and a task
+// under the local posture starts no run, so a pass promoted under it would
+// change files outside housekeeping.paths with no ask. A pass in a local
+// project is promoted gated; a request for the local posture on a pass is
+// refused as a malformed request, recording nothing; a request for gated
+// is what it already is. The control is an ordinary investigation in the
+// same project, promoted under the project's local posture.
+func TestAPassIsPromotedThroughTheGateWhateverThePostureIs(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	s.posture = config.DeliveryLocal
+	tk := s.pass(t)
+	n := len(s.history(t, tk.id))
+	req := request(tk.id)
+	req.Delivery = "local"
+	if _, err := s.queue.Promote(ctx, req); !errors.Is(err, ErrRequest) || !IsRefusal(err) {
+		t.Fatalf("local asked of a pass = %v, want ErrRequest", err)
+	}
+	s.untouched(t, tk, n)
+	if got := s.promote(t, request(tk.id)); got.Task.Delivery != store.Known(config.DeliveryGated) {
+		t.Fatalf("a pass promoted in a local project was recorded under %v, want gated", got.Task.Delivery)
+	}
+	if stored := s.record(t, tk.id); stored.Delivery != store.Known(config.DeliveryGated) || !stored.Housekeeping {
+		t.Fatalf("the stored pass is %+v, want a gated delivery still marked", stored)
+	}
+	control := s.investigation(t)
+	req = request(control.id)
+	req.Branch = "topic-control" // the promoted pass holds topic
+	if got := s.promote(t, req); got.Task.Delivery != store.Known(config.DeliveryLocal) {
+		t.Fatalf("the control, an investigation in the local project, was recorded under %v", got.Task.Delivery)
+	}
+
+	// A pass asked gated, in another subject since a repository has one
+	// open pass, is what it already is.
+	s = newPromotionSubject(t)
+	s.posture = config.DeliveryLocal
+	tk = s.pass(t)
+	req = request(tk.id)
+	req.Delivery = "gated"
+	if got := s.promote(t, req); got.Task.Delivery != store.Known(config.DeliveryGated) {
+		t.Fatalf("a pass asked gated was recorded under %v", got.Task.Delivery)
+	}
+}
+
+// A housekeeping pass is held to the same read as any promotion (P7): it is
+// recorded gated whatever the project declares, but the project's posture
+// is still read from its trusted copy, and a copy that cannot be read, or
+// that declares a posture this build does not define, refuses the promotion
+// with ErrPostureUnreadable and records nothing, with no posture assumed in
+// its place. The control is an ordinary investigation over the same copy,
+// refused the same way, which is what says the refusal is the reader's.
+// Once the copy reads, the same pass is promoted gated, with the posture
+// read once.
+func TestAnUnreadablePostureRefusesThePromotionOfAPass(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	s.posture = config.DeliveryLocal
+	tk := s.pass(t)
+	n := len(s.history(t, tk.id))
+	s.postureErr = errors.New("the trusted copy could not be fetched")
+	asked := s.postureAsked.Load()
+	if _, err := s.queue.Promote(ctx, request(tk.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("promoting a pass over an unreadable copy = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, tk, n)
+	if got := s.postureAsked.Load(); got != asked+1 {
+		t.Fatalf("the pass's promotion read the posture %d times, want once", got-asked)
+	}
+	control := s.investigation(t)
+	m := len(s.history(t, control.id))
+	if _, err := s.queue.Promote(ctx, request(control.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("the control, an investigation over the same copy = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, control, m)
+
+	s.postureErr = nil
+	s.posture = config.Delivery("direct")
+	if _, err := s.queue.Promote(ctx, request(tk.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("promoting a pass over a posture this build does not define = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, tk, n)
+
+	s.posture = config.DeliveryLocal
+	asked = s.postureAsked.Load()
+	if got := s.promote(t, request(tk.id)); got.Task.Delivery != store.Known(config.DeliveryGated) {
+		t.Fatalf("the pass promoted once the copy reads was recorded under %v, want gated", got.Task.Delivery)
+	}
+	if got := s.postureAsked.Load(); got != asked+1 {
+		t.Fatalf("the pass's promotion read the posture %d times, want once", got-asked)
+	}
+}
