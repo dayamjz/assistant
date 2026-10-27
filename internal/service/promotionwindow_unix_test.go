@@ -396,6 +396,57 @@ func TestAReportedCopyHoldingWorkPastThePromotionWindowIsOneKeptWorkEntry(t *tes
 	})
 }
 
+// PRD section 6's "kept work is answered before new task work starts" and
+// P15, for the entry the window writes: past a one-second promotion_window
+// over a copy holding a commit, a delivery task created in the same project
+// is not dispatched. It has no attempt through several passes, the service
+// log says it waits, and task.get names the window's entry. Promoting the
+// investigation answers the entry carry on, naming the investigation itself
+// as the task that carries it on, relaunches a worker in the copy from the
+// stored report, and the held task then dispatches. At ed85b34, before main's
+// dispatch hold was merged, the held task dispatched at once with the entry
+// open; without endWindow's keep there is no entry to wait for.
+func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		ctx := t.Context()
+		w := inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+		ended := w.session.Reference().String()
+		inv.workerEnded(t, running)
+		entry, _ := inv.waitKeptWake(t)
+
+		var created machine.TaskCreated
+		if err := running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
+			Repository: inv.repository.ID, Branch: "task/after-the-window",
+		}, &created); err != nil {
+			t.Fatalf("creating a task in the investigation's project: %v", err)
+		}
+		held := created.Record.ID
+		waitLog(t, inv.home, "task "+held+" waits: ")
+		passes()
+		if got := attemptsOf(t, inv.home, held); len(got) != 0 {
+			t.Fatalf("with the window's entry %d open, task %s was dispatched with attempts %+v", entry.ID, held, got)
+		}
+		var task machine.Task
+		if err := running.client.Call(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: held}, &task); err != nil {
+			t.Fatal(err)
+		}
+		if len(task.KeptWork) != 1 || task.KeptWork[0].ID != entry.ID {
+			t.Fatalf("the held task names kept work %+v, want the window's entry %d", task.KeptWork, entry.ID)
+		}
+
+		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-held"), ended)
+		answered, err := recordsOf(t, inv.home).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || answered.Open() || answered.Answer.Or("") != store.KeptCarryOn || answered.CarriedOnTask.Or("") != inv.task {
+			t.Fatalf("after the promotion the window's entry reads %+v (%v), want it answered carry on by task %s", answered, err, inv.task)
+		}
+		waitAttempts(t, inv.home, held)
+	})
+}
+
 // The control for the test above: the same copy holding the same commit,
 // promoted inside a five-second promotion_window, continues its worker and
 // is never kept for the window, so no pass past the window's end records an
