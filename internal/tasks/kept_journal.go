@@ -95,8 +95,9 @@ func writeJournal(dir string, j discardJournal) error {
 // It reports false when no discard's directory stands there, or when one
 // stood with no journal and only the partial files a stopped first write
 // leaves, which it removes with the directory. It reports the journal and
-// true for a directory with a journal, a partial file beside it ignored,
-// since the journal is the last one written whole. Anything else (a
+// true for a directory with a journal naming a copy's identity, a partial
+// file beside it ignored, since the journal is the last one written whole.
+// Anything else (a journal that names no copy, a
 // directory with no journal holding other files, a journal or a directory
 // that is not a regular file or a directory, or a journal that cannot be
 // read) is refused with ErrAsideStands and left as it is.
@@ -132,13 +133,20 @@ func (c *Cleaner) standingDiscard(copyPath string) (discardJournal, bool, error)
 	if err := json.Unmarshal(raw, &j); err != nil {
 		return discardJournal{}, false, fmt.Errorf("%w at %s: its journal could not be read: %w", ErrAsideStands, dir, err)
 	}
+	if _, err := ParseCopyIdentity(j.Copy); err != nil {
+		return discardJournal{}, false, fmt.Errorf("%w at %s: its journal names no copy: %w", ErrAsideStands, dir, err)
+	}
 	return j, true, nil
 }
 
 // clearUnjournalled removes dir, a discard's directory with no journal, in
 // which nothing was set aside. The files it removes are the journal's
-// partial files, writeWhole's, through removePartials; any other entry is
-// refused with ErrAsideStands naming it, and dir is left as it is.
+// partial files, writeWhole's, by their exact names (isPartial), each one
+// it read and checked removed by that name; any other entry, one whose name
+// merely begins like a partial file's among them, is refused with
+// ErrAsideStands naming it, and dir is left as it is. A file written into
+// dir after the read is not removed, and the last removal, of dir itself,
+// then fails rather than taking it.
 func clearUnjournalled(dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -147,7 +155,7 @@ func clearUnjournalled(dir string) error {
 	journal := filepath.Join(dir, journalName)
 	var others []string
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), partialPrefix(journal)) {
+		if !isPartial(journal, e.Name()) {
 			others = append(others, e.Name())
 		}
 	}
@@ -155,8 +163,10 @@ func clearUnjournalled(dir string) error {
 		return fmt.Errorf("%w at %s: it has no journal and holds %s, which no discard writes there without one",
 			ErrAsideStands, dir, strings.Join(others, ", "))
 	}
-	if err := removePartials(journal); err != nil {
-		return fmt.Errorf("%w at %s: %w", ErrAsideStands, dir, err)
+	for _, e := range entries {
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w at %s: %w", ErrAsideStands, dir, err)
+		}
 	}
 	return os.Remove(dir)
 }

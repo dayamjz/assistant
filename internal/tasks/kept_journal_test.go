@@ -90,10 +90,12 @@ func TestAPartialFirstJournalIsClearedAndTheNextDiscardBegins(t *testing.T) {
 }
 
 // What a discard's directory holds that no discard writes there is never
-// removed: a directory with no journal holding any other file, a journal
-// that cannot be read, a journal that is a symbolic link, and a file where
-// the directory goes are each refused with ErrAsideStands and left exactly
-// as they were. A partial file beside a whole journal is no reason to
+// removed: a directory with no journal holding any other file (one whose
+// name only begins like a partial journal's among them, the review of
+// d279357), a journal that cannot be read, one that is null, names
+// nothing or names no copy's identity (the same review), a journal that is
+// a symbolic link, and a file where the directory goes are each refused
+// with ErrAsideStands and left exactly as they were. A partial file beside a whole journal is no reason to
 // refuse: the journal is the last one written whole, and it is read.
 func TestADiscardsDirectoryItCannotTakeUpIsLeftAndRefused(t *testing.T) {
 	principles.Cite(t, principles.P6)
@@ -105,9 +107,25 @@ func TestADiscardsDirectoryItCannotTakeUpIsLeftAndRefused(t *testing.T) {
 			mkdirAll(t, dir)
 			writeFile(t, filepath.Join(dir, "work.txt"), "someone's file\n")
 		}},
+		{"a file named like a partial journal and no journal", func(t *testing.T, dir string) {
+			mkdirAll(t, dir)
+			writeFile(t, filepath.Join(dir, partialPrefix(filepath.Join(dir, journalName))+"-notes"), "someone's notes\n")
+		}},
 		{"a journal that cannot be read", func(t *testing.T, dir string) {
 			mkdirAll(t, dir)
 			writeFile(t, filepath.Join(dir, journalName), "not a journal")
+		}},
+		{"a journal that is null", func(t *testing.T, dir string) {
+			mkdirAll(t, dir)
+			writeFile(t, filepath.Join(dir, journalName), "null")
+		}},
+		{"a journal that names nothing", func(t *testing.T, dir string) {
+			mkdirAll(t, dir)
+			writeFile(t, filepath.Join(dir, journalName), "{}")
+		}},
+		{"a journal that names no copy's identity", func(t *testing.T, dir string) {
+			mkdirAll(t, dir)
+			writeFile(t, filepath.Join(dir, journalName), `{"copy":"not-an-identity"}`)
 		}},
 		{"a journal that is a symbolic link", func(t *testing.T, dir string) {
 			mkdirAll(t, dir)
@@ -165,5 +183,36 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A partial file is recognized by exactly the name writeWhole's
+// os.CreateTemp call gives it, partialPrefix and the random part, and by
+// nothing looser: a name that only begins with the prefix, the prefix
+// alone, or another file's prefix is not one. The first case is made by
+// the same os.CreateTemp call writeWhole makes, so if os.CreateTemp ever
+// names its files otherwise this fails rather than leaving partial files
+// unrecognized.
+func TestAPartialFileIsRecognizedByTheNameWriteWholeGivesIt(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, journalName)
+	f, err := os.CreateTemp(dir, partialPrefix(path)+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if name := filepath.Base(f.Name()); !isPartial(path, name) {
+		t.Fatalf("%s, made as writeWhole makes a partial file, is not recognized as one", name)
+	}
+	for _, name := range []string{
+		partialPrefix(path) + "-notes", partialPrefix(path), partialPrefix(path) + "12a",
+		partialPrefix(filepath.Join(dir, "other.json")) + "12", journalName,
+	} {
+		if isPartial(path, name) {
+			t.Fatalf("%s was recognized as a partial file of %s", name, path)
+		}
 	}
 }

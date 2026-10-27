@@ -98,13 +98,14 @@ paths: ["internal/tasks/**"]
   (`home.Home.Discarding`) and its journal, written through `writeWhole`
   before anything is set aside: `beginDiscard` makes it, refusing one that
   stands (`ErrAsideStands`), and `standingDiscard` reads one a discard
-  left, clearing a directory that holds only a partial first journal and
-  refusing, never removing, anything else. No discard answer calls it
-  yet; the set-aside that does follows in AGE-486's stack. An entry is set
-  aside only as it was read (`moveAsRead` in `kept_state.go`, the state its
-  bytes, `ErrLossChanged` otherwise) and never over a name that stands
-  (`renameNoReplace`, `rename_*.go`; refused where the platform has no
-  such rename).
+  left, clearing a directory that holds only partial first journals, each
+  by exactly the name `writeWhole` gives it (`isPartial`), and refusing,
+  never removing, anything else, a journal naming no copy's identity
+  among it. No discard answer calls it yet; the set-aside that does
+  follows in AGE-486's stack. An entry is set aside only as it was read
+  (`moveAsRead` in `kept_state.go`, the state its bytes, `ErrLossChanged`
+  otherwise) and never over a name that stands (`renameNoReplace`,
+  `rename_*.go`; refused where the platform has no such rename).
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file
