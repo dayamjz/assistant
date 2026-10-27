@@ -152,6 +152,10 @@ type Retirement struct {
 	Hold string
 	Note string
 	By   Resolver
+	// Relaunches reports whether an open hold key offers to relaunch the
+	// pass's worker; the retirement closes each with AnswerStop under By.
+	// Its owner is internal/service, which keys those holds.
+	Relaunches func(key string) bool
 	// Ended reports whether a run status is one a run has ended in, which
 	// internal/runs' move table owns.
 	Ended func(RunStatus) bool
@@ -159,6 +163,12 @@ type Retirement struct {
 	// terms.
 	Delivered func(TaskSnapshot) bool
 }
+
+// AnswerStop is the answer RetireHousekeepingPass records on every open
+// hold of the pass whose retry would relaunch its worker, PRD section 6's
+// "a retire that writes the record also answers stop", the word the hold
+// answer of every such hold reads as no relaunch.
+const AnswerStop = "stop"
 
 // AnswerRetire is the answer an answered retirement records on the
 // retirement hold it closes.
@@ -168,8 +178,8 @@ func (r Retirement) validate() error {
 	switch {
 	case strings.TrimSpace(r.Task) == "":
 		return errors.New("store: a retirement names no pass")
-	case r.Ended == nil || r.Delivered == nil:
-		return fmt.Errorf("store: retiring pass %s: what ends a run and what delivers a task are decided outside this package, and one was not passed", r.Task)
+	case r.Relaunches == nil || r.Ended == nil || r.Delivered == nil:
+		return fmt.Errorf("store: retiring pass %s: what relaunches a worker, what ends a run and what delivers a task are decided outside this package, and one was not passed", r.Task)
 	case strings.TrimSpace(r.Hold) == "":
 		return fmt.Errorf("store: retiring pass %s: a retirement names the retirement hold it answers", r.Task)
 	}
@@ -180,7 +190,7 @@ func (r Retirement) validate() error {
 }
 
 // Retired is RetireHousekeepingPass's answer: the record as written and
-// the hold it closed, the retirement hold.
+// every hold it closed, the retirement hold first.
 type Retired struct {
 	Record HousekeepingRetirement
 	Closed []Hold
@@ -199,8 +209,9 @@ type Retired struct {
 //   - with ErrHoldResolved, wrapped, a retirement whose hold is no longer
 //     open, and ErrNotFound for one that does not exist.
 //
-// It resolves the retirement hold retire and writes the record naming the
-// hold. Whether the worker is dead is
+// It resolves the retirement hold retire, then every other open hold of
+// the pass Relaunches names stop, each under the same resolver, and writes
+// the record naming the hold. Whether the worker is dead is
 // the probe's, which no transaction can take; the attempt anchor is what
 // keeps a relaunch since the caller's probe from slipping past, and the
 // session anchor what keeps a launch under way at the caller's reading from
@@ -298,8 +309,9 @@ func passStillTx(snap TaskSnapshot, r Retirement) error {
 	return nil
 }
 
-// closeRetirementHoldsTx resolves an answered retirement's hold retire,
-// under the answer's resolver, and returns its key.
+// closeRetirementHoldsTx resolves an answered retirement's hold retire and
+// every other open hold of the pass that relaunches its worker stop, under
+// one resolver, and returns their keys in that order.
 func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, r Retirement, resolver string, note any, now string) ([]string, error) {
 	resolve := func(key, answer string, note any) error {
 		result, err := tx.ExecContext(ctx,
@@ -327,7 +339,17 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 	if err := resolve(r.Hold, AnswerRetire, note); err != nil {
 		return nil, err
 	}
-	return []string{r.Hold}, nil
+	closed := []string{r.Hold}
+	for _, h := range snap.Holds {
+		if !h.Open() || h.Key == r.Hold || h.TaskID.Or("") != snap.Task.ID || !r.Relaunches(h.Key) {
+			continue
+		}
+		if err := resolve(h.Key, AnswerStop, "the retire answer to "+r.Hold+" is also the decision not to begin the work again"); err != nil {
+			return nil, err
+		}
+		closed = append(closed, h.Key)
+	}
+	return closed, nil
 }
 
 // RetirementOf reads a task's housekeeping retirement record, and false
