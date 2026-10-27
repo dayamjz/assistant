@@ -450,6 +450,7 @@ func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
 		machine.AnswerStopped:             false,
 		machine.AnswerWorkerStopped:       false,
 		machine.AnswerLanded:              false,
+		machine.AnswerRetired:             false,
 	}
 	effects := machine.AnswerEffects()
 	if len(effects) != len(oracle) {
