@@ -26,7 +26,7 @@ import (
 // list cannot be read (ErrPassScopeUnreadable, never an assumed scope); and,
 // under the store's serialization, while a pass of the repository is open
 // (*store.PassOpenError naming it). Whether the coordinator was asked by a
-// person or answered the due wake is nothing this package can tell, so the
+// person or answered a wake is nothing this package can tell, so the
 // pass is held to the same scope either way.
 //
 // The program's part names the scope, the base of the newest earlier pass
@@ -118,8 +118,8 @@ type earlierPass struct {
 // the launch recorded: that is read at a fresh fetch of the upstream, which
 // can stand past the primary checkout the copy was cut from, and a pass
 // that found nothing at the older tree has not checked the newer commit.
-// It is the one reading of the base: the next pass's instructions and the
-// due check (internal/service) both take it from here.
+// It is the one reading of the base, which the next pass's instructions
+// take from here.
 func PassBase(task store.Task) store.Optional[string] {
 	snap, ok := task.StartSnapshot.Get()
 	if !ok || snap.Head == "" {
@@ -232,8 +232,7 @@ var passRules = []string{
 		"it and the code is a finding about one of the two, not drift in the file. Report each such question as an ask finding " +
 		"carrying the proposed wording and the evidence. The same goes for a correction a coordinator note asks for that reads " +
 		"as a new rule, even when the note says the person decided it.",
-	"Change nothing outside the scope above. Once the coordinator promotes this pass, a change that touches a path outside it " +
-		"holds at review for a person.",
+	"Change nothing outside the scope above.",
 	"Edit only your own copy, and reach a shared branch only through the gate after promotion. Remove no copy, branch or file " +
 		"outside the scope, and force nothing.",
 	"Cleaning the machine is not this pass's job: copies and temporary entries are the program's to remove. Nothing outside " +

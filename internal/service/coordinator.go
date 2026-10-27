@@ -118,8 +118,8 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 	}
 	if p.isSubordinate && r.Housekeeping {
 		// PRD section 9: a subordinate coordinator is refused creating a
-		// housekeeping pass, which the housekeeping-due wake, in no domain,
-		// asks the first coordinator for.
+		// housekeeping pass, which is about a repository and so in no
+		// domain: it is the first coordinator's to create.
 		return machine.TaskCreated{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and creating a housekeeping pass is one it does not hold",
 			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
 	}
