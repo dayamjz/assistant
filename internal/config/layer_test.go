@@ -116,7 +116,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
 			"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
 		"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
-		"remote_disconnect_grace": "2h"
+		"remote_disconnect_grace": "2h",
+		"housekeeping": {"paths": ["AGENTS.md", "docs/agents/**"], "interval": "12h"}
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -150,6 +151,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if got := strings.Join(c.JudgePaths.Strings(), ","); got != "spec/**" {
 		t.Errorf("JudgePaths = %q, want the document's list replacing the default", got)
+	}
+	if got := strings.Join(c.HousekeepingPaths.Strings(), ","); got != "AGENTS.md,docs/agents/**" || c.HousekeepingInterval != 12*time.Hour {
+		t.Errorf("housekeeping = %q every %v, want the document's list and interval", got, c.HousekeepingInterval)
 	}
 	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.md" {
 		t.Errorf("DocumentOwnership = %+v", c.DocumentOwnership)
