@@ -1034,15 +1034,6 @@ start. An answer that fails having done nothing takes its own claim back, and th
 as it was. While a discard's removal is deferred, a discard records no claim and is shown as on
 any open entry, a claim standing or not.
 
-An answer is a **claim** until its outcome is recorded, on the owner's decision of 2026-10-22
-on #475's design, recorded on #530. An answer closes an entry only in the write that records its
-outcome; a carry on's outcome, as its answer above says, is the new task owning the copy. Until
-then the answer is a claim on the entry. A claim keeps the entry open, listed, and holding its
-project's dispatch, and every other answer to that entry, or to another entry of the same copy,
-is refused while it stands. A service that stops with a claim owed takes it up again at the next
-start. An answer that fails having done nothing takes its own claim back, and the entry is open
-as it was.
-
 <kbd>proposed</kbd> Each answer's outcome, under that rule:
 
 - **land**: the run it starts, which carries the work to the gate as a delivery. The entry closes
