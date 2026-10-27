@@ -74,7 +74,7 @@ func TestARepositoryHasAtMostOneOpenHousekeepingPass(t *testing.T) {
 
 	// A retired pass releases the claim too, though it resolves nothing.
 	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: second.ID, Hold: registerRetireHold(t, s, second.ID),
-		By: ResolvedByMachineInterface(), Delivered: relayed}); err != nil {
+		By: ResolvedByMachineInterface(), Ended: func(RunStatus) bool { return true }, Delivered: relayed}); err != nil {
 		t.Fatalf("retiring %s: %v", second.ID, err)
 	}
 
@@ -192,20 +192,40 @@ func promotedPassWithRun(t *testing.T, s *Store, id, branch string, status RunSt
 	return attempt, run
 }
 
-// PRD section 6's retirement is one record, written once in its own
-// transaction, naming the hold the answer closed, never rewritten, and a
-// second retirement of the pass is refused as closed (P6).
-func TestARetirementIsWrittenOnce(t *testing.T) {
+func ended(st RunStatus) bool { return st == RunPassed || st == RunFailed || st == RunTerminated }
+
+// PRD section 6's retirement is written only while nothing moves the pass,
+// decided in its own transaction: a run that has not ended, a run newer
+// than the one the retirement was decided against, and a relaunch since
+// all refuse it with nothing written; and once written it is the one
+// record, naming the hold the answer closed, never rewritten (P6).
+func TestARetirementIsWrittenOnceAndOnlyWhileNothingMovesThePass(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
-	_, run := promotedPassWithRun(t, s, "taskhkaaaaca", "housekeeping/one", RunRunning)
+	attempt, run := promotedPassWithRun(t, s, "taskhkaaaaca", "housekeeping/one", RunRunning)
 	retire := registerRetireHold(t, s, "taskhkaaaaca")
-	answer := Retirement{Task: "taskhkaaaaca", Hold: retire, By: ResolvedByMachineInterface(), Delivered: relayed}
+	answer := Retirement{Task: "taskhkaaaaca", Attempt: attempt.Sequence, Run: run.ID, Hold: retire, By: ResolvedByMachineInterface(),
+		Ended: ended, Delivered: relayed}
+
+	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("retiring while run %s runs = %v, want ErrPassMoves", run.ID, err)
+	}
 	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunPassed); err != nil {
 		t.Fatal(err)
+	}
+	for _, moved := range []Retirement{
+		func() Retirement { r := answer; r.Attempt = 0; return r }(),
+		func() Retirement { r := answer; r.Run = "run-older"; return r }(),
+	} {
+		if _, err := s.RetireHousekeepingPass(ctx, moved); !errors.Is(err, ErrPassMoves) {
+			t.Fatalf("retiring against %+v = %v, want ErrPassMoves", moved, err)
+		}
+	}
+	if h, err := s.Hold(ctx, retire); err != nil || !h.Open() {
+		t.Fatalf("a refused retirement left the hold %+v, %v; want it open", h, err)
 	}
 	retired, err := s.RetireHousekeepingPass(ctx, answer)
 	if err != nil || retired.Record.Hold != retire || len(retired.Closed) != 1 || retired.Closed[0].Key != retire {

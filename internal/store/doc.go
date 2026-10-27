@@ -405,9 +405,9 @@
 // tier internal/taskstate passes in (Disposition.Delivered), so this package
 // states no tier of its own; PassOpen is the one statement of "open".
 // Migration 64 adds the housekeeping retirement record, written once by
-// RetireHousekeepingPass in the transaction that reads the pass again,
-// which PassOpen reads as closing the pass; the state resolver does not
-// read it.
+// RetireHousekeepingPass in the transaction that reads the pass again and
+// finds nothing moving it, which PassOpen reads as closing the pass; the
+// state resolver does not read it.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

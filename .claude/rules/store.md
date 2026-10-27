@@ -31,8 +31,10 @@ paths: ["internal/store/**"]
   `CreateTask` decides one open pass per repository in its own transaction
   with the record tier passed in as `Disposition.Delivered`; `PassOpen` is
   the one statement of "open". housekeepingRetirementMigration (64) is the
-  `housekeeping_retirement` record (`RetireHousekeepingPass`, written
-  once), which `PassOpen` reads as closing the pass.
+  `housekeeping_retirement` record (`RetireHousekeepingPass`, written once,
+  only while nothing moves the pass as its transaction reads it,
+  `ErrPassMoves`, and answering `stop` on every open hold whose retry would
+  relaunch the worker), which `PassOpen` reads as closing the pass.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

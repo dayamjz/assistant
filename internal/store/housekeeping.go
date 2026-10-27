@@ -127,16 +127,34 @@ func openPassTx(ctx context.Context, tx *sql.Tx, repository string, delivered fu
 	return Optional[string]{}, nil
 }
 
-// Retirement is what RetireHousekeepingPass is asked to record. Hold is the
-// answered retirement hold it is retired on.
+// Retirement is what RetireHousekeepingPass is asked to record, and what the
+// caller read when it decided nothing moves the pass: the pass's latest
+// attempt, that attempt's session and the newest attributed run as they
+// stood. Hold is the answered retirement hold it is retired on.
 type Retirement struct {
 	// Task is the pass.
 	Task string
+	// Attempt is the pass's latest attempt sequence as the caller read it,
+	// and zero for a pass never dispatched. A pass whose latest attempt has
+	// moved since was relaunched, which moves it.
+	Attempt int64
+	// Session is that attempt's session reference as the caller read it,
+	// and empty for an attempt with none or a pass never dispatched. An
+	// attempt's session is recorded once, by its launch after the worker's
+	// process has started, so a session recorded since the caller read none
+	// is a launch under way at that reading, which moves the pass.
+	Session string
+	// Run is the newest run attributed to the pass as the caller read it,
+	// and empty for none. A newer one has started since, which moves it.
+	Run string
 	// Hold is the open retirement hold the answer of retire closes, with
 	// Note and By as the answer's note and resolver.
 	Hold string
 	Note string
 	By   Resolver
+	// Ended reports whether a run status is one a run has ended in, which
+	// internal/runs' move table owns.
+	Ended func(RunStatus) bool
 	// Delivered is internal/taskstate's terminal tier, on Disposition's
 	// terms.
 	Delivered func(TaskSnapshot) bool
@@ -150,8 +168,8 @@ func (r Retirement) validate() error {
 	switch {
 	case strings.TrimSpace(r.Task) == "":
 		return errors.New("store: a retirement names no pass")
-	case r.Delivered == nil:
-		return fmt.Errorf("store: retiring pass %s: what delivers a task is decided outside this package, and it was not passed", r.Task)
+	case r.Ended == nil || r.Delivered == nil:
+		return fmt.Errorf("store: retiring pass %s: what ends a run and what delivers a task are decided outside this package, and one was not passed", r.Task)
 	case strings.TrimSpace(r.Hold) == "":
 		return fmt.Errorf("store: retiring pass %s: a retirement names the retirement hold it answers", r.Task)
 	}
@@ -169,18 +187,29 @@ type Retired struct {
 }
 
 // RetireHousekeepingPass writes a pass's retirement record, once, in one
-// transaction that reads the pass again first, under the store's
-// serialization. It refuses, writing nothing:
+// transaction that reads the pass again first, PRD section 6's "written only
+// while nothing moves the pass ... decided under the store's
+// serialization". It refuses, writing nothing:
 //
 //   - with ErrPassClosed, wrapped, a pass already retired or in the terminal
 //     tier, and an error for a task that is not a pass;
+//   - with ErrPassMoves, wrapped, a pass whose latest attempt, that
+//     attempt's session, or newest attributed run is not the one the caller
+//     read, or with a run attributed to it that has not ended;
 //   - with ErrHoldResolved, wrapped, a retirement whose hold is no longer
 //     open, and ErrNotFound for one that does not exist.
 //
 // It resolves the retirement hold retire and writes the record naming the
-// hold. PRD section 6's "written only while nothing moves the pass", the
-// anchors that hold the write to the attempt, the session and the run the
-// caller read, are the link above this one.
+// hold. Whether the worker is dead is
+// the probe's, which no transaction can take; the attempt anchor is what
+// keeps a relaunch since the caller's probe from slipping past, and the
+// session anchor what keeps a launch under way at the caller's reading from
+// doing so: a session recorded since the caller read none refuses here, and
+// SetAttemptSession refuses once the record is written, so the two writes
+// have exactly one loser in either order: no session is recorded for an
+// attempt of a retired pass after its retirement, and a retired pass's
+// latest attempt either has no session or has the one its retirement was
+// decided against, which the caller had read dead.
 func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retired, error) {
 	if err := r.validate(); err != nil {
 		return Retired{}, err
@@ -204,6 +233,9 @@ func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retir
 		}
 		if !PassOpen(snap, r.Delivered) {
 			return ErrPassClosed
+		}
+		if err := passStillTx(snap, r); err != nil {
+			return err
 		}
 		now := encodeTime(nowUTC())
 		resolver, _ := resolverText(r.By)
@@ -231,6 +263,39 @@ func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retir
 		return Retired{}, fmt.Errorf("store: retiring housekeeping pass %s: %w", r.Task, err)
 	}
 	return out, nil
+}
+
+// passStillTx refuses, with ErrPassMoves, a pass that something moves as
+// the retirement's transaction reads it, on RetireHousekeepingPass's terms.
+func passStillTx(snap TaskSnapshot, r Retirement) error {
+	var latest int64
+	if n := len(snap.Attempts); n > 0 {
+		latest = snap.Attempts[n-1].Sequence
+	}
+	if latest != r.Attempt {
+		return fmt.Errorf("%w: its latest attempt is %d where the retirement was decided against %d, so its worker was begun again since",
+			ErrPassMoves, latest, r.Attempt)
+	}
+	if n := len(snap.Attempts); n > 0 {
+		if session := snap.Attempts[n-1].SessionRef.Or(""); session != r.Session {
+			return fmt.Errorf("%w: its latest attempt %d runs in session %q where the retirement was decided against %q, so a launch of it was under way",
+				ErrPassMoves, latest, session, r.Session)
+		}
+	}
+	newest := ""
+	if len(snap.Runs) > 0 {
+		newest = snap.Runs[0].ID
+	}
+	if newest != r.Run {
+		return fmt.Errorf("%w: run %s is the newest attributed to it where the retirement was decided against %q, so a run started since",
+			ErrPassMoves, newest, r.Run)
+	}
+	for _, run := range snap.Runs {
+		if !r.Ended(run.Status) {
+			return fmt.Errorf("%w: run %s attributed to it is %s and has not ended", ErrPassMoves, run.ID, run.Status)
+		}
+	}
+	return nil
 }
 
 // closeRetirementHoldsTx resolves an answered retirement's hold retire,
