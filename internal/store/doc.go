@@ -407,7 +407,11 @@
 // Migration 64 adds the housekeeping retirement record, written once by
 // RetireHousekeepingPass in the transaction that reads the pass again and
 // finds nothing moving it, which PassOpen reads as closing the pass; the
-// state resolver does not read it.
+// state resolver does not read it. It is refused at every attempt claim,
+// at the record of an attempt's session and at the shape transition that
+// would promote the pass (ErrPassRetired), which with the retirement's
+// session anchor records no session for an attempt of a retired pass after
+// its retirement.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
