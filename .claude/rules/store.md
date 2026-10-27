@@ -44,7 +44,10 @@ paths: ["internal/store/**"]
   `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
   to a pass still open and still; every attempt claim refuses a pass with
   one open, `ErrPassHeld`, so the offer and a claim have one loser in
-  either order).
+  either order). housekeepingWakesMigration (66) is the queue's fourth
+  shape `housekeeping_wake` about a repository (`AppendHousekeepingWake`
+  is its one append, `HousekeepingWakes` and `QueuedHousekeepingWakes` its
+  reads).
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

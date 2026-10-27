@@ -233,6 +233,11 @@ const housekeepingRetirementMigration = "housekeeping retirement"
 // sealCheckpointTableMigration is a constant.
 const housekeepingHoldMigration = "housekeeping retirement hold"
 
+// housekeepingWakesMigration names the migration that adds the queue's
+// fourth shape, the housekeeping-due wake about a repository, for the
+// reason sealCheckpointTableMigration is a constant.
+const housekeepingWakesMigration = "housekeeping wakes"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2789,6 +2794,65 @@ var schema = []migration{
 			// (ErrPassHeld). The mark says which holds those are; every
 			// other hold reads back unknown.
 			`ALTER TABLE hold ADD COLUMN housekeeping_retirement INTEGER`,
+		},
+	},
+	{
+		version: 66,
+		name:    housekeepingWakesMigration,
+		statements: []string{
+			// PRD section 8's housekeeping-due wake, the queue's fourth
+			// shape: a wake about a repository rather than a task, keyed by
+			// the repository and by the pass it follows, or by none before
+			// the first pass. It is kept_work_wake's shape with the entry
+			// replaced by the repository and the pass, plus the detail the
+			// wake names (what could not be read, or the open pass and what
+			// it waits on), under the same seals. A detection is raised
+			// once, which the unique key over the repository and the
+			// marker holds. A row is not deleted while its repository
+			// stands; ForgetRepository takes the acknowledged rows after
+			// the repository row and refuses while one is queued.
+			`CREATE TABLE housekeeping_wake (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				repository_id    TEXT NOT NULL REFERENCES repository(id),
+				pass             TEXT REFERENCES task(id),
+				kind             TEXT NOT NULL,
+				marker           TEXT NOT NULL,
+				detail           TEXT NOT NULL,
+				created_at       TEXT NOT NULL,
+				handled_at       TEXT,
+				acknowledged_by  TEXT,
+				handed_out_at    TEXT,
+				handed_out_to    TEXT,
+				handed_out_under TEXT,
+				handouts         INTEGER,
+				UNIQUE (repository_id, marker)
+			) STRICT`,
+			`CREATE INDEX housekeeping_wake_unacknowledged ON housekeeping_wake(id) WHERE handled_at IS NULL`,
+			`CREATE TRIGGER housekeeping_wake_is_appended
+				BEFORE UPDATE OF id, repository_id, pass, kind, marker, detail, created_at ON housekeeping_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON housekeeping_wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON housekeeping_wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_not_removed
+				BEFORE DELETE ON housekeeping_wake
+				WHEN OLD.handled_at IS NULL OR EXISTS (SELECT 1 FROM repository WHERE repository.id = OLD.repository_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is kept after it is drained and is not deleted while its repository stands');
+				END`,
 		},
 	},
 }
