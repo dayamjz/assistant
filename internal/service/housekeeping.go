@@ -203,6 +203,7 @@ func (s *Service) raiseHousekeeping(c *incarnation, w store.HousekeepingWakeRequ
 	out.Detections[0].Disposition = appended.Disposition
 	if appended.Disposition == store.WakeAppended {
 		s.wakeBell.ring()
+		s.publishHousekeepingWake(appended.Wake)
 	}
 	return out
 }
