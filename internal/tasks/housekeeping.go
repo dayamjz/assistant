@@ -118,8 +118,8 @@ type earlierPass struct {
 // the launch recorded: that is read at a fresh fetch of the upstream, which
 // can stand past the primary checkout the copy was cut from, and a pass
 // that found nothing at the older tree has not checked the newer commit.
-// It is the one reading of the base, which the next pass's instructions
-// take from here.
+// It is the one reading of the base: the next pass's instructions and the
+// due check (internal/service) both take it from here.
 func PassBase(task store.Task) store.Optional[string] {
 	snap, ok := task.StartSnapshot.Get()
 	if !ok || snap.Head == "" {

@@ -29,7 +29,8 @@ const (
 	// knowledge (knowledge.go's knowledgeRef).
 	knowledgeReadNamespace = "refs/assistant/knowledge/"
 	// housekeepingReadNamespace holds a housekeeping pass's intake read of
-	// the trusted scope (housekeeping.go).
+	// the trusted scope and the due check's read of the default branch
+	// (housekeeping.go).
 	housekeepingReadNamespace = "refs/assistant/trusted/housekeeping/"
 )
 
