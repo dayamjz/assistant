@@ -188,3 +188,44 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 		}
 	})
 }
+
+// A retired housekeeping pass is never promoted: the transition reads the
+// retirement record in the transaction that would flip the shape and
+// refuses with ErrPassRetired, writing nothing, because every attempt
+// claim refuses a retired pass, so the delivery it became could never
+// begin. The positive control is the same transition of a pass not
+// retired, which flips.
+func TestTheShapeTransitionRefusesARetiredPass(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	flip := func(id string) error {
+		history := historyOf(t, s, id)
+		_, _, err := s.TransitionTaskShape(ctx, id, TaskInvestigation, TaskDelivery, "repo-1", "housekeeping/"+id,
+			config.DeliveryGated, "Correct the drift.", history[len(history)-1].Sequence, "promoted in the test")
+		return err
+	}
+	mustPass(t, s, "taskhkrtirea")
+	attempt := beginAttempt(t, s, "taskhkrtirea", 0)
+	retire := registerRetireHold(t, s, "taskhkrtirea")
+	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: "taskhkrtirea", Attempt: attempt.Sequence, Hold: retire,
+		By: ResolvedByMachineInterface(), Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}); err != nil {
+		t.Fatalf("retiring the pass: %v", err)
+	}
+	before := historyOf(t, s, "taskhkrtirea")
+	if err := flip("taskhkrtirea"); !errors.Is(err, ErrPassRetired) {
+		t.Fatalf("promoting the retired pass = %v, want ErrPassRetired", err)
+	}
+	got, err := s.Task(ctx, "taskhkrtirea")
+	if err != nil || got.Shape != TaskInvestigation || got.Branch.IsKnown() || got.Delivery.IsKnown() || got.DeliveryIntent.IsKnown() {
+		t.Fatalf("the refused promotion wrote the record: %+v, %v", got, err)
+	}
+	if after := historyOf(t, s, "taskhkrtirea"); len(after) != len(before) {
+		t.Fatalf("the refused promotion appended: %+v", after)
+	}
+	mustPass(t, s, "taskhkrtireb")
+	if err := flip("taskhkrtireb"); err != nil {
+		t.Fatalf("promoting a pass not retired = %v, want it flipped", err)
+	}
+}

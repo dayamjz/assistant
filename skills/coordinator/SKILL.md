@@ -139,7 +139,7 @@ assistant coordinator create --housekeeping --project NAME \
   open, if a run started or the worker was begun again since. `keep` leaves
   it open. The program retires no pass on its own: a pass whose run rebased
   to nothing lands from the run's nothing-to-deliver record, as any delivery
-  task does, and is not retired. A retired pass is never relaunched, `retire` answered while a launch of the
+  task does, and is not retired. A retired pass is never relaunched or promoted, `retire` answered while a launch of the
   pass is under way is refused with the hold open, and a retired pass no
   longer counts as work in flight unless a run of its branch has not ended
   or a wake about it is not yet acknowledged.

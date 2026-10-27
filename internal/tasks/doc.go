@@ -154,7 +154,10 @@
 // same tighten-only rule, before anything is written: a trusted copy that
 // cannot be read or parsed, or that loosens the operator's delivery posture,
 // refuses the promotion with ErrPostureUnreadable rather than leaving a
-// delivery task recorded as gated by default.
+// delivery task recorded as gated by default; a housekeeping pass is read
+// the same way and recorded gated, as a request for gated is, and a retired
+// pass is refused by the flip itself (store.ErrPassRetired), since the
+// delivery it became could never begin.
 //
 // The flip and the cleanup claim exclude each other: RecordTaskCleanup
 // reads the shape in the transaction that claims the record, and

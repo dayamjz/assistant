@@ -555,7 +555,7 @@ because the default branch already holds the correction, lands from the
 run's nothing-to-deliver record as any delivery task does (see Nothing left
 to deliver above) and needs no retirement; one whose run left nothing to
 push without that record is asked about the same way once nothing moves
-it. A retired pass is never begun again, and `retire` answered while a
+it. A retired pass is never begun again or promoted, and `retire` answered while a
 launch of the pass is under way is refused, with the decision left open,
 until that worker is recorded, which the next answer then reads live. It
 stops counting as work in flight: the stop guard and the catch-up read

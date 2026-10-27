@@ -785,3 +785,35 @@ func TestPromoteHoldsTheBranchToIntakesRules(t *testing.T) {
 		s.untouched(t, tk, n)
 	})
 }
+
+// A retired housekeeping pass is not promoted: the flip reads the
+// retirement record in its own transaction and refuses with
+// store.ErrPassRetired, recording nothing and writing nothing into the
+// copy, because every attempt claim refuses a retired pass, so the delivery
+// it became could never begin. The control is a pass not retired, which is
+// promoted.
+func TestPromoteRefusesARetiredPass(t *testing.T) {
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.pass(t)
+	retire := store.Hold{Key: "task/" + tk.id + "/housekeeping-retire/1/1/-", TaskID: store.Known(tk.id), Subject: "retire?", Detail: "d"}
+	if _, err := s.store.RegisterHold(ctx, retire); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.RetireHousekeepingPass(ctx, store.Retirement{Task: tk.id, Attempt: 1, Hold: retire.Key,
+		By: store.ResolvedByMachineInterface(), Relaunches: func(string) bool { return false },
+		Ended: func(store.RunStatus) bool { return true }, Delivered: taskstate.Delivered}); err != nil {
+		t.Fatalf("retiring the pass: %v", err)
+	}
+	n := len(s.history(t, tk.id))
+	if _, err := s.queue.Promote(ctx, request(tk.id)); !errors.Is(err, store.ErrPassRetired) {
+		t.Fatalf("promoting a retired pass = %v, want store.ErrPassRetired", err)
+	}
+	s.untouched(t, tk, n)
+
+	control := newPromotionSubject(t)
+	ctk := control.pass(t)
+	if got := control.promote(t, request(ctk.id)); got.Task.Delivery != store.Known(config.DeliveryGated) {
+		t.Fatalf("the control, a pass not retired, was recorded under %v, want gated", got.Task.Delivery)
+	}
+}

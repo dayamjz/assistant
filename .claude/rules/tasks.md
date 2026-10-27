@@ -15,9 +15,11 @@ paths: ["internal/tasks/**"]
   `*config.LoosenError`). They refuse with `ErrPostureUnreadable` when that
   read fails rather than assuming one, and let a request tighten it and never
   loosen it (`*PostureError`). A housekeeping pass is promoted gated whatever
-  the project declares, with no posture read, because its scope is held at the
-  review of the run its push starts and a local task starts no run; a request
-  for another posture on a pass is `ErrRequest`.
+  the project declares, as a request for gated, because its scope is held at
+  the review of the run its push starts and a local task starts no run; the
+  project's posture is read for it as for any task, so an unreadable copy
+  refuses it too; a request for another posture on a pass is `ErrRequest`,
+  and a retired pass is refused in the flip (`store.ErrPassRetired`).
 - A local task's cleanup proof is the content check against the working
   copy's default branch and nothing else.
 - The remote-branch and merged-pull-request proofs follow a commit the gate

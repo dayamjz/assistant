@@ -645,8 +645,9 @@ func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 // whoever asks, so no worker starts in its copy once its claim on its
 // repository is released. SetAttemptSession returns it for the launch of an
 // attempt claimed before the retirement, so no session is recorded for an
-// attempt of a retired pass after its retirement, and OfferRetirementHold
-// for a pass whose claim is already released.
+// attempt of a retired pass after its retirement, OfferRetirementHold for
+// a pass whose claim is already released, and TransitionTaskShape for a
+// promotion of a retired pass, whose delivery could never begin.
 var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
 
 // ErrPassHeld is returned, wrapped, by BeginTaskAttempt and

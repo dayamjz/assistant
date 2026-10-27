@@ -398,7 +398,8 @@
 // task: the task row's housekeeping mark, written once at intake, and the
 // housekeeping retirement record, written once by RetireHousekeepingPass in
 // the transaction that reads the pass again, and refused at every attempt
-// claim and at the record of an attempt's session (ErrPassRetired), which
+// claim, at the record of an attempt's session and at the shape transition
+// that would promote the pass (ErrPassRetired), which
 // with the retirement's session anchor records no session for an attempt
 // of a retired pass after its retirement. CreateTask decides the one-open-pass rule in its
 // own transaction from every earlier pass's snapshot and the record tier

@@ -172,3 +172,52 @@ func TestAPassIsPromotedThroughTheGateWhateverThePostureIs(t *testing.T) {
 		t.Fatalf("a pass asked gated was recorded under %v", got.Task.Delivery)
 	}
 }
+
+// A housekeeping pass is held to the same read as any promotion (P7): it is
+// recorded gated whatever the project declares, but the project's posture
+// is still read from its trusted copy, and a copy that cannot be read, or
+// that declares a posture this build does not define, refuses the promotion
+// with ErrPostureUnreadable and records nothing, with no posture assumed in
+// its place. The control is an ordinary investigation over the same copy,
+// refused the same way, which is what says the refusal is the reader's.
+// Once the copy reads, the same pass is promoted gated, with the posture
+// read once.
+func TestAnUnreadablePostureRefusesThePromotionOfAPass(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	s.posture = config.DeliveryLocal
+	tk := s.pass(t)
+	n := len(s.history(t, tk.id))
+	s.postureErr = errors.New("the trusted copy could not be fetched")
+	asked := s.postureAsked.Load()
+	if _, err := s.queue.Promote(ctx, request(tk.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("promoting a pass over an unreadable copy = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, tk, n)
+	if got := s.postureAsked.Load(); got != asked+1 {
+		t.Fatalf("the pass's promotion read the posture %d times, want once", got-asked)
+	}
+	control := s.investigation(t)
+	m := len(s.history(t, control.id))
+	if _, err := s.queue.Promote(ctx, request(control.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("the control, an investigation over the same copy = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, control, m)
+
+	s.postureErr = nil
+	s.posture = config.Delivery("direct")
+	if _, err := s.queue.Promote(ctx, request(tk.id)); !errors.Is(err, ErrPostureUnreadable) {
+		t.Fatalf("promoting a pass over a posture this build does not define = %v, want ErrPostureUnreadable", err)
+	}
+	s.untouched(t, tk, n)
+
+	s.posture = config.DeliveryLocal
+	asked = s.postureAsked.Load()
+	if got := s.promote(t, request(tk.id)); got.Task.Delivery != store.Known(config.DeliveryGated) {
+		t.Fatalf("the pass promoted once the copy reads was recorded under %v, want gated", got.Task.Delivery)
+	}
+	if got := s.postureAsked.Load(); got != asked+1 {
+		t.Fatalf("the pass's promotion read the posture %d times, want once", got-asked)
+	}
+}
