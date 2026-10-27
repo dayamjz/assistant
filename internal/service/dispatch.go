@@ -427,8 +427,8 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 // settleOrRelease ends a dispatch's hold on its slot, or hands it to the
 // launch: a dispatch left queued by placeable, or refused at its claim
 // because the pass's retirement hold is open (store.ErrPassHeld), claimed
-// nothing, so its slot is given back and the next pass reads the task
-// again, which for the pass is the pass after the hold is answered keep; a
+// nothing, so its slot is given back and the next dispatch reads the task
+// again, which for the pass is the dispatch the keep answer runs; a
 // dispatch that failed settles the slot now, with no proof, for the
 // service's lifetime; and a dispatch that proved its copy keeps the slot
 // unsettled and returns it with d.settle set, for launchTask to settle with

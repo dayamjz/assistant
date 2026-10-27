@@ -58,15 +58,19 @@ func TestAMarkedCreateRecordsAHousekeepingInvestigation(t *testing.T) {
 }
 
 // The program's part of a later pass names the base of the newest earlier
-// pass and when it was created, and the holds earlier passes raised that are
-// still open, and an empty set of notes is said to be none rather than
-// refused.
+// pass, the default-branch commit its copy was cut at (PassBase) and not
+// the knowledge revision its launch recorded, and when it was created, and
+// the holds earlier passes raised that are still open, and an empty set of
+// notes is said to be none rather than refused.
 func TestALaterPassIsToldTheLastBaseAndTheOpenQuestions(t *testing.T) {
 	ctx := context.Background()
 	f := newFixture(t)
 	first := f.create(t, pass("")).Task
 	f.beginAttempt(t, first.ID)
-	if err := f.store.SetAttemptKnowledge(ctx, first.ID, 1, store.AttemptKnowledge{Commit: "c0ffee"}); err != nil {
+	if err := f.store.SetAttemptKnowledge(ctx, first.ID, 1, store.AttemptKnowledge{Commit: "deadbeef"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.SetTaskStartSnapshot(ctx, first.ID, store.CopySnapshot{Head: "c0ffee"}); err != nil {
 		t.Fatal(err)
 	}
 	hold := store.Hold{Key: HoldKey(first.ID, "f1"), TaskID: store.Known(first.ID), Subject: "whether the rule on P14 should read otherwise",
@@ -93,6 +97,9 @@ func TestALaterPassIsToldTheLastBaseAndTheOpenQuestions(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Errorf("the second pass's instructions do not say %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "deadbeef") {
+		t.Errorf("the second pass's instructions name the knowledge revision as the base:\n%s", text)
 	}
 }
 

@@ -1059,3 +1059,62 @@ func TestARetiredPassWithARunNotEndedIsInFlight(t *testing.T) {
 		t.Fatalf("with the service stopped the stop guard reads %s, want %s", verdict.Reason, supervisor.StopLockFree)
 	}
 }
+
+// Answering keep on a retirement hold offered before the pass's first
+// attempt, as the offer that wins the window before a dispatcher's claim,
+// or a service that opens with that hold standing, leaves it, runs the
+// dispatch the answer reports: the pass resolves Dispatched and nothing
+// else would begin it, since the loop dispatches at open and on intake and
+// not on its own, so the answer runs the dispatch, which claims the pass's
+// first attempt. Before, the pass stayed unstarted and blocked every later
+// pass. The open's dispatch, refused by the hold with nothing claimed, is
+// the control that the attempt is the answer's.
+func TestKeepOnAHoldOfferedBeforeTheFirstAttemptDispatchesThePass(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhkkeepaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		// The pass as intake records it, dispatchable: its copy reserved
+		// at this home's path and its instructions written.
+		copyPath, err := sub.h.TaskCopy(pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := records.CreateTask(t.Context(), store.Task{
+			ID: pass, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+			RepositoryID: store.Known(hkRepository), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}); err != nil {
+			t.Fatal(err)
+		}
+		instructions, err := sub.h.TaskInstructions(pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(instructions), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(instructions, []byte("check the agent context\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		offerRetirementHoldOf(t, records, pass)
+	})
+	if attempts := recordedAttempts(t, sub.records(t), pass); len(attempts) != 0 {
+		t.Fatalf("the open's dispatch claimed %+v over the open retirement hold", attempts)
+	}
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("the pass carries %+v, want its one open retirement hold", holds)
+	}
+	if kept, err := sub.answer(t, pass, holds[0].Key, machine.AnswerKeep); err != nil || kept.Effect != machine.AnswerRecorded {
+		t.Fatalf("keep answered %+v, %v", kept, err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if attempts := recordedAttempts(t, sub.records(t), pass); len(attempts) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("keep did not dispatch the pass: no attempt was begun")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

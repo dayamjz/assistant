@@ -42,13 +42,19 @@ import (
 //
 //   - a fetch, a trusted copy or a record that cannot be read raises the
 //     housekeeping-due wake naming what could not be read, among them a last
-//     pass whose newest attempt recorded no base, so missing information is
-//     never read as nothing having changed;
+//     pass never dispatched, whose copy records no base, so missing
+//     information is never read as nothing having changed;
 //   - an empty trusted list raises nothing: housekeeping is off for the
 //     repository;
 //   - a tip other than the last pass's base, or no pass ever, raises the
 //     wake;
 //   - a tip that is the base raises nothing.
+//
+// The base is tasks.PassBase's, the default-branch commit the pass's copy
+// was cut at, which is what its worker read, and not the knowledge revision
+// its launch recorded at a fresh fetch of the upstream: a primary checkout
+// behind the upstream cuts the copy at the older commit, and a pass that
+// found nothing there has not checked what the newer one changed.
 //
 // The marker is advanced in the wake's own transaction, or alone when
 // nothing was raised, so the check runs again only after another interval in
@@ -107,7 +113,10 @@ import (
 // # The end, by an answer
 //
 // answerRetirement answers the retirement hold: keep closes it and leaves
-// the pass open; retire, under the task's slot, refuses a pass whose worker
+// the pass open, and for a hold offered before the pass's first attempt,
+// which refused the dispatch that read it (store.ErrPassHeld), runs the
+// dispatch (dispatchInBackground), since dispatch runs at open and on intake
+// and nothing else would begin the pass; retire, under the task's slot, refuses a pass whose worker
 // the probe does not read dead and otherwise asks
 // store.RetireHousekeepingPass, which answers stop on every open hold of the
 // pass whose retry would relaunch its worker (isRetryHold) under the same
@@ -468,9 +477,7 @@ func (s *Service) dueCheckFromPass(c *incarnation, r store.Repository, last *tas
 	}
 	var base store.Optional[string]
 	if last != nil {
-		if n := len(last.Snapshot.Attempts); n > 0 {
-			base = last.Snapshot.Attempts[n-1].KnowledgeCommit
-		}
+		base = tasks.PassBase(last.Snapshot.Task)
 	}
 	var lastCreated time.Time
 	if last != nil {
@@ -536,8 +543,9 @@ func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, l
 	}
 	b, ok := base.Get()
 	if !ok {
-		return raise(fmt.Sprintf("the base of housekeeping pass %s of repository %s, the default-branch commit its newest attempt recorded at launch, "+
-			"could not be read: it records none, so whether the default branch %s, now at %s, moved since is not known", follows, r.ID, r.DefaultBranch, tip))
+		return raise(fmt.Sprintf("the base of housekeeping pass %s of repository %s, the default-branch commit its copy was cut at, "+
+			"could not be read: it records none, as a pass never dispatched does, so whether the default branch %s, now at %s, moved since is not known",
+			follows, r.ID, r.DefaultBranch, tip))
 	}
 	if b == tip {
 		return s.advanceHousekeeping(c, *checked)
@@ -678,6 +686,15 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		}
 		s.publishHoldState(resolved)
 		s.log.Printf("housekeeping pass %s is kept open: its retirement hold %s was answered %q", r.Task, hold.Key, r.Answer)
+		if rh.Attempt == 0 {
+			// The hold was offered before the pass's first attempt, so the
+			// dispatch that read it was refused (store.ErrPassHeld) and
+			// claimed nothing, and nothing else begins the pass: dispatch
+			// runs at open and on intake, not on the loop's own. The
+			// answer runs it, on dispatchInBackground's terms.
+			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since the hold had refused its dispatch", r.Task, hold.Key, r.Answer)
+			s.dispatchInBackground()
+		}
 		return machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}, nil
 	case machine.AnswerRetire:
 	default:

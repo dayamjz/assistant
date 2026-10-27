@@ -226,6 +226,15 @@ func launched(t *testing.T, records *store.Store, id, base, ref string) {
 	}
 }
 
+// cutAt records that the pass's copy was cut at head, as a dispatch that
+// proved the copy records its start snapshot.
+func cutAt(t *testing.T, records *store.Store, id, head string) {
+	t.Helper()
+	if err := records.SetTaskStartSnapshot(t.Context(), id, store.CopySnapshot{Head: head}); err != nil {
+		t.Fatalf("recording where pass %s's copy was cut: %v", id, err)
+	}
+}
+
 // relayed closes a pass that found nothing: its report, then its findings
 // relayed record, the terminal tier's Complete.
 func relayed(t *testing.T, records *store.Store, id string) {
@@ -244,13 +253,58 @@ func relayed(t *testing.T, records *store.Store, id string) {
 	}
 }
 
-// closedPass records a pass launched on base that found nothing and was
-// relayed: the last pass of the repository, closed.
+// closedPass records a pass whose copy was cut at base, launched on it as
+// its knowledge revision too, that found nothing and was relayed: the last
+// pass of the repository, closed.
 func closedPass(t *testing.T, records *store.Store, id, base string) {
 	t.Helper()
 	passTask(t, records, id)
 	launched(t, records, id, base, "")
+	cutAt(t, records, id, base)
 	relayed(t, records, id)
+}
+
+// PRD section 6's housekeeping: the base of a pass is the default-branch
+// commit its copy was cut at, which is what its worker read, and not the
+// knowledge revision its launch recorded at a fresh fetch of the upstream.
+// A primary checkout behind the upstream cuts the copy at the older commit
+// while the launch records the newer one, so a pass that found nothing
+// drifted at the older tree has not checked what the newer commit changed:
+// with the upstream still at that commit, the due check raises the wake
+// naming it past the copy's commit. The control is a pass whose copy was
+// cut at the upstream's tip, which raises nothing.
+func TestTheBaseOfAPassIsTheCommitItsCopyWasCutAtNotTheKnowledgeItsLaunchRead(t *testing.T) {
+	t.Parallel()
+	var older, newer string
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		older = sub.tip(t)
+		newer = sub.merge(t, "CLAUDE.md", "a claim the older tree does not hold\n")
+		passTask(t, records, "taskhkbaseaa")
+		launched(t, records, "taskhkbaseaa", newer, "")
+		cutAt(t, records, "taskhkbaseaa", older)
+		relayed(t, records, "taskhkbaseaa")
+	})
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 1 || !strings.Contains(wakes[0].Detail, newer) || !strings.Contains(wakes[0].Detail, older) {
+		t.Fatalf("the due wake is %+v, want one naming the tip %s past %s, the commit the pass's copy was cut at", wakes, newer, older)
+	}
+
+	control := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, "taskhkbaseab")
+		launched(t, records, "taskhkbaseab", "", "")
+		cutAt(t, records, "taskhkbaseab", sub.tip(t))
+		relayed(t, records, "taskhkbaseab")
+	})
+	control.clock.Advance(time.Hour)
+	if r := control.pass(t); !control.checkStarted(t, r, false) {
+		t.Fatalf("the control did not check: %+v", r.Housekeeping)
+	}
+	if wakes := control.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a pass whose copy was cut at the tip raised %+v", wakes)
+	}
 }
 
 // PRD section 13's housekeeping row: with housekeeping.interval zero, no

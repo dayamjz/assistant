@@ -107,9 +107,25 @@ type passFacts struct {
 type earlierPass struct {
 	id      string
 	created time.Time
-	// base is the default-branch commit its newest attempt recorded at
-	// launch, and unknown for a pass never launched.
+	// base is PassBase's, and unknown for a pass never dispatched.
 	base store.Optional[string]
+}
+
+// PassBase is the base of a housekeeping pass, PRD section 6's: the
+// default-branch commit its copy was cut at, which is what its worker read,
+// as the copy's start snapshot records it at the pass's latest dispatch,
+// and unknown for a pass never dispatched. It is not the knowledge revision
+// the launch recorded: that is read at a fresh fetch of the upstream, which
+// can stand past the primary checkout the copy was cut from, and a pass
+// that found nothing at the older tree has not checked the newer commit.
+// It is the one reading of the base: the next pass's instructions and the
+// due check (internal/service) both take it from here.
+func PassBase(task store.Task) store.Optional[string] {
+	snap, ok := task.StartSnapshot.Get()
+	if !ok || snap.Head == "" {
+		return store.Unknown[string]()
+	}
+	return store.Known(snap.Head)
 }
 
 // readPassFacts reads the repository's scope and its earlier passes.
@@ -131,11 +147,7 @@ func (q *Queue) readPassFacts(ctx context.Context, repository store.Repository, 
 	facts := passFacts{repository: repository.ID, scope: scope}
 	for i, p := range passes {
 		if i == 0 {
-			last := earlierPass{id: p.Task.ID, created: p.Task.CreatedAt}
-			if n := len(p.Attempts); n > 0 {
-				last.base = p.Attempts[n-1].KnowledgeCommit
-			}
-			facts.last = store.Known(last)
+			facts.last = store.Known(earlierPass{id: p.Task.ID, created: p.Task.CreatedAt, base: PassBase(p.Task)})
 		}
 		for _, h := range p.Holds {
 			if h.Open() && h.TaskID.Or("") == p.Task.ID {
@@ -174,10 +186,10 @@ func passInstructions(f passFacts, notes string) string {
 	if last, ok := f.last.Get(); ok {
 		fmt.Fprintf(&b, "The last pass was task %s, created at %s.", last.id, last.created.UTC().Format(time.RFC3339))
 		if base, ok := last.base.Get(); ok {
-			fmt.Fprintf(&b, " Its base, the default-branch commit it was launched on, is %s. Read what merged since then from "+
+			fmt.Fprintf(&b, " Its base, the default-branch commit its copy was cut at, is %s. Read what merged since then from "+
 				"the repository, starting with git log %s..HEAD on the default branch, rather than from anyone's memory.\n\n", base, base)
 		} else {
-			b.WriteString(" It recorded no base, because it was never launched, so read the scoped files whole against the tree.\n\n")
+			b.WriteString(" It recorded no base, because it was never dispatched, so read the scoped files whole against the tree.\n\n")
 		}
 	} else {
 		b.WriteString("This is the repository's first pass. There is no earlier base, so read the scoped files whole against the tree.\n\n")
