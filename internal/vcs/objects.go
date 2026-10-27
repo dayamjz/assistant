@@ -305,14 +305,51 @@ func (r *Repository) NotHeldBy(ctx context.Context, rev string, objects []string
 }
 
 // ObjectType is the type git records object under: commit, tag, tree or
-// blob. An object the repository does not hold is an error.
+// blob. An object the repository does not have is ErrObjectNotFound; one
+// it has but could not read is an error that does not match it, so a
+// caller that treats absence as an answer cannot take a failed read for
+// it (round 46, P6).
+//
+// It asks cat-file --batch-check for the one object. On standard output
+// git states the type and size of an object it read, or "missing" for one
+// it did not (both documented forms), and the "missing" line reads the
+// same whether git found nothing or found an object it could not read; on
+// standard error it says nothing in the first case and reports the failed
+// read in the second, which is what an empty, a corrupt and an unreadable
+// loose object each put there when this was written (git 2.54), and what
+// the package's test checks against the installed git. So "missing" with
+// nothing on standard error is absence, and anything else that is not a
+// type line is a failed read. What this does not cover: a git that fails
+// a read without a word on standard error would be read as absence.
 func (r *Repository) ObjectType(ctx context.Context, object string) (string, error) {
 	if err := checkArg("object", object); err != nil {
 		return "", err
 	}
-	out, err := r.run(ctx, "object-type", "cat-file", "-t", "--end-of-options", object)
+	out, stderr, err := r.runCollecting(ctx, "object-type", nil, []byte(object+"\n"), "cat-file", "--batch-check")
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(out)), nil
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	fields := strings.Fields(lines[0])
+	switch {
+	case len(lines) != 1:
+	case len(fields) == 3:
+		return fields[1], nil
+	case len(fields) == 2 && fields[0] == object && fields[1] == "missing" && stderr == "":
+		return "", &objectError{object: object, repo: r.path}
+	}
+	return "", &outputError{op: "object-type", detail: "git answered " + strconv.Quote(strings.TrimSpace(string(out))) + " for " + object + " with " + strconv.Quote(strings.TrimSpace(stderr)) + " on standard error"}
 }
+
+// objectError reports an object the repository does not have.
+type objectError struct {
+	object string
+	repo   string
+}
+
+func (e *objectError) Error() string {
+	return "vcs: " + e.object + " is not an object in " + e.repo
+}
+
+// Unwrap makes every absent object match ErrObjectNotFound.
+func (e *objectError) Unwrap() error { return ErrObjectNotFound }

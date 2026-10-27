@@ -105,3 +105,42 @@ func TestUnheldIsWhatNothingTheCopyNamesReaches(t *testing.T) {
 		t.Fatal("Unheld answered for a copy that is gone")
 	}
 }
+
+// An object the copy has but cannot read is an error, never unheld (round
+// 46, P6: a safety fact that cannot be verified refuses). The copy stands
+// on a commit past its own, so the kept commit is held by ancestry alone,
+// its reflog values expired; with its loose object emptied, Unheld is an
+// error and not an answer naming it lost. The positive control is the same
+// copy before the object is emptied, holding everything.
+func TestUnheldRefusesAnObjectTheCopyHasButCannotRead(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	tk := s.deliveryTask(t, "task/unreadable")
+	own := commit(t, tk.copy, "own.txt", "the task's own work\n", "the task's own commit")
+	_, err := s.cleanUp(t, tk.id)
+	kept, ok := KeptOf(refusedWith(t, err, ReasonUnproven))
+	if !ok {
+		t.Fatal("an unproven refusal is not kept work")
+	}
+	got, err := s.cleaner.Keep(ctx, kept)
+	if err != nil || !got.Recorded || !slices.Contains(got.Entry.Holds, own) {
+		t.Fatalf("Keep = %+v, %v; want a new entry holding %s", got, err, own)
+	}
+	entry := got.Entry
+	commit(t, tk.copy, "more.txt", "work past the kept commit\n", "a commit past it")
+	rawGit(t, tk.copy, "reflog", "expire", "--expire=now", "--all")
+	if missing, err := s.cleaner.Unheld(ctx, entry); err != nil || len(missing) != 0 {
+		t.Fatalf("Unheld with the kept commit held by ancestry = %v, %v; want nothing unheld", missing, err)
+	}
+	loose := filepath.Join(tk.copy, ".git", "objects", own[:2], own[2:])
+	if err := os.Chmod(loose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loose, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if missing, err := s.cleaner.Unheld(ctx, entry); err == nil {
+		t.Fatalf("Unheld with the kept commit's object unreadable = %v, nil; want an error, not an answer", missing)
+	}
+}

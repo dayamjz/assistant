@@ -158,8 +158,45 @@ func TestNotReachedFromListsWhatOnlyTheNamesHold(t *testing.T) {
 			t.Errorf("ObjectType(%s) = %q, %v; want %s", object, got, err, want)
 		}
 	}
-	if _, err := repo.ObjectType(ctx(t), missing); err == nil {
-		t.Error("ObjectType of an object the repository does not hold succeeded; want an error")
+	if _, err := repo.ObjectType(ctx(t), missing); !errors.Is(err, vcs.ErrObjectNotFound) {
+		t.Errorf("ObjectType of an object the repository does not hold = %v; want ErrObjectNotFound", err)
+	}
+}
+
+// ObjectType tells an object the repository does not have, ErrObjectNotFound,
+// from one it has but cannot read, an error that does not match it (round
+// 46, P6: a caller that takes absence for an answer must not take a failed
+// read for it). The positive control is the blob read as a blob; then its
+// loose object is emptied, and then overwritten with bytes that are not an
+// object, and each is the error and not the absence.
+func TestObjectTypeTellsAnAbsentObjectFromOneItCannotRead(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(dir, "a.txt"), "bytes\n")
+	blob := strings.TrimSpace(rawGit(t, dir, "hash-object", "-w", "a.txt"))
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.ObjectType(ctx(t), blob); err != nil || got != "blob" {
+		t.Fatalf("ObjectType(%s) = %q, %v; want blob", blob, got, err)
+	}
+	missing := strings.Repeat("1", len(blob))
+	if _, err := repo.ObjectType(ctx(t), missing); !errors.Is(err, vcs.ErrObjectNotFound) {
+		t.Fatalf("ObjectType of an absent object = %v; want ErrObjectNotFound", err)
+	}
+	loose := filepath.Join(dir, ".git", "objects", blob[:2], blob[2:])
+	if err := os.Chmod(loose, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, bytes := range map[string][]byte{"emptied": nil, "overwritten": []byte("not an object")} {
+		if err := os.WriteFile(loose, bytes, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.ObjectType(ctx(t), blob); err == nil || errors.Is(err, vcs.ErrObjectNotFound) {
+			t.Errorf("ObjectType of the blob with its loose object %s = %v; want an error that is not ErrObjectNotFound", name, err)
+		}
 	}
 }
 

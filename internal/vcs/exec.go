@@ -412,6 +412,16 @@ func (r *Repository) runWith(ctx context.Context, op string, extra []string, arg
 
 // runFull is runWith with stdin as git's standard input, nil for none.
 func (r *Repository) runFull(ctx context.Context, op string, extra []string, stdin []byte, args ...string) ([]byte, error) {
+	out, _, err := r.runCollecting(ctx, op, extra, stdin, args...)
+	return out, err
+}
+
+// runCollecting is runFull returning, beside standard output, what git
+// wrote on standard error when it succeeded, for the one reader whose
+// answer git states there beside a standard output that reads the same
+// either way (ObjectType). On a failure the text is on the *CommandError
+// and the string is empty.
+func (r *Repository) runCollecting(ctx context.Context, op string, extra []string, stdin []byte, args ...string) ([]byte, string, error) {
 	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
 	defer cancel()
 	addr := r.addressing()
@@ -453,13 +463,14 @@ func (r *Repository) runFull(ctx context.Context, op string, extra []string, std
 			refusal = errors.Join(refusal, cause)
 		}
 		msg, truncated := stderr.collected()
-		return nil, r.commandError(op, full, code, msg, truncated, refusal)
+		return nil, "", r.commandError(op, full, code, msg, truncated, refusal)
 	}
 	if runErr != nil {
 		msg, truncated := stderr.collected()
-		return stdout.buf.Bytes(), r.commandError(op, full, code, msg, truncated, cause)
+		return stdout.buf.Bytes(), "", r.commandError(op, full, code, msg, truncated, cause)
 	}
-	return stdout.buf.Bytes(), nil
+	msg, _ := stderr.collected()
+	return stdout.buf.Bytes(), msg, nil
 }
 
 // exitStatus reports the status git exited with. It is on the process state

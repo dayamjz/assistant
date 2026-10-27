@@ -228,8 +228,9 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 // ancestry; one that is a tree or a blob a commit value's history records,
 // in any commit it reaches (vcs.NotHeldBy), is held; any other, a commit
 // nothing names or reaches, a tag nothing names, a tree or blob no commit
-// records, or an object the copy no longer has, is unheld, in Holds'
-// order. A copy that cannot be read is an error, never an answer. It is
+// records, or an object the copy no longer has (vcs.ErrObjectNotFound),
+// is unheld, in Holds' order. A copy that cannot be read is an error,
+// never an answer, and so is an object the copy has but cannot read. It is
 // read in the Cleaner's layout, without replacement references or a graft
 // file, as Keep reads. internal/service's carry on asks it of the kept
 // copy wherever it stands, by the entry with CopyPath set there, before it
@@ -299,8 +300,13 @@ func unheld(ctx context.Context, git []vcs.Option, entry store.KeptWork) ([]stri
 		held := false
 		kind, err := copied.ObjectType(ctx, h)
 		switch {
-		case err != nil:
+		case errors.Is(err, vcs.ErrObjectNotFound):
 			// Not an object the copy has: unheld.
+		case err != nil:
+			// An object the copy has but could not read, or a read that
+			// failed, is not an answer (round 46): naming it lost would
+			// refuse a carry on and a promotion over work the copy holds.
+			return nil, fmt.Errorf("tasks: reading what %s is in the kept copy at %s: %w", h, entry.CopyPath, err)
 		case kind == "commit":
 			for _, c := range commits {
 				reaches, err := copied.IsAncestor(ctx, h, c)
