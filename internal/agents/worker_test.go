@@ -481,3 +481,42 @@ func TestEveryQueuedSendHonoursItsOwnContext(t *testing.T) {
 	default:
 	}
 }
+
+// A send the worker reads and ends on is delivered, not refused: its bytes
+// were written and taken before the process ended, so the send returns nil
+// and Done reports the end (round 44: whenever the end was seen before the
+// write's completion, the send answered ErrWorkerEnded, which is how the
+// stream mode's test of a line that is not JSON failed one run in three on
+// CI). The seam holds the writer until the worker has ended, so the end is
+// seen first every time.
+func TestASendTheWorkerEndsOnIsDeliveredNotRefused(t *testing.T) {
+	agent := standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "finish", Reply: "finishing", Ends: true}},
+	}}, agents.WithTerminationGrace(300*time.Millisecond))
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), workerSpec(t))
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+	agents.InterruptAfterWriteForTest(worker, func(text string) {
+		if !strings.Contains(text, "finish") {
+			return
+		}
+		select {
+		case <-worker.Done():
+		case <-time.After(promptly):
+			t.Error("the worker did not end on the line it was sent")
+		}
+	})
+	if err := worker.Send(t.Context(), "finish now"); err != nil {
+		t.Fatalf("a send the worker ended on answered %v, want it delivered", err)
+	}
+	select {
+	case <-worker.Done():
+	default:
+		t.Fatal("the worker ended on the send and Done is not closed")
+	}
+	if got := worker.Capture().Text; !strings.Contains(got, "finishing") {
+		t.Errorf("the worker's output is %q, want the reply it ended on", got)
+	}
+}

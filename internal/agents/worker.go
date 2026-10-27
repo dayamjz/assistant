@@ -176,7 +176,11 @@ type Worker interface {
 	// messages belong to the adapter, not to the caller.
 	// It returns once the text has been written, or ErrWorkerEnded when the
 	// process is no longer running, so nothing is reported delivered to a
-	// process that is gone. A Codex turn returns when turn/start is
+	// process that is gone. A process that ends with a send's write in
+	// flight does not by itself make that send ErrWorkerEnded: a write
+	// that completed was taken before the end and the send returns nil,
+	// with Done saying the rest, and only a write the process never took
+	// is refused. A Codex turn returns when turn/start is
 	// accepted, not when that turn goes idle; the next Send waits for the
 	// idle, or for the failed turn/completed that ends a turn with none,
 	// before it writes, and an app-server that exited mid-turn makes it
@@ -324,6 +328,11 @@ type procWorker struct {
 	closeOnce sync.Once
 	stdinMu   sync.Mutex
 	stdinOpen bool
+	// afterWrite runs in the writer once a send's bytes are written and
+	// before the send is told, with the text sent. It is nil in production
+	// and set only by this package's tests, which use it to put the
+	// process's end inside that window.
+	afterWrite func(text string)
 }
 
 // startWorker starts one process as a worker, delivers instructions on its
@@ -444,6 +453,9 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 	written := make(chan error, 1)
 	go func() {
 		_, err := w.stdin.Write(framed)
+		if w.afterWrite != nil {
+			w.afterWrite(text)
+		}
 		written <- err
 	}()
 	select {
@@ -467,8 +479,27 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 		}
 		return nil
 	case <-w.done:
-		w.pending = written
-		return ErrWorkerEnded
+		// The process ended with the write in flight, and the writer alone
+		// knows whether the bytes reached it first, so its answer is waited
+		// for, under ctx as every wait here is. done closes once the leader
+		// is reaped and its group terminated, so a write nothing took fails
+		// as soon as the pipe has no reader, and one that completed was
+		// taken before the end and is delivered (round 44: a worker ending
+		// on the line it was sent, as stream mode does on a line that is
+		// not JSON, had its send refused whenever the end was seen first,
+		// which a select between two ready cases does at random). A reader
+		// that escaped the group and holds the pipe open makes this a wait
+		// ctx ends, with the write left pending as a cut-off leaves it.
+		select {
+		case err := <-written:
+			if err != nil {
+				return ErrWorkerEnded
+			}
+			return nil
+		case <-ctx.Done():
+			w.pending = written
+			return ctx.Err()
+		}
 	case <-ctx.Done():
 		w.pending = written
 		return ctx.Err()
