@@ -54,8 +54,8 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // empty column; a second write of it is refused, here by the shape check
 // below before the trigger is reached.
 //
-// Three facts are checked in the transaction, on the single writer
-// connection, and nothing is written unless all three hold. The task's shape
+// Four facts are checked in the transaction, on the single writer
+// connection, and nothing is written unless all four hold. The task's shape
 // must still be from: a task that already moved is ErrTaskShapeMoved,
 // which is what makes a second promotion of one task refuse. The task must
 // have no cleanup record: a task with one is refused with
@@ -63,7 +63,11 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // was decided over in the transaction that writes that record, and the two
 // writes read each other's row under the same serialization, so a promotion
 // and a cleanup of one task cannot interleave: one of the two is refused,
-// and which is decided by the order the writer connection ran them in. And
+// and which is decided by the order the writer connection ran them in. The
+// task must have no retirement record: a housekeeping pass with one is
+// refused with ErrPassRetired, read in the same transaction as
+// RetireHousekeepingPass writes it, because every attempt claim refuses a
+// retired pass, so a delivery it became could never begin. And
 // anchor must be the highest event sequence the caller had read, on
 // AppendTaskEventAfter's terms: the state a promotion is decided from is
 // resolved rather than stored, so the caller anchors the flip to the history
@@ -134,6 +138,9 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		case err == nil:
 			return ErrCleanupRecorded
 		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		if err := refuseRetiredTx(ctx, tx, id); err != nil {
 			return err
 		}
 		var tip int64
