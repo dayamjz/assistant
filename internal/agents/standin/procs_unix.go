@@ -121,6 +121,7 @@ type processTable interface {
 	commandLine(pid int) (string, []string, error)
 	environment(pid int) ([]string, error)
 	foreign(pid int) (bool, error)
+	isExiting(pid int) (bool, error)
 }
 
 // kernel is the processTable the kernel answers.
@@ -133,6 +134,7 @@ func (kernel) identify(pid int) (agents.Identity, bool, error) {
 func (kernel) commandLine(pid int) (string, []string, error) { return commandLine(pid) }
 func (kernel) environment(pid int) ([]string, error)         { return startEnvironment(pid) }
 func (kernel) foreign(pid int) (bool, error)                 { return foreignProcess(pid) }
+func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
 
 // settleReadings bounds how many times processesWhere reads the process
 // table looking for a settled reading (processesWhere), so a listing ends
@@ -155,7 +157,15 @@ const settleReadings = 64
 // did is not settled. Nor is one in which a read of this user's running
 // process failed: that process was not read whole, and passing it over
 // would settle a list without it, as a shell read just after it was started
-// once was (#549). Whether a process whose read failed is another user's is
+// once was (#549). An argument list that reads empty without error is such
+// a failed read, since a running process has the arguments it was started
+// with and an empty list is what the kernel gives of one between its exec
+// and the loader placing them, of one that has begun to exit, and of a
+// zombie: the same shell, read so on CI's ubuntu runner, was refused by the
+// match and the listing settled without it (run 40492934694). The one exception is a process whose read failed that
+// the table reads as having begun to exit (isExiting: on Linux the kernel's
+// exiting flag in /proc/<pid>/stat; on Darwin it reports false), which
+// starts nothing either and so counts as one read as not running. Whether a process whose read failed is another user's is
 // read from the process table (foreignProcess), never assumed from the
 // failure. In each
 // case processesWhere reads the table again, reusing what it read of a
@@ -261,6 +271,21 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			matched, merr := match(table, pid)
 			_, args, cerr := table.commandLine(pid)
+			if cerr == nil && emptyArguments(args) {
+				// An argument list that reads empty is not a read made
+				// whole: a running process has the arguments it was
+				// started with, and an empty list is what /proc gives of
+				// one between its exec and the loader placing them, of one
+				// that has begun to exit, and of a zombie. CI's ubuntu
+				// runner read a shell so just after it was started, the
+				// match refused the empty list, and the listing settled
+				// without it (run 40492934694, job 122151106251, #549's
+				// listing found empty again), so it is read as failed and
+				// made again, the exiting case told apart below as any
+				// failed read's is.
+				cerr = fmt.Errorf("process %d: its argument list read empty, which is not a read made whole", pid)
+				merr = nil
+			}
 			// The match reads the same record commandLine does, so when
 			// both fail alike the error is told once.
 			failed := errors.Join(merr, cerr)
@@ -274,6 +299,20 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
 				unsettle(pid, fmt.Errorf("%v exited before it had been read whole", id))
 				continue
+			}
+			if failed != nil && ferr == nil && !foreign {
+				// A process of this user's that has begun to exit starts
+				// nothing, as one that has exited does, so it is read as
+				// not running: CI's ubuntu runner met one whose exe link,
+				// gone with its address space, could not be read in any of
+				// the readings (run 40211320712).
+				if exiting, err := table.isExiting(pid); err == nil && exiting {
+					nowStopped[pid] = true
+					if !stopped[pid] && !wasRefused[pid] {
+						unsettle(pid, fmt.Errorf("process %d read as exiting for the first time, its read failing: %w", pid, failed))
+					}
+					continue
+				}
 			}
 			switch {
 			case failed != nil && ferr != nil:
@@ -306,6 +345,12 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		standing = nowStanding
 	}
 	return nil, longestStanding(causes, standing)
+}
+
+// emptyArguments reports an argument list read as nothing: none, or the one
+// empty string a NUL-separated read of nothing splits into.
+func emptyArguments(args []string) bool {
+	return len(args) == 0 || (len(args) == 1 && args[0] == "")
 }
 
 // unsettledCause is one process that kept a reading of the process table

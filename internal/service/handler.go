@@ -122,6 +122,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 			return s.respondTask(ctx, req, r)
 		})
+	case ipc.MethodKeptWorkAnswer:
+		return call(ctx, req, func(ctx context.Context, r machine.KeptWorkAnswerRequest) (machine.KeptWorkAnswered, error) {
+			return s.answerKeptWork(ctx, req, r)
+		})
 	case ipc.MethodTaskCreate:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskCreateRequest) (machine.TaskCreated, error) {
 			return s.createTask(ctx, req, r)

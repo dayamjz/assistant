@@ -63,7 +63,45 @@ paths: ["internal/service/**"]
   `releaseHeldSlot` gives the slot back and reads the hold again, and a
   removal asks again (`redispatchAfterRemoval`); `taskView` and `report`
   name the entries.
-  Answers are #411's remaining part.
+  `keptanswer.go` is the answer (`keptwork.answer`, reached by section 9's
+  hold answer with `--hold kept-work/N`): every answer is claimed on the
+  open entry first and written only with its outcome, so
+  an answer under way never hides the entry. Land, decided from the copy
+  as it stands through `internal/tasks`' `Loss`, the reading a discard
+  shows and never the entry's recorded `Lacks`, refused for any lost path
+  of the working tree or index and anything lost HEAD does not carry
+  (`tasks.Cleaner.LeftBehind`, read as `Loss` reads), claimed once (`ClaimKeptWorkLanding`), carried out
+  through `startPushedBranch` and answered with its run, the claim
+  withdrawn when no run could start; carry on (`keptcarryon.go`), claimed first with the
+  entry left open, which creates a new task through `queue.Create` with
+  the identifier the claim named, a promoted task's recorded
+  `DeliveryIntent` as its instructions and the outlived task's posture as
+  intake's floor (`carriedPosture`, `tasks.Request.DeliveryFloor`, so the
+  stricter of it and the project's is decided in intake's one read), and
+  adopts the kept copy, which the answer, the completion before the move,
+  the completion after it and the completion right before its mark each
+  hold to what every open entry of the copy recorded, the set the mark
+  closes (`store.OpenKeptWorkOfCopy`), through `internal/tasks`' one
+  reading of it (`holdsKeptWork`, `tasks.Cleaner.Unheld`), the last
+  reading made right before the mark and its set given to the mark, which
+  closes no entry kept after it; a copy git reads a `core.worktree` for,
+  or one with a linked worktree, is refused before the claim, since the
+  move would leave either naming the old path; the successor's posture floor is what the outlived task's push is
+  held to (`carriedPosture` through `localPosture`, gated for a row with
+  none recorded); the answer
+  written only with the adoption and the claim withdrawn when intake
+  refuses the task; land and carry on are each completed at open when a
+  stopped service left them. Discard (`keptdiscard.go`) is the preview
+  alone, what would be lost with a digest through `internal/tasks`'
+  `Loss`, recording and removing nothing; a confirmation is refused before
+  anything is read (`discardDeferred`, the row
+  `machine.PhraseDiscardRemovalDeferred`), its removal deferred to AGE-486
+  (docs/prd.md, sections 6 and 9). A promotion answers its copy's entry carry on in the
+  flip, which is `store.TransitionTaskShape`'s write with the resolver
+  `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the
+  copy for; `refusalOf` refuses a copy it does not take
+  (`tasks.ErrLayoutUnsupported`) and an entry recorded since
+  (`store.ErrKeptWorkUnverified`).
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.

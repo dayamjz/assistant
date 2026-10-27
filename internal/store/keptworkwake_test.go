@@ -79,9 +79,7 @@ func TestAKeptWorkWakeIsAppendedOncePerOpenEntryUnderTheFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptDiscard, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, answered.ID)
 	if _, err := s.AppendKeptWorkWake(ctx, inc, KeptWorkWakeRequest{KeptWork: answered.ID, Kind: "kept-work", Marker: "m"}); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("a wake about an answered entry = %v, want ErrKeptWorkAnswered", err)
 	}

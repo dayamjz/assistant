@@ -141,7 +141,12 @@ repository more than one round of review.
   far and no second strip list exists or should.
 - A lease, an incorporation check, or a force decision belongs in
   `internal/safety` even when shorter at the git call; `internal/vcs` stays
-  mechanism only. `internal/custody` is the only path that moves a person's
+  mechanism only. So does whether a kept copy is the one its registry
+  recorded: every path that answers one asks
+  `tasks.Cleaner.VerifyKeptCopy`, which asks `safety.VerifyKeptCopy`, before
+  it reads or writes the copy (promotion, whose flip answers carry on, asks
+  the same body without a `Cleaner`; `tasks.Cleaner.Keep`, which records a
+  copy as it is kept, reads it as git does and is not one of them). `internal/custody` is the only path that moves a person's
   branch.
 - Only `internal/store` opens the database or writes SQL; add a typed accessor
   there rather than a query elsewhere. The sealed `task_state` table (migration

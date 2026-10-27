@@ -97,8 +97,8 @@ import (
 // dispatch.go's terms. A removal is the one way an entry closes in this
 // build, so a cleanup that removed a copy asks dispatchDue again, through
 // redispatchAfterRemoval, and a task the closed entry held dispatches then
-// rather than at the next release. Nothing here acts on an answer: answering
-// an entry is #411's remaining part.
+// rather than at the next release. An answer is keptanswer.go's, and it asks
+// for a dispatch the same way.
 
 // keepWork records the kept work entry for a kept copy and logs what came of
 // it. It is the one call a site makes for a copy kept because its work has

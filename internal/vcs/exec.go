@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -78,6 +79,24 @@ func WithInvocationDeadline(d time.Duration) Option {
 	}
 }
 
+// WithoutReplaceObjects has every command the handle runs, and every
+// handle opened from it runs, ServeReceivePack aside, which receives a
+// push as any repository does, read the object graph as the objects record it,
+// not through replacement references or a graft file: git's
+// --no-replace-objects, passed as a git-level option on each command line,
+// and GIT_GRAFT_FILE set to the null device, since that option leaves a
+// graft file (info/grafts) in force. So neither a replacement reference in
+// the repository (refs/replace/), nor a graft file in it, nor the
+// repository's configuration, nor anything an ancestor left in the
+// environment, can make a commit's parents or an object's content read as
+// another's. A
+// caller deciding what a copy holds, and so what removing it would lose,
+// uses it; one acting on a person's repository as the person sees it does
+// not.
+func WithoutReplaceObjects() Option {
+	return func(s *settings) { s.noReplace = true }
+}
+
 // DefaultInvocationDeadline is the deadline an invocation gets when its
 // caller's context has none and its handle was built without
 // WithInvocationDeadline. The longest invocations this package makes are a
@@ -133,6 +152,8 @@ type settings struct {
 	redactor  Redactor
 	maxOutput int64
 	deadline  time.Duration
+	// noReplace is WithoutReplaceObjects.
+	noReplace bool
 }
 
 func newSettings(opts []Option) settings {
@@ -350,6 +371,25 @@ var globalArgs = []string{
 	"-c", "advice.detachedHead=false",
 }
 
+// gitLevelArgs are globalArgs and, under WithoutReplaceObjects,
+// --no-replace-objects: the git-level options of every invocation of r.
+func (r *Repository) gitLevelArgs() []string {
+	if !r.set.noReplace {
+		return globalArgs
+	}
+	return append(slices.Clone(globalArgs), "--no-replace-objects")
+}
+
+// levelEnv is what WithoutReplaceObjects sets in every invocation's
+// environment, after the environment is stripped: GIT_GRAFT_FILE naming the
+// null device, an empty graft file, so the repository's own is not read.
+func (r *Repository) levelEnv() []string {
+	if !r.set.noReplace {
+		return nil
+	}
+	return []string{"GIT_GRAFT_FILE=" + os.DevNull}
+}
+
 // run invokes git for op with the given subcommand arguments and returns its
 // standard output. The repository addressing and the global options are added
 // here, so a caller passes only the subcommand and its arguments.
@@ -367,20 +407,39 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 // own (TreeWithEntries). Nothing a caller's environment carries can reach git
 // through it: only what this package passes does.
 func (r *Repository) runWith(ctx context.Context, op string, extra []string, args ...string) ([]byte, error) {
+	return r.runFull(ctx, op, extra, nil, args...)
+}
+
+// runFull is runWith with stdin as git's standard input, nil for none.
+func (r *Repository) runFull(ctx context.Context, op string, extra []string, stdin []byte, args ...string) ([]byte, error) {
+	out, _, err := r.runCollecting(ctx, op, extra, stdin, args...)
+	return out, err
+}
+
+// runCollecting is runFull returning, beside standard output, what git
+// wrote on standard error when it succeeded, for the one reader whose
+// answer git states there beside a standard output that reads the same
+// either way (ObjectType). On a failure the text is on the *CommandError
+// and the string is empty.
+func (r *Repository) runCollecting(ctx context.Context, op string, extra []string, stdin []byte, args ...string) ([]byte, string, error) {
 	ctx, cancel := procgroup.Bound(ctx, r.set.deadline)
 	defer cancel()
 	addr := r.addressing()
-	full := make([]string, 0, len(addr)+len(globalArgs)+len(args))
+	level := r.gitLevelArgs()
+	full := make([]string, 0, len(addr)+len(level)+len(args))
 	full = append(full, addr...)
-	full = append(full, globalArgs...)
+	full = append(full, level...)
 	full = append(full, args...)
 
 	cmd := procgroup.Command(r.set.git, full...)
 	cmd.Dir = r.path
-	cmd.Env = append(envFor(os.Environ(), r.set.ssh), extra...)
+	cmd.Env = append(append(envFor(os.Environ(), r.set.ssh), r.levelEnv()...), extra...)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input
 	// sees EOF rather than waiting for a person.
 	cmd.Stdin = nil
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	stdout := &capWriter{limit: r.set.maxOutput}
 	// Standard error is diagnostic text rather than a result, so it is kept up
@@ -404,13 +463,14 @@ func (r *Repository) runWith(ctx context.Context, op string, extra []string, arg
 			refusal = errors.Join(refusal, cause)
 		}
 		msg, truncated := stderr.collected()
-		return nil, r.commandError(op, full, code, msg, truncated, refusal)
+		return nil, "", r.commandError(op, full, code, msg, truncated, refusal)
 	}
 	if runErr != nil {
 		msg, truncated := stderr.collected()
-		return stdout.buf.Bytes(), r.commandError(op, full, code, msg, truncated, cause)
+		return stdout.buf.Bytes(), "", r.commandError(op, full, code, msg, truncated, cause)
 	}
-	return stdout.buf.Bytes(), nil
+	msg, _ := stderr.collected()
+	return stdout.buf.Bytes(), msg, nil
 }
 
 // exitStatus reports the status git exited with. It is on the process state

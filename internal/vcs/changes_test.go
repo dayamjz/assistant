@@ -1,9 +1,11 @@
 package vcs_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -107,5 +109,54 @@ func TestChangesRefusesABareRepository(t *testing.T) {
 	}
 	if _, err := bare.Changes(ctx(t)); !errors.Is(err, vcs.ErrNotARepository) {
 		t.Errorf("Changes on a bare repository: %v, want ErrNotARepository", err)
+	}
+}
+
+// IndexEntries names the index's content by git's own object identity, so
+// staging a change moves it and nothing else in the tree does: an untracked
+// file, a path with a space in it, an unstaged edit and a deletion in the
+// tree leave it as it was, and staging a file adds its entry.
+func TestIndexEntriesNameTheIndexByObjectIdentity(t *testing.T) {
+	gitEnvironment(t)
+	copy, _, _, _ := clonedCopy(t)
+	dir := copy.Path()
+	ctx := context.Background()
+	index := func(when string) []vcs.IndexEntry {
+		t.Helper()
+		entries, err := copy.IndexEntries(ctx)
+		if err != nil || len(entries) == 0 {
+			t.Fatalf("%s: IndexEntries = %+v, %v", when, entries, err)
+		}
+		for _, e := range entries {
+			if e.Mode == "" || e.Object == "" || e.Path == "" || e.Stage != 0 {
+				t.Fatalf("%s: an entry reads %+v, want a mode, an object, a path and stage 0", when, e)
+			}
+		}
+		return entries
+	}
+	clean := index("a clean index")
+
+	writeFile(t, filepath.Join(dir, "new.txt"), "untracked\n")
+	writeFile(t, filepath.Join(dir, "with space.txt"), "untracked too\n")
+	if entries := index("untracked files"); !slices.Equal(entries, clean) {
+		t.Fatalf("IndexEntries with untracked files = %+v; want the clean index's %+v", entries, clean)
+	}
+
+	rawGit(t, dir, "add", "new.txt")
+	staged := index("a file staged")
+	if slices.Equal(staged, clean) || len(staged) != len(clean)+1 {
+		t.Fatalf("IndexEntries with a file staged = %+v; want one more entry than %+v", staged, clean)
+	}
+
+	writeFile(t, filepath.Join(dir, "kept.txt"), "edited\n")
+	if entries := index("an unstaged edit"); !slices.Equal(entries, staged) {
+		t.Fatalf("IndexEntries with an unstaged edit = %+v; want the index's %+v unchanged", entries, staged)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "kept.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if entries := index("a deletion in the tree"); !slices.Equal(entries, staged) {
+		t.Fatalf("IndexEntries with a deletion in the tree = %+v; want the index's %+v unchanged", entries, staged)
 	}
 }

@@ -66,29 +66,29 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 	}
 
 	t.Run("the reverse move, an empty repository, branch or intent refuse before anything is read", func(t *testing.T) {
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskDelivery, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrShapeTransition) {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskDelivery, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); !errors.Is(err, ErrShapeTransition) {
 			t.Fatalf("delivery to investigation = %v, want ErrShapeTransition", err)
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrShapeTransition) {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); !errors.Is(err, ErrShapeTransition) {
 			t.Fatalf("investigation to investigation = %v, want ErrShapeTransition", err)
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); err == nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); err == nil {
 			t.Fatal("an empty repository was accepted")
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", " ", config.DeliveryGated, "Deliver it.", 2, "d"); err == nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", " ", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); err == nil {
 			t.Fatal("an empty branch was accepted")
 		}
 		for _, blank := range []string{"", " \n\t"} {
-			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, blank, 2, "d"); err == nil {
+			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, blank, 2, "d", ResolvedByMachineInterface(), nil); err == nil {
 				t.Fatalf("the blank intent %q was accepted", blank)
 			}
 		}
 		for _, posture := range []config.Delivery{"", "direct", "fast"} {
-			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", posture, "Deliver it.", 2, "d"); !errors.Is(err, ErrUnknownDelivery) {
+			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", posture, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); !errors.Is(err, ErrUnknownDelivery) {
 				t.Fatalf("posture %q = %v, want ErrUnknownDelivery", posture, err)
 			}
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, "nope", TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrNotFound) {
+		if _, _, err := s.TransitionTaskShape(ctx, "nope", TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a task that does not exist = %v, want ErrNotFound", err)
 		}
 		unchanged(t, "after the refusals")
@@ -97,7 +97,7 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 	t.Run("an anchor the history moved past refuses", func(t *testing.T) {
 		// The seeded task has two entries, queued and dispatched; a caller
 		// that read only the first is behind.
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 1, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 1, "d", ResolvedByMachineInterface(), nil)
 		var moved *TaskMovedError
 		if !errors.As(err, &moved) || !errors.Is(err, ErrTaskMoved) {
 			t.Fatalf("a stale anchor = %v, want a *TaskMovedError matching ErrTaskMoved", err)
@@ -109,7 +109,7 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 	})
 
 	t.Run("the one write flips the shape, records what it works under, and appends the event", func(t *testing.T) {
-		got, event, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryLocal, "Deliver it.", 2, "promoted in the test")
+		got, event, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryLocal, "Deliver it.", 2, "promoted in the test", ResolvedByMachineInterface(), nil)
 		if err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
@@ -132,7 +132,7 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 	})
 
 	t.Run("a second transition of the same task refuses as moved", func(t *testing.T) {
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "other", config.DeliveryGated, "Deliver something else.", 3, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "other", config.DeliveryGated, "Deliver something else.", 3, "d", ResolvedByMachineInterface(), nil)
 		if !errors.Is(err, ErrTaskShapeMoved) {
 			t.Fatalf("a second promotion = %v, want ErrTaskShapeMoved", err)
 		}
@@ -161,7 +161,7 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 		if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofScratch}, TaskInvestigation); err != nil {
 			t.Fatalf("RecordTaskCleanup: %v", err)
 		}
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil)
 		if !errors.Is(err, ErrCleanupRecorded) {
 			t.Fatalf("promoting a claimed task = %v, want ErrCleanupRecorded", err)
 		}
@@ -176,7 +176,7 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 
 	t.Run("the transition refuses a cleanup decided over the old shape", func(t *testing.T) {
 		task := seedInvestigation(t, s, "taskaaaaaaad")
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); err != nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d", ResolvedByMachineInterface(), nil); err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
 		_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofScratch}, TaskInvestigation)
@@ -187,4 +187,94 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 			t.Fatalf("the refused claim left a record: %v", err)
 		}
 	})
+}
+
+// The flip answers its copy's open kept work only for entries the caller
+// verified the copy for: with an open entry it was not given, the flip is
+// refused with ErrKeptWorkUnverified and nothing is written, the task an
+// investigation, its history as it was and the entry open; given that
+// entry, the flip answers it carry on naming the promoted task.
+func TestTheFlipAnswersOnlyKeptWorkTheCallerVerified(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s) // records repo-1, which a kept work entry's project is read off
+	task := seedInvestigation(t, s, "taskaaaaaavk")
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: task.ID, CopyPath: task.WorktreePath,
+		Holds: []string{"cccc"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	before := historyOf(t, s, task.ID)
+	anchor := before[len(before)-1].Sequence
+	flip := func(verified []int64) (Task, error) {
+		got, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
+			config.DeliveryGated, "Deliver it.", anchor, "promoted in the test", ResolvedByMachineInterface(), verified)
+		return got, err
+	}
+
+	for _, verified := range [][]int64{nil, {entry.ID + 1}} {
+		if _, err := flip(verified); !errors.Is(err, ErrKeptWorkUnverified) {
+			t.Fatalf("the flip verified for %v = %v; want ErrKeptWorkUnverified", verified, err)
+		}
+		if got, err := s.Task(ctx, task.ID); err != nil || got.Shape != TaskInvestigation {
+			t.Fatalf("after the refused flip the task reads %+v, %v; want the investigation", got, err)
+		}
+		if after := historyOf(t, s, task.ID); len(after) != len(before) {
+			t.Fatalf("the refused flip grew the history from %d to %d entries", len(before), len(after))
+		}
+		if still, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+			t.Fatalf("after the refused flip the entry reads %+v, %v; want it open", still, err)
+		}
+	}
+
+	if got, err := flip([]int64{entry.ID}); err != nil || got.Shape != TaskDelivery {
+		t.Fatalf("the flip verified for the entry = %+v, %v; want the delivery task", got, err)
+	}
+	if closed, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || closed.Open() || closed.Answer.Or("") != KeptCarryOn ||
+		closed.CarriedOnTask.Or("") != task.ID {
+		t.Fatalf("after the flip the entry reads %+v, %v; want it answered carry on by the promoted task", closed, err)
+	}
+}
+
+// The flip refuses a promotion over an entry of the copy holding any
+// answer not yet carried out, a landing claim as a carry-on claim, the one
+// owed rule every answer is held to (the full review of 04c4696): the
+// investigation's entry has its landing claimed, and the flip verified
+// for it is refused with ErrKeptWorkCopyOwed, the task still the
+// investigation, nothing appended, and the entry open with its claim.
+// Before, only a carry-on claim refused it, and the flip answered the
+// entry carry on under a standing landing claim.
+func TestTheFlipRefusesAnEntryWhoseLandingIsClaimed(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+	task := seedInvestigation(t, s, "taskaaaaaavl")
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: task.ID, CopyPath: task.WorktreePath,
+		Holds: []string{"cccc"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	before := historyOf(t, s, task.ID)
+	anchor := before[len(before)-1].Sequence
+	_, _, err = s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
+		config.DeliveryGated, "Deliver it.", anchor, "promoted in the test", ResolvedByMachineInterface(), []int64{entry.ID})
+	if !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("the flip over a claimed landing = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if got, err := s.Task(ctx, task.ID); err != nil || got.Shape != TaskInvestigation {
+		t.Fatalf("after the refused flip the task reads %+v, %v; want the investigation", got, err)
+	}
+	if after := historyOf(t, s, task.ID); len(after) != len(before) {
+		t.Fatalf("the refused flip grew the history from %d to %d entries", len(before), len(after))
+	}
+	if still, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() || !still.LandingClaimed() {
+		t.Fatalf("after the refused flip the entry reads %+v, %v; want it open with its landing claimed", still, err)
+	}
 }

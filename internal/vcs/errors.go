@@ -18,6 +18,10 @@ var (
 	// ErrRefNotFound is returned when a revision does not resolve to a commit
 	// in this repository.
 	ErrRefNotFound = errors.New("vcs: revision does not resolve to a commit")
+	// ErrObjectNotFound is returned by ObjectType for an object the
+	// repository does not have. An object it has but could not read is an
+	// error that does not match it.
+	ErrObjectNotFound = errors.New("vcs: object is not in the repository")
 	// ErrPathNotFound is returned when a path does not exist at the requested
 	// commit. A path that exists but is not a regular file resolves here and
 	// then fails in cat-file, which reports a *CommandError instead.

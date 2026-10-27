@@ -35,6 +35,44 @@ func WithCleanupInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 	return o
 }
 
+// WithIntakeInterruptForTest returns o with intake's seam between a task's
+// row and its instructions file set to f, for this package's external
+// tests: an intake whose f returns an error ends with the row written and
+// no file, as a service that stopped there leaves it.
+func WithIntakeInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.intakeTest, o.interruptIntake = tb, f
+	return o
+}
+
+// WithLandingInterruptForTest returns o with a landing's seam between its
+// run and the entry's record of it set to f, for this package's external
+// tests: a landing whose f returns an error ends with the run started and
+// the entry naming none, as a service that stopped there leaves it.
+func WithLandingInterruptForTest(tb testing.TB, o Options, f func(run string) error) Options {
+	o.landingTest, o.interruptLanding = tb, f
+	return o
+}
+
+// WithCarryOnInterruptForTest returns o with a carry on's seam between the
+// copy's move to the new task and the entry's mark set to f, for this
+// package's external tests: a carry on whose f returns an error ends with
+// the copy at the new task's path and the entry owed, as a service that
+// stopped there leaves it.
+func WithCarryOnInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.carryOnTest, o.interruptCarryOn = tb, f
+	return o
+}
+
+// WithCarryOnClaimInterruptForTest returns o with a carry-on answer's seam
+// between its read or write of the entry's claim and the completion's read
+// of the entry set to f, for this package's external tests: what f writes
+// to the store in between is what another answer could have written while
+// this one ran, and an error f returns ends the answer there.
+func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) Options {
+	o.carryOnTest, o.interruptCarryOnClaim = tb, f
+	return o
+}
+
 // WithCleanupAskSpacingForTest returns o with the spacing the supervisor
 // pass leaves between two asks of one landed task's cleanup set to d, for
 // this package's external tests, which cannot wait landedAskSpacing.
@@ -102,6 +140,12 @@ func (s *Service) ReadPersonMergesForTest(ctx context.Context) {
 // terms in service.go.
 func (s *Service) SetBeforeRefusalEndForTest(f func()) {
 	s.beforeRefusalEnd = f
+}
+
+// SetBetweenLandingClaimAndStartForTest installs betweenLandingClaimAndStart
+// for this package's external tests, on that field's terms in service.go.
+func (s *Service) SetBetweenLandingClaimAndStartForTest(f func()) {
+	s.betweenLandingClaimAndStart = f
 }
 
 // SetAfterConsentRegisteredForTest installs afterConsentRegistered for this
@@ -225,6 +269,10 @@ func (r *LateRecorder) RecordInvocation(rec agents.Record) {
 // store read can, so a test can put a failed reading at the point it needs
 // one. It exists only in the tests.
 func (s *Service) FailUsageReadsForTest(n int32) { s.usageReadFaults.Store(n) }
+
+// CarryOnHeading is the heading of the note a carry on appends to the new
+// task's instructions, for this package's external tests.
+const CarryOnHeading = carryOnHeading
 
 // KickedSupervision is the supervisor loop of a service opened with
 // WithKickedSupervisionForTest: untimed, under a clock the test moves, and

@@ -4,6 +4,7 @@ package standin
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -349,5 +350,151 @@ func TestAListingPassesOverAnotherUsersUnreadableProcess(t *testing.T) {
 		if slices.Contains(table.refused, p.PID) {
 			t.Errorf("%v is another user's and could not be read, and was listed", p)
 		}
+	}
+}
+
+// unreadableAsExiting is a processTable that names one real running
+// process, pid, and passes every read of it through to the kernel but two:
+// its command line
+// fails to read as Linux's /proc does for a process that has begun to exit
+// and released its address space (readlink of /proc/<pid>/exe: ENOENT,
+// the read CI's ubuntu runner reported, run 40211320712), and it reads as
+// exiting when exiting says so.
+type unreadableAsExiting struct {
+	kernel
+	pid      int
+	exiting  bool
+	readings int
+}
+
+// ids names pid alone, so how many readings the listing takes is decided
+// by that process and nothing else running beside the test.
+func (u *unreadableAsExiting) ids() ([]int, error) {
+	u.readings++
+	return []int{u.pid}, nil
+}
+
+func (u *unreadableAsExiting) commandLine(pid int) (string, []string, error) {
+	if pid == u.pid {
+		return "", nil, &os.PathError{Op: "readlink", Path: "/proc/" + strconv.Itoa(pid) + "/exe", Err: syscall.ENOENT}
+	}
+	return u.kernel.commandLine(pid)
+}
+
+func (u *unreadableAsExiting) isExiting(pid int) (bool, error) {
+	if pid == u.pid {
+		return u.exiting, nil
+	}
+	return u.kernel.isExiting(pid)
+}
+
+// A process of this user's that has begun to exit starts nothing, as one
+// that has exited does, so a read of it that fails does not keep a
+// listing from settling (P15): a real running process whose command line
+// fails to read as CI's ubuntu runner reported, readlink of its exe
+// ENOENT, and that reads as exiting, is passed over and the listing
+// settles without it, from the second reading: the first that meets it
+// exiting is unsettled, as the first that meets an exited process is,
+// since it may have started a process that reading does not name. The
+// control is the same process not reading as
+// exiting, which still fails the listing, naming it and the read's
+// ENOENT, as TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker
+// did on that runner: a running process of this user's that cannot be read
+// and is not exiting is never passed over (#549).
+func TestAListingSettlesBesideAnUnreadableProcessThatIsExiting(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+
+	exiting := &unreadableAsExiting{pid: sleeper.Process.Pid, exiting: true}
+	listed, err := processesWhere(exiting, refuseAll)
+	if err != nil {
+		t.Fatalf("a listing beside process %d, unreadable and exiting: %v", sleeper.Process.Pid, err)
+	}
+	if exiting.readings < 2 {
+		t.Fatalf("the listing read the table %d time(s); want the reading that first met the exiting process unsettled, as one that first meets an exited process is", exiting.readings)
+	}
+	if slices.ContainsFunc(listed, func(p Process) bool { return p.PID == sleeper.Process.Pid }) {
+		t.Fatalf("the listing %v names process %d, which it could not read", listed, sleeper.Process.Pid)
+	}
+
+	_, err = processesWhere(&unreadableAsExiting{pid: sleeper.Process.Pid}, refuseAll)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.PID != sleeper.Process.Pid || !errors.Is(err, syscall.ENOENT) {
+		t.Fatalf("a listing beside process %d, unreadable and not exiting = %v; want it unsettled naming the process and its ENOENT", sleeper.Process.Pid, err)
+	}
+	if err := sleeper.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("process %d was not running once the listings returned (%v), so this shows nothing", sleeper.Process.Pid, err)
+	}
+}
+
+// argumentsEmptyOnce is a processTable that names one real running process,
+// pid, and passes every read of it through to the kernel but one: in the
+// first reading its command line reads as its executable with an empty
+// argument list and no error, which is what Linux's /proc read for a shell
+// in the window between its exec and the loader placing its arguments
+// (CI's ubuntu runner, run 40492934694, job 122151106251: the listing of
+// TestProcessesMatchingListsAProcessByItsArguments settled without the
+// shell it had just started). Every later reading is the kernel's.
+type argumentsEmptyOnce struct {
+	kernel
+	pid      int
+	readings int
+}
+
+// ids names pid alone, so how many readings the listing takes is decided
+// by that process and nothing else running beside the test.
+func (a *argumentsEmptyOnce) ids() ([]int, error) {
+	a.readings++
+	return []int{a.pid}, nil
+}
+
+func (a *argumentsEmptyOnce) commandLine(pid int) (string, []string, error) {
+	if pid == a.pid && a.readings == 1 {
+		executable, _, err := a.kernel.commandLine(pid)
+		return executable, []string{""}, err
+	}
+	return a.kernel.commandLine(pid)
+}
+
+// An argument list that reads empty is not a read made whole (P15): a real
+// running shell whose arguments read as an empty list in the first reading,
+// as /proc gives them between a process's exec and the loader placing them,
+// is read again and listed from the next reading with the arguments it was
+// started with. Before, the match refused the empty list, the shell was
+// read whole as refused, which no later reading revisits, and the listing
+// settled without it (#549's listing, found empty again on CI's ubuntu
+// runner, run 40492934694).
+func TestAProcessWhoseArgumentsReadEmptyIsReadAgain(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	token := fmt.Sprintf("empty once %d %d", os.Getpid(), time.Now().UnixNano())
+	shell := exec.Command("/bin/sh", "-c", "read line; exit 0", "sh", token)
+	in, err := shell.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shell.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = in.Close(); _ = shell.Process.Kill(); _ = shell.Wait() })
+	table := &argumentsEmptyOnce{pid: shell.Process.Pid}
+	listed, err := processesWhere(table, matching(func(args []string) bool { return slices.Contains(args, token) }))
+	if err != nil {
+		t.Fatalf("the listing beside the shell whose arguments read empty once: %v", err)
+	}
+	if len(listed) != 1 || listed[0].PID != shell.Process.Pid || !slices.Equal(listed[0].Args, shell.Args) {
+		t.Fatalf("the listing is %v after %d reading(s), want only process %d with arguments %q", listed, table.readings, shell.Process.Pid, shell.Args)
+	}
+	if table.readings < 2 {
+		t.Fatalf("the listing read the table %d time(s); want the reading that met the empty argument list unsettled", table.readings)
 	}
 }

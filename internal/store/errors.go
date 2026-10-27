@@ -323,8 +323,8 @@ var ErrFirstAttemptIsDispatch = errors.New("store: a task's first attempt is its
 
 // ErrNotCarriedOn is returned by BeginFirstTaskAttempt for a placement by
 // CarriedOnFrom that names an entry the task cannot be carrying on: one not
-// answered carry on, one of the task's own copy, or one of another project
-// or branch. Nothing is written.
+// answered carry on, one of the task's own copy, one of another project or
+// branch, or one whose carry on names another task. Nothing is written.
 var ErrNotCarriedOn = errors.New("store: the task is not carrying on that kept work entry")
 
 // ErrAttemptRouteRecorded is returned by SetAttemptRoute when the attempt

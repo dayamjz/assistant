@@ -102,7 +102,9 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 	subject.service.betweenHeldAndRelease = func() {
 		inWindow = true
 		subject.service.betweenHeldAndRelease = nil
-		if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+		if _, err := subject.records.ClaimKeptWorkLanding(ctx, entry.ID, store.ResolvedByMachineInterface()); err != nil {
+			t.Errorf("answering the entry: %v", err)
+		} else if _, err := subject.records.RecordKeptWorkLanding(ctx, entry.ID, "run-landing"); err != nil {
 			t.Errorf("answering the entry: %v", err)
 		}
 		subject.service.dispatchDue(ctx)
@@ -175,7 +177,10 @@ func TestAHoldThatCouldNotBeReadKeepsNoSlotFromTheClosingPass(t *testing.T) {
 
 	s.beforeHoldRead = nil
 	s.stopCtx = ctx
-	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := subject.records.ClaimKeptWorkLanding(ctx, entry.ID, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subject.records.RecordKeptWorkLanding(ctx, entry.ID, "run-landing"); err != nil {
 		t.Fatal(err)
 	}
 	s.dispatchDue(ctx)
@@ -286,7 +291,10 @@ func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing
 		t.Fatalf("with the entry open the task has attempts %+v, %v; want attempt 1 alone, with no worker", attempts, err)
 	}
 
-	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := subject.records.ClaimKeptWorkLanding(ctx, entry.ID, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subject.records.RecordKeptWorkLanding(ctx, entry.ID, "run-landing"); err != nil {
 		t.Fatal(err)
 	}
 	subject.service.dispatchDue(ctx)
@@ -371,7 +379,10 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 	if _, slot := s.isolationOf(subject.task); slot {
 		t.Fatal("the refused handoff kept the task's slot, so no pass would dispatch it")
 	}
-	if _, err := subject.records.AnswerKeptWork(ctx, entry.ID, store.KeptLand, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := subject.records.ClaimKeptWorkLanding(ctx, entry.ID, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := subject.records.RecordKeptWorkLanding(ctx, entry.ID, "run-landing"); err != nil {
 		t.Fatal(err)
 	}
 	s.dispatchDue(ctx)

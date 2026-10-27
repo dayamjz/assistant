@@ -29,7 +29,9 @@
 // typed *IsolationError naming the comparison that failed. The comparisons
 // are the ones isolation.go lists in order; every path comparison is by file
 // identity and never by string, so a symbolic link into the primary and a
-// case variant of it on a case-insensitive filesystem are both the primary.
+// case variant of it on a case-insensitive filesystem are both the primary,
+// and .git under the copy is read once more without following a link, since
+// by identity a link there is the other repository's directory it reaches.
 // The remote set is exact, assistant at this home's gate for a delivery copy
 // and none for an investigation copy, because any other route is a push the
 // gate's hooks never see. The environment is refused when vcs.StripRedirecting
@@ -346,8 +348,9 @@
 //     nothing git tracks.
 //   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
 //     importer, as is os.RemoveAll, so only this package calling either
-//     behind a Removal is convention; no type stops another package from
-//     removing a copy it never proved.
+//     behind a Removal is convention, and no type stops another package
+//     from removing a copy it never proved. (A person's discard removes
+//     nothing in this build: its removal is deferred to AGE-486.)
 //   - A caller states the terminal's liveness, and one that states Dead of
 //     a terminal it never probed is indistinguishable from one that did.
 //   - Ignored files are invisible to vcs.Inventory and so to the dirty and

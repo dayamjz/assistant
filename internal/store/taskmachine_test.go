@@ -181,7 +181,7 @@ func TestATasksMachineIsWrittenOnceAtDispatch(t *testing.T) {
 			t.Fatalf("BeginFirstTaskAttempt: %v", err)
 		}
 		promoted, _, err := s.TransitionTaskShape(ctx, inv.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
-			config.DeliveryGated, "Deliver it.", 2, "promoted")
+			config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface(), nil)
 		if err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
@@ -383,9 +383,8 @@ func TestKeptWorkReadsItsMachineOffItsOwner(t *testing.T) {
 	if err != nil || len(open) != 2 || open[0].Machine != "mini" || open[1].Machine != "" {
 		t.Fatalf("OpenKeptWork = %+v, %v; want the task's entry on mini and the run's here", open, err)
 	}
-	answered, err := s.AnswerKeptWork(ctx, ofTask.ID, KeptCarryOn, ResolvedByPerson())
-	if err != nil || answered.Machine != "mini" {
-		t.Fatalf("AnswerKeptWork = %+v, %v; want mini", answered, err)
+	if answered := landKept(t, s, ofTask.ID); answered.Machine != "mini" {
+		t.Fatalf("the answered entry = %+v; want mini", answered)
 	}
 }
 
@@ -393,9 +392,9 @@ func TestKeptWorkReadsItsMachineOffItsOwner(t *testing.T) {
 // it, PRD section 8: the dispatch names the entry and never a machine, and
 // the machine is read off the owner the entry outlived. An entry the task
 // cannot be carrying on is refused with nothing written: one not answered
-// carry on, the task's own, or one of another branch. A valid placement is
-// still held while the project has an open entry, on keptworkhold.go's
-// terms. The finished task keeps its machine.
+// carry on, the task's own, one of another branch, or one another task
+// carried on. A valid placement is still held while the project has an open
+// entry, on keptworkhold.go's terms. The finished task keeps its machine.
 func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P14)
@@ -415,17 +414,17 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 		}
 		return k
 	}
-	open := kept("aaaa")
 	landed := kept("cccc")
-	if _, err := s.AnswerKeptWork(ctx, landed.ID, KeptLand, ResolvedByPerson()); err != nil {
-		t.Fatalf("answering land: %v", err)
-	}
-	carried := kept("eeee")
-	if _, err := s.AnswerKeptWork(ctx, carried.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, landed.ID)
 	newTask := seedTaskOnBranch(t, s, "carriedonaaa", "topic", finished.Row)
+	carried := carryOnKept(t, s, kept("eeee").ID, newTask.ID)
+	// Kept after the carry on, so its mark left it open.
+	open := kept("aaaa")
+	if !open.Open() {
+		t.Fatalf("the entry kept after the carry on reads %+v, want it open", open)
+	}
 	otherBranch := seedTaskOnBranch(t, s, "otherbrancha", "elsewhere", 0)
+	secondCarrier := seedTaskOnBranch(t, s, "secondcarrie", "topic", newTask.Row)
 
 	t.Run("an entry the task is not carrying on records nothing", func(t *testing.T) {
 		for name, try := range map[string]struct {
@@ -433,10 +432,11 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 			entry int64
 			want  error
 		}{
-			"an open entry":              {newTask.ID, open.ID, ErrNotCarriedOn},
-			"an entry answered land":     {newTask.ID, landed.ID, ErrNotCarriedOn},
-			"another branch's entry":     {otherBranch.ID, carried.ID, ErrNotCarriedOn},
-			"an entry that is not there": {newTask.ID, carried.ID + 100, ErrNotFound},
+			"an open entry":                    {newTask.ID, open.ID, ErrNotCarriedOn},
+			"an entry answered land":           {newTask.ID, landed.ID, ErrNotCarriedOn},
+			"another branch's entry":           {otherBranch.ID, carried.ID, ErrNotCarriedOn},
+			"an entry another task carried on": {secondCarrier.ID, carried.ID, ErrNotCarriedOn},
+			"an entry that is not there":       {newTask.ID, carried.ID + 100, ErrNotFound},
 		} {
 			if _, err := s.BeginFirstTaskAttempt(ctx, try.task, CarriedOnFrom(try.entry)); !errors.Is(err, try.want) {
 				t.Errorf("%s = %v, want %v", name, err, try.want)
@@ -451,9 +451,7 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AnswerKeptWork(ctx, ownEntry.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
-			t.Fatal(err)
-		}
+		carryOnKept(t, s, ownEntry.ID, own.ID)
 		if _, err := s.BeginFirstTaskAttempt(ctx, own.ID, CarriedOnFrom(ownEntry.ID)); !errors.Is(err, ErrNotCarriedOn) {
 			t.Errorf("the task's own entry = %v, want ErrNotCarriedOn", err)
 		}
@@ -484,12 +482,13 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 		if _, known := unnamed.RepositoryID.Get(); known {
 			t.Fatalf("the entry reads project %q, want none: the case below would test nothing", unnamed.RepositoryID.Or(""))
 		}
-		if _, err := s.AnswerKeptWork(ctx, unnamed.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
-			t.Fatal(err)
-		}
+		// The carry on names the investigation of its project, so for that
+		// one only the missing project can refuse.
+		ofItsProject := investigation("projectonebb", "project-one")
+		carryOnKept(t, s, unnamed.ID, ofItsProject.ID)
 		for name, task := range map[string]Task{
 			"another project's investigation": investigation("projecttwoaa", "project-two"),
-			"an investigation of its project": investigation("projectonebb", "project-one"),
+			"an investigation of its project": ofItsProject,
 			"a task naming a repository":      seedTaskOnBranch(t, s, "namedrepoaaa", "named", 0),
 		} {
 			if _, err := s.BeginFirstTaskAttempt(ctx, task.ID, CarriedOnFrom(unnamed.ID)); !errors.Is(err, ErrNotCarriedOn) {
@@ -507,9 +506,7 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 	if got := attemptsOf(t, s, newTask.ID); len(got) != 0 || machineOf(t, s, newTask.ID) != "" {
 		t.Fatalf("the held dispatch left attempts %+v and machine %q", got, machineOf(t, s, newTask.ID))
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByPerson()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, open.ID)
 	if _, err := s.BeginFirstTaskAttempt(ctx, newTask.ID, CarriedOnFrom(carried.ID)); err != nil {
 		t.Fatalf("BeginFirstTaskAttempt carrying on: %v", err)
 	}
@@ -529,10 +526,8 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.AnswerKeptWork(ctx, ofRun.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
-			t.Fatal(err)
-		}
-		fromRun := seedTaskOnBranch(t, s, "fromrunaaaaa", "topic", newTask.Row)
+		fromRun := seedTaskOnBranch(t, s, "fromrunaaaaa", "topic", secondCarrier.Row)
+		carryOnKept(t, s, ofRun.ID, fromRun.ID)
 		if _, err := s.BeginFirstTaskAttempt(ctx, fromRun.ID, CarriedOnFrom(ofRun.ID)); err != nil {
 			t.Fatalf("carrying a run's copy on: %v", err)
 		}
@@ -629,7 +624,7 @@ func TestTheMachineIsStoredInTheTaskRowAndNowhereElse(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, _, err := s.TransitionTaskShape(ctx, inv.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
-		config.DeliveryGated, "Deliver it.", 2, "promoted"); err != nil {
+		config.DeliveryGated, "Deliver it.", 2, "promoted", ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatal(err)
 	}
 	promoted, err := s.Task(ctx, inv.ID)
@@ -641,10 +636,8 @@ func TestTheMachineIsStoredInTheTaskRowAndNowhereElse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptCarryOn, ResolvedByPerson()); err != nil {
-		t.Fatal(err)
-	}
 	next := seedTaskOnBranch(t, s, "carriedonbbb", "topic", promoted.Row)
+	carryOnKept(t, s, entry.ID, next.ID)
 	if _, err := s.BeginFirstTaskAttempt(ctx, next.ID, CarriedOnFrom(entry.ID)); err != nil {
 		t.Fatal(err)
 	}

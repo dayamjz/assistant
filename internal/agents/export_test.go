@@ -85,3 +85,9 @@ const (
 	// TerminalPoll is how often a readiness wait reads the screen again.
 	TerminalPoll = terminalPoll
 )
+
+// InterruptAfterWriteForTest makes w, a worker this package started as a
+// process, call f with each later send's text once its bytes are written and
+// before the send is told, so a test can put the process's end inside that
+// window. It is set between sends, never while one is in flight.
+func InterruptAfterWriteForTest(w Worker, f func(text string)) { w.(*procWorker).afterWrite = f }

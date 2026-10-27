@@ -1,10 +1,13 @@
-// Package safety owns two questions. The first is whether a branch update may
+// Package safety owns three questions. The first is whether a branch update may
 // proceed, and on what anchor: PRD principle P6 is the contract and PRD
 // section 5's push stage is where it is used. The second is whether a set of
 // commits is already incorporated in a tip, failing closed: the git half of
 // PRD principle P12's content proof, which a cleanup decision reads before an
-// isolated copy may be removed. Both are policy over internal/vcs, which
-// provides the mechanism and deliberately implements none of this.
+// isolated copy may be removed. The third is whether a kept copy is the one
+// its registry recorded, asked before anything of it is read or written
+// (keptcopy.go owns it, VerifyKeptCopy). All three are policy over
+// internal/vcs, which provides the mechanism and deliberately implements none
+// of this.
 //
 // Nothing here moves a reference, pushes, or removes anything. A caller
 // receives a Decision or a *Refusal for the first question, and performing

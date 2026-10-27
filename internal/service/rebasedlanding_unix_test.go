@@ -276,20 +276,6 @@ func rebasedLanding(t *testing.T, branch string, deleteBranch, mergeOnly bool,
 	})
 }
 
-// advanceUpstream commits content to path on the bare upstream's default
-// branch from a clone of its own, the way another person's landing moves it.
-func advanceUpstream(t *testing.T, upstream, path, content, message string) {
-	t.Helper()
-	clone := t.TempDir()
-	git(t, clone, "clone", "--quiet", upstream, ".")
-	if err := os.WriteFile(filepath.Join(clone, path), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	git(t, clone, "add", "-A")
-	git(t, clone, "commit", "--quiet", "-m", message)
-	git(t, clone, "push", "--quiet", "origin", "HEAD:refs/heads/main")
-}
-
 // reaches reports whether descendant reaches ancestor in repository.
 func reaches(t *testing.T, repository, ancestor, descendant string) bool {
 	t.Helper()

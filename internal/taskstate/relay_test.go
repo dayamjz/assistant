@@ -113,7 +113,7 @@ func TestARelayIsRecordedOnlyForAReportedInvestigation(t *testing.T) {
 		t.Fatalf("StoreTaskReport: %v", err)
 	}
 	if _, _, err := s.TransitionTaskShape(ctx, promoted.ID, store.TaskInvestigation, store.TaskDelivery, repo, "promoted",
-		config.DeliveryGated, "Deliver it.", 3, "promoted in the test"); err != nil {
+		config.DeliveryGated, "Deliver it.", 3, "promoted in the test", store.ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatalf("TransitionTaskShape: %v", err)
 	}
 	key := "task/" + inquiry.ID + "/ask-1"
