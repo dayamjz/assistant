@@ -459,7 +459,9 @@ const (
 	// credentials, so a repository file naming it is refused at parse time
 	// (P7). A value that is not zero lies between MinHousekeepingInterval and
 	// MaxHousekeepingInterval, refused rather than clamped outside them. It
-	// is not a loop bound: it stops nothing and parks nothing.
+	// is not a loop bound: it stops nothing and parks nothing. The service
+	// refuses an operator's file whose value is not zero for as long as it
+	// runs no due check (its unhonored.go).
 	KeyHousekeepingInterval Key = "housekeeping.interval"
 )
 
