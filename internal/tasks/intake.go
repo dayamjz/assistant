@@ -580,6 +580,29 @@ func refuseLink(path string) error {
 // partialPrefix is the name every partial file of path begins with.
 func partialPrefix(path string) string { return "." + filepath.Base(path) + ".partial" }
 
+// isPartial reports whether name is exactly a partial file writeWhole
+// makes of path: partialPrefix and then only the decimal digits
+// os.CreateTemp puts in place of the pattern's "*". A file whose name only
+// begins with the prefix, such as ".journal.json.partial-notes", is not
+// one. removePartials, intake's, removes every name with the prefix in a
+// task's own directory and does not ask this; a discard's journal, which
+// never removes what it did not write, does (kept_journal.go). That
+// os.CreateTemp writes digits is its implementation, not its
+// documentation; TestAPartialFileIsRecognizedByTheNameWriteWholeGivesIt
+// fails if that changes.
+func isPartial(path, name string) bool {
+	digits, ok := strings.CutPrefix(name, partialPrefix(path))
+	if !ok || digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // removePartials removes every partial file of path a stop left beside it,
 // found by name, each removed as a name with os.Remove, which removes a
 // link itself and never what it points to.
