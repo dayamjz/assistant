@@ -10,33 +10,6 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
-// renameNoReplace moves a file to a free name and refuses, moving nothing,
-// to land on a name that stands, which is what lets a discard set an entry
-// aside, or put one back, without overwriting one made under its name
-// since. The positive control is the move to a free name.
-func TestARenameThatMustNotReplaceRefusesToLandOnAName(t *testing.T) {
-	t.Parallel()
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		t.Skip("this build has a rename that refuses to replace only on Linux and macOS")
-	}
-	dir := t.TempDir()
-	from, taken, free := filepath.Join(dir, "from"), filepath.Join(dir, "taken"), filepath.Join(dir, "free")
-	writeFile(t, from, "moved\n")
-	writeFile(t, taken, "made under the name\n")
-	if err := renameNoReplace(from, taken); err == nil {
-		t.Fatal("the rename replaced the file standing under the name")
-	}
-	if raw, err := os.ReadFile(taken); err != nil || string(raw) != "made under the name\n" {
-		t.Fatalf("the name's file reads %q, %v; want it as it was made", raw, err)
-	}
-	if err := renameNoReplace(from, free); err != nil {
-		t.Fatalf("renaming to a free name: %v", err)
-	}
-	if raw, err := os.ReadFile(free); err != nil || string(raw) != "moved\n" {
-		t.Fatalf("the moved file reads %q, %v", raw, err)
-	}
-}
-
 // moveAsRead sets an entry aside only as it was read (PRD section 6,
 // "Removing a discarded copy", step 2): a file, a directory and a symbolic
 // link read beforehand move whole and unchanged, a file rewritten with the

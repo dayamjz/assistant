@@ -88,6 +88,19 @@ func (h *Home) Discarding(copyPath string) (string, error) {
 	return filepath.Join(filepath.Dir(cleaned), "."+filepath.Base(cleaned)+".discarding"), nil
 }
 
+// DiscardingStage is where a discard writes its first journal before its
+// directory (Discarding) exists: a directory os.MkdirTemp makes in parent
+// from pattern, beside the copy, which the discard then renames to
+// Discarding whole. So Discarding never stands without a journal. copyPath
+// is held to the layout as Discarding holds it.
+func (h *Home) DiscardingStage(copyPath string) (parent, pattern string, err error) {
+	dir, err := h.Discarding(copyPath)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Dir(dir), filepath.Base(dir) + ".begin*", nil
+}
+
 // element reports whether s is one path element that names a child, rather
 // than nothing, the directory itself or its parent.
 func element(s string) bool {
