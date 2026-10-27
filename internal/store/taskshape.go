@@ -144,14 +144,14 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		if tip != anchor {
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
-		// A carry on claimed on the copy's entry and not yet carried out
-		// is moving the copy the promotion would continue in to another
-		// task.
+		// An entry of the copy holding an answer not yet carried out, a
+		// carry on claimed, which is moving the copy the promotion would
+		// continue in to another task, or a landing claimed, refuses the
+		// flip on the one owed rule every answer is held to (owedOnCopy).
 		var claimed int64
 		var what string
-		switch err := tx.QueryRowContext(ctx, `SELECT id, 'claimed carry on by task ' || carried_on_task FROM kept_work
-			WHERE task_id = ? AND answer IS NULL AND closure IS NULL AND carried_on_task IS NOT NULL
-			ORDER BY id LIMIT 1`, id).Scan(&claimed, &what); {
+		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task ELSE 'claimed land' END
+			FROM kept_work WHERE task_id = ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, id).Scan(&claimed, &what); {
 		case err == nil:
 			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, claimed, what)
 		case !errors.Is(err, sql.ErrNoRows):

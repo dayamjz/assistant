@@ -241,7 +241,7 @@ var PhraseKeptWorkLosesNothing = Phrase{
 
 // PhraseDiscardRemovalDeferred is the row for a discard given --confirm:
 // removal on a confirmed discard is deferred to AGE-486 (docs/prd.md,
-// sections 6 and 9), so the answer is refused before anything is read and
+// sections 6 and 9), so the answer is refused before the copy is read and
 // changes nothing, the copy and its entry as they were.
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",

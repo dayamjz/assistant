@@ -25,8 +25,10 @@ import (
 // entry stays open and listed, holding its project's new tasks as before.
 //
 // A discard answer given a confirmation is refused with discardDeferred
-// before anything is read or written, so the copy, its entry and the store
-// are exactly as they were. What closes the entry instead, besides a land
+// before the copy is read or anything is written (the entry itself was
+// read to find it, and an entry already answered or closed is refused as
+// answered first, as every answer is), so the copy, its entry and the
+// store are exactly as they were. What closes the entry instead, besides a land
 // or a carry on, is P12 cleanup removing the copy on a proof, which
 // happens only when the cleanup decision is next asked of the copy at one
 // of cleanup.go's sites; the removal closes the entry. That decision
@@ -44,11 +46,15 @@ import (
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
-	if confirm != "" {
-		return machine.KeptWorkAnswered{}, discardDeferred{entry: entry.ID}
-	}
+	// An entry already answered or closed takes no answer, and is refused
+	// as such before the confirmation is read: the deferred row's advice,
+	// to answer land or carry on while the project waits, is for an open
+	// entry (the full review of 04c4696).
 	if !entry.Open() {
 		return machine.KeptWorkAnswered{}, refusedAnswered(entry)
+	}
+	if confirm != "" {
+		return machine.KeptWorkAnswered{}, discardDeferred{entry: entry.ID}
 	}
 	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {
@@ -63,8 +69,8 @@ func (s *Service) discardKeptWork(ctx context.Context, entry store.KeptWork, con
 }
 
 // discardDeferred is the refusal of a discard given a confirmation: the
-// removal it would make is deferred to AGE-486, so nothing was read or
-// written. Its text is the row a person reads,
+// removal it would make is deferred to AGE-486, so nothing of the copy was
+// read and nothing was written. Its text is the row a person reads,
 // machine.PhraseDiscardRemovalDeferred, and it matches ipc.ErrRefused.
 type discardDeferred struct{ entry int64 }
 

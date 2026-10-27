@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -34,7 +35,7 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 // it did and is still listed, and the worktree's files, index, references
 // and logs are as they were (its read may add objects it fetches). A
 // confirmation, with the digest shown or with another, is refused with the
-// row saying the removal is not in this build, before anything is read:
+// row saying the removal is not in this build, before the copy is read:
 // the copy, its objects included, and the gate are byte for byte as they
 // were, and the entry, field for field but when it last surfaced, still
 // open and listed, so it still
@@ -816,5 +817,44 @@ func TestADiscardShownCarriesNamesThatAreNotUTF8Exactly(t *testing.T) {
 func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath) bool {
 	return slices.ContainsFunc(files, func(f machine.KeptWorkLostPath) bool {
 		return f.Kind == want.Kind && f.ExactPath() == want.ExactPath()
+	})
+}
+
+// A discard of an entry already answered is refused as answered, with a
+// confirmation as without one (the full review of 04c4696): the entry is
+// carried on, so its copy moved and its project's dispatch is free, and a
+// discard given --confirm is refused naming the first answer and never
+// with the row saying removal is deferred, whose advice to answer land or
+// carry on, and that the project still waits, would be wrong. Before, the
+// confirmation was refused as deferred before the entry was read as
+// answered.
+func TestADiscardOfAnAnsweredEntryIsRefusedAsAnsweredWithOrWithoutAConfirmation(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task's worker launching before its entry is discarded")
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err != nil {
+			t.Fatalf("carrying the entry on: %v", err)
+		}
+		for _, confirm := range []string{"", "not-the-digest"} {
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+				Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard), Confirm: confirm}, &out)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "already answered carry-on") ||
+				strings.Contains(err.Error(), machine.PhraseDiscardRemovalDeferred.Outcome) {
+				t.Fatalf("a discard with confirmation %q of a carried-on entry = %v; want it refused as already answered, not as deferred", confirm, err)
+			}
+		}
+		waitLaunched(t, h, out.Task)
 	})
 }

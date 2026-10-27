@@ -96,8 +96,9 @@ paths: ["internal/store/**"]
   (`ErrKeptWorkUnverified`) and writes nothing; and no
   answer or claim is written while an entry of the copy holds one not yet
   carried out, a claim on the entry itself included
-  (`ErrKeptWorkCopyOwed`), and
-  `TransitionTaskShape` refuses a promotion over one. Each
+  (`ErrKeptWorkCopyOwed`, the one condition `owedOnCopy`), and
+  `TransitionTaskShape` refuses a promotion over one by that same
+  condition, a landing claim as a carry-on claim. Each
   answer's claim and outcome are its own accessors, and there is no
   generic answer write, so nothing writes an answer of discard: its
   removal and record are deferred to AGE-486. `TransitionTaskShape` answers the promoted task's own copy's open

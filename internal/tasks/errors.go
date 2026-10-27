@@ -122,7 +122,7 @@ type KeptWorkUnheldError struct {
 
 // Error names the task, the entry and what is missing.
 func (e *KeptWorkUnheldError) Error() string {
-	return fmt.Sprintf("tasks: task %s is not promoted: its copy no longer holds %s, which kept work entry %d recorded it standing on, "+
+	return fmt.Sprintf("tasks: the copy of task %s no longer holds %s, which kept work entry %d recorded it standing on, "+
 		"so the entry cannot be answered carry on; land what the copy holds now, or answer the entry otherwise",
 		e.Task, strings.Join(e.Unheld, ", "), e.Entry)
 }

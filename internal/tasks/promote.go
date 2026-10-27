@@ -37,7 +37,8 @@ import (
 // takes, the check every answer to a kept copy asks (verifyKeptCopy,
 // Cleaner.VerifyKeptCopy's body), and that still holds what each entry
 // recorded it standing on (unheld, Cleaner.Unheld's body, the reading a
-// carry on makes), so no entry is closed over work the copy has lost: before
+// carry on makes), so no entry is closed over work the copy had lost when
+// it was read: before
 // the flip, Promote reads the task's
 // open entries (keptOfCopy, which refuses one recorded for another path)
 // and verifies the copy for each, refusing with ErrLayoutUnsupported, or
@@ -48,8 +49,15 @@ import (
 // after the flip the copy is verified again before it is read or written,
 // a refusal there being a *PromotionRefusal as not isolated with nothing
 // written, the flip and its answers standing as after any refusal past the
-// flip. The verification is a check at one moment, on
-// safety.VerifyKeptCopy's terms. A copy with no open entry is not asked
+// flip. Both verifications are a check at one moment, on
+// safety.VerifyKeptCopy's and Cleaner.Unheld's terms, and the flip is
+// the answer: work the copy loses between the reading before the flip and
+// the flip is answered carry on in the flip, and the reading after it then
+// refuses the promotion with that answer standing, as it does a copy whose
+// identity moved in the same window (the full review of 04c4696); a carry
+// on, which marks only after its last reading with the entry open until
+// then, has no such window, and a promotion's flip, being the answer and
+// the shape in one write, cannot be ordered the same way. A copy with no open entry is not asked
 // it: what stands between such a copy and the writes is the assertion
 // before shaping, which refuses a .git under the copy that is a symbolic
 // link (ComparisonGitDir, round 37) before anything is written through it,
@@ -345,7 +353,9 @@ type Promoted struct {
 // read, refuses the flip with store.ErrKeptWorkUnverified, and nothing is
 // written.
 //
-// After the flip the copy is verified again for those entries, then
+// After the flip the copy is verified again for those entries, a refusal
+// there leaving the flip's answers standing (this file's opening comment
+// owns that window), then
 // asserted, shaped, asserted again, and the
 // intent and the delivery second check are appended to the instructions
 // file; a copy that fails either assertion is a *PromotionRefusal with the

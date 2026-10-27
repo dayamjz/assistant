@@ -714,7 +714,10 @@ worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
 the entry closes with the promotion and never without it, and the
 promotion is refused, naming what is missing, when the copy no longer
-holds what the entry recorded, as a carry on of it would be.
+holds what the entry recorded when the promotion reads it, as a carry on
+of it would be; work lost in the moment between that reading and the
+promotion's write is answered with the write, and the promotion then
+reports the copy refused.
 
 Nothing in the program discards a copy, on its own or on an answer: the
 preview is open to any caller that may answer kept work, and a
