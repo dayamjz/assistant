@@ -218,6 +218,11 @@ const keptWorkLandingMigration = "kept work landing run"
 // is a constant.
 const keptWorkCarryOnMigration = "kept work carry-on task"
 
+// housekeepingMigration names the migration that adds PRD section 6's
+// housekeeping mark on the task row, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingMigration = "housekeeping passes"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2694,6 +2699,40 @@ var schema = []migration{
 				WHEN OLD.carried_on_at IS NOT NULL OR NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL OR NEW.answer IS NOT 'carry-on'
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, with its carry-on answer, by the task its claim names');
+				END`,
+		},
+	},
+	{
+		version: 63,
+		name:    housekeepingMigration,
+		statements: []string{
+			// PRD section 8's task record: whether the task is a
+			// housekeeping pass, written once at intake and kept by
+			// promotion and relaunch, a row written before the column
+			// reading as not one. It is the one place that fact is stored
+			// (P14). 1 is a pass and NULL is not; no other value is
+			// written. A pass is created as an investigation of a
+			// repository under the housekeeping role, and the housekeeping
+			// role is a pass's alone, which the insert triggers hold.
+			`ALTER TABLE task ADD COLUMN housekeeping INTEGER`,
+			`CREATE TRIGGER task_housekeeping_is_written_at_intake
+				BEFORE UPDATE OF housekeeping ON task
+				WHEN NEW.housekeeping IS NOT OLD.housekeeping
+				BEGIN
+					SELECT RAISE(ABORT, 'store: whether a task is a housekeeping pass is written at its intake and never moved');
+				END`,
+			`CREATE TRIGGER task_housekeeping_pass_is_an_investigation_of_a_repository
+				BEFORE INSERT ON task
+				WHEN NEW.housekeeping IS NOT NULL AND (NEW.housekeeping IS NOT 1 OR NEW.shape <> 'investigation'
+					OR NEW.repository_id IS NULL OR NEW.role IS NOT 'housekeeping')
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping pass is created as an investigation of a repository under the housekeeping role');
+				END`,
+			`CREATE TRIGGER task_housekeeping_role_is_a_passes
+				BEFORE INSERT ON task
+				WHEN NEW.role = 'housekeeping' AND NEW.housekeeping IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: the housekeeping role is assigned to a housekeeping pass and no other task');
 				END`,
 		},
 	},

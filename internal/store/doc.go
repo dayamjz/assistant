@@ -399,6 +399,12 @@
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
 //
+// Migration 63 adds PRD section 8's housekeeping mark on the task row,
+// written once at intake, and CreateTask decides the one-open-pass rule in
+// its own transaction from every earlier pass's snapshot and the record
+// tier internal/taskstate passes in (Disposition.Delivered), so this package
+// states no tier of its own; PassOpen is the one statement of "open".
+//
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
 // the drain is for and the kinds a subordinate can act on as words, and
