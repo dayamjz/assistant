@@ -95,8 +95,11 @@
 // both directions by its test, which derives the set from
 // taskstate.States() and fails on a state with no row, so a state added
 // later cannot land unplaced; Landed and Complete sit beside Ready. A state the table does not decide
-// is read as unknown and never as none. feed.Observe takes the two reads,
-// through store.OpenReadOnly.
+// is read as unknown and never as none. Whether a task's state counts at all
+// is its Regard, which RegardOf reads off its observation: an open stall
+// hold or a housekeeping pass something moves is in flight whatever it
+// resolves, and a retired pass nothing moves only while a wake about it is
+// queued. feed.Observe takes the two reads, through store.OpenReadOnly.
 //
 // Which watched tasks have their terminal read is a second closed table, in
 // terminal.go, on the same terms: every state but Reported, Landed and

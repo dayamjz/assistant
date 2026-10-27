@@ -231,7 +231,11 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		if err != nil {
 			return machine.Wakes{}, err
 		}
-		if offered+offeredDomain+offeredKept > 0 {
+		offeredHousekeeping, err := s.store.OfferedHousekeepingWakes(ctx, handout.Held, handout.Route)
+		if err != nil {
+			return machine.Wakes{}, err
+		}
+		if offered+offeredDomain+offeredKept+offeredHousekeeping > 0 {
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
@@ -239,7 +243,7 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if err != nil {
 				return machine.Wakes{}, err
 			}
-			if len(wakes.Wakes)+len(wakes.DomainWakes)+len(wakes.KeptWorkWakes) > 0 {
+			if len(wakes.Wakes)+len(wakes.DomainWakes)+len(wakes.KeptWorkWakes)+len(wakes.HousekeepingWakes) > 0 {
 				return wakes, nil
 			}
 		}
@@ -259,8 +263,8 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 
 // drainAll is one drain of every shape under one handout, the one both
 // wakes.list and wakes.wait answer with: the task rows, then the domain
-// rows, then the kept-work rows, each bounded by limit, and the last two
-// none on a subordinate's route, handed out in one store transaction
+// rows, then the kept-work rows, then the housekeeping rows, each bounded by
+// limit, and the last three none on a subordinate's route, handed out in one store transaction
 // (store.DrainAll), so a drain that fails or is cancelled between two
 // shapes hands out nothing it does not return.
 func (s *Service) drainAll(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
@@ -268,7 +272,8 @@ func (s *Service) drainAll(ctx context.Context, limit int, handout store.WakeHan
 	if err != nil {
 		return machine.Wakes{}, err
 	}
-	return machine.Wakes{Wakes: drained.Wakes, DomainWakes: drained.DomainWakes, KeptWorkWakes: drained.KeptWorkWakes}, nil
+	return machine.Wakes{Wakes: drained.Wakes, DomainWakes: drained.DomainWakes, KeptWorkWakes: drained.KeptWorkWakes,
+		HousekeepingWakes: drained.HousekeepingWakes}, nil
 }
 
 // wakeHandout is what a coordinator's drain made now hands rows out as, on

@@ -50,7 +50,9 @@ import (
 // Two consequences of reading the PRD's rows as written are left as they
 // are rather than settled here. A task resolved Unknown is in flight under
 // section 6 and stopped without a decision under section 9, so it is listed
-// in both parts. A run attributed to a task under way is listed beside the
+// in both parts, except a retired housekeeping pass nothing moves, which
+// section 6 takes out of flight whatever it resolves and which is listed as
+// stopped only. A run attributed to a task under way is listed beside the
 // task when a segment is advancing it, because the run is being advanced
 // and the task is in flight, which are the two parts' own definitions.
 //
@@ -103,7 +105,7 @@ func (s *Service) catchUp(ctx context.Context) (machine.CatchUp, error) {
 	for _, o := range observed {
 		task := s.taskView(ctx, o)
 		byTask[task.Record.ID] = task
-		inFlight, decided := supervisor.TaskInFlight(o.State.State, unacknowledged[task.Record.ID], supervisor.StallHeld(o))
+		inFlight, decided := supervisor.TaskInFlight(o.State.State, unacknowledged[task.Record.ID], supervisor.RegardOf(o))
 		if inFlight || !decided {
 			out.UnderWay.Tasks = append(out.UnderWay.Tasks, task)
 		}
