@@ -730,3 +730,46 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 		t.Fatalf("the wakes are %+v, %v, want the three written ones", rows, err)
 	}
 }
+
+// A run's task is the inverse of the snapshot's attribution: the task of
+// the run's repository and branch whose latest attempt began at or before
+// the run was created, the newest such attempt deciding, so a run of a
+// branch a pass used is the pass's only until another task's attempt takes
+// the branch, and a run no task's attempt precedes is nobody's.
+func TestARunsTaskIsTheOneWhoseAttemptPrecedesIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	_, run := promotedPassWithRun(t, s, "taskhkrunofa", "housekeeping/one", RunPassed)
+	if got, ok, err := s.TaskOfRun(ctx, run); err != nil || !ok || got.ID != "taskhkrunofa" {
+		t.Fatalf("the task of the pass's run = %+v, %v, %v; want the pass", got, ok, err)
+	}
+	tick()
+	if _, err := s.CreateTask(ctx, Task{ID: "taskhkrunofb", Shape: TaskDelivery, Project: "one", Mode: "interactive",
+		WorktreePath: "/w/taskhkrunofb", RepositoryID: Known("repo-1"), Branch: Known("housekeeping/one")},
+		Disposition{Observed: newestOnBranch(t, s, "repo-1", "housekeeping/one")}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	beginAttempt(t, s, "taskhkrunofb", 0)
+	tick()
+	later, err := s.CreateRun(ctx, Run{ID: "run-later", RepositoryID: "repo-1", Branch: "housekeeping/one", SubmittedHead: "cccc",
+		Base: "bbbb", Intent: "validate", IntentSource: "task", Build: testBuild(), ConfigDigest: "cfg-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.TaskOfRun(ctx, later); err != nil || !ok || got.ID != "taskhkrunofb" {
+		t.Fatalf("the task of a run after the ordinary task took the branch = %+v, %v, %v; want that task", got, ok, err)
+	}
+	if got, ok, err := s.TaskOfRun(ctx, run); err != nil || !ok || got.ID != "taskhkrunofa" {
+		t.Fatalf("the task of the pass's earlier run = %+v, %v, %v; still want the pass", got, ok, err)
+	}
+	stray, err := s.CreateRun(ctx, Run{ID: "run-stray", RepositoryID: "repo-1", Branch: "nobodys", SubmittedHead: "dddd",
+		Base: "bbbb", Intent: "validate", IntentSource: "person", Build: testBuild(), ConfigDigest: "cfg-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := s.TaskOfRun(ctx, stray); err != nil || ok {
+		t.Fatalf("the task of a run on a branch no task works on = %+v, %v, %v; want none", got, ok, err)
+	}
+}
