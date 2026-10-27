@@ -302,6 +302,16 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM repository WHERE id = ?`, id); err != nil {
 			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
 		}
+		// The housekeeping records about the repository go after it, which
+		// their seals require: refuseUnlessForgettable has refused a queued
+		// wake, so every wake left here is acknowledged.
+		for _, forget := range []string{
+			`DELETE FROM housekeeping_wake WHERE repository_id = ?`,
+		} {
+			if _, err := tx.ExecContext(ctx, forget, id); err != nil {
+				return fmt.Errorf("store: forgetting the housekeeping records of repository %s: %w", id, err)
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -548,6 +558,9 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 	if err := refuseIfAKeptWorkWakeIsQueued(ctx, tx, id); err != nil {
 		return err
 	}
+	if err := refuseIfAHousekeepingWakeIsQueued(ctx, tx, id); err != nil {
+		return err
+	}
 	for _, runID := range runIDs {
 		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {
 			return err
@@ -582,6 +595,24 @@ func refuseIfAKeptWorkWakeIsQueued(ctx context.Context, tx *sql.Tx, repositoryID
 	return fmt.Errorf("%w: kept-work wake %d, raised about kept work entry %d of repository %s, is still queued; "+
 		"once the coordinator acknowledges it, the repository's records can be removed",
 		ErrKeptWorkWakeQueued, wake, entry, repositoryID)
+}
+
+// refuseIfAHousekeepingWakeIsQueued stops a removal that would delete an
+// unacknowledged housekeeping wake about the repository, which PRD section 8
+// keeps actionable until it is acknowledged.
+func refuseIfAHousekeepingWakeIsQueued(ctx context.Context, tx *sql.Tx, repositoryID string) error {
+	var wake int64
+	err := tx.QueryRowContext(ctx, `SELECT id FROM housekeeping_wake WHERE handled_at IS NULL AND repository_id = ?
+		ORDER BY id LIMIT 1`, repositoryID).Scan(&wake)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: checking the housekeeping wakes of repository %s: %w", repositoryID, err)
+	}
+	return fmt.Errorf("%w: housekeeping wake %d about repository %s is still queued; "+
+		"once the coordinator acknowledges it, the repository's records can be removed",
+		ErrHousekeepingWakeQueued, wake, repositoryID)
 }
 
 // repositoryRunIDs returns the identifiers of every run of one repository.

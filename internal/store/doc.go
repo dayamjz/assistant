@@ -392,9 +392,17 @@
 // shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
 // marker, for a database an earlier build left with a task's wake and no
 // instant.
+// A wake about a repository's housekeeping is the queue's fourth shape,
+// migration 66's housekeeping_wake, PRD section 8's housekeeping-due wake:
+// kept_work_wake's columns with the entry replaced by the repository and the
+// pass it follows, plus the detail it names, stored redacted, under the
+// same seals, once per marker within the repository, which its unique key
+// holds. AppendHousekeepingWake is its one append. ForgetRepository refuses
+// a repository with one queued (ErrHousekeepingWakeQueued) and takes the
+// acknowledged rows after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the two shapes about no task, and
-// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// count and the acknowledgement for the three shapes about no task, and
+// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).

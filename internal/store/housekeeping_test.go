@@ -589,3 +589,57 @@ func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
 		t.Fatalf("the first attempt of a pass with a report decision open = %v, want it begun", err)
 	}
 }
+
+// PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
+// repository, appended once per marker under the incarnation fence, drained
+// and acknowledged on the other shapes' terms, the first coordinator's
+// alone, and it holds its repository's records until acknowledged.
+func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	request := HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due", Marker: "due:none:1", Detail: "no pass was ever created"}
+	first, err := s.AppendHousekeepingWake(ctx, inc, request)
+	if err != nil || first.Disposition != WakeAppended || first.Wake.Repository != "repo-1" || first.Wake.Pass.IsKnown() || !first.Wake.Queued() {
+		t.Fatalf("the first append = %+v, %v", first, err)
+	}
+	again, err := s.AppendHousekeepingWake(ctx, inc, request)
+	if err != nil || again.Disposition != WakeAlreadyQueued || again.Wake.ID != first.Wake.ID {
+		t.Fatalf("a replay = %+v, %v, want the queued row", again, err)
+	}
+	stale := inc
+	inc = incarnationOf(t, s)
+	if _, err := s.AppendHousekeepingWake(ctx, stale, HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due",
+		Marker: "due:none:2", Detail: "d"}); !errors.Is(err, ErrStaleIncarnation) {
+		t.Fatalf("a replaced incarnation's append = %v, want ErrStaleIncarnation", err)
+	}
+
+	if n, err := s.OfferedHousekeepingWakes(ctx, nil, WakeRoute{Subordinate: "web"}); err != nil || n != 0 {
+		t.Fatalf("a subordinate is offered %d, %v, want none", n, err)
+	}
+	if n, err := s.UnacknowledgedHousekeepingWakes(ctx); err != nil || n != 1 {
+		t.Fatalf("unacknowledged = %d, %v, want 1", n, err)
+	}
+	if _, err := s.ForgetRepository(ctx, "repo-1"); !errors.Is(err, ErrHousekeepingWakeQueued) {
+		t.Fatalf("forgetting the repository with its wake queued = %v, want ErrHousekeepingWakeQueued", err)
+	}
+	drained, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"})
+	if err != nil || len(drained.HousekeepingWakes) != 1 || drained.HousekeepingWakes[0].ID != first.Wake.ID {
+		t.Fatalf("the drain = %+v, %v, want the housekeeping row", drained, err)
+	}
+	if err := s.AcknowledgeAll(ctx, nil, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendHousekeepingWake(ctx, inc, request); !errors.Is(err, ErrWakeHandled) {
+		t.Fatalf("the marker raised again once acknowledged = %v, want ErrWakeHandled", err)
+	}
+	if removed, err := s.ForgetRepository(ctx, "repo-1"); err != nil || removed != 0 {
+		t.Fatalf("forgetting the repository once its wake is acknowledged = %d, %v", removed, err)
+	}
+	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 0 {
+		t.Fatalf("the repository's wakes outlived it: %+v, %v", rows, err)
+	}
+}
