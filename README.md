@@ -165,7 +165,7 @@ These are **example pins**, not guaranteed entitlements or the default configura
 
 Each task gets an isolated repository copy. Workers can investigate a problem and report findings without immediately editing or shipping code; a subsequent promotion can turn an investigation into delivery work. The supervisor watches progress, raises decisions and stalled-work signals, and maintains durable records through service restarts.
 
-Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state rather than silently deleting work. The full answer/dispatch-hold workflow is still being completed, so do not assume every recovery path is automated.
+Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks in that project until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
 
 **Where workers run:** The default session provider is `pipe`: the worker is the service's own child. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
@@ -305,7 +305,7 @@ For the recorded view, run `assistant runs --usage=24h` or `assistant --json run
 
 ## Operations and recovery
 
-A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers the kept-work decision. Use `assistant watch`, `assistant tasks`, and the operator guide to inspect those states; do not assume that every hold or kept-work recovery is automatic.
+A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers land or carry on (or until cleanup closes the entry on proof). A discard answer previews what removal would lose and does not remove the copy in this build. Use `assistant watch`, `assistant tasks`, and the [operator guide](docs/operators.md#kept-work) to inspect those states.
 
 ## Available now vs. on the roadmap
 
@@ -316,7 +316,7 @@ A **hold** is a stage or task waiting for a person's decision; a **parked run** 
 | Role-specific agent, provider, model, effort, and fallback | **Available** (adapter/model constraints apply) |
 | Nine-stage validation and GitHub/GitLab delivery | **Available** |
 | Usage records, per-run budgets, home-wide ceilings | **Available** |
-| Kept-work visibility | **Available**; resolution flows are being expanded |
+| Kept-work visibility, dispatch hold, land and carry on | **Available**. Removal on a confirmed discard is not in this build ([operator guide](docs/operators.md#kept-work)). |
 | Cross-machine placement, bridge, herdr provider | **Refused in this build.** The schema accepts the keys. The service does not start when `config.yaml` sets one. [Operator guide](docs/operators.md#watch-a-worker-in-a-terminal). |
 | Role-level configurable context windows | **Available** (a role names `context` as `standard` or `1m` beside a complete model triple; an undeclared window is refused before launch). See [multi-agent support](docs/multi-agent-support.md). |
 | Automatic cloud worker provisioning | **Future direction** |
