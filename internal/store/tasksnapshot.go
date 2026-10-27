@@ -116,8 +116,6 @@ func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, erro
 	return out, nil
 }
 
-// TaskSnapshots reads every task as TaskSnapshot does, newest task first, all
-// as of one point in time.
 // TaskOfRun is the task a run is attributed to, the inverse of the reading
 // TaskSnapshot makes of a task's runs, so the two agree: the task that names
 // the run as its own, else the task of the run's repository and branch whose
@@ -149,6 +147,8 @@ func (s *Store) TaskOfRun(ctx context.Context, run Run) (Task, bool, error) {
 	return Task{}, false, fmt.Errorf("store: reading the task run %s is attributed to: %w", run.ID, err)
 }
 
+// TaskSnapshots reads every task as TaskSnapshot does, newest task first, all
+// as of one point in time.
 func (s *Store) TaskSnapshots(ctx context.Context) ([]TaskSnapshot, error) {
 	var out []TaskSnapshot
 	err := s.snapshotTx(ctx, func(q querier) error {
