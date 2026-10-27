@@ -37,7 +37,8 @@ import (
 // because the worker was one this service could not end or had not yet
 // exited, left the copy standing. The decision is therefore asked whenever
 // the task's terminal is observed Dead, from three places, each handing internal/tasks the liveness a resolution read
-// through the service's Terminals, on cleanup.go's terms:
+// through the service's Terminals, on cleanup.go's terms (a retired
+// housekeeping pass's, below, with one exception retiredTerminal states):
 //
 //   - the landing sites themselves, through settleLanded, which ends the
 //     held worker first and then reads the task again, so a landing whose
@@ -83,6 +84,18 @@ import (
 // report-ready reading below would otherwise stop owing the copy the moment
 // the findings were relayed. A relayed investigation is not promotable, so
 // nothing here has to keep its worker for a promotion.
+//
+// # A retired housekeeping pass
+//
+// A retired pass is owed the decision too, on housekeeping.go's terms
+// (retiredCleanupOwed, retiredTerminal, logRetiredCleanup): its retirement
+// asks it once through cleanUpLandedTask, and the pass asks again on the
+// same cadence while the copy carries no removal, so a service that stopped
+// between the retirement record and that first ask, or a refusal that
+// changes with the world, is asked again rather than left with work nothing
+// surfaces (P15). Its worker is never ended here: a retirement is recorded
+// only with its worker read dead or its latest attempt never having had a
+// session.
 //
 // # Cadence
 //
@@ -198,9 +211,20 @@ func relayedEnds(r taskstate.Resolution) bool {
 }
 
 // copyCleanupOwed reports whether the cleanup decision is still owed for
-// o's copy, as a landed task's or as a reported investigation's.
+// o's copy, as a landed task's, as a reported investigation's, or as a
+// retired housekeeping pass's (housekeeping.go's retiredCleanupOwed).
 func copyCleanupOwed(o taskstate.Observed) bool {
-	return landedCleanupOwed(o.State) || reportedCleanupOwed(o)
+	return landedCleanupOwed(o.State) || reportedCleanupOwed(o) || retiredCleanupOwed(o)
+}
+
+// cleanupTerminal is the terminal the cleanup decision is asked with for
+// o's copy: the liveness o's resolution read, except for a retired
+// housekeeping pass, which housekeeping.go's retiredTerminal answers.
+func cleanupTerminal(o taskstate.Observed) taskstate.Liveness {
+	if retiredCleanupOwed(o) {
+		return retiredTerminal(o)
+	}
+	return o.State.Basis.Process
 }
 
 // settleLanded is what a landing site does about one landed task: it ends
@@ -243,10 +267,10 @@ func (s *Service) endLandedWorker(ctx context.Context, id string) {
 }
 
 // cleanUpLandedTask reads the task through the service's reader and, while
-// it is still owed a cleanup, asks the decision with the terminal that read
-// resolved, and counts the ask in landedTried when that terminal read Dead,
-// so the pass asks again only on its spacing and bound. It logs what the
-// decision answered.
+// it is still owed a cleanup, asks the decision with the terminal
+// cleanupTerminal reads off that read, and counts the ask in landedTried
+// when that terminal is Dead, so the pass asks again only on its spacing and
+// bound. It logs what the decision answered.
 func (s *Service) cleanUpLandedTask(ctx context.Context, id string) {
 	o, err := s.tasks().ObserveTask(ctx, id)
 	if err != nil {
@@ -257,12 +281,13 @@ func (s *Service) cleanUpLandedTask(ctx context.Context, id string) {
 }
 
 // askLandedCleanup asks the cleanup decision for a task read in o, when o
-// says it is still owed one, landed or reported (copyCleanupOwed), with the
-// terminal o resolved, and logs what the decision answered. An ask under a
-// Dead terminal is counted in landedTried once the decision has answered,
-// whatever it answered, so the pass's next ask of the same terminal waits
-// out the spacing; a terminal not Dead is no ask the decision could have
-// granted, and is not counted.
+// says it is still owed one, landed, reported or a retired pass
+// (copyCleanupOwed), with the terminal cleanupTerminal reads off o, and logs
+// what the decision answered, a retired pass's on logRetiredCleanup's terms.
+// An ask under a Dead terminal is counted in landedTried once the decision
+// has answered, whatever it answered, so the pass's next ask of the same
+// terminal waits out the spacing; a terminal not Dead is no ask the
+// decision could have granted, and is not counted.
 func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 	if !copyCleanupOwed(o) {
 		return
@@ -272,9 +297,14 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 		s.log.Printf("the isolated copy of task %s was not cleaned up: this service was built without a cleanup decision", id)
 		return
 	}
-	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: o.State.Basis.Process})
-	if o.State.Basis.Process == taskstate.Dead {
+	terminal := cleanupTerminal(o)
+	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: terminal})
+	if terminal == taskstate.Dead {
 		s.markLandedTried(id, latestRef(o.Snapshot.Attempts), time.Now())
+	}
+	if retiredCleanupOwed(o) {
+		s.logRetiredCleanup(ctx, id, done, err)
+		return
 	}
 	s.logCleanup(ctx, done, err)
 }
@@ -282,10 +312,11 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // landedFromPass is the supervisor pass's trigger, over the resolutions the
 // pass already read, on the file comment's terms: for each task in the
 // terminal tier, it ends the worker this service still holds for the latest
-// attempt, and for each one still owed a cleanup, landed or a reported
-// investigation, whose terminal the pass read Dead under a reference whose
-// ask is due (landedAskDue), it asks the decision. A reported investigation's worker is
-// never ended here. The work
+// attempt, and for each one still owed a cleanup, landed, a reported
+// investigation or a retired housekeeping pass, whose terminal reads Dead
+// (cleanupTerminal) under a reference whose ask is due (landedAskDue), it
+// asks the decision. Neither a reported investigation's worker nor a
+// retired pass's is ended here. The work
 // goes to a goroutine registered through startWork under the task's slot;
 // a slot already taken, or a service giving up its home, skips the task
 // until the next pass. A service built by hand without a cleaner asks
@@ -296,13 +327,13 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 	}
 	for _, o := range observed {
 		landed := landedEnds(o.State)
-		if !landed && !reportedCleanupOwed(o) {
+		if !landed && !copyCleanupOwed(o) {
 			continue
 		}
 		id := o.Snapshot.Task.ID
 		ref := latestRef(o.Snapshot.Attempts)
 		held := landed && ref != "" && s.holdsSession(id, ref)
-		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && s.landedAskDue(id, ref, time.Now())
+		owed := copyCleanupOwed(o) && cleanupTerminal(o) == taskstate.Dead && s.landedAskDue(id, ref, time.Now())
 		if !held && !owed {
 			continue
 		}

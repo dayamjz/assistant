@@ -124,17 +124,29 @@ import (
 // resolver; any other answer is refused with the hold open. Standing consent
 // answers no task hold, so it never answers this one.
 //
-// A retired pass is never begun again: every attempt claim refuses it in
-// the store (store.ErrPassRetired), and relaunch.go refuses it before it
-// sweeps anything, and the record of an attempt's session refuses it, so
-// no session is recorded for an attempt of a retired pass after its
+// After a retirement the pass's copy is asked the cleanup decision, so
+// a copy holding work that has not landed becomes a kept work entry (P15)
+// and nothing is removed without a proof; a copy refused for a report never
+// stored or a decision never registered is kept the same way
+// (tasks.KeptOnRetirement), since nothing will store that report or
+// register those holds now. The retirement record is written before that
+// ask and in another transaction, so the ask is not the retirement's alone:
+// landed.go's pass asks it again, on its cadence, for every retired pass
+// whose copy carries no removal (retiredCleanupOwed), so a service that
+// stopped between the two asks it once it opens again and reads the worker
+// dead, and a refusal that changes with the world is asked about again. The
+// terminal it is asked with is retiredTerminal's. The store refuses a
+// retirement hold for a pass already retired. A retired pass is never
+// begun again: every attempt claim refuses it in the store
+// (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
+// anything, and the record of an attempt's session refuses it, so no
+// session is recorded for an attempt of a retired pass after its
 // retirement. Nor is it in flight by its state alone
 // (supervisor.RegardOf): the loop watches it, the stop guard counts it and
 // the catch-up read lists it under way only while a run of its branch has
 // not ended or a wake about it is queued, so once its wakes are
 // acknowledged a pass retired with its worker dead or never launched has
-// its terminal read no more and raises no further terminal-gone wake. Its
-// copy's cleanup decision is the link above this one.
+// its terminal read no more and raises no further terminal-gone wake.
 //
 // # Residual gaps
 //
@@ -158,7 +170,11 @@ import (
 //     with exactly one loser: a retirement anchored to no session refuses
 //     once the session is recorded (store.ErrPassMoves), and the record
 //     refuses once the pass is retired (store.ErrPassRetired), on which
-//     launch.go ends the worker it started and records nothing.
+//     launch.go ends the worker it started and records nothing. What such
+//     a worker did between its start and its end stays in the pass's copy,
+//     which the cleanup decision is asked about as for any retired pass
+//     (P6), and between its start and its end it is a worker no record
+//     names, the gap dispatch.go's crash paragraph states.
 //   - The program cannot tell a rule from a fact; what a pass may change
 //     rests on the worker's instructions and the run's review, and the
 //     review's ask on paths outside housekeeping.paths (internal/stages).
@@ -608,6 +624,50 @@ func passRelaunches(task string) func(string) bool {
 func retirementOf(task string, attempts []store.TaskAttempt, run string) store.Retirement {
 	return store.Retirement{Task: task, Attempt: latestSequence(attempts), Session: latestRef(attempts), Run: run,
 		Relaunches: passRelaunches(task), Ended: runs.Finished, Delivered: taskstate.Delivered}
+}
+
+// retiredCleanupOwed reports whether o is a retired housekeeping pass whose
+// copy the cleanup decision is still owed for, on the file comment's terms:
+// retired, not in the terminal tier, whose own rule a pass that landed after
+// all is held to instead, its copy not recorded removed, and dispatched at
+// least once, since a dispatch cuts the copy after its claim, so a pass
+// never dispatched has none. landed.go asks it, at the retirement and again
+// from the pass, on that file's cadence.
+func retiredCleanupOwed(o taskstate.Observed) bool {
+	snap := o.Snapshot
+	return snap.Task.Housekeeping && snap.Retirement.IsKnown() && !landedEnds(o.State) &&
+		!o.State.Basis.CleanupRemoved && len(snap.Attempts) > 0
+}
+
+// retiredTerminal is the terminal a retired pass's cleanup is asked with:
+// the liveness its resolution read when its latest attempt has a session,
+// and Dead when it never had one. The second is PRD section 6's other half
+// of nothing moving a pass, "or its latest attempt never had a session",
+// the reading its retirement was decided on, and it stays that way: no
+// attempt begins after the retirement and no session is recorded for one
+// claimed before it, because every attempt claim and the session's record
+// refuse a retired pass (store.ErrPassRetired).
+func retiredTerminal(o taskstate.Observed) taskstate.Liveness {
+	if latestRef(o.Snapshot.Attempts) == "" {
+		return taskstate.Dead
+	}
+	return o.State.Basis.Process
+}
+
+// logRetiredCleanup is logCleanup for a retired pass's copy: a copy
+// tasks.KeptOnRetirement keeps for a report or hold its retirement means will
+// never come becomes a kept work entry (P15), as a copy kept for its work
+// does through logCleanup.
+func (s *Service) logRetiredCleanup(ctx context.Context, id string, done tasks.Cleanup, err error) {
+	var refused *tasks.CleanupRefusal
+	if errors.As(err, &refused) && !refused.Unlanded() {
+		if kept, ok := tasks.KeptOnRetirement(refused); ok {
+			s.log.Printf("the isolated copy of retired housekeeping pass %s is kept (%s): %s", id, refused.Reason, refused.Detail)
+			s.keepWork(ctx, kept)
+			return
+		}
+	}
+	s.logCleanup(ctx, done, err)
 }
 
 // answerRetirement answers a pass's retirement hold, on the file comment's
