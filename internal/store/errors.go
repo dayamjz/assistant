@@ -638,3 +638,16 @@ func (e *PassOpenError) Error() string {
 
 // Unwrap makes every *PassOpenError match ErrPassOpen.
 func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
+
+// ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
+// still moves the pass as its transaction reads it: a run attributed to it
+// that has not ended, a run or an attempt newer than the retirement was
+// decided against, or a session of that attempt recorded since the
+// retirement was decided against none. Nothing is written.
+var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
+
+// ErrPassClosed is returned, wrapped, by RetireHousekeepingPass for a pass
+// already retired or whose records put it in the terminal tier: its claim
+// on its repository is already released, and a second retirement would be a
+// second record of one end.
+var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")

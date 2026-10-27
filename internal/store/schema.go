@@ -223,6 +223,11 @@ const keptWorkCarryOnMigration = "kept work carry-on task"
 // sealCheckpointTableMigration is a constant.
 const housekeepingMigration = "housekeeping passes"
 
+// housekeepingRetirementMigration names the migration that adds PRD section
+// 6's housekeeping retirement record, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingRetirementMigration = "housekeeping retirement"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2733,6 +2738,39 @@ var schema = []migration{
 				WHEN NEW.role = 'housekeeping' AND NEW.housekeeping IS NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: the housekeeping role is assigned to a housekeeping pass and no other task');
+				END`,
+		},
+	},
+	{
+		version: 64,
+		name:    housekeepingRetirementMigration,
+		statements: []string{
+			// PRD section 8's housekeeping retirement record: written once
+			// per pass that ends without a terminal record, naming how it
+			// was retired, the retirement hold a person's answer closed,
+			// and when. It is appended and sealed, and kept while its task
+			// stands.
+			`CREATE TABLE housekeeping_retirement (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				hold_key    TEXT NOT NULL REFERENCES hold(key),
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER housekeeping_retirement_is_a_passes
+				BEFORE INSERT ON housekeeping_retirement
+				WHEN NOT EXISTS (SELECT 1 FROM task WHERE task.id = NEW.task_id AND task.housekeeping = 1)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a retirement is recorded for a housekeeping pass and no other task');
+				END`,
+			`CREATE TRIGGER housekeeping_retirement_is_written_once
+				BEFORE UPDATE ON housekeeping_retirement
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping retirement is written once and is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_retirement_is_not_removed
+				BEFORE DELETE ON housekeeping_retirement
+				WHEN EXISTS (SELECT 1 FROM task WHERE task.id = OLD.task_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping retirement is not deleted while its pass stands');
 				END`,
 		},
 	},
