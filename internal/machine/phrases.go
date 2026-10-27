@@ -243,6 +243,17 @@ var phraseTaskLandedLocally = Phrase{
 	Decision:    "Nothing to decide.",
 }
 
+// phraseTaskNothingToDeliver is the row for a task its run's
+// nothing-to-deliver record landed, PRD section 6's "nothing left to
+// deliver": the change was already on the shared branch and nothing was
+// delivered. It never says the work merged or was validated, because no
+// check ran on it.
+var phraseTaskNothingToDeliver = Phrase{
+	Outcome:     "This change was already on the shared branch, so nothing was delivered.",
+	Consequence: "Another change made the same edit first, and nothing was validated or merged for this one; its local copy stays until removing it is proven safe.",
+	Decision:    "Nothing to decide.",
+}
+
 // phraseLandedLocallyNow is the row for an approval whose fast-forward was
 // made, AnswerLanded, on phraseTaskLandedLocally's terms.
 var phraseLandedLocallyNow = Phrase{
@@ -391,6 +402,8 @@ func TaskPhrase(t Task) Phrase {
 	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
 		t.State.Basis.LandedLocally != "":
 		return phraseTaskLandedLocally
+	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.NothingToDeliver:
+		return phraseTaskNothingToDeliver
 	case state == taskstate.Unknown && t.State.Source == taskstate.SourceNone && noteTailed(t.State.Basis.EventKind):
 		return NoWordYet
 	}
@@ -931,12 +944,12 @@ var (
 		Decision:    "Nothing to decide.",
 	}
 	phraseLandedSince = Phrase{
-		Outcome:     "This work was merged or cleared away since you last marked what you had seen, newest first.",
+		Outcome:     "This work was merged, found already on the shared branch, or cleared away since you last marked what you had seen, newest first.",
 		Consequence: "It is shown here until you mark it as seen.",
 		Decision:    "Once you have read it, run assistant watch --mark-seen to mark it.",
 	}
 	phraseNothingLanded = Phrase{
-		Outcome:     "Nothing was merged or cleared away since you last marked what you had seen.",
+		Outcome:     "Nothing was merged, found already on the shared branch, or cleared away since you last marked what you had seen.",
 		Consequence: "There is nothing new to read here.",
 		Decision:    "Nothing to decide.",
 	}
@@ -970,8 +983,18 @@ var (
 		Consequence: "Nothing of it is left here, and nothing was lost.",
 		Decision:    "Nothing to decide.",
 	}
+	phraseAlreadyShared = Phrase{
+		Outcome:     "This work was already on the shared branch, so nothing was delivered.",
+		Consequence: "Another change made the same edit first; nothing was validated or merged for this one.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseCopyClearedAlreadyShared = Phrase{
+		Outcome:     "This work's local copy was removed, because the same change was already on the shared branch.",
+		Consequence: "Nothing of it is left here, and nothing was lost.",
+		Decision:    "Nothing to decide.",
+	}
 	phraseNothingMarked = Phrase{
-		Outcome:     "Nothing was marked as seen, because nothing merged or cleared away was shown.",
+		Outcome:     "Nothing was marked as seen, because nothing merged, found already on the shared branch, or cleared away was shown.",
 		Consequence: "What you marked before stands.",
 		Decision:    "Nothing to decide.",
 	}
@@ -1013,7 +1036,7 @@ func DigestPhrase(d Digest) Phrase {
 		return phraseDigestQuiet
 	}
 	p := Phrase{
-		Outcome: fmt.Sprintf("In short: %d decision(s) are waiting on you, %d item(s) were merged or cleared away since you last marked what you had seen, "+
+		Outcome: fmt.Sprintf("In short: %d decision(s) are waiting on you, %d item(s) were merged, found already on the shared branch, or cleared away since you last marked what you had seen, "+
 			"%d piece(s) of work are under way, %d change(s) are being validated now, and %d piece(s) of work stopped without asking you anything.",
 			d.Waiting, d.Landed, d.UnderWay, d.Advancing, d.Stopped),
 		Consequence: "Each count is of the lines below.",
@@ -1030,7 +1053,7 @@ func DigestPhrase(d Digest) Phrase {
 	case d.Unconfirmed > 0:
 		p.Decision = "Check on the work no worker was seen at."
 	case d.Landed > 0:
-		p.Decision = "Once you have read what was merged or cleared away, run assistant watch --mark-seen to mark it."
+		p.Decision = "Once you have read what was merged, found already on the shared branch, or cleared away, run assistant watch --mark-seen to mark it."
 	}
 	return p
 }
@@ -1050,17 +1073,25 @@ func digestRows() []Phrase {
 
 // phraseDigestQuiet is the digest of a read with nothing in any part.
 var phraseDigestQuiet = Phrase{
-	Outcome:     "In short: nothing waits on you, nothing new was merged or cleared away, and nothing is under way or stopped.",
+	Outcome:     "In short: nothing waits on you, nothing new was merged, found already on the shared branch, or cleared away, and nothing is under way or stopped.",
 	Consequence: "Nothing here needs you right now.",
 	Decision:    "Nothing to decide.",
 }
 
 // LandedPhrase is what a person reads about one landed record: the merge
-// row for a merge record and the cleared-away row for a cleanup record.
-// It is the record's row and not the task's, so a task whose copy was
-// removed after it merged reads as merged on its merge record's line.
+// row for a merge record, the already-shared row for a nothing-to-deliver
+// record, and the cleared-away row for a cleanup record, worded for the
+// record the task landed on. It is the record's row and not the task's, so a
+// task whose copy was removed after it merged reads as merged on its merge
+// record's line, and a task whose change was already on the shared branch
+// is never read as merged on any line.
 func LandedPhrase(l Landed) Phrase {
-	if l.Cleanup != nil && l.Merge == nil {
+	switch {
+	case l.NothingToDeliver != nil:
+		return phraseAlreadyShared
+	case l.Cleanup != nil && l.Merge == nil && l.Task.State.Basis.NothingToDeliver:
+		return phraseCopyClearedAlreadyShared
+	case l.Cleanup != nil && l.Merge == nil:
 		return phraseCopyCleared
 	}
 	return phraseWasMerged
@@ -1071,7 +1102,7 @@ func LandedPhrase(l Landed) Phrase {
 // what was shown is what brings them into the next read.
 func LandedMorePhrase(more int) Phrase {
 	return Phrase{
-		Outcome:     fmt.Sprintf("And %d more were merged or cleared away that are not shown here.", more),
+		Outcome:     fmt.Sprintf("And %d more were merged, found already on the shared branch, or cleared away that are not shown here.", more),
 		Consequence: "They stay unseen, and are shown once those above are marked as seen.",
 		Decision:    "Mark those above as seen to read the rest.",
 	}
@@ -1085,7 +1116,7 @@ func MarkedPhrase(m Marked) Phrase {
 		return phraseNothingMarked
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("What was shown above as merged or cleared away, %d item(s), is now marked as seen.", len(m.Marks)),
+		Outcome:     fmt.Sprintf("What was shown above as merged, found already on the shared branch, or cleared away, %d item(s), is now marked as seen.", len(m.Marks)),
 		Consequence: "It is not shown here again; anything that arrived after this read still is.",
 		Decision:    "Nothing to decide.",
 	}
@@ -1971,7 +2002,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, phraseTaskStallHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, phraseTaskHeld, phraseTaskStallHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, phraseTaskNothingToDeliver, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	out = append(out, UncertaintiesPhrase(2), FollowUpsPhrase(1))
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
@@ -2023,7 +2054,7 @@ func TablePhrases() []Phrase {
 		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
-	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
+	out = append(out, phraseWasMerged, phraseCopyCleared, phraseAlreadyShared, phraseCopyClearedAlreadyShared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, digestRows()...)
 	out = append(out, defaultBranchRows()...)

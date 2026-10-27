@@ -20,7 +20,11 @@ import (
 //
 // PRD section 5 asks this stage to fetch fresh upstream and the branch target,
 // then rebase onto them. If nothing remains to change after the rebase, the
-// run ends successfully and the rest is skipped via KeyDiffEmpty.
+// run ends successfully and the rest is skipped via KeyDiffEmpty. Beside it,
+// in the same write, the stage records the default-branch commit it read and
+// whether P12's content check finds the submitted work present in it,
+// KeyDiffEmptyCheck, which PRD section 6's "nothing left to deliver" reads;
+// nothing.go owns that check and its reader.
 //
 // # What it guards against
 //
@@ -121,6 +125,7 @@ func Rebase(deps StageDeps) pipeline.Implementation {
 		Writes: []pipeline.Key{
 			pipeline.KeyHead,
 			pipeline.KeyDiffEmpty,
+			pipeline.KeyDiffEmptyCheck,
 			pipeline.KeyPushAnchor,
 		},
 		NewBody: func() pipeline.Body {
@@ -270,6 +275,9 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		if err != nil {
 			return pipeline.Output{}, err
 		}
+		if err := checkNothingLeft(ctx, copied, &output, submitted, targetCommit); err != nil {
+			return pipeline.Output{}, err
+		}
 		return withWrites(output, writes), nil
 	}
 
@@ -303,13 +311,32 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	if err != nil {
 		return pipeline.Output{}, err
 	}
-
-	// Update KeyHead with the new commit
-	output.Writes = map[pipeline.Key]graph.Value{
-		pipeline.KeyHead: graph.TextValue(newHead),
+	if err := checkNothingLeft(ctx, copied, &output, submitted, targetCommit); err != nil {
+		return pipeline.Output{}, err
 	}
 
+	// The new head joins what checkDiffEmpty wrote rather than replacing it:
+	// a replay that dropped every commit is exactly the one whose
+	// KeyDiffEmpty the short circuit needs.
+	writes[pipeline.KeyHead] = graph.TextValue(newHead)
 	return withWrites(output, writes), nil
+}
+
+// checkNothingLeft adds the content check nothing.go describes to an output
+// that took the empty-diff short circuit, and leaves any other output as it
+// is.
+func checkNothingLeft(ctx context.Context, copied *vcs.Repository, out *pipeline.Output, submitted, against string) error {
+	if empty, ok := out.Writes[pipeline.KeyDiffEmpty]; !ok {
+		return nil
+	} else if set, _ := empty.Bool(); !set {
+		return nil
+	}
+	checked, err := askEmptyCheck(ctx, copied, submitted, against)
+	if err != nil {
+		return err
+	}
+	out.Writes[pipeline.KeyDiffEmptyCheck] = checked
+	return nil
 }
 
 // readRebaseState reads the facts this stage needs from the run's state.

@@ -120,6 +120,20 @@ const (
 	// it and does not run its body while it holds, which is PRD section 5's
 	// empty-diff short circuit; the rebase stage is what sets it.
 	KeyDiffEmpty Key = "diff.empty"
+	// KeyDiffEmptyCheck is what the rebase stage recorded beside the
+	// empty-diff short circuit, in the same write as KeyDiffEmpty: the
+	// default-branch commit it read at its fresh fetch, and the answer of
+	// P12's content check of the commits the run was submitted with against
+	// that commit. PRD section 6's "nothing left to deliver" reads it from
+	// the run's position, so a run that ended on the short circuit is told
+	// apart from one whose work is on the default branch by content. Its
+	// encoding belongs to internal/stages, which writes it and exports the
+	// one reader, beside the push anchor's.
+	//
+	// Its row is late, because empty is how every run behaved before it
+	// existed: a run that checkpointed without it reads as having recorded
+	// no check, which writes no nothing-to-deliver record.
+	KeyDiffEmptyCheck Key = "diff.empty.check"
 	// KeyApproved is the commit a completed review approved. PRD section 5 has
 	// the push stage require a durable record of one this commit descends
 	// from; nothing in this package checks that.
@@ -260,6 +274,7 @@ var sharedKeys = []keySpec{
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun, false},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage, false},
+	{KeyDiffEmptyCheck, graph.KindText, graph.MergeNone, ownerStage, true},
 	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage, false},
 	// The anchor carries a merge rule because the stage that observes it takes
 	// fix rounds, so a run may write it more than once. Each write is a fresh

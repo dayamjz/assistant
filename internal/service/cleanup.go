@@ -30,7 +30,11 @@ import (
 // A delivery task's copy is cleaned up when a merge record is written for a
 // run attributed to it, which is the same two sites, after the run's own
 // copy: a merge record is what makes the task Landed, and Landed is the
-// state PRD section 6's lifecycle has cleanup move to Complete. The task is
+// state PRD section 6's lifecycle has cleanup move to Complete. A run's
+// nothing-to-deliver record lands its task too, PRD section 6's "nothing
+// left to deliver", and settle writes it with the run's end, so the same
+// site asks the cleanup after it; the decision proves the copy on P12's
+// terms as after any landing, and the record removes nothing itself. The task is
 // found the way the resolver finds it, through internal/taskstate's
 // Basis.LandedRun, so the run that landed it and the task that is cleaned
 // up are one attribution and not two. A landing site does not ask the
@@ -267,17 +271,23 @@ func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	}
 }
 
-// cleanUpLanded settles every delivery task the run's merge record landed,
-// on landed.go's terms: it ends the worker this service holds for it and
-// then asks the cleanup decision, and logs what came of each. A run with no
-// merge record reading merged landed nothing and this returns at once.
+// cleanUpLanded settles every delivery task the run's merge record or its
+// nothing-to-deliver record landed, on landed.go's terms: it ends the worker
+// this service holds for it and then asks the cleanup decision, and logs
+// what came of each. A run with neither a merge record reading merged nor a
+// nothing-to-deliver record landed nothing and this returns at once.
 func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 	merge, ended, err := s.store.MergeRecord(ctx, record.ID)
 	if err != nil {
 		s.log.Printf("cleaning up after run %s: its merge record could not be read: %v", record.ID, err)
 		return
 	}
-	if !ended || merge.End != store.PullRequestMerged {
+	_, nothing, err := s.store.NothingToDeliver(ctx, record.ID)
+	if err != nil {
+		s.log.Printf("cleaning up after run %s: its nothing-to-deliver record could not be read: %v", record.ID, err)
+		return
+	}
+	if (!ended || merge.End != store.PullRequestMerged) && !nothing {
 		return
 	}
 	resolved, err := s.tasks().All(ctx)
