@@ -328,6 +328,13 @@ type Run struct {
 	// findings and never part of the run's state, so they hold nothing and
 	// the same run can carry one on one reading and not on a later one.
 	Proposals []findings.Finding `json:"proposals,omitempty"`
+	// KeptWork is the open kept work entries of this run's project, oldest
+	// first, read off the kept work record for this answer and never
+	// stored: PRD section 6's "your own push is never held by it ... and its
+	// answer names the kept work". Nothing about the run waits on it, and
+	// it is absent when the project has none. RunKeptWorkPhrase is the line
+	// a person reads.
+	KeptWork []store.KeptWork `json:"kept_work,omitempty"`
 	// NotApplied names the run-starting inputs a request carried that this
 	// run was not built from, by the field of StartRequest each came in on.
 	//
@@ -565,6 +572,20 @@ type Task struct {
 	// against. Otherwise it is absent. It is derived on every answer and
 	// never stored.
 	Policy *config.Policy `json:"policy,omitempty"`
+	// KeptWork is the open kept work entries that hold this task's dispatch,
+	// oldest first, as internal/store's KeptWorkHolding read them for this
+	// answer: present only while the task resolves Dispatched from its
+	// history and its project's kept work holds it, PRD section 6's "it
+	// waits, naming the kept work". It is derived on every answer and never
+	// stored, and TaskPhrase renders a task carrying it as waiting on that
+	// decision rather than as a worker being launched.
+	KeptWork []store.KeptWork `json:"kept_work,omitempty"`
+	// KeptWorkUnread is true when the task resolves Dispatched from its
+	// history and whether kept work holds it could not be read for this
+	// answer: KeptWork is then absent and says nothing either way, and
+	// TaskPhrase renders the task as neither waiting on kept work nor a
+	// worker being launched. It is derived on every answer and never stored.
+	KeptWorkUnread bool `json:"kept_work_unread,omitempty"`
 }
 
 // InvestigationReport is what task.get (and every other answer that carries

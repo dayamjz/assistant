@@ -62,7 +62,14 @@ paths: ["internal/store/**"]
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
-  reservation whose owner is gone when it opens.
+  reservation whose owner is gone when it opens. `keptworkhold.go` is the
+  dispatch hold's one predicate: a task naming a project, none of whose
+  attempts recorded a session (a claim alone proves no worker started),
+  whose project has an open entry; the dispatch claims
+  (`BeginFirstTaskAttempt`, and `BeginDispatchAttempt` for a retried
+  dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts)
+  refuse it with `*DispatchHeldError` in their own transactions, and
+  `BeginTaskAttempt`, the relaunch claim, is never held.
 - taskMachineMigration's `task.machine` is PRD section 8's machine a task
   runs on, the one place it is stored: written once, for a remote host, by
   `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on

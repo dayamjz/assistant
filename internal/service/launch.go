@@ -230,6 +230,16 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	}); err != nil {
 		return nil, fmt.Errorf("service: recording the knowledge revision of task %s attempt %d: %w", d.id, d.attempt, err)
 	}
+	// The launch claim is the last write before the worker's process
+	// starts, and the dispatch hold is asked inside it, so kept work
+	// recorded while the copy was cut and asserted still keeps a new
+	// task's worker from starting; dispatch.go says what remains.
+	if err := s.store.ClaimAttemptLaunch(ctx, d.id, d.attempt); err != nil {
+		if errors.Is(err, store.ErrDispatchHeld) {
+			s.releaseHeldSlot(ctx, d.id)
+		}
+		return nil, err
+	}
 	host := s.sessionHost(selection.Resolution.Runner)
 	launched, err := host.Create(s.registry.hurrying(ctx), session.Spec{
 		TaskID:       d.id,

@@ -204,6 +204,10 @@ const captureSessionMigration = "capture session marker"
 // nothing-to-deliver record and the seen mark of one.
 const nothingToDeliverMigration = "nothing-to-deliver record"
 
+// attemptLaunchMigration names the migration that adds a task attempt's
+// launch claim, for the reason sealCheckpointTableMigration is a constant.
+const attemptLaunchMigration = "task attempt launch claim"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2554,6 +2558,27 @@ var schema = []migration{
 					OR (OLD.kind = 'nothing-to-deliver' AND EXISTS (SELECT 1 FROM nothing_to_deliver WHERE run = OLD.key))
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not deleted while the record it marks stands');
+				END`,
+		},
+	},
+	{
+		version: 60,
+		name:    attemptLaunchMigration,
+		statements: []string{
+			// When the attempt's worker launch was claimed, written once by
+			// ClaimAttemptLaunch immediately before the process is started,
+			// in the transaction that found the task not held by kept work.
+			// The record precedes the process, on task_attempt's terms, and
+			// says a launch was begun, never that a worker started: the
+			// session reference is that fact, and the dispatch hold reads it
+			// alone. NULL is no launch claimed: a row written before this column,
+			// or an attempt whose launch never reached its claim.
+			`ALTER TABLE task_attempt ADD COLUMN launch_claimed_at TEXT`,
+			`CREATE TRIGGER task_attempt_launch_is_claimed_once
+				BEFORE UPDATE OF launch_claimed_at ON task_attempt
+				WHEN OLD.launch_claimed_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s launch is claimed once and the claim is not rewritten');
 				END`,
 		},
 	},

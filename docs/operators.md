@@ -596,10 +596,18 @@ reserves the removal, and no new run of the repository starts until the
 eject finishes; a service that starts after an eject died releases that
 reservation.
 
-This build records and surfaces kept work and does not yet hold dispatch:
-a new task in a project with an open entry still dispatches. Answering an
-entry (land, carry on or discard) and holding new task work until its
-entries are answered are #411 part 2.
+While a project has an open kept-work entry, no new task in that project
+starts: the task is recorded, `assistant --json tasks` shows it waiting and
+names the entries under `kept_work`, and it starts on its own once every
+entry is answered or closed. When whether kept work holds the task could not
+be read for an answer, the answer says so (`kept_work_unread`) and names no
+entry, rather than reading as a worker being launched. Kept work in one project never holds another,
+a task whose worker was already launched is not held (its relaunch goes
+ahead), and your own push always starts its run, whose answer names the
+project's open entries. In this build the only way an entry closes is its
+copy's work turning up somewhere safe, as above: answering an entry (land,
+carry on or discard) is #411's remaining part, so until it ships a project
+whose kept work never lands holds its new tasks until then.
 
 ## Waiting on a fleet
 

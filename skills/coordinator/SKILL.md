@@ -291,14 +291,19 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. A kept entry no task
-  names, such as the run of the person's own push, reaches you as a
-  `kept-work` wake about the entry instead, listed under `kept_work_wakes`
-  with the entry's id in `kept_work`, its `project` and its `branch`, with
-  numbers of its own, and acknowledged as `kNUMBER`. Acknowledging it
-  closes the wake and answers nothing: the entry stays listed until it is
-  answered or its work lands. The
+  theirs to decide. Answering it is not in this build yet. While the
+  project has an open entry, a task you create in it is recorded and not
+  started: it reads `dispatched` and its answer (`task.get`) names the
+  entries holding it under `kept_work`; it starts on its own once they are
+  answered or closed. An answer carrying `kept_work_unread` could not read
+  whether kept work holds the task, so it names no entry either way: ask
+  again rather than telling the person it is starting. Tasks in other projects, work already running and a
+  person's own push are not held. A kept entry no task names, such as the
+  run of the person's own push, reaches you as a `kept-work` wake about the
+  entry instead, listed under `kept_work_wakes` with the entry's id in
+  `kept_work`, its `project` and its `branch`, with numbers of its own, and
+  acknowledged as `kNUMBER`. Acknowledging it closes the wake and answers
+  nothing: the entry stays listed until it is answered or its work lands. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,

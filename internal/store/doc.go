@@ -230,6 +230,19 @@
 // the gate is never removed under a copy that depends on it. No reservation
 // refuses a kept work entry.
 //
+// An open entry also holds a new task's dispatch in its project, PRD
+// section 6's "kept work is answered before new task work starts".
+// keptworkhold.go is the one predicate (a task naming a project, with no
+// attempt whose worker started by a recorded session, whose project has an
+// open entry), read by KeptWorkHolding, and by BeginFirstTaskAttempt,
+// BeginDispatchAttempt and ClaimAttemptLaunch (attemptLaunchMigration's
+// launch_claimed_at, written once immediately before a worker's process
+// starts), each of the three refusing a held task with a
+// *DispatchHeldError in the transaction that would write. It is derived from
+// the records on every read and stored nowhere. BeginTaskAttempt, the
+// relaunch claim, is not held, and a launch claim alone does not exempt a
+// task: only a recorded session does.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a

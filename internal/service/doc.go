@@ -461,8 +461,9 @@
 // is proven, and dispatch.go is the step that proves it: for a task that
 // resolves Dispatched, and whose repository's trusted copy allows this
 // machine (unhonored.go's placeable, read before a first claim only), it
-// claims the attempt through store.BeginFirstTaskAttempt,
-// or store.BeginTaskAttempt for a retry after an attempt that never launched,
+// claims the attempt through store.BeginFirstTaskAttempt, or
+// store.BeginDispatchAttempt for a retry after an attempt that never
+// launched, each refusing a task kept work holds inside its own write,
 // records what the primary checkout looked like, cuts the copy PRD section 5
 // gives the task's shape - a clone of the primary into home.TaskCopy, with
 // the gate as its one remote and the task's branch for a delivery task, with

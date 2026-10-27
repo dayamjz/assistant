@@ -105,6 +105,10 @@ func validRemoteHost(name string) error {
 // exist is ErrNotFound, wrapped. The zero Placement, and a remote host name
 // OnRemoteHost says is refused, are refused before anything is read. A task
 // that does not exist is ErrNotFound, wrapped.
+//
+// A dispatch is new task work, so a task kept work holds is refused with a
+// *DispatchHeldError in the same transaction and nothing is written, on
+// keptworkhold.go's terms, once the placement itself is found valid.
 func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Placement) (TaskAttempt, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return TaskAttempt{}, fmt.Errorf("store: no task named")
@@ -130,6 +134,9 @@ func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Pla
 				return err
 			}
 		}
+		if err := refuseHeldDispatchTx(ctx, tx, taskID); err != nil {
+			return err
+		}
 		// Before the attempt: the trigger seals the column from the first
 		// attempt on.
 		if machine != "" {
@@ -141,7 +148,8 @@ func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Pla
 	})
 	if err != nil {
 		var moved *TaskMovedError
-		if errors.As(err, &moved) {
+		var held *DispatchHeldError
+		if errors.As(err, &moved) || errors.As(err, &held) {
 			return TaskAttempt{}, err
 		}
 		return TaskAttempt{}, fmt.Errorf("store: dispatching task %s: %w", taskID, err)
