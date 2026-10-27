@@ -336,5 +336,6 @@ A Go service owns Assistant's state, and the gate is first-class. No controlled 
 - [Multi-agent support](docs/multi-agent-support.md): adapters, roles, model pins, and fallback behavior
 - [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features
 - [End-to-end verification](internal/journey/README.md): what the tests establish
+- [Caliper evaluation plan](docs/caliper-evaluation-plan.md): Q1-Q4 questions, including the Q4 replay pilot for new model releases
 
 Assistant is developed in Go. For repository checks, use `make check` with the toolchain and lint dependencies specified by the project. Which checks `main` requires, and which file owns each workflow's settings, is in [AGENTS.md](AGENTS.md).
