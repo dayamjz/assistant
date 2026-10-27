@@ -274,7 +274,9 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // launching was dispatch's and a second launch of one attempt would be a
 // second process against one record; and it stays unsettled, which is what
 // claimSteer and claimRelaunch refuse on, from the claim until the launch
-// has settled the record of its session (dispatched.settle), so nothing
+// has settled the record of its session (dispatched.settle), a worker
+// fallback at the launch included, which is handed the slot unsettled and
+// settles it after the backup's launch (dispatched.handSlot), so nothing
 // that takes the task's slot, a stop, a relaunch or a housekeeping pass's
 // retirement, interleaves with a worker being created and not yet
 // recorded, and the offer of a pass's retirement hold, which reads the
@@ -372,22 +374,32 @@ type dispatched struct {
 	// section 11's note about what already happened; relaunch.go owns the
 	// text.
 	note string
-	// settle settles the task's slot the dispatch or relaunch took, with
-	// the proof, once; nil when the caller settles it itself. launchTask
-	// calls it at every return, and before a worker fallback, which takes
-	// the slot for itself, so the slot is unsettled from the claim until
-	// the launch's record is settled.
-	settle func()
+	// settle settles the task's slot the dispatch or relaunch took, once,
+	// with the proof it is given; nil when the caller settles it itself.
+	// launchTask calls it with proof at every return but a worker fallback,
+	// which it hands the slot to unsettled (handSlot) for switchWorker to
+	// settle once the backup's launch has settled its record, so the slot
+	// is unsettled from the claim until that record is settled, across a
+	// fallback too.
+	settle func(tasks.Isolation)
 }
 
-// settleSlot settles the slot once, on settle's terms, and is safe to call
-// again or on a dispatch that carries none.
+// settleSlot settles the slot once with the dispatch's proof, on settle's
+// terms, and is safe to call again or on a dispatch that carries none.
 func (d *dispatched) settleSlot() {
-	if d.settle != nil {
-		settle := d.settle
-		d.settle = nil
-		settle()
+	if settle := d.handSlot(); settle != nil {
+		settle(d.proof)
 	}
+}
+
+// handSlot gives the slot's settle to the caller, once, and leaves the
+// dispatch with none to settle, so a later settleSlot settles nothing: it
+// is how launchTask hands an unsettled slot to a worker fallback. It is nil
+// for a dispatch that carries none.
+func (d *dispatched) handSlot() func(tasks.Isolation) {
+	settle := d.settle
+	d.settle = nil
+	return settle
 }
 
 // dispatchTask dispatches one task, on the terms this file's opening comment
@@ -432,8 +444,7 @@ func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), d dis
 	case err != nil:
 		settle(d.proof)
 	default:
-		proof := d.proof
-		d.settle = func() { settle(proof) }
+		d.settle = settle
 	}
 	return d, err
 }

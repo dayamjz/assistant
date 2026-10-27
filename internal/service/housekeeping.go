@@ -148,7 +148,8 @@ import (
 //     launched, which section 6's "or its latest attempt never had a
 //     session" counts as nothing moving the pass. Within this service the
 //     dispatch or relaunch holds the task's slot unsettled from its claim
-//     until the launch has settled its record (dispatch.go, launch.go),
+//     until the launch has settled its record (dispatch.go, launch.go), a
+//     worker fallback at the launch included (workerfallback.go),
 //     the slot every retirement is written under and the retirement
 //     hold's offer reads, so a retire answered meanwhile is refused with
 //     the hold open (errSteerInFlight), the offer is skipped until the

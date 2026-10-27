@@ -8,7 +8,7 @@ import (
 )
 
 // untaskedShape is one of the queue's shapes about no task: migration 48's
-// domain_wake, migration 55's kept_work_wake and migration 59's
+// domain_wake, migration 55's kept_work_wake and migration 60's
 // housekeeping_wake. Each is the wake table's
 // columns with the task replaced by their owner, both are the first
 // coordinator's alone, and both are offered, handed out and acknowledged on
@@ -25,7 +25,7 @@ type untaskedShape struct {
 var (
 	domainWakeShape   = untaskedShape{table: "domain_wake", noun: "domain wake"}
 	keptWorkWakeShape = untaskedShape{table: "kept_work_wake", noun: "kept work wake"}
-	// housekeepingWakeShape is migration 59's housekeeping_wake, the
+	// housekeepingWakeShape is migration 60's housekeeping_wake, the
 	// fourth shape, about a repository, on the same terms.
 	housekeepingWakeShape = untaskedShape{table: "housekeeping_wake", noun: "housekeeping wake"}
 )

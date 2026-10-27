@@ -169,7 +169,7 @@ func (s *Store) PendingKeptWorkNotifications(ctx context.Context, limit int) ([]
 // the domain wake's, migration 50's domain_notification keyed by
 // domain_wake_id, or the kept-work wake's, migration 55's
 // kept_work_notification keyed by kept_work_wake_id, or the housekeeping
-// wake's, migration 59's housekeeping_notification keyed by
+// wake's, migration 60's housekeeping_notification keyed by
 // housekeeping_wake_id. They are the same record over the queue's shapes,
 // so one implementation serves all and none can drift from the others.
 type notificationShape struct {

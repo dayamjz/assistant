@@ -83,7 +83,8 @@ paths: ["internal/service/**"]
 - Dispatch and launch: `dispatch.go` dispatches (the attempt row is the
   claim) and `launch.go` follows a proven dispatch in the same pass, under
   the slot the dispatch or relaunch took, which stays unsettled until the
-  launch's record of its session is settled (`dispatched.settle`), so a
+  launch's record of its session is settled (`dispatched.settle`), a worker
+  fallback at the launch included (`switchWorker` is handed it unsettled), so a
   stop, a relaunch or a retirement never interleaves with a worker created
   and not yet recorded, and the retirement hold's offer, which reads that
   state through `launching`, is skipped meanwhile. A path already

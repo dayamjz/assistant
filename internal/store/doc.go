@@ -378,7 +378,7 @@
 // marker, for a database an earlier build left with a task's wake and no
 // instant.
 // A wake about a repository's housekeeping is the queue's fourth shape,
-// migration 59's housekeeping_wake, PRD section 8's housekeeping-due wake:
+// migration 60's housekeeping_wake, PRD section 8's housekeeping-due wake:
 // kept_work_wake's columns with the entry replaced by the repository and the
 // pass it follows, plus the detail it names, stored redacted, under the
 // same seals, once per marker within the repository, which its unique key
@@ -394,7 +394,7 @@
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
 //
-// Migration 59 also adds PRD section 8's two housekeeping records about a
+// Migration 60 also adds PRD section 8's two housekeeping records about a
 // task: the task row's housekeeping mark, written once at intake, and the
 // housekeeping retirement record, written once by RetireHousekeepingPass in
 // the transaction that reads the pass again, and refused at every attempt

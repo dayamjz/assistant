@@ -465,6 +465,12 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// beforeFallbackClaim runs in switchWorker with the task, before the
+	// switch takes the slot it was handed or claims one, outside mu. It is
+	// nil in production and set only by this package's tests, which use it
+	// to read the slot at the point a slot settled by the failed launch
+	// would let a steer or a retirement hold's offer in.
+	beforeFallbackClaim func(id string)
 	// beforeSessionRecord runs in launchTask once the session is held
 	// pending and immediately before the store write that records the
 	// attempt's session reference, outside mu, with the task and the

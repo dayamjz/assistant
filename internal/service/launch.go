@@ -113,7 +113,9 @@ import (
 // recorded for an attempt of a retired pass after its retirement
 // (housekeeping.go). Within this service that path is not reached: the
 // task's slot, which the dispatch or relaunch took, stays unsettled from
-// its claim until the record here is settled (dispatched.settle), so a
+// its claim until the record here is settled (dispatched.settle), across a
+// worker fallback made here too, which is handed the slot unsettled and
+// settles it after the backup's launch (dispatched.handSlot), so a
 // retire answered meanwhile is refused (errSteerInFlight) rather than
 // written, the retirement hold is not offered meanwhile either, and a pass
 // retired before the claim is refused here before any worker is created
@@ -200,8 +202,9 @@ func (s *Service) settleRecording(id string, launched *session.Session, recorded
 // error is reported.
 func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Session, error) {
 	// The slot the dispatch or relaunch took is settled here, at every
-	// return and before a worker fallback, which takes it for itself; a
-	// caller that settles it itself, as switchWorker does, passes none.
+	// return but a worker fallback, which is handed it unsettled and
+	// settles it after the backup's launch; a caller that settles it
+	// itself, as switchWorker does, passes none.
 	defer d.settleSlot()
 	instructions, err := os.ReadFile(d.instructions)
 	if err != nil {
@@ -276,8 +279,11 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 			if errors.As(err, &protocol) {
 				failure = protocol.Failure
 			}
-			d.settleSlot()
-			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure)
+			// The slot stays unsettled across the switch: handed over
+			// rather than settled, so no stop, relaunch or retirement
+			// takes it, and no retirement hold is offered, between this
+			// launch's end and the backup's claim.
+			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure, d.handSlot())
 		}
 		var undeclared *agents.CapabilityError
 		if errors.As(err, &undeclared) {

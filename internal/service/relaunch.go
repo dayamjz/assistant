@@ -220,8 +220,7 @@ func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (re
 		settle(out.launch.proof)
 		return out, err
 	}
-	proof := out.launch.proof
-	out.launch.settle = func() { settle(proof) }
+	out.launch.settle = settle
 	s.releaseSuperseded(id, out.superseded)
 	return out, nil
 }

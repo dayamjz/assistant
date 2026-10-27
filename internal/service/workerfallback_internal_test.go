@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -416,4 +417,76 @@ func TestARetryCutShortAfterItsRedispatchSettlesTheSlot(t *testing.T) {
 		t.Fatalf("a stop's claim after the cut-short retry = %v, want the slot settled", err)
 	}
 	release()
+}
+
+// A worker fallback at launch keeps the task's slot unsettled across the
+// switch: from the dispatch's claim until the backup's launch settles its
+// record, launching reads true and claimSteer is refused, so the retirement
+// hold's offer, which reads launching, is skipped and a retire answer, which
+// claims the slot, is refused (errSteerInFlight) throughout, with no gap in
+// which both could succeed. The slot is read at the point the switch would
+// claim it, and the control is the same launch once it returns: the slot is
+// settled and the backup's attempt is recorded.
+func TestAWorkerFallbackAtLaunchKeepsTheSlotUnsettledAcrossTheSwitch(t *testing.T) {
+	const unestablished = "that a fallback at launch redispatches the backup in the same copy"
+	requireSweepClearsHere(t, unestablished)
+	backup := standin.New(t, standin.Script{})
+	sub := newLaunchSubject(t, backup)
+	s := sub.service
+	// A primary whose program names an interpreter that does not exist
+	// resolves at the route, since the file is there and executable, and
+	// fails at its creation through the real process path with the
+	// not-found error the fallback rule allows, which is the fallback
+	// launchTask makes itself, with no worker to end.
+	binary := filepath.Join(t.TempDir(), "cursor")
+	if err := procgroup.WriteProgram(binary, []byte("#!/nonexistent/interpreter\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	unavailable := agents.CursorFactory(agents.WithCursorBinary(binary))
+	s.catalog = agents.NewCatalog(unavailable, fixedRunner{runner: backup.Runner()})
+	s.cfg.Roles = config.Roles{config.RoleWorker: {Agent: "cursor", Fallback: &config.Role{Agent: "claude"}}}
+	var observed atomic.Int32
+	var launching atomic.Bool
+	var steered atomic.Bool
+	s.beforeFallbackClaim = func(id string) {
+		if id != sub.task {
+			return
+		}
+		observed.Add(1)
+		launching.Store(s.launching(id))
+		if release, err := s.claimSteer(id); err == nil {
+			steered.Store(true)
+			release()
+		} else if !errors.Is(err, errSteerInFlight) {
+			t.Errorf("claimSteer at the switch = %v, want errSteerInFlight", err)
+		}
+	}
+	d, err := s.dispatchTask(t.Context(), sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.launchTask(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	if observed.Load() != 1 {
+		t.Fatalf("the switch was observed %d times, want once", observed.Load())
+	}
+	if !launching.Load() {
+		t.Fatal("at the switch the task did not read as launching: the slot was settled before the backup's claim")
+	}
+	if steered.Load() {
+		t.Fatal("at the switch a steer claim succeeded: a retire answer could be written while the backup launches")
+	}
+	if s.launching(sub.task) {
+		t.Fatal("the slot is still unsettled after the backup's launch returned")
+	}
+	// The backup's attempt is the second, begun by the redispatch the
+	// switch makes for a primary that never ran, with its session recorded.
+	attempts, err := s.store.TaskAttempts(t.Context(), sub.task)
+	if err != nil || len(attempts) != 2 || !attempts[1].SessionRef.IsKnown() {
+		t.Fatalf("attempts after the fallback = %+v, %v; want the backup's second attempt with its session recorded", attempts, err)
+	}
+	if adapter, _ := attempts[1].Adapter.Get(); adapter != "claude" {
+		t.Fatalf("selected %q, want the backup", adapter)
+	}
 }
