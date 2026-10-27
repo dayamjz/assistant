@@ -489,7 +489,9 @@ func (e *InstructionsLinkError) Unwrap() error { return ErrInstructionsLink }
 // same path and CompleteIntake remove every one, through removePartials,
 // which removes each name itself and never follows it. The Lstat before the
 // rename and the rename are two steps, so a link planted at path between
-// them is replaced by the rename, never written through.
+// them is replaced by the rename, never written through. Its other caller
+// is a discard's journal (kept_journal.go), which reads a link refused here
+// as a directory it cannot take up.
 func writeWhole(path string, content []byte) error {
 	if err := refuseLink(path); err != nil {
 		return err

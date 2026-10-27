@@ -87,3 +87,42 @@ func TestCopyAtAcceptsOnlyThisHomesCopiesWhereTheyStand(t *testing.T) {
 		}
 	}
 }
+
+// TestDiscardingStandsBesideACopyByItsPathAlone holds where a confirmed
+// discard keeps what it sets aside, PRD section 8's on-disk layout: beside
+// a task's copy at tasks/<id>/.copy.discarding and beside a run's copy at
+// worktrees/<repo>/.<run>.discarding. It is named from the copy's path
+// whether or not the copy stands, since a discard past its point of no
+// return has moved the copy away, and a path that is not where this home
+// places a copy is refused with ErrNotACopy, as CopyAt refuses it.
+func TestDiscardingStandsBesideACopyByItsPathAlone(t *testing.T) {
+	h, err := home.Open(filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskCopy, _ := h.TaskCopy(id)
+	runCopy := h.Worktree("repository", "run")
+	for copyPath, want := range map[string]string{
+		taskCopy: filepath.Join(h.Root(), "tasks", id, ".copy.discarding"),
+		runCopy:  filepath.Join(h.Root(), "worktrees", "repository", ".run.discarding"),
+	} {
+		if _, err := os.Lstat(copyPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("the copy at %s stands (%v); this case is one that does not", copyPath, err)
+		}
+		if got, err := h.Discarding(copyPath); err != nil || got != want {
+			t.Fatalf("Discarding(%s) = %q, %v, want %q", copyPath, got, err, want)
+		}
+	}
+	for _, dir := range []string{
+		h.Root(), filepath.Dir(taskCopy), filepath.Join(taskCopy, "sub"), "tasks/" + id + "/copy",
+		filepath.Join(h.Root(), "worktrees", "repository"), filepath.Join(h.Root(), "tasks", "NOT-AN-ID", "copy"),
+	} {
+		if got, err := h.Discarding(dir); !errors.Is(err, home.ErrNotACopy) {
+			t.Fatalf("Discarding(%s) = %q, %v, want ErrNotACopy", dir, got, err)
+		}
+	}
+}

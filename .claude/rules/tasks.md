@@ -94,6 +94,13 @@ paths: ["internal/tasks/**"]
   recorded, which carry on in `internal/service` asks too, and promotion
   through the same body (`verifyKeptCopy`) before its flip answers the
   copy's entries and again before it writes into the copy.
+- `kept_journal.go` is a confirmed discard's own directory beside its copy
+  (`home.Home.Discarding`) and its journal, written through `writeWhole`
+  before anything is set aside: `beginDiscard` makes it, refusing one that
+  stands (`ErrAsideStands`), and `standingDiscard` reads one a discard
+  left, clearing a directory that holds only a partial first journal and
+  refusing, never removing, anything else. No discard answer calls it
+  yet; the set-aside that does follows in AGE-486's stack.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file
