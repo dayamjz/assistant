@@ -260,12 +260,16 @@ judge's pin, and the default it was compared against.
   planted ones, but they come from a few repositories, mostly this one, and
   from the reviewers the fleet happened to use. A setup that wins here is
   shown to win on those rounds, not in general.
-- **Q4's judge is a reviewer, and an LLM.** A judge from the same vendor as
-  an arm may favor it. In the pilot, a replay of a live round drew an APPROVE
+- **Q4's judge is a reviewer, and an LLM.** Its verdicts vary, and the pilot
+  shows how much that matters. A replay of a live round drew an APPROVE
   where the live round had drawn a blocker. One sample cannot separate
   reviewer variance from the different worker output. That is why the plan
   asks for k >= 3, the objective grader wherever it applies, and a rescored
   baseline whenever the judge changes.
+- **A judge may favor arms from its own vendor.** The pilot cannot show
+  whether that happens, because its judge (Codex) and its arms (Claude) came
+  from different vendors. Once an arm shares the judge's vendor, rescore
+  that arm under a second judge from another vendor.
 - **A delta approval is not a landing.** On PR #475, the fleet recorded each
   delta approval being followed by a full review that found a new blocker.
   Unless the judge runs full reviews, a Q4 success means "the next delta
@@ -288,8 +292,14 @@ judge's pin, and the default it was compared against.
    recorded in `docs/evaluations/2026-10-27-caliper-q4-replay-pilot.md`. Its
    15 unjudged runs are kept, so they can be judged later on the same trees.
 7. Port the Q4 harness to `evals/caliper/q4/` on caliper 0.19.0. Freeze the
-   first case subset, and verify both graders against each case before
-   spending any arm runs (AGE-492 step 2).
+   first case subset. Before spending any arm runs, check each case as
+   section 3.5 requires (AGE-492 step 2):
+   - its positive control;
+   - each objective test the case uses, failing at the case's commit and
+     passing at the landed head;
+   - the judge's pin.
+
+   A case with no such test is recorded as judge-only, not dropped.
 8. Add the release workflow: run the frozen subset against a new release,
    compare it with the current default, and record the result under
    `docs/evaluations/`. A person changes the role table defaults or the

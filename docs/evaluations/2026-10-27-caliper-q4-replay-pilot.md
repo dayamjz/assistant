@@ -1,10 +1,11 @@
 # Caliper Q4 replay pilot, 2026-10-27
 
-This is the first evidence for Q4 in `docs/caliper-evaluation-plan.md`
-(section 3.5): which agent setup clears review findings most efficiently. It
-is a pilot. One case was judged, at k = 1 per arm, so nothing here ranks the
-arms. It checks that a replayed fix round can be run and judged end to end,
-and it records what that cost.
+This is a pilot for Q4 in `docs/caliper-evaluation-plan.md` (section 3.5):
+which agent setup clears review findings most efficiently. It does not
+answer that question. One case was judged, at k = 1 per arm, so nothing here
+ranks the arms, and nothing here is a basis for changing a default or the
+ladder order (plan section 5, step 8). It checks that a replayed fix round
+can be run and judged end to end, and it records what that cost.
 
 It did not run under caliper. It is the fleet's own replay benchmark, run
 before the harness was ported (plan section 5, step 7).
@@ -67,7 +68,8 @@ by hand, not harvested. Section 6 "Learning what converges" of
 
 ## Where the run differs from the suite the plan describes
 
-The fleet's `REPORT.md` lists each of these deviations.
+The fleet's `REPORT.md` lists most of these deviations. The two about graders
+come from holding the run against plan section 3.5.
 
 - **Worker rules.** Each worker got the fleet's standing rules with four
   lines changed:
@@ -105,9 +107,27 @@ The fleet's `REPORT.md` lists each of these deviations.
   owner chose to judge 475-A only. The other 15 runs are kept as
   `refs/replay-results/<case>-<arm>` in the MacBook's checkout, so they can
   be judged later on the exact same tree.
-- **No objective grader.** Nothing ran the landed fix's tests against an
-  arm's result. Section 3.5 of the plan explains why case 475-A's landed
-  tests cannot simply be run against an arm's result.
+- **No objective grader ran, though one was available.** Nothing ran any
+  landed test against an arm's result.
+  - Section 3.5 of the plan rules out running all of 475-A's landed tests,
+    because they also cover later findings. It does not rule out the tests
+    for the case's own finding.
+  - The live round's fix, `38ce420`, added two tests for exactly that
+    finding:
+    - `TestPromoteRefusesACopyWhoseRepositoryDirectoryIsALink`;
+    - a new sub-test of
+      `TestAssertIsolatedRefusesEverythingButAnIsolatedCopy`.
+  - Its commit message reports that both passed the link before the fix
+    and refuse it after. Both are still in the landed head `b277ca3`.
+  - They are 475-A's candidate objective graders. Nobody checked them
+    against the case's commit or ran them against the arms, so the pilot's
+    outcome rests on the judge alone.
+- **No positive control ran before the workers.** Section 3.5 asks that a
+  case's blocking finding reproduce at its commit before any arm runs.
+  Nothing checked that here. The nearest evidence came afterwards and from
+  the judges: four of the five reported reproducing the blocker at the
+  case's code. That is narrative inside a review, not a control, so it does
+  not rule out the finding having softened in this environment.
 - **Judge attempts stopped and rerun.** Four of the five 475-A judges were
   stopped by a quota gate within seconds of starting. None recorded a token
   count, and their files are kept with a `.failed-<time>` suffix. Each was
@@ -230,6 +250,9 @@ coordinator's own turns, and the live rounds these cases were taken from.
 </details>
 
 ## What the pilot suggests
+
+None of these is a ranking. Each is one judged run per arm, on a case every
+arm passed.
 
 - **The cheapest arm cleared the case.** All five arms got a blocker-free
   delta review on 475-A. The lowest API-equivalent cost was `opus-high`, at
