@@ -532,6 +532,13 @@ raises the same wake naming what it could not read. Because the check runs
 once per interval, a default branch that moves just after a check that found
 it unmoved is seen at the next check, up to an interval later.
 
+An open pass never blocks silently. Once it has been open for a whole
+interval the coordinator's wake names it and what it waits on, each interval.
+While something still moves it (a run not ended, a worker that reads live or
+cannot be read), it is in flight whatever its state says, so its worker is
+watched like any running task, and the coordinator escalates a long run or a
+hang to you; nothing retires it. When nothing moves it, nothing here ends it yet.
+
 What reaches you is what reaches you of any task: the pass's pull request,
 its decisions, and a blocker the coordinator escalates. The due wake and a
 report that found nothing do not.

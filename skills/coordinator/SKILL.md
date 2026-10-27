@@ -129,6 +129,11 @@ assistant coordinator create --housekeeping --project NAME \
   while one exists, was raised before that pass was created: acknowledge it
   and create nothing.
 
+- A pass open for a whole interval raises the same wake naming it and what it
+  waits on, again each interval. When something still moves it (a run not
+  ended, a worker that reads live or cannot be read), escalate it to the
+  person as a blocker; it is never retired on its own.
+
 ## Read the fleet
 
 ```sh

@@ -137,7 +137,9 @@ paths: ["internal/service/**"]
 - Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
   program's part of it (it creates no pass): the trusted scope a pass's
   intake reads, the due check off the loop's goroutine, once per interval
-  per repository, which raises the housekeeping-due wake, and `passRun`,
+  per repository, which raises the housekeeping-due wake, the open pass's
+  wake each interval it stays open (a pass something moves is in flight
+  whatever it resolves, `supervisor.PassMoves`), and `passRun`,
   which marks a run the records attribute to a pass (`store.TaskOfRun`)
   for the review's scope ask. Its header owns the residual gaps.
 - Terminals: every task reader is built through `reader`, probing through
@@ -155,12 +157,6 @@ paths: ["internal/service/**"]
   `stop_grace`; past it, or on a forced stop, it ends every group it
   registered by force and the caller exits. Its header owns which groups and
   the gaps.
-- In flight: which tasks the loop watches, the stop guard counts and the
-  catch-up read lists is one rule, `supervisor.TaskInFlight` with each
-  task's `supervisor.RegardOf`: a housekeeping pass something moves
-  (`supervisor.PassMoves`, read from the records and the probe) is in
-  flight whatever it resolves and has its terminal read, and a retired
-  pass nothing moves counts only for a queued wake.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps.
 

@@ -492,6 +492,12 @@ func TestADueCheckWritesNothingOnceAPassWasCreatedWhileItRead(t *testing.T) {
 	if wakes := sub.wakes(t); len(wakes) != 0 {
 		t.Fatalf("a check whose repository got an open pass while it read raised %+v, want nothing", wakes)
 	}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	wakes := sub.wakes(t)
+	if len(wakes) != 1 || wakes[0].Pass != store.Known("taskhkracecc") {
+		t.Fatalf("the open pass's wake is %+v, want one naming taskhkracecc", wakes)
+	}
 }
 
 // writeDocument writes a file into a checkout.
@@ -499,5 +505,38 @@ func writeDocument(t *testing.T, dir, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// PRD section 6's "once a pass has been open for a whole interval, the wake
+// names it and what it waits on, and again each interval while it stays
+// open, whether or not the default branch moved": a pass open past one
+// interval raises one wake naming it, keyed by the interval, and another
+// once a second interval has passed; nothing is fetched while it is open.
+// The pass here has no session and no run, so nothing moves it, and it is
+// offered the retirement hold once per interval as well.
+func TestAWakeRaisedWhileAPassIsOpenNamesItEachInterval(t *testing.T) {
+	t.Parallel()
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, "taskhkopenaa")
+	})
+	if r := sub.pass(t); len(sub.wakes(t)) != 0 || len(r.Housekeeping[hkRepository].Detections) != 0 {
+		t.Fatalf("a pass open within its first interval raised %+v", sub.wakes(t))
+	}
+	for i := 1; i <= 2; i++ {
+		sub.clock.Advance(time.Hour)
+		sub.pass(t)
+		if len(sub.checks) != 0 {
+			t.Fatal("a due check ran while a pass is open")
+		}
+		wakes := sub.wakes(t)
+		if len(wakes) != i {
+			t.Fatalf("after %d interval(s) the loop raised %d wakes, want %d: %+v", i, len(wakes), i, wakes)
+		}
+		last := wakes[i-1]
+		if last.Pass != store.Known("taskhkopenaa") || !strings.Contains(last.Detail, "taskhkopenaa") ||
+			!strings.Contains(last.Detail, "nothing moves it") {
+			t.Fatalf("the wake is %+v, want it to name the open pass and what it waits on", last)
+		}
 	}
 }
