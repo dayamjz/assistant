@@ -297,6 +297,15 @@ type supervisionHooks struct {
 	// now replaces the clock the loop and the watchdog read, so a window
 	// can elapse under a test without waiting for it.
 	now func() time.Time
+	// afterHousekeepingCheck is called with a repository's due check's
+	// report once the check, which runs off the loop's goroutine, has
+	// written what it wrote (housekeeping.go).
+	afterHousekeepingCheck func(repository string, report taskReport)
+	// afterDueRead is called with the repository of a due check that has
+	// read its default branch and its trusted configuration, before the
+	// check writes its wake or its marker, so a test can create a pass in
+	// between (housekeeping.go).
+	afterDueRead func(repository string)
 	// afterPass is called, after its writes, with the report of every pass
 	// the loop makes on its own: an incarnation's first pass and each
 	// pass at the interval. A kicked pass's report goes to its kick
@@ -375,6 +384,11 @@ type passReport struct {
 	// KeptWork is the pass over the open kept work no task names, keyed by
 	// entry, on keptworkwake.go's terms; nil when there is none.
 	KeptWork map[int64]taskReport
+	// Housekeeping is the pass over each repository's housekeeping, keyed
+	// by repository, on housekeeping.go's terms; nil when nothing was
+	// written. A due check that runs off the loop's goroutine reports
+	// through its own hook instead.
+	Housekeeping map[string]taskReport
 }
 
 // taskReport is one task's part of a pass.
@@ -547,6 +561,14 @@ func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replac
 			}
 		}
 	}
+	for repository, hr := range report.Housekeeping {
+		if hr.Err != nil {
+			s.log.Printf("supervisor incarnation %d could not record its pass over the housekeeping of repository %s: %v", c.inc.Epoch(), repository, hr.Err)
+			if errors.Is(hr.Err, store.ErrStaleIncarnation) {
+				replaced = true
+			}
+		}
+	}
 	for entry, kr := range report.KeptWork {
 		if kr.Err != nil {
 			s.log.Printf("supervisor incarnation %d could not record its pass over kept work entry %d: %v", c.inc.Epoch(), entry, kr.Err)
@@ -620,8 +642,10 @@ func (s *Service) pass(c *incarnation) passReport {
 	// standing one's subordinate probed, its gone surfaced on the queue's
 	// second shape, and the bound's hold registered for one past it.
 	report.Delegations = s.superviseDelegations(c, now)
-	// The kept work no task names last, on keptworkwake.go's terms.
+	// The kept work no task names, on keptworkwake.go's terms.
 	report.KeptWork = s.superviseUntaskedKeptWork(c, untasked)
+	// Each repository's housekeeping last, on housekeeping.go's terms.
+	report.Housekeeping = s.superviseHousekeeping(c, observed, now)
 	return report
 }
 
