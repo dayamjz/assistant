@@ -236,9 +236,17 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	// review nothing: a change the ignore patterns exclude whole is exactly
 	// the change that must not delete a judge file unseen.
 	judged := judgeEdits(deps.Config.JudgePaths, change.changes)
-	// A housekeeping pass's asks are read off the same unfiltered change, on
-	// housekeeping.go's terms, and added to every report too.
-	outside := outsideHousekeeping(facts.housekeeping, deps.Config.HousekeepingPaths, change.changes)
+	// A housekeeping pass's asks are read off the same unfiltered change
+	// and off what each of its commits touched, on housekeeping.go's terms,
+	// and added to every report too.
+	changes := change.changes
+	if facts.housekeeping && change.from != "" {
+		var listErr error
+		if changes, listErr = commitsChanges(ctx, repo, change.from, facts.head, change.changes); listErr != nil {
+			return pipeline.Output{}, listErr
+		}
+	}
+	outside := outsideHousekeeping(facts.housekeeping, deps.Config.HousekeepingPaths, changes)
 	// What the decision-model checks did is written on every report from here
 	// on too, as not having run until they do.
 	mode := deps.Config.DecisionModel

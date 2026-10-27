@@ -156,8 +156,8 @@ paths: ["internal/service/**"]
   retirement hold, the retirement hold's answers (the program retires no
   pass on its own; a run that rebases to nothing lands its pass from the
   nothing-to-deliver record `runs.go` writes, which `taskstate.Delivered`
-  reads for the one-open-pass rule), and `passBranch`, which marks every
-  run of a pass's branch for the review's scope ask. A retired pass's copy is asked the cleanup
+  reads for the one-open-pass rule), and `passRun`, which marks a run the
+  records attribute to a pass (`store.TaskOfRun`) for the review's scope ask. A retired pass's copy is asked the cleanup
   decision through `landed.go`'s one recurring trigger, not a one-shot ask
   of its own. Its header owns the residual gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;

@@ -1,6 +1,7 @@
 package stages
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -21,10 +22,13 @@ import (
 // it. The scope is the
 // run's configuration's HousekeepingPaths, a trusted-only key, so a pushed
 // copy cannot widen it; an empty list, housekeeping turned off after the
-// pass was created, leaves every touched path outside. The paths are the
-// change the review read, unfiltered by the ignore patterns, which a pushed
-// branch may set: a rename or a copy counts both its paths, and a deletion
-// its path, so moving a file out of the scope is asked about too.
+// pass was created, leaves every touched path outside. The paths are what
+// each commit the review covers touched, listed commit by commit against
+// its first parent and with the net change (commitsChanges), unfiltered by
+// the ignore patterns, which a pushed branch may set: a rename or a copy
+// counts both its paths, and a deletion its path, so moving a file out of
+// the scope is asked about too, and an edit a later commit reverted is
+// asked about, since the rebase keeps both commits.
 //
 // The asks are built here and not parsed from the reviewer, so a reviewer
 // that says nothing about a path does not make it disappear, and they reach
@@ -35,7 +39,10 @@ import (
 
 // outsideHousekeeping is every path the change touched outside scope, in the
 // order git reported them, each once, for a pass's run; nil for any other
-// run.
+// run. changed is what every commit touched, commit by commit
+// (commitsChanges), and not the net change alone: an edit outside the scope
+// that a later commit reverted is absent from the net change, and the rebase
+// keeps both commits, so it is asked about all the same.
 func outsideHousekeeping(pass bool, scope config.PatternSet, changed []vcs.FileChange) []string {
 	if !pass {
 		return nil
@@ -50,6 +57,27 @@ func outsideHousekeeping(pass bool, scope config.PatternSet, changed []vcs.FileC
 		}
 	}
 	return out
+}
+
+// commitsChanges is what the commits from from to head touched, each commit
+// against its first parent, newest first, after the net change itself, so
+// a path only a reverted commit touched is listed with the rest. A commit
+// that cannot be listed is an error: a read that fails refuses the review
+// rather than holding a pass's run to less than its commits.
+func commitsChanges(ctx context.Context, repo *vcs.Repository, from, head string, net []vcs.FileChange) ([]vcs.FileChange, error) {
+	commits, err := repo.CommitsNotIn(ctx, head, from)
+	if err != nil {
+		return nil, fmt.Errorf("stages: the review stage cannot list the commits of %s since %s: %w", head, from, err)
+	}
+	out := append([]vcs.FileChange(nil), net...)
+	for _, c := range commits {
+		changed, err := repo.ChangedFiles(ctx, c+"^", c)
+		if err != nil {
+			return nil, fmt.Errorf("stages: the review stage cannot list what commit %s changed: %w", c, err)
+		}
+		out = append(out, changed...)
+	}
+	return out, nil
 }
 
 // housekeepingFindings is one ask per path a pass's change touched outside

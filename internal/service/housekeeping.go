@@ -739,24 +739,23 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 	return machine.TaskAnswered{Hold: retired.Closed[0], Effect: machine.AnswerRetired}, nil
 }
 
-// passBranch reports whether a run is on a housekeeping pass's branch, which
-// begin records as pipeline.Start.HousekeepingPass so the review stage holds
-// the change to the pass's scope (internal/stages' housekeeping.go). It is
-// decided from the task records and the run's repository and branch, never
-// from the push: a pass's own push, a rerun of its run, and a person's push
-// of its branch are all runs attributed to the pass by its branch, so each
-// is held to the scope, which is wider than PRD section 6's "the run that a
-// pass's push starts" and never narrower. A read that fails refuses the
-// begin rather than starting a pass's run without the rule.
-func (s *Service) passBranch(ctx context.Context, record store.Run) (bool, error) {
-	all, err := s.store.Tasks(ctx)
+// passRun reports whether a run is a housekeeping pass's, which begin
+// records as pipeline.Start.HousekeepingPass so the review stage holds the
+// change to the pass's scope (internal/stages' housekeeping.go). It is
+// decided from the task records and never from the push: the run's task is
+// the task the run is attributed to (store.TaskOfRun, the same reading the
+// task's snapshot makes of its runs), so a pass's own push, a rerun of its
+// run, and a person's push of its branch while the pass holds the branch
+// are all the pass's and held to the scope, which is wider than PRD
+// section 6's "the run that a pass's push starts" and never narrower; a run
+// of the branch after another task's attempt took it, as an ordinary
+// delivery may once the pass is retired, is that task's and not held. A
+// read that fails refuses the begin rather than starting a pass's run
+// without the rule.
+func (s *Service) passRun(ctx context.Context, record store.Run) (bool, error) {
+	t, ok, err := s.store.TaskOfRun(ctx, record)
 	if err != nil {
 		return false, fmt.Errorf("service: whether run %s is a housekeeping pass's could not be read: %w", record.ID, err)
 	}
-	for _, t := range all {
-		if t.Housekeeping && t.RepositoryID.Or("") == record.RepositoryID && t.Branch.Or("") == record.Branch {
-			return true, nil
-		}
-	}
-	return false, nil
+	return ok && t.Housekeeping, nil
 }

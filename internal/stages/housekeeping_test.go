@@ -113,3 +113,34 @@ func TestAPassChangeInsideItsScopeDoesNotHold(t *testing.T) {
 		t.Fatalf("a pass's change inside its scope came to %s with %v, want passed with no ask", got.outcome(), got.report().Findings)
 	}
 }
+
+// The scope is decided from the paths each commit touched, as the file
+// comment says, and not from the net change: an edit outside the scope that
+// a later commit reverted leaves the net change inside the scope, and the
+// rebase keeps every commit, so the ask names that path all the same. The
+// control is TestAPassChangeInsideItsScopeDoesNotHold, the same pass whose
+// one commit stays inside.
+func TestAPassEditOutsideItsScopeRevertedBeforeTheHeadStillHolds(t *testing.T) {
+	cfg := config.Defaults()
+	s := newSubject(t)
+	git(t, s.dir, "checkout", "--quiet", "main")
+	git(t, s.dir, "checkout", "--quiet", "-B", "topic")
+	const outside = "notes/outside.txt"
+	write(t, s.dir, outside, "an edit outside the scope\n")
+	s.commit(t, "edit outside the scope")
+	git(t, s.dir, "rm", "--quiet", outside)
+	s.commit(t, "revert the edit")
+	write(t, s.dir, readmePath, "Total sums every value.\n")
+	s.head = s.commit(t, "correct the README")
+	report := cleanReview(s)
+	report.Read = []string{readmePath}
+	report.Traced = []findings.Trace{{Path: readmePath, Reason: "the intent covers it"}}
+	got := run(t, s, script(standin.Report(report)), cfg, passStart(s))
+	if outcome := got.outcome(); outcome != pipeline.OutcomeHeld {
+		t.Fatalf("a pass whose reverted commit touched %s came to %s at review, want held: %+v", outside, outcome, got.report().Findings)
+	}
+	asks := asksAt(got.report())
+	if ask, ok := asks[outside]; len(asks) != 1 || !ok || !strings.Contains(ask.Description, outside) {
+		t.Fatalf("the review carries asks at %v, want one naming %s, the path a reverted commit touched", asks, outside)
+	}
+}

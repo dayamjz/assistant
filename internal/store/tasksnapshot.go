@@ -118,6 +118,37 @@ func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, erro
 
 // TaskSnapshots reads every task as TaskSnapshot does, newest task first, all
 // as of one point in time.
+// TaskOfRun is the task a run is attributed to, the inverse of the reading
+// TaskSnapshot makes of a task's runs, so the two agree: the task that names
+// the run as its own, else the task of the run's repository and branch whose
+// latest attempt began at or before the run was created, the newest such
+// attempt deciding, as a later attempt on the branch takes the branch's runs
+// from then on. false is a run no task names and no task's attempt precedes
+// on its branch, a person's run of their own branch among them. It is what
+// internal/service reads to decide whether a run is a housekeeping pass's
+// (PRD section 6), so a run of a branch a retired pass used, started after
+// another task took the branch, is that task's and not the pass's.
+func (s *Store) TaskOfRun(ctx context.Context, run Run) (Task, bool, error) {
+	t, err := scanTask(s.read.QueryRowContext(ctx, taskColumns+` FROM task WHERE run_id = ?`, run.ID))
+	switch {
+	case err == nil:
+		return t, true, nil
+	case !isNoRows(err):
+		return Task{}, false, fmt.Errorf("store: reading the task naming run %s: %w", run.ID, err)
+	}
+	t, err = scanTask(s.read.QueryRowContext(ctx, taskColumns+` FROM task WHERE id = (
+		SELECT a.task_id FROM task_attempt a JOIN task t ON t.id = a.task_id
+		WHERE t.repository_id = ? AND t.branch = ? AND a.started_at <= ?
+		ORDER BY a.started_at DESC, a.sequence DESC LIMIT 1)`, run.RepositoryID, run.Branch, encodeTime(run.CreatedAt)))
+	switch {
+	case err == nil:
+		return t, true, nil
+	case isNoRows(err):
+		return Task{}, false, nil
+	}
+	return Task{}, false, fmt.Errorf("store: reading the task run %s is attributed to: %w", run.ID, err)
+}
+
 func (s *Store) TaskSnapshots(ctx context.Context) ([]TaskSnapshot, error) {
 	var out []TaskSnapshot
 	err := s.snapshotTx(ctx, func(q querier) error {

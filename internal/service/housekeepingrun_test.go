@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
@@ -39,6 +40,39 @@ func passOnBranch(t *testing.T, h *home.Home, branch string) {
 	}
 	if _, _, err := records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, "subject", branch,
 		config.DeliveryGated, "Correct the drift.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil); err != nil {
+		t.Fatal(err)
+	}
+	// The pass's attempt is what attributes a run of the branch to it.
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// taskOnBranchAfterThePass records an ordinary delivery task of the subject
+// on branch, with its first attempt begun after the pass's, so a run of the
+// branch from then on is that task's and not the pass's.
+func taskOnBranchAfterThePass(t *testing.T, h *home.Home, branch string) {
+	t.Helper()
+	ctx := t.Context()
+	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = records.Close() }()
+	const id = "taskhkrunbbb"
+	// The attempt's record is ordered after the pass's by its time, which
+	// is the attribution's order; the pause keeps the two records' times
+	// apart, as the store's own tests do, and races nothing.
+	time.Sleep(25 * time.Millisecond)
+	pass, err := records.Task(ctx, "taskhkrunaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.CreateTask(ctx, store.Task{ID: id, Shape: store.TaskDelivery, Project: "one", WorktreePath: "/w2",
+		RepositoryID: store.Known("subject"), Branch: store.Known(branch)}, store.Disposition{Observed: pass.Row}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -122,5 +156,17 @@ func TestARunOfAPassBranchCarriesThePassKey(t *testing.T) {
 	recordRepository(t, plain, other)
 	if passKeyOfAStartedRun(t, plain, other) {
 		t.Fatal("a run of a branch no pass works on began with the pass key")
+	}
+
+	// The key is the run's task's, not the branch's: once an ordinary task
+	// has taken a branch a pass used, its runs are that task's and carry no
+	// pass key, so an ordinary delivery is not held to the pass's scope.
+	reused := newHome(t)
+	third := newSubject(t)
+	recordRepository(t, reused, third)
+	passOnBranch(t, reused, "work")
+	taskOnBranchAfterThePass(t, reused, "work")
+	if passKeyOfAStartedRun(t, reused, third) {
+		t.Fatal("a run of a branch an ordinary task took after a pass began with the pass key")
 	}
 }

@@ -750,8 +750,8 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// reference before this was called.
 	start.SubmittedSubject = s.submittedSubject(ctx, record)
 	// Whether the run is a housekeeping pass's is settled here, from the
-	// records, for the same reason: housekeeping.go's passBranch.
-	if start.HousekeepingPass, err = s.passBranch(ctx, record); err != nil {
+	// records, for the same reason: housekeeping.go's passRun.
+	if start.HousekeepingPass, err = s.passRun(ctx, record); err != nil {
 		return machine.Run{}, err
 	}
 	resolved, err := s.resolveRunConfig(ctx, record)
