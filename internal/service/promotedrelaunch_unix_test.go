@@ -103,7 +103,12 @@ func (inv investigation) reportedAfter(t *testing.T, running serviceUnderTest, b
 	if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: filedReport}); code != "" {
 		t.Fatalf("the worker's report was refused with %q", code)
 	}
-	waitState(t, running.client, inv.task, "read Reported from its report", reportedFromTheReport(taskstate.Live))
+	// Under a one-second promotion_window the worker may already be ended
+	// by the first read, so either terminal reading is the report tier's
+	// answer.
+	waitState(t, running.client, inv.task, "read Reported from its report", func(r taskstate.Resolution) bool {
+		return reportedFromTheReport(taskstate.Live)(r) || reportedFromTheReport(taskstate.Dead)(r)
+	})
 	return w
 }
 
