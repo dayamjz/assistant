@@ -731,6 +731,15 @@ const (
 	// fast-forward is refused is not an effect: the answer is refused, the
 	// hold stays open, and nothing is recorded.
 	AnswerLanded AnswerEffect = "landed-locally"
+	// AnswerRetired is a retire on a housekeeping pass's retirement hold
+	// that wrote the pass's retirement record: its claim on its repository
+	// is released, so the next pass can be created, every open hold that
+	// would have begun its worker again was answered stop under the same
+	// decision, the copy its dispatch cut, which a pass never dispatched has
+	// none of, was asked the cleanup decision, and nothing was removed for
+	// want of a proof or discarded. The pass still resolves what its own
+	// records give.
+	AnswerRetired AnswerEffect = "retired"
 )
 
 // AnswerEffects is the closed set of AnswerEffect, in declaration order. The
@@ -739,6 +748,7 @@ func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
 		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped, AnswerWorkerStopped, AnswerLanded,
+		AnswerRetired,
 	}
 }
 

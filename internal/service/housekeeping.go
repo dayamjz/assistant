@@ -5,11 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -81,18 +85,57 @@ import (
 // terminal is read on every pass. With housekeeping.interval zero, no wake
 // is ever raised about a pass, open or not.
 //
+// # The end, by an answer
+//
+// answerRetirement answers the retirement hold, whose key is retireHold's:
+// keep closes it and leaves the pass open, and for a hold offered before the
+// pass's first attempt, which refused the dispatch that read it
+// (store.ErrPassHeld), runs the dispatch (dispatchInBackground), since
+// dispatch runs at open and on intake and nothing else would begin the pass;
+// retire, under the task's slot, refuses a pass whose worker the probe does
+// not read dead and otherwise asks store.RetireHousekeepingPass, which
+// answers stop on every open hold of the pass whose retry would relaunch its
+// worker (isRetryHold) under the same resolver; any other answer is refused
+// with the hold open. Standing consent answers no task hold, so it never
+// answers this one.
+//
+// A retired pass is never begun again: every attempt claim refuses it in
+// the store (store.ErrPassRetired), and the record of an attempt's session
+// refuses it, so no session is recorded for an attempt of a retired pass
+// after its retirement. Nor is it in flight by its state alone
+// (supervisor.RegardOf): the loop watches it, the stop guard counts it and
+// the catch-up read lists it under way only while a run of its branch has
+// not ended or a wake about it is queued, so once its wakes are
+// acknowledged a pass retired with its worker dead or never launched has
+// its terminal read no more and raises no further terminal-gone wake. Its
+// copy's cleanup decision is a link above this one, and the offer of the
+// hold to an open pass nothing moves is the next link: until it lands
+// nothing here registers a retirement hold.
+//
 // # Residual gaps
 //
 //   - The due check runs off the loop's goroutine, so a pass report does not
 //     carry it, and a check that is slower than the interval is not begun a
 //     second time until it returns.
-//   - A repository whose newest pass is open gets no due check, and nothing
-//     here ends such a pass: the retirement hold is the link above this
-//     one.
+//   - A launch records its attempt's session only once the worker's process
+//     has started, and until then the attempt reads as never launched, which
+//     section 6's "or its latest attempt never had a session" counts as
+//     nothing moving the pass. Within this service the dispatch or relaunch
+//     holds the task's slot unsettled from its claim until the launch has
+//     settled its record (dispatch.go, launch.go), a worker fallback at the
+//     launch included (workerfallback.go), the slot every retirement is
+//     written under, so a retire answered meanwhile is refused with the hold
+//     open (errSteerInFlight); the pass stays open and resolves Dispatched,
+//     in flight, until its worker is recorded. For a retirement the slot does
+//     not order, written by another incarnation or past a crash, the store
+//     decides the two writes with exactly one loser: a retirement anchored to
+//     no session refuses once the session is recorded (store.ErrPassMoves),
+//     and the record refuses once the pass is retired (store.ErrPassRetired),
+//     on which launch.go ends the worker it started and records nothing.
 //   - The program cannot tell a rule from a fact; what a pass may change
 //     rests on the worker's instructions and the run's review, and the
 //     review's ask on paths outside housekeeping.paths (internal/stages).
-
+//
 // housekeepingState is what this service remembers between passes about
 // housekeeping, none of it a fact the records do not hold: which
 // repositories' due checks are running now. Losing it costs a repeated
@@ -197,6 +240,14 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	out := s.raiseHousekeeping(c, store.HousekeepingWakeRequest{Repository: r.ID, Pass: id,
 		Marker: fmt.Sprintf("open:%s:%d", id, epoch), Detail: detail}, nil)
 	return out
+}
+
+// latestSequence is the sequence of the latest of attempts, zero for none.
+func latestSequence(attempts []store.TaskAttempt) int64 {
+	if n := len(attempts); n > 0 {
+		return attempts[n-1].Sequence
+	}
+	return 0
 }
 
 // passWaitsOn says what an open pass waits on, for the wake and the hold:
@@ -395,6 +446,133 @@ func (s *Service) advanceHousekeeping(c *incarnation, check store.DueCheck) task
 		return taskReport{Watched: true}
 	}
 	return taskReport{Watched: true, Err: err}
+}
+
+// retireHoldSpace is the key space of a pass's retirement holds under the
+// task.
+const retireHoldSpace = "/housekeeping-retire/"
+
+// retireHold is a retirement hold's key: the pass, the interval it was
+// offered in, and the latest attempt and newest run it was decided against,
+// which RetireHousekeepingPass anchors a retire answer to.
+type retireHold struct {
+	Task    string
+	Epoch   int64
+	Attempt int64
+	Run     string
+}
+
+func (h retireHold) key() string {
+	run := h.Run
+	if run == "" {
+		run = "-"
+	}
+	return fmt.Sprintf("task/%s%s%d/%d/%s", h.Task, retireHoldSpace, h.Epoch, h.Attempt, run)
+}
+
+// parseRetireHold reads a retirement hold's key of the task, and false for
+// any other key.
+func parseRetireHold(key, task string) (retireHold, bool) {
+	rest, ok := strings.CutPrefix(key, "task/"+task+retireHoldSpace)
+	if !ok {
+		return retireHold{}, false
+	}
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) != 3 {
+		return retireHold{}, false
+	}
+	epoch, err1 := strconv.ParseInt(parts[0], 10, 64)
+	attempt, err2 := strconv.ParseInt(parts[1], 10, 64)
+	if err1 != nil || err2 != nil || parts[2] == "" {
+		return retireHold{}, false
+	}
+	h := retireHold{Task: task, Epoch: epoch, Attempt: attempt, Run: parts[2]}
+	if h.Run == "-" {
+		h.Run = ""
+	}
+	return h, true
+}
+
+// passRelaunches is the Relaunches a retirement of task is decided with:
+// the holds whose retry would begin its worker again.
+func passRelaunches(task string) func(string) bool {
+	return func(key string) bool { return isRetryHold(key, task) }
+}
+
+// retirementOf is the store request for a retirement of task, anchored to
+// its latest attempt and that attempt's session as the caller read them in
+// attempts, and to run, with the owners' predicates.
+func retirementOf(task string, attempts []store.TaskAttempt, run string) store.Retirement {
+	return store.Retirement{Task: task, Attempt: latestSequence(attempts), Session: latestRef(attempts), Run: run,
+		Relaunches: passRelaunches(task), Ended: runs.Finished, Delivered: taskstate.Delivered}
+}
+
+// answerRetirement answers a pass's retirement hold, on the file comment's
+// terms. The caller has refused a subordinate and a worker and read the
+// hold open.
+func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest, hold store.Hold, rh retireHold) (machine.TaskAnswered, error) {
+	switch r.Answer {
+	case machine.AnswerKeep:
+		resolved, err := s.store.ResolveHoldNoted(ctx, hold.Key, r.Answer, r.Note, req.HoldResolver())
+		if errors.Is(err, store.ErrHoldResolved) {
+			return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+		}
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		s.publishHoldState(resolved)
+		s.log.Printf("housekeeping pass %s is kept open: its retirement hold %s was answered %q", r.Task, hold.Key, r.Answer)
+		if rh.Attempt == 0 {
+			// The hold was offered before the pass's first attempt, so the
+			// dispatch that read it was refused (store.ErrPassHeld) and
+			// claimed nothing, and nothing else begins the pass: dispatch
+			// runs at open and on intake, not on the loop's own. The
+			// answer runs it, on dispatchInBackground's terms.
+			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since the hold had refused its dispatch", r.Task, hold.Key, r.Answer)
+			s.dispatchInBackground()
+		}
+		return machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}, nil
+	case machine.AnswerRetire:
+	default:
+		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
+			ipc.ErrInvalidRequest, r.Task, hold.Key, machine.AnswerRetire, machine.AnswerKeep, r.Answer)
+	}
+	release, err := s.claimSteer(r.Task)
+	if err != nil {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	}
+	defer release()
+	o, err := s.tasks().ObserveTask(ctx, r.Task)
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	if ref := latestRef(o.Snapshot.Attempts); ref != "" && latestSequence(o.Snapshot.Attempts) == rh.Attempt {
+		if s.terminals == nil {
+			return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrUnavailable, errRelaunchUnprobed)
+		}
+		probed := s.terminals.Probe(ctx, ref)
+		if probed.Liveness != taskstate.Dead {
+			return machine.TaskAnswered{}, fmt.Errorf("%w: %w: the worker of housekeeping pass %s (session %s) reads %s, so it still moves the pass and the hold %s stays open",
+				ipc.ErrRefused, store.ErrPassMoves, r.Task, ref, probed.Liveness, hold.Key)
+		}
+		s.closeStallsOnDead(ctx, r.Task, rh.Attempt, ref, "", probed)
+	}
+	req2 := retirementOf(r.Task, o.Snapshot.Attempts, rh.Run)
+	req2.Attempt = rh.Attempt
+	req2.Hold, req2.Note, req2.By = hold.Key, r.Note, req.HoldResolver()
+	retired, err := s.store.RetireHousekeepingPass(ctx, req2)
+	switch {
+	case errors.Is(err, store.ErrPassMoves), errors.Is(err, store.ErrPassClosed), errors.Is(err, store.ErrHoldResolved):
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w; the hold %s stays as it was", ipc.ErrRefused, err, hold.Key)
+	case err != nil:
+		return machine.TaskAnswered{}, err
+	}
+	for _, h := range retired.Closed {
+		s.publishHoldState(h)
+	}
+	s.log.Printf("housekeeping pass %s was retired on the answer %q to hold %s, closing %d hold(s)", r.Task, r.Answer, hold.Key, len(retired.Closed))
+	s.cleanUpLandedTask(ctx, r.Task)
+	return machine.TaskAnswered{Hold: retired.Closed[0], Effect: machine.AnswerRetired}, nil
 }
 
 // passRun reports whether a run is a housekeeping pass's, which begin

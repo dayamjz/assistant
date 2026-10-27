@@ -342,11 +342,11 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // has settled the record of its session (dispatched.settle), a worker
 // fallback at the launch included, which is handed the slot unsettled and
 // settles it after the backup's launch (dispatched.handSlot), so nothing
-// that takes the task's slot, a stop or a relaunch, interleaves with a
-// worker being created and not yet recorded, and a reader of that state
-// (launching) can tell a launch in flight from a settled slot. What came of
-// the launch is logged, and a refusal of the launch's own assertion is
-// recorded the way dispatch's is.
+// that takes the task's slot, a stop, a relaunch or a housekeeping pass's
+// retirement, interleaves with a worker being created and not yet
+// recorded, and a reader of that state (launching) can tell a launch in
+// flight from a settled slot. What came of the launch is logged, and a
+// refusal of the launch's own assertion is recorded the way dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	if !s.intake.TryRLock() {
 		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
@@ -390,6 +390,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 			continue
 		case errors.Is(err, errTaskUnplaced):
 			s.log.Printf("task %s stays queued: %v", r.Record.ID, err)
+			continue
+		case errors.Is(err, store.ErrPassHeld):
+			s.log.Printf("housekeeping pass %s was not dispatched, and is once its retirement hold is answered keep: %v", r.Record.ID, err)
 			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
@@ -521,8 +524,11 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 // launch: for a dispatch kept work held it gives the slot back through
 // releaseHeldSlot, for one that ended before it could read the hold
 // (*holdUnread) it gives the slot back and asks nothing, this file's
-// opening comment says why for both; every other failure is
-// settleOrRelease's; and a dispatch that proved its copy
+// opening comment says why for both; a dispatch refused at its claim
+// because the pass's retirement hold is open (store.ErrPassHeld) claimed
+// nothing, so its slot is given back and the next dispatch reads the task
+// again, which for the pass is the dispatch the keep answer runs; every
+// other failure is settleOrRelease's; and a dispatch that proved its copy
 // keeps the slot unsettled and is returned with d.settle set, for
 // launchTask to settle with the proof once the launch's record is settled,
 // on the file comment's terms.
@@ -534,7 +540,7 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 			s.betweenHeldAndRelease()
 		}
 		s.releaseHeldSlot(ctx, id)
-	case errors.As(err, &unread):
+	case errors.As(err, &unread), errors.Is(err, store.ErrPassHeld):
 		s.giveBackSlot(id)
 	case err != nil:
 		s.settleOrRelease(id, settle, d.proof, err)
