@@ -346,8 +346,9 @@ func (r runRecord) forget(ctx context.Context, tx *sql.Tx, repositoryID, runID s
 // keeps rows per run is here or in refusedRunRecords, and
 // forgetrows_test.go holds both lists to the catalog.
 //
-// merge_record and run_cleanup are written once and sealed against deletion,
-// as is seen_mark, whose merge kind is keyed by the run. Their seals exist so
+// merge_record, nothing_to_deliver and run_cleanup are written once and
+// sealed against deletion, as is seen_mark, whose merge and
+// nothing-to-deliver kinds are keyed by the run. Their seals exist so
 // no write makes a row say other than what the read, the cleanup decision or
 // the mark saw, and PRD section 8's "appended" is rows added and never
 // edited; neither says such a row outlives its run. forgetRunRecordsMigration
@@ -375,6 +376,7 @@ var runRecords = []runRecord{
 	// run is not this repository's to forget, and stays.
 	{table: "agent_invocation", remove: `DELETE FROM agent_invocation WHERE run = ?`},
 	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
+	{table: "nothing_to_deliver", remove: `DELETE FROM nothing_to_deliver WHERE run = ?`, afterRun: true},
 	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
 	{table: "run_rebase", remove: `DELETE FROM run_rebase WHERE run = ?`, afterRun: true},
 	// A kept work entry about a run's copy goes with the run only once it is
@@ -391,10 +393,10 @@ var runRecords = []runRecord{
 	{table: "kept_work_wake", remove: `DELETE FROM kept_work_wake WHERE kept_work IN (
 		SELECT id FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL))`, afterRun: true},
 	{table: "kept_work", remove: `DELETE FROM kept_work WHERE run_id = ? AND (answer IS NOT NULL OR closure IS NOT NULL)`, afterRun: true},
-	// A seen mark of a merge record is keyed by the run through its kind,
-	// which the catalog cannot say, so it is named here; it goes after the
-	// merge record it marks, which its seal requires.
-	{table: "seen_mark", remove: `DELETE FROM seen_mark WHERE kind = 'merge' AND key = ?`, afterRun: true},
+	// A seen mark of a merge record or a nothing-to-deliver record is keyed
+	// by the run through its kind, which the catalog cannot say, so it is
+	// named here; it goes after the record it marks, which its seal requires.
+	{table: "seen_mark", remove: `DELETE FROM seen_mark WHERE kind IN ('merge', 'nothing-to-deliver') AND key = ?`, afterRun: true},
 }
 
 // refusedRunRecords is every table that keeps rows per run and whose row

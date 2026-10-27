@@ -56,6 +56,15 @@ func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
 	return o
 }
 
+// WithSettleInterruptForTest returns o with settle's seam set to f, for
+// this package's external tests: a settle whose f returns an error writes
+// nothing, as a service that stopped between a segment's last checkpoint
+// and the record's move leaves the run.
+func WithSettleInterruptForTest(o Options, f func(runID string) error) Options {
+	o.interruptSettle = f
+	return o
+}
+
 // WithAfterIntakeBranchReleaseForTest returns o with the seam after
 // internal/tasks gives back an intake's branch exclusion set to f, for this
 // package's external tests: for a delivery intake, f runs after the task's

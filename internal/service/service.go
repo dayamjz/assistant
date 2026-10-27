@@ -208,6 +208,10 @@ type Options struct {
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
 	// does.
 	beforeStaleRemovalRelease func()
+	// interruptSettle is the Service field of the same name, which
+	// export_test.go's WithSettleInterruptForTest sets and the product never
+	// does.
+	interruptSettle func(runID string) error
 	// afterIntakeBranchRelease is the Service field of the same name, which
 	// export_test.go's WithAfterIntakeBranchReleaseForTest sets and the
 	// product never does. It is here rather than only on the Service because
@@ -436,6 +440,12 @@ type Service struct {
 	// recovery runs before each anchored release of a dead eject's
 	// reservation. It is nil in production.
 	beforeStaleRemovalRelease func()
+	// interruptSettle runs at the start of settle, before anything is
+	// written, and a non-nil error from it is returned as settle's own, as a
+	// service that stopped between a segment's last checkpoint and the
+	// record's move leaves the run. It is nil in production and set only by
+	// this package's tests.
+	interruptSettle func(runID string) error
 	// afterIntakeBranchRelease runs once internal/tasks has given back the
 	// branch exclusion an intake or a promotion took through newQueue's
 	// Exclude. For a delivery intake that is after the task's record and
@@ -689,6 +699,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies:                make(map[string]*topology),
 		advancing:                 make(map[string]*slot),
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		interruptSettle:           o.interruptSettle,
 		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		afterMergeReadPass:        o.afterMergeReadPass,

@@ -91,6 +91,12 @@ paths: ["internal/store/**"]
 - runRebaseMigration's `run_rebase` is the run rebase record the rebase
   stage writes through `RecordRunRebase`, held to the run row's submitted
   commit (`ErrRebaseNotOfRun`), written once, and gone only with its run.
+- nothingToDeliverMigration's `nothing_to_deliver` is PRD section 8's
+  nothing-to-deliver record, written once by
+  `TransitionRunOnNothingToDeliver` in the transaction that moves the run to
+  passed, held to the run row's submitted commit and to a checkpoint its
+  history holds (`ErrNothingNotOfRun`), and sealed like `merge_record`; its
+  seen mark kind is `nothing-to-deliver`.
 - A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number
   what they append from the shipped list rather than spelling a version out.

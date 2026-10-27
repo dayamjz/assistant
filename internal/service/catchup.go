@@ -27,9 +27,9 @@ import (
 //     the run's checkpoint decision is the decision and the run's answer is
 //     its options. Each carries the existing answer path.
 //   - Landed is the records internal/taskstate's terminal tier derived a
-//     task's state from on this read: the merge record of the run its
-//     resolution names as landed, and for a task it resolved Complete, its
-//     cleanup record. It reads the resolution's own basis rather than
+//     task's state from on this read: the merge record, or the
+//     nothing-to-deliver record, of the run its resolution names as landed,
+//     and for a task it resolved Complete, its cleanup record. It reads the resolution's own basis rather than
 //     choosing among the records again, so the tier and this part cannot
 //     name different records. What the seen mark holds is subtracted, and
 //     machine.ShowLanded orders and bounds what is left.
@@ -267,11 +267,20 @@ func (s *Service) answeringHold(ctx context.Context, h store.Hold) (machine.Answ
 }
 
 // landedOf is the landed records the terminal tier derived o's state from:
-// the merge record of the run the resolution names as landed, and for a
-// task resolved Complete, the cleanup record that made it so.
+// the merge record or the nothing-to-deliver record of the run the
+// resolution names as landed, whichever Basis.NothingToDeliver says it was,
+// and for a task resolved Complete, the cleanup record that made it so.
 func landedOf(o taskstate.Observed, task machine.Task) []machine.Landed {
 	var out []machine.Landed
-	if run := o.State.Basis.LandedRun; run != "" {
+	if run := o.State.Basis.LandedRun; run != "" && o.State.Basis.NothingToDeliver {
+		for _, rec := range o.Snapshot.NothingToDeliver {
+			if rec.Run == run {
+				nothing := rec
+				out = append(out, machine.Landed{Task: task, NothingToDeliver: &nothing})
+				break
+			}
+		}
+	} else if run != "" {
 		for _, rec := range o.Snapshot.MergeRecords {
 			if rec.Run == run && rec.End == store.PullRequestMerged {
 				merge := rec

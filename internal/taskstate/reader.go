@@ -124,7 +124,7 @@ func (r *Reader) Observe(ctx context.Context) ([]Observed, error) {
 // resolve asks the two live inputs in the order NewReader states, the slot
 // before the probe, and resolves.
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
-	in := recordsOf(snap)
+	in := InputsOf(snap)
 	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
 		in.Advancing = r.advancing(run.ID)
 	}
@@ -136,13 +136,16 @@ func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolutio
 	return Resolve(in)
 }
 
-// recordsOf is the resolver's inputs a snapshot holds, with neither live
-// input asked: the process Unobserved and the run not advancing.
-func recordsOf(snap store.TaskSnapshot) Inputs {
+// InputsOf is the resolver's inputs a snapshot holds, with neither live input
+// asked: the process Unobserved and the run not advancing. It is the one
+// place a store.TaskSnapshot becomes Inputs, so a record the snapshot gains
+// reaches every reader that resolves from records alone, internal/tasks'
+// cleanup proofs among them, and none of them lists the fields again (P14).
+func InputsOf(snap store.TaskSnapshot) Inputs {
 	return Inputs{
 		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
-		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding,
-		ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
+		MergeRecords: snap.MergeRecords, NothingToDeliver: snap.NothingToDeliver, Cleanup: snap.Cleanup,
+		LocalLanding: snap.LocalLanding, ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
 	}
 }
 
@@ -152,6 +155,6 @@ func recordsOf(snap store.TaskSnapshot) Inputs {
 // is what internal/store's one-open-pass rule and a pass's retirement are
 // handed, so neither states the tier a second time (P14).
 func Delivered(snap store.TaskSnapshot) bool {
-	r := Resolve(recordsOf(snap))
+	r := Resolve(InputsOf(snap))
 	return r.Source == SourceRecord && (r.State == Landed || r.State == Complete)
 }

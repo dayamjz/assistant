@@ -118,6 +118,14 @@
 // and which attributed run's merge record makes a task Landed is its
 // question: the snapshot carries all of them rather than deciding.
 //
+// A third record lands a task in that tier: PRD section 8's
+// nothing-to-deliver record, which the nothing_to_deliver table holds and
+// TransitionRunOnNothingToDeliver writes in the transaction that moves the
+// run to passed, refusing a submitted commit the run was not given and a
+// checkpoint its history does not hold. TaskSnapshot carries it for every
+// attributed run on the merge record's terms, and it is sealed on the merge
+// record's terms too, its seen mark with it.
+//
 // Two records beside them are written by the same cleanup decision, and
 // migration 18 holds both. RunCleanup is a run's copy's cleanup record on
 // TaskCleanup's terms, with one column more: a refusal, the decision's own
@@ -152,7 +160,9 @@
 // column the catalog cannot read. The merge record, the run cleanup record
 // and a merge record's seen mark go too: the migration named
 // forgetRunRecordsMigration narrows their delete seals to "while what they
-// describe stands", and ForgetRepository removes them after the run row.
+// describe stands", and ForgetRepository removes them after the run row. The
+// nothing-to-deliver record and its seen mark go on the same terms, which
+// nothingToDeliverMigration writes its seals with.
 //
 // # The message record
 //

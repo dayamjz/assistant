@@ -36,8 +36,12 @@ func RunSettled(status store.RunStatus) bool {
 // facts, in PRD section 6's fixed precedence and first match wins:
 //
 //  1. A terminal record: SourceRecord. A task is Landed when the merge
-//     record of a run in Runs reads merged; where more than one does, the
-//     newest such run is the one named in Basis.LandedRun. A task is Landed
+//     record of a run in Runs reads merged, or when a run in Runs has a
+//     nothing-to-deliver record, which a run writes when its rebase leaves
+//     nothing to deliver, PRD section 6's "nothing left to deliver", on the
+//     merge record's terms; where more than one run has either, the newest
+//     such run is the one named in Basis.LandedRun, and
+//     Basis.NothingToDeliver says which record it was. A task is Landed
 //     too when its own local landing record exists, which the approved
 //     fast-forward of a task delivered under the local posture writes, PRD
 //     section 6; Basis.LandedLocally names the commit it records, and where a
@@ -126,9 +130,11 @@ func Resolve(in Inputs) Resolution {
 	if ok {
 		out.Basis.RunID, out.Basis.RunStatus, out.Basis.RunUpdatedAt = run.ID, run.Status, run.UpdatedAt
 	}
-	landed, isLanded := landedRun(in.Runs, in.MergeRecords)
+	landed, isLanded := landedRun(in.Runs, in.MergeRecords, in.NothingToDeliver)
+	nothing, isNothing := nothingOf(in.NothingToDeliver, landed.ID)
+	isNothing = isLanded && isNothing
 	if isLanded {
-		out.Basis.LandedRun = landed.ID
+		out.Basis.LandedRun, out.Basis.NothingToDeliver = landed.ID, isNothing
 	}
 	local, isLocal := in.LocalLanding.Get()
 	isLocal = isLocal && local.Task == in.Task.ID
@@ -154,6 +160,8 @@ func Resolve(in Inputs) Resolution {
 	isReported = isReported && in.Task.Shape == store.TaskInvestigation
 
 	switch {
+	case isNothing:
+		out.State, out.Source, out.Detail = fromNothingRecord(in.Task, nothing, in.Cleanup)
 	case isLanded:
 		out.State, out.Source, out.Detail = fromRecords(in.Task, landed, in.MergeRecords, in.Cleanup)
 	case isLocal:
@@ -205,16 +213,48 @@ func newest(runs []store.Run) (store.Run, bool) {
 }
 
 // landedRun picks, on newest's terms, the newest of runs whose merge record
-// in records reads merged. A record naming a run outside runs is not
-// consulted, and a record reading closed lands nothing.
-func landedRun(runs []store.Run, records []store.MergeRecord) (store.Run, bool) {
-	var merged []store.Run
+// in records reads merged or that has a nothing-to-deliver record in
+// nothing. A record naming a run outside runs is not consulted, and a merge
+// record reading closed lands nothing.
+func landedRun(runs []store.Run, records []store.MergeRecord, nothing []store.NothingToDeliver) (store.Run, bool) {
+	var landed []store.Run
 	for _, r := range runs {
-		if rec, ok := recordOf(records, r.ID); ok && rec.End == store.PullRequestMerged {
-			merged = append(merged, r)
+		rec, merged := recordOf(records, r.ID)
+		_, delivered := nothingOf(nothing, r.ID)
+		if (merged && rec.End == store.PullRequestMerged) || delivered {
+			landed = append(landed, r)
 		}
 	}
-	return newest(merged)
+	return newest(landed)
+}
+
+// nothingOf finds the nothing-to-deliver record naming the run, if any.
+func nothingOf(records []store.NothingToDeliver, runID string) (store.NothingToDeliver, bool) {
+	for _, rec := range records {
+		if runID != "" && rec.Run == runID {
+			return rec, true
+		}
+	}
+	return store.NothingToDeliver{}, false
+}
+
+// fromNothingRecord is the terminal tier for a task its run's
+// nothing-to-deliver record landed, on fromRecords' terms: Complete when the
+// task is a delivery task whose cleanup record carries a removal, otherwise
+// Landed. The detail names the record and says the change was already on the
+// default branch and nothing was delivered, never that anything merged or
+// was validated.
+func fromNothingRecord(task store.Task, rec store.NothingToDeliver,
+	cleanup store.Optional[store.TaskCleanup]) (State, Source, store.Optional[string]) {
+	said := fmt.Sprintf("run %s found its change already on the default branch at %s, so nothing was delivered",
+		rec.Run, rec.DefaultCommit)
+	if c, ok := cleanup.Get(); ok && task.Shape == store.TaskDelivery {
+		if removedAt, removed := c.RemovedAt.Get(); removed {
+			return Complete, SourceRecord, store.Known(said + ", and the isolated copy was removed at " +
+				removedAt.UTC().Format(time.RFC3339))
+		}
+	}
+	return Landed, SourceRecord, store.Known(said)
 }
 
 // recordOf finds the merge record naming the run, if any.

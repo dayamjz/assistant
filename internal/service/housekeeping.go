@@ -81,14 +81,18 @@ import (
 //
 // # A run that rebases to nothing
 //
-// No end here. PRD section 6's nothing left to deliver (AGE-487, proposed
-// and not built) lands a pass whose run's rebase leaves nothing to deliver
-// as it lands any delivery task, and a landed pass is no longer open under
-// the one-at-a-time rule. Until that is built, such a pass is where its
-// records put it: it resolves Ready from the passed run, its worker runs
-// on, the wake names it each interval while something moves it, and once
-// nothing does it is offered the retirement hold like any other end that
-// does not land. Nothing here reads a run's position, and the program
+// No end here. PRD section 6's nothing left to deliver lands a pass whose
+// run's rebase leaves nothing to deliver as it lands any delivery task,
+// from the nothing-to-deliver record the run's end writes (runs.go,
+// store.TransitionRunOnNothingToDeliver), and a landed pass is in the
+// terminal tier, so it is no longer open under the one-at-a-time rule
+// (taskstate.Delivered reads that record) and is offered no retirement
+// hold. A run that ended on the short circuit without that record, its
+// branch already published or its work not proven present, lands nothing,
+// and its pass is where its records put it: it resolves Ready, its worker
+// runs on, the wake names it each interval while something moves it, and
+// once nothing does it is offered the retirement hold like any other end
+// that does not land. Nothing here reads a run's position, and the program
 // retires no pass on its own.
 //
 // # The end, by an answer

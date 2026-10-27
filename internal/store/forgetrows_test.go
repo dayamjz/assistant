@@ -114,7 +114,7 @@ var unseedableRunTables = map[string]string{
 // why. The forget test seeds each and requires it emptied, and the placement
 // test requires runRecords to name it.
 var keyedThroughAKind = map[string]string{
-	"seen_mark": "a mark of kind merge is keyed by the merge record's run",
+	"seen_mark": "a mark of kind merge or nothing-to-deliver is keyed by its record's run",
 }
 
 // Issue #177: a repository whose run has a row in every table that keeps rows
@@ -196,6 +196,19 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if _, err := s.MarkSeen(ctx, []SeenRecord{{Kind: SeenMerge, Key: run.ID}}); err != nil {
 		t.Fatalf("MarkSeen: %v", err)
 	}
+	// A run ends with a merge record or a nothing-to-deliver record and never
+	// both, so the second is written for a second run of the same repository.
+	second := runningRun2(t, s)
+	if _, err := s.AppendGraphCheckpoint(ctx, second.ID, "", 0, []byte(`{"seq":1}`)); err != nil {
+		t.Fatalf("AppendGraphCheckpoint: %v", err)
+	}
+	if _, err := s.TransitionRunOnNothingToDeliver(ctx, second.ID, []RunStatus{RunRunning}, RunPassed,
+		nothingToDeliverOf2(second)); err != nil {
+		t.Fatalf("running to passed with nothing to deliver: %v", err)
+	}
+	if _, err := s.MarkSeen(ctx, []SeenRecord{{Kind: SeenNothingToDeliver, Key: second.ID}}); err != nil {
+		t.Fatalf("MarkSeen: %v", err)
+	}
 
 	refused := refusedRunTables()
 	tables := runKeyedTables(t, s, refused)
@@ -228,8 +241,8 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if err != nil {
 		t.Fatalf("ForgetRepository: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("ForgetRepository removed %d runs, want 1", removed)
+	if removed != 2 {
+		t.Fatalf("ForgetRepository removed %d runs, want 2", removed)
 	}
 	var left []string
 	for _, table := range append(tables, "run", "repository") {
@@ -381,6 +394,13 @@ func TestWrittenOnceRunRecordsAreNotDeletedWhileTheirRunStands(t *testing.T) {
 			t.Fatalf("%s holds %d rows after the refused delete, want 1", table, n)
 		}
 	}
+}
+
+// nothingToDeliverOf2 is a nothing-to-deliver record for run, on the
+// checkpoint the test appended for it.
+func nothingToDeliverOf2(run Run) NothingToDeliver {
+	return NothingToDeliver{DefaultCommit: "dddd", Submitted: run.SubmittedHead, Examined: []string{run.SubmittedHead},
+		Answer: NothingToDeliverAnswer, Checkpoint: 1}
 }
 
 // keptWorkWakeAndNotification raises an open kept work entry as a kept-work

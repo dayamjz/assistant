@@ -200,6 +200,10 @@ const stallBaseMigration = "stall base marker"
 // sealCheckpointTableMigration is a constant.
 const captureSessionMigration = "capture session marker"
 
+// nothingToDeliverMigration names the migration that adds PRD section 8's
+// nothing-to-deliver record and the seen mark of one.
+const nothingToDeliverMigration = "nothing-to-deliver record"
+
 // housekeepingMigration names the migration that adds PRD section 6's
 // housekeeping: the task row's housekeeping mark, the retirement record, the
 // housekeeping-due wake about a repository and its notification record, and
@@ -2505,6 +2509,63 @@ var schema = []migration{
 	},
 	{
 		version: 59,
+		name:    nothingToDeliverMigration,
+		statements: []string{
+			// PRD section 8's nothing-to-deliver record: written once, in
+			// the transaction that ends a run on section 5's empty-diff
+			// short circuit, of a branch the run's push anchor found absent
+			// where it would push, whose submitted commits P12's content
+			// check found present by content in the default-branch commit
+			// the rebase stage read. It names the run, that commit, the
+			// submitted commit, the commits the check examined and its
+			// answer, and the checkpoint entry those facts were read from. A
+			// task's Landed is derived from it, beside the merge record, and
+			// neither the run row nor the task row stores the fact again.
+			//
+			// One row per run, keyed by the run with no foreign key, for
+			// merge_record's reason. The answer is the one value the record
+			// is written on, so a row naming any other cannot be stored.
+			`CREATE TABLE nothing_to_deliver (
+				run            TEXT PRIMARY KEY,
+				default_commit TEXT NOT NULL CHECK (default_commit <> ''),
+				submitted      TEXT NOT NULL CHECK (submitted <> ''),
+				examined       TEXT NOT NULL,
+				answer         TEXT NOT NULL CHECK (answer = 'present'),
+				checkpoint     INTEGER NOT NULL CHECK (checkpoint > 0),
+				recorded_at    TEXT NOT NULL
+			) STRICT`,
+			// Written once means written once, on merge_record's terms, and
+			// the delete seal is merge_record's as forgetRunRecordsMigration
+			// narrowed it: refused while the run it describes stands, which
+			// only ForgetRepository ends.
+			`CREATE TRIGGER nothing_to_deliver_is_written_once
+				BEFORE UPDATE ON nothing_to_deliver
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a nothing-to-deliver record is written once by the end of its run and is not updated');
+				END`,
+			`CREATE TRIGGER nothing_to_deliver_is_not_removed
+				BEFORE DELETE ON nothing_to_deliver
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a nothing-to-deliver record is written once by the end of its run and is not deleted while its run stands');
+				END`,
+			// A seen mark of a nothing-to-deliver record is keyed by its run,
+			// as a merge record's is, so its delete seal is narrowed on the
+			// same terms: refused while the record it marks stands. A mark of
+			// a task's cleanup record keeps the whole seal, as before.
+			`DROP TRIGGER seen_mark_is_not_removed`,
+			`CREATE TRIGGER seen_mark_is_not_removed
+				BEFORE DELETE ON seen_mark
+				WHEN (OLD.kind <> 'merge' AND OLD.kind <> 'nothing-to-deliver')
+					OR (OLD.kind = 'merge' AND EXISTS (SELECT 1 FROM merge_record WHERE run = OLD.key))
+					OR (OLD.kind = 'nothing-to-deliver' AND EXISTS (SELECT 1 FROM nothing_to_deliver WHERE run = OLD.key))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not deleted while the record it marks stands');
+				END`,
+		},
+	},
+	{
+		version: 60,
 		name:    housekeepingMigration,
 		statements: []string{
 			// PRD section 8's task record: whether the task is a

@@ -187,6 +187,20 @@ environment doctor runs in, so an identity set only in variables such as
 `GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
 make it disagree with what a run meets.
 
+When the rebase leaves nothing to change, because the default branch already
+carries the same change under another commit, the run ends there with every
+later stage skipped and nothing pushed. If the branch was not on the upstream
+when the run looked, and every commit of the run's own is present by content
+in the default branch it read, the run also records that nothing was left to
+deliver, and the task it belongs to lands: its worker is ended, its copy is
+removed once the cleanup proves the work is on the default branch (or kept as
+kept work when it holds anything more), and a task queued behind it goes on.
+`assistant tasks` and the catch-up say the change was already on the shared
+branch and nothing was delivered, never that it merged. Any other run that
+ends this way, such as one whose branch was already published or whose change
+the default branch applied and then reverted, lands nothing, and its task
+stays where its run leaves it.
+
 ## Answering a hold
 
 `assistant --answer approved`, `skipped`, or `cancelled` answers the decision a
@@ -536,10 +550,12 @@ started or its worker was begun again since you were asked. It closes no pull
 request, moves no branch and discards nothing; it answers `stop` on the pass's
 decisions that would begin its worker again, and its copy is asked the
 cleanup decision, so work not yet landed is kept for you (see Kept work).
-The program retires no pass on its own: a pass whose run rebased to nothing,
-because the default branch already holds the correction, is asked about the
-same way once nothing moves it, until the landing the product's design
-proposes for that case is built. A retired pass is never begun again, and `retire` answered while a
+The program retires no pass on its own. A pass whose run rebased to nothing,
+because the default branch already holds the correction, lands from the
+run's nothing-to-deliver record as any delivery task does (see Nothing left
+to deliver above) and needs no retirement; one whose run left nothing to
+push without that record is asked about the same way once nothing moves
+it. A retired pass is never begun again, and `retire` answered while a
 launch of the pass is under way is refused, with the decision left open,
 until that worker is recorded, which the next answer then reads live. It
 stops counting as work in flight: the stop guard and the catch-up read
@@ -560,7 +576,7 @@ otherwise the read opens with a digest. That digest is one line counting what fo
 
 - the decisions waiting on you, every open hold and every run held at a
   decision;
-- what was merged or cleared away since you last marked what you had seen;
+- what was merged, found already on the shared branch, or cleared away since you last marked what you had seen;
 - the work under way, and the changes being validated right now;
 - the work that stopped without asking you anything.
 
@@ -574,8 +590,8 @@ tasks there are, and the task's own line says the worker was not seen at it.
 That line is the same in `assistant tasks`. Only a worker whose terminal was
 observed live reads as a worker on the work.
 
-`assistant watch --once --mark-seen` marks as seen exactly the merged and
-cleared-away work that read showed, so the next read, and every read after
+`assistant watch --once --mark-seen` marks as seen exactly the merged,
+already-shared and cleared-away work that read showed, so the next read, and every read after
 it, counts only what landed since. Nothing else is filtered: a decision is
 counted until it is answered, and what is under way or stopped is counted for
 as long as it is true.

@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
+	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -1246,6 +1247,11 @@ func (e ending) disposition(stopping bool) disposition {
 // is somewhere else is not an error here: the record is authoritative, and
 // this is reconciliation rather than a decision about what the run may do.
 func (s *Service) settle(ctx context.Context, runID string, result graph.Result) error {
+	if s.interruptSettle != nil {
+		if err := s.interruptSettle(runID); err != nil {
+			return err
+		}
+	}
 	built, err := s.driverFor(ctx)
 	if err != nil {
 		return err
@@ -1270,6 +1276,11 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		end := store.PullRequestEnd(endText)
 		if end == "" {
 			move, checksPassed = built.runs.Pass, true
+			if record, ok := s.nothingToDeliver(runID, result); ok {
+				move = func(ctx context.Context, id string) (store.Run, error) {
+					return built.runs.PassNothingToDeliver(ctx, id, record)
+				}
+			}
 			break
 		}
 		_, number, err := recordedPullRequest(result.State)
@@ -1339,6 +1350,38 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	}
 	s.publishRunState(ctx, runID)
 	return nil
+}
+
+// nothingToDeliver reads, from the position a completed run's segment
+// ended at, whether the run writes PRD section 6's nothing-to-deliver record
+// with its end, and builds the record when it does. It reads the
+// checkpoint's state through internal/stages, which owns how the rebase
+// stage recorded the short circuit, its content check and the push anchor,
+// and never the stage's report, the run's status or its outcome (P8). A
+// position that took the short circuit and does not qualify is logged with
+// why, and the run passes as it did before, its task resolving from its run
+// tier; a position that cannot be read is logged and writes no record either,
+// because a record is written only on facts the position proves.
+func (s *Service) nothingToDeliver(runID string, result graph.Result) (store.NothingToDeliver, bool) {
+	read, err := stages.NothingToDeliverOf(result.State)
+	if err != nil {
+		s.log.Printf("run %s ended and its position could not be read for nothing left to deliver, so no record is written: %v",
+			runID, err)
+		return store.NothingToDeliver{}, false
+	}
+	if lands, why := read.Lands(); !lands {
+		if read.ShortCircuit {
+			s.log.Printf("run %s ended with nothing left to change and writes no nothing-to-deliver record: %s", runID, why)
+		}
+		return store.NothingToDeliver{}, false
+	}
+	return store.NothingToDeliver{
+		DefaultCommit: read.Against,
+		Submitted:     read.Submitted,
+		Examined:      read.Examined,
+		Answer:        store.NothingToDeliverAnswer,
+		Checkpoint:    result.Checkpoint.Seq,
+	}, true
 }
 
 // parkRecord is the record of which bound parked a run, read off the result

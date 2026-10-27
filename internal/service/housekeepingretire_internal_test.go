@@ -62,7 +62,7 @@ func passRun(t *testing.T, records *store.Store, id string, status store.RunStat
 	if status == store.RunPending {
 		return run
 	}
-	if status == store.RunPassed {
+	if status == store.RunPassed || nothingLeft {
 		var all pipeline.Stages
 		for _, stage := range pipeline.Order() {
 			*all.At(stage) = writingStage(stage, nil)
@@ -150,17 +150,18 @@ func (s *hkSubject) answer(t *testing.T, id, hold, answer string) (machine.TaskA
 	return s.service.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: id, Hold: hold, Answer: answer})
 }
 
-// A pass whose run rebased to nothing, the empty-diff short circuit written
-// by the real pipeline, is retired by nobody but a person: PRD section 6's
-// nothing left to deliver (AGE-487) proposes that such a pass lands, and
-// nothing of it is built, so until then the pass is where its records put
-// it. It resolves Ready, is not retired on its own however many passes the
-// loop makes, and once its worker reads dead and an interval has passed it
-// is offered the retirement hold like any other end that does not land;
-// retire then releases its claim and a later pass can be created. This is
-// what the code does and establishes nothing of the proposed landing, which
-// section 13's housekeeping row describes and no test here claims.
-func TestAPassWhoseRunRebasedToNothingIsRetiredOnlyByAnAnswer(t *testing.T) {
+// A pass whose run ended on the empty-diff short circuit, written by the
+// real pipeline, without a nothing-to-deliver record, as a run whose
+// branch was already published or whose work was not proven present ends
+// (PRD section 6's nothing left to deliver, "what this does not
+// establish"), lands nothing and is retired by nobody but a person: the
+// pass is where its records put it, resolving Ready, not retired however
+// many passes the loop makes, and once its worker reads dead and an
+// interval has passed it is offered the retirement hold like any other end
+// that does not land; retire then releases its claim and a later pass can
+// be created. TestAPassWhoseRunLeftNothingToDeliverLandsAndIsNotRetired is
+// the run that did write the record.
+func TestAPassWhoseRunWroteNoNothingToDeliverRecordIsRetiredOnlyByAnAnswer(t *testing.T) {
 	t.Parallel()
 	const pass = "taskhkproofa"
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
@@ -190,6 +191,42 @@ func TestAPassWhoseRunRebasedToNothingIsRetiredOnlyByAnAnswer(t *testing.T) {
 	}
 	if err := sub.createPass(t); err != nil {
 		t.Fatalf("a pass after the retired one was refused: %v", err)
+	}
+}
+
+// PRD section 13's housekeeping row and section 6's nothing left to
+// deliver: a pass whose run's rebase left nothing to deliver, with the
+// run's nothing-to-deliver record written as its end writes it, lands.
+// It resolves Landed from that record, is in the terminal tier and so no
+// longer open, a later pass can be created at once, and after an interval
+// it is offered no retirement hold and no retirement is written: the
+// program retires nothing, and this pass needs no retirement.
+func TestAPassWhoseRunLeftNothingToDeliverLandsAndIsNotRetired(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhklandaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-landnothing")
+		sub.terminals.dead("pane-landnothing")
+		run := passRun(t, records, "run-landnothing", store.RunRunning, true)
+		if _, err := records.TransitionRunOnNothingToDeliver(t.Context(), run.ID, []store.RunStatus{store.RunRunning}, store.RunPassed,
+			store.NothingToDeliver{DefaultCommit: "main", Submitted: run.SubmittedHead, Examined: []string{run.SubmittedHead},
+				Answer: store.NothingToDeliverAnswer, Checkpoint: 1}); err != nil {
+			t.Fatalf("ending run %s on nothing to deliver: %v", run.ID, err)
+		}
+	})
+	if got := sub.observedTask(t, pass); got.State != taskstate.Landed || !got.Basis.NothingToDeliver {
+		t.Fatalf("the pass resolves %+v, want Landed from the run's nothing-to-deliver record", got)
+	}
+	if err := sub.createPass(t); err != nil {
+		t.Fatalf("a pass after one that landed on nothing to deliver was refused: %v", err)
+	}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("the landed pass was offered %+v, want no retirement hold", holds)
+	}
+	if _, found := sub.retirement(t, pass); found {
+		t.Fatal("the landed pass was retired")
 	}
 }
 

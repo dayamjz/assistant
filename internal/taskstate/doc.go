@@ -42,6 +42,20 @@
 // merge record. The detail says the branch was fast-forwarded on this
 // machine and never that anything merged, because nothing was validated.
 //
+// A gated delivery task whose rebase leaves nothing to deliver lands too, PRD
+// section 6's "nothing left to deliver": its Landed is derived from the
+// nothing-to-deliver record of a run attributed to it, which
+// store.TransitionRunOnNothingToDeliver writes in the transaction that ends
+// the run on section 5's empty-diff short circuit, and only for a run whose
+// position carries the facts internal/stages' NothingToDeliver.Lands asks
+// for. It is read in this same tier, beside the merge record and on its
+// terms: the newest attributed run with either record is the one named, and
+// Basis.NothingToDeliver says which record it was. Complete follows from it
+// and the cleanup record as from a merge record. The detail says the change
+// was already on the default branch and nothing was delivered, and never
+// that anything merged or was validated, because no review, test or check
+// ran on it.
+//
 // A terminal record is final. Every run in the snapshot is read below it, so
 // a run attributed later, by branch or named by the task's own row, does not
 // displace it; work that continues after Landed is a new task, which is what
