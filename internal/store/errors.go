@@ -645,19 +645,33 @@ func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 // whoever asks, so no worker starts in its copy once its claim on its
 // repository is released. SetAttemptSession returns it for the launch of an
 // attempt claimed before the retirement, so no session is recorded for an
-// attempt of a retired pass after its retirement, and TransitionTaskShape
-// for a promotion of a retired pass, whose delivery could never begin.
+// attempt of a retired pass after its retirement, OfferRetirementHold for
+// a pass whose claim is already released, and TransitionTaskShape for a
+// promotion of a retired pass, whose delivery could never begin.
 var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
+
+// ErrPassHeld is returned, wrapped, by BeginTaskAttempt and
+// BeginFirstTaskAttempt for a housekeeping pass with an open retirement
+// hold, the one OfferRetirementHold registered: the hold waits on a person
+// about whether the pass ends, and an attempt begun under it would run a
+// worker in a pass that resolves Held, which is not in flight, out of
+// supervision (P10). A keep answer closes the hold, and the next claim
+// begins. The claim and the offer are decided in the store with exactly
+// one loser in either order: the offer refuses a pass whose attempt moved
+// (ErrTaskMoved), and the claim refuses a pass whose hold is open.
+var ErrPassHeld = errors.New("store: the housekeeping pass holds on its retirement decision and is not begun until it is answered")
 
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
 // still moves the pass as its transaction reads it: a run attributed to it
 // that has not ended, a run or an attempt newer than the retirement was
 // decided against, or a session of that attempt recorded since the
-// retirement was decided against none. Nothing is written.
+// retirement was decided against none. OfferRetirementHold returns it for a
+// run or a session on the same terms. Nothing is written.
 var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
 
 // ErrPassClosed is returned, wrapped, by RetireHousekeepingPass for a pass
 // already retired or whose records put it in the terminal tier: its claim
 // on its repository is already released, and a second retirement would be a
-// second record of one end.
+// second record of one end. OfferRetirementHold returns it for a pass in the
+// terminal tier, whose retire answer could only be refused.
 var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")

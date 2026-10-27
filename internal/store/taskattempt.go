@@ -128,7 +128,8 @@ func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 //
 // It returns ErrNotFound, wrapped, for a task that does not exist, and for
 // a housekeeping pass ErrPassRetired, wrapped, once its retirement is
-// recorded. It records no state and launches nothing: the record precedes the process,
+// recorded and ErrPassHeld, wrapped, while its retirement hold is open. It
+// records no state and launches nothing: the record precedes the process,
 // and the session the process runs in is filled in afterwards by
 // SetAttemptSession.
 func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLatest int64) (TaskAttempt, error) {
@@ -172,14 +173,18 @@ func (s *Store) beginTaskAttempt(ctx context.Context, taskID string, expectedLat
 
 // anchorTaskAttemptTx refuses, with a *TaskMovedError, a task whose highest
 // attempt is not expectedLatest, with ErrNotFound one that does not exist,
-// and with ErrPassRetired a housekeeping pass whose retirement is recorded,
-// which is every attempt's claim: dispatch, a retried dispatch, and the one
-// anchored relaunch.
+// with ErrPassRetired a housekeeping pass whose retirement is recorded, and
+// with ErrPassHeld one whose retirement hold is open, which is every
+// attempt's claim: dispatch, a retried dispatch, and the one anchored
+// relaunch.
 func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expectedLatest int64) error {
 	if err := taskExists(ctx, tx, taskID); err != nil {
 		return err
 	}
 	if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
+		return err
+	}
+	if err := refuseHeldTx(ctx, tx, taskID); err != nil {
 		return err
 	}
 	var stands int64
@@ -192,6 +197,25 @@ func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expecte
 		return &TaskMovedError{Task: taskID, Anchor: AnchoredAttempt, Expected: expectedLatest, Stands: stands}
 	}
 	return nil
+}
+
+// refuseHeldTx refuses, with ErrPassHeld, a housekeeping pass whose
+// retirement hold, the one OfferRetirementHold marked, is open: the hold
+// waits on a person about whether the pass ends, and a worker begun under
+// it would run in a pass that resolves Held, out of supervision. Read in the
+// claim's transaction, so the offer and the claim have one loser in either
+// order.
+func refuseHeldTx(ctx context.Context, tx *sql.Tx, task string) error {
+	var key string
+	err := tx.QueryRowContext(ctx,
+		`SELECT key FROM hold WHERE task_id = ? AND resolution IS NULL AND housekeeping_retirement = 1 LIMIT 1`, task).Scan(&key)
+	switch {
+	case isNoRows(err):
+		return nil
+	case err != nil:
+		return fmt.Errorf("reading whether task %s holds on its retirement: %w", task, err)
+	}
+	return fmt.Errorf("%w: task %s holds on %s", ErrPassHeld, task, key)
 }
 
 // insertTaskAttemptTx writes attempt sequence of the task, with no session.

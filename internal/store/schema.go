@@ -228,6 +228,11 @@ const housekeepingMigration = "housekeeping passes"
 // sealCheckpointTableMigration is a constant.
 const housekeepingRetirementMigration = "housekeeping retirement"
 
+// housekeepingHoldMigration names the migration that marks a housekeeping
+// pass's retirement hold on the hold row, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingHoldMigration = "housekeeping retirement hold"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2772,6 +2777,18 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a housekeeping retirement is not deleted while its pass stands');
 				END`,
+		},
+	},
+	{
+		version: 65,
+		name:    housekeepingHoldMigration,
+		statements: []string{
+			// The retirement hold is the one hold the store registers
+			// itself (OfferRetirementHold), and the one hold an attempt
+			// claim reads: no attempt of a pass begins while one is open
+			// (ErrPassHeld). The mark says which holds those are; every
+			// other hold reads back unknown.
+			`ALTER TABLE hold ADD COLUMN housekeeping_retirement INTEGER`,
 		},
 	},
 }
