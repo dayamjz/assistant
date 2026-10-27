@@ -44,8 +44,8 @@ func promotePass(t *testing.T, records *store.Store, id string) {
 // passRun records a run of the pass's branch, after its attempt began, in
 // status. A passed run is driven through the real pipeline over the durable
 // checkpoint store first, with a rebase stage that writes the empty-diff
-// short circuit when nothingLeft is set, so the position the retirement
-// reads is what the executor wrote and not one stated here.
+// short circuit when nothingLeft is set, so a run that rebased to nothing
+// is the shape the executor leaves and not one stated here.
 func passRun(t *testing.T, records *store.Store, id string, status store.RunStatus, nothingLeft bool) store.Run {
 	t.Helper()
 	ctx := t.Context()
@@ -119,18 +119,6 @@ func (s *hkSubject) retirement(t *testing.T, id string) (store.HousekeepingRetir
 	return r, found
 }
 
-// awaitRetired waits for the next on-proof retirement's end.
-func (s *hkSubject) awaitRetired(t *testing.T) hkRetired {
-	t.Helper()
-	select {
-	case r := <-s.retired:
-		return r
-	case <-time.After(loopWait):
-		t.Fatal("no on-proof retirement reported")
-		return hkRetired{}
-	}
-}
-
 // retireHolds is the pass's retirement holds, open or answered.
 func (s *hkSubject) retireHolds(t *testing.T, id string) []store.Hold {
 	t.Helper()
@@ -162,111 +150,46 @@ func (s *hkSubject) answer(t *testing.T, id, hold, answer string) (machine.TaskA
 	return s.service.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: id, Hold: hold, Answer: answer})
 }
 
-// PRD section 13's housekeeping row: a pass whose run rebased to nothing is
-// retired on that proof, read from the run's recorded position, with no
-// hold registered, and the pass still resolves Ready; a later pass can then
-// be created. The worker's end is verified by the probe reading it dead.
-func TestAPassWhoseRunRebasedToNothingIsRetiredOnProof(t *testing.T) {
+// A pass whose run rebased to nothing, the empty-diff short circuit written
+// by the real pipeline, is retired by nobody but a person: PRD section 6's
+// nothing left to deliver (AGE-487) proposes that such a pass lands, and
+// nothing of it is built, so until then the pass is where its records put
+// it. It resolves Ready, is not retired on its own however many passes the
+// loop makes, and once its worker reads dead and an interval has passed it
+// is offered the retirement hold like any other end that does not land;
+// retire then releases its claim and a later pass can be created. This is
+// what the code does and establishes nothing of the proposed landing, which
+// section 13's housekeeping row describes and no test here claims.
+func TestAPassWhoseRunRebasedToNothingIsRetiredOnlyByAnAnswer(t *testing.T) {
 	t.Parallel()
 	const pass = "taskhkproofa"
-	var run store.Run
-	stall := supervisor.StallHold{Task: pass, Attempt: 1, Epoch: 1, Surface: 3}
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
 		promotedPass(t, records, pass, "pane-proof")
 		sub.terminals.dead("pane-proof")
-		run = passRun(t, records, "run-proof", store.RunPassed, true)
-		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: stall.Key(), TaskID: store.Known(pass),
-			Subject: "whether to end a stalled worker", Detail: "d"}); err != nil {
-			t.Fatal(err)
-		}
+		passRun(t, records, "run-proof", store.RunPassed, true)
 	})
-	if got := sub.awaitRetired(t); got.task != pass || got.run != run.ID || got.err != nil {
-		t.Fatalf("the on-proof retirement ended %+v, want pass %s retired on run %s", got, pass, run.ID)
+	for i := 0; i < 3; i++ {
+		sub.pass(t)
 	}
-	record, found := sub.retirement(t, pass)
-	if !found || !record.OnProof() || record.Run != store.Known(run.ID) {
-		t.Fatalf("the retirement record is %+v (%v), want one naming run %s", record, found, run.ID)
-	}
-	snap, err := sub.records(t).TaskSnapshot(t.Context(), pass)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The one hold the pass carries is the stall hold planted above, which
-	// the retirement's probe reading the worker dead closed as the
-	// program's (PRD section 6's "the probe a housekeeping retirement takes
-	// among them"); nothing was registered.
-	if len(snap.Holds) != 1 || snap.Holds[0].Key != stall.Key() || snap.Holds[0].Open() ||
-		snap.Holds[0].Resolution != store.Known(supervisor.StallClosedWorkerDead) {
-		t.Fatalf("the on-proof retirement left the holds %+v, want only the stall hold, closed on the dead reading", snap.Holds)
+	if _, found := sub.retirement(t, pass); found {
+		t.Fatal("a pass whose run rebased to nothing was retired by the program")
 	}
 	if got := sub.observedTask(t, pass); got.State != taskstate.Ready {
-		t.Fatalf("the retired pass resolves %s, want Ready, which the retirement does not change", got.State)
+		t.Fatalf("the pass resolves %s, want Ready from its passed run", got.State)
+	}
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("before an interval the pass carries %+v, want no retirement hold", holds)
+	}
+	var open *store.PassOpenError
+	if err := sub.createPass(t); !errors.As(err, &open) || open.Pass != pass {
+		t.Fatalf("a pass after one still open = %v, want it refused naming %s", err, pass)
+	}
+	sub.retireOnAnswer(t, pass)
+	if record, found := sub.retirement(t, pass); !found || record.Hold == "" {
+		t.Fatalf("the retirement record is %+v (%v), want one naming the answered hold", record, found)
 	}
 	if err := sub.createPass(t); err != nil {
 		t.Fatalf("a pass after the retired one was refused: %v", err)
-	}
-}
-
-// The same run whose rebase found something to deliver is no proof: the
-// pass is not retired, its run's position having said nothing of the kind.
-// This is the control on the position, beside the one on the probe below.
-func TestAPassedRunWithSomethingLeftIsNoProof(t *testing.T) {
-	t.Parallel()
-	const pass = "taskhkproofb"
-	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
-		promotedPass(t, records, pass, "pane-left")
-		sub.terminals.dead("pane-left")
-		passRun(t, records, "run-left", store.RunPassed, false)
-	})
-	if got := sub.awaitRetired(t); !errors.Is(got.err, errNothingLeftUnread) {
-		t.Fatalf("a run with something left ended the on-proof retirement %+v, want it to read no proof", got)
-	}
-	if _, found := sub.retirement(t, pass); found {
-		t.Fatal("a pass whose run delivered something was retired")
-	}
-}
-
-// An on-proof retirement whose worker end cannot be verified writes nothing:
-// a worker this service does not hold, which reads live, is ended only by a
-// stop, so the pass is left to the hold and the escalation.
-func TestAnOnProofRetirementWhoseWorkerEndCannotBeVerifiedWritesNothing(t *testing.T) {
-	t.Parallel()
-	const pass = "taskhkproofc"
-	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
-		promotedPass(t, records, pass, "pane-other")
-		sub.terminals.live("pane-other", "still here\n")
-		passRun(t, records, "run-other", store.RunPassed, true)
-	})
-	got := sub.awaitRetired(t)
-	if got.err == nil || !strings.Contains(got.err.Error(), "could not be verified") {
-		t.Fatalf("the on-proof retirement ended %+v, want its worker's end unverified", got)
-	}
-	if _, found := sub.retirement(t, pass); found {
-		t.Fatal("a pass whose worker's end was not verified was retired")
-	}
-}
-
-// With a stop's hold open on the pass, no on-proof retirement is written:
-// the program never answers a hold that waits on a person, and that hold's
-// retry would begin the worker again.
-func TestAStopsHoldOpenKeepsAPassFromItsOnProofRetirement(t *testing.T) {
-	t.Parallel()
-	const pass = "taskhkproofd"
-	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
-		promotedPass(t, records, pass, "pane-stopped")
-		sub.terminals.dead("pane-stopped")
-		passRun(t, records, "run-stopped", store.RunPassed, true)
-		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: stoppedKey(pass, 1), TaskID: store.Known(pass),
-			Subject: "whether to begin the work again", Detail: "d"}); err != nil {
-			t.Fatal(err)
-		}
-	})
-	sub.pass(t)
-	if len(sub.retired) != 0 {
-		t.Fatalf("an on-proof retirement was tried with the stop's hold open: %+v", <-sub.retired)
-	}
-	if _, found := sub.retirement(t, pass); found {
-		t.Fatal("a pass with a stop's hold open was retired on proof")
 	}
 }
 
@@ -329,7 +252,7 @@ func TestACancelledPassStaysOpenUntilItsRetirementHoldIsAnsweredRetire(t *testin
 	if err != nil || retired.Effect != machine.AnswerRetired {
 		t.Fatalf("retire answered %+v, %v", retired, err)
 	}
-	if record, found := sub.retirement(t, pass); !found || record.Hold != store.Known(offered.Key) {
+	if record, found := sub.retirement(t, pass); !found || record.Hold != offered.Key {
 		t.Fatalf("the retirement record is %+v (%v), want one naming %s", record, found, offered.Key)
 	}
 	if err := sub.createPass(t); err != nil {
@@ -847,7 +770,7 @@ func TestARetiredPassIsOwedItsCleanupOnRetiredCleanupOwedsTerms(t *testing.T) {
 		o := taskstate.Observed{
 			Snapshot: store.TaskSnapshot{
 				Task:       store.Task{ID: "taskhkownaaa", Shape: store.TaskInvestigation, Housekeeping: true},
-				Retirement: store.Known(store.HousekeepingRetirement{Task: "taskhkownaaa", Hold: store.Known("k")}),
+				Retirement: store.Known(store.HousekeepingRetirement{Task: "taskhkownaaa", Hold: "k"}),
 				Attempts:   []store.TaskAttempt{{Sequence: 1, SessionRef: store.Known("pane-own")}},
 			},
 			State: taskstate.Resolution{State: taskstate.Unknown, Source: taskstate.SourceProcess,
@@ -907,49 +830,6 @@ func (s *hkSubject) awaitKeptOf(t *testing.T, task string) {
 			t.Fatalf("no kept work entry was written for task %s; the log reads:\n%s", task, serviceLogOf(t, s.h))
 		}
 		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// A pass the program can retire on proof, older than an interval, is never
-// left retired with its retirement hold open: the loop offers the hold and
-// starts the on-proof retirement from the same reading, and whichever lands
-// first, the other gives way. Retired with an open retirement hold is the
-// state refused, since answering that hold could only be refused. An open
-// stop hold keeps the first pass from starting the retirement, so the pass
-// an interval later is the one that does both.
-func TestARetiredPassIsNeverLeftWithItsRetirementHoldOpen(t *testing.T) {
-	t.Parallel()
-	const pass = "taskhkbothaa"
-	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
-		promotedPass(t, records, pass, "pane-both")
-		sub.terminals.dead("pane-both")
-		passRun(t, records, "run-both", store.RunPassed, true)
-		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: stoppedKey(pass, 1), TaskID: store.Known(pass),
-			Subject: "whether to begin the work again", Detail: "d"}); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if len(sub.retired) != 0 {
-		t.Fatal("the first pass started an on-proof retirement with the stop's hold open")
-	}
-	if _, err := sub.records(t).ResolveHold(t.Context(), stoppedKey(pass, 1), "stop", store.ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
-	sub.clock.Advance(time.Hour)
-	sub.pass(t)
-	<-sub.retired
-	_, retired := sub.retirement(t, pass)
-	open := 0
-	for _, h := range sub.retireHolds(t, pass) {
-		if h.Open() {
-			open++
-		}
-	}
-	if retired && open != 0 {
-		t.Fatalf("the pass was retired and still carries %d open retirement hold(s)", open)
-	}
-	if !retired && open != 1 {
-		t.Fatalf("the pass was not retired and carries %d open retirement hold(s), want the one a person answers", open)
 	}
 }
 

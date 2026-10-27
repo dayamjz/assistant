@@ -2543,10 +2543,8 @@ var schema = []migration{
 			// appended and sealed, and kept while its task stands.
 			`CREATE TABLE housekeeping_retirement (
 				task_id     TEXT PRIMARY KEY REFERENCES task(id),
-				run_id      TEXT REFERENCES run(id),
-				hold_key    TEXT REFERENCES hold(key),
-				recorded_at TEXT NOT NULL,
-				CHECK ((run_id IS NULL) <> (hold_key IS NULL))
+				hold_key    TEXT NOT NULL REFERENCES hold(key),
+				recorded_at TEXT NOT NULL
 			) STRICT`,
 			`CREATE TRIGGER housekeeping_retirement_is_a_passes
 				BEFORE INSERT ON housekeeping_retirement

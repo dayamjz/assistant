@@ -652,9 +652,8 @@ var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is 
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
 // still moves the pass as its transaction reads it: a run attributed to it
 // that has not ended, a run or an attempt newer than the retirement was
-// decided against, a session of that attempt recorded since the retirement
-// was decided against none, or, for an on-proof retirement, an open hold
-// that offers to relaunch its worker. OfferRetirementHold returns it for a
+// decided against, or a session of that attempt recorded since the
+// retirement was decided against none. OfferRetirementHold returns it for a
 // run or a session on the same terms. Nothing is written.
 var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
 

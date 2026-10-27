@@ -410,11 +410,6 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// betweenRetirementCheckAndEnd runs in an on-proof retirement after the
-	// store answered that the retirement stands and before the worker is
-	// ended. It is nil in production and set only by this package's tests,
-	// which start a run of the pass's branch there.
-	betweenRetirementCheckAndEnd func()
 	// afterStallStopEnded runs in a stop or retry answered to a stall hold,
 	// after the stop ended the worker and proved it dead and before the
 	// answer is recorded on the stall hold. It is nil in production and set

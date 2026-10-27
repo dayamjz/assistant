@@ -61,8 +61,9 @@ func housekeepingFindings(paths []string) []findings.Finding {
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
 			Location: findings.Location{Path: path},
-			Description: fmt.Sprintf("This run was started by a housekeeping pass, which may change only the repository's agent "+
-				"context, the files its trusted housekeeping.paths names, and this change touched %s, which is outside them. "+
+			Description: fmt.Sprintf("This run is on a housekeeping pass's branch, whoever pushed or started it, so it is held to "+
+				"the pass's scope: a pass may change only the repository's agent context, the files its trusted "+
+				"housekeeping.paths names, and this change touched %s, which is outside them. "+
 				"Whether that change belongs in the pass is yours to decide; approving accepts it.", path),
 		})
 	}

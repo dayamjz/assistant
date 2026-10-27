@@ -107,10 +107,10 @@ paths: ["internal/service/**"]
 - Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
   program's part of it (it creates no pass): the due check off the loop's
   goroutine, once per interval per repository, the open pass's wake and
-  retirement hold, the on-proof retirement of a pass whose run rebased to
-  nothing (to be removed once AGE-487 lands), the retirement hold's
-  answers, and `passBranch`, which marks every run of a pass's branch for
-  the review's scope ask. A retired pass's copy is asked the cleanup
+  retirement hold, the retirement hold's answers (the program retires no
+  pass on its own; a run that rebases to nothing is AGE-487's landing,
+  proposed and not built), and `passBranch`, which marks every run of a
+  pass's branch for the review's scope ask. A retired pass's copy is asked the cleanup
   decision through `landed.go`'s one recurring trigger, not a one-shot ask
   of its own. Its header owns the residual gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;

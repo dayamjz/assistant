@@ -35,12 +35,6 @@ type hkCheck struct {
 	report     taskReport
 }
 
-// hkRetired is one on-proof retirement's end as its hook delivered it.
-type hkRetired struct {
-	task, run string
-	err       error
-}
-
 // hkSubject is a loop over a home that records one repository with a gate
 // and an upstream, under housekeepingConfig or what the test states.
 type hkSubject struct {
@@ -50,7 +44,6 @@ type hkSubject struct {
 	primary   string
 	upstream  string
 	checks    chan hkCheck
-	retired   chan hkRetired
 	first     passReport
 	// offerMu guards onOffer, which the loop's beforeRetirementOffer hook
 	// calls when a test set it.
@@ -74,7 +67,7 @@ type hkPlant func(t *testing.T, records *store.Store, sub *hkSubject)
 func openHousekeeping(t *testing.T, document string, plant hkPlant) *hkSubject {
 	t.Helper()
 	h, records := loopHomeConfigured(t, document)
-	sub := &hkSubject{h: h, terminals: newScriptedTerminals(), checks: make(chan hkCheck, 64), retired: make(chan hkRetired, 64)}
+	sub := &hkSubject{h: h, terminals: newScriptedTerminals(), checks: make(chan hkCheck, 64)}
 	sub.primary, sub.upstream = plantHousekeepingRepository(t, h, records)
 	if plant != nil {
 		plant(t, records, sub)
@@ -82,7 +75,6 @@ func openHousekeeping(t *testing.T, document string, plant hkPlant) *hkSubject {
 	clock := &fakeClock{now: time.Now()}
 	sub.loopSubject = openLoopHooked(t, h, records, sub.terminals, clock, nil, func(hooks *supervisionHooks) {
 		hooks.afterHousekeepingCheck = func(repository string, r taskReport) { sub.checks <- hkCheck{repository, r} }
-		hooks.afterRetireOnProof = func(task, run string, err error) { sub.retired <- hkRetired{task, run, err} }
 		hooks.beforeRetirementOffer = func(task string) {
 			sub.offerMu.Lock()
 			f := sub.onOffer

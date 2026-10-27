@@ -535,10 +535,11 @@ assistant --task ID --answer keep     # leave it open; asked again after another
 started or its worker was begun again since you were asked. It closes no pull
 request, moves no branch and discards nothing; it answers `stop` on the pass's
 decisions that would begin its worker again, and its copy is asked the
-cleanup decision, so work not yet landed is kept for you (see Kept work). A
-pass whose run rebased to nothing, because the default branch already holds
-the correction, is retired by the program on that proof, with no decision
-asked. A retired pass is never begun again, and `retire` answered while a
+cleanup decision, so work not yet landed is kept for you (see Kept work).
+The program retires no pass on its own: a pass whose run rebased to nothing,
+because the default branch already holds the correction, is asked about the
+same way once nothing moves it, until the landing the product's design
+proposes for that case is built. A retired pass is never begun again, and `retire` answered while a
 launch of the pass is under way is refused, with the decision left open,
 until that worker is recorded, which the next answer then reads live. It
 stops counting as work in flight: the stop guard and the catch-up read

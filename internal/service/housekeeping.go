@@ -12,7 +12,6 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -80,30 +79,19 @@ import (
 // housekeeping.interval zero, no wake and no hold is ever raised about a
 // pass, open or not.
 //
-// # Rebase to nothing, on proof
+// # A run that rebases to nothing
 //
-// Each pass also looks at every open pass whose newest attributed run
-// passed with every attributed run ended and no open hold that would
-// relaunch its worker, whatever the interval. Off the loop's goroutine and
-// under the task's slot, it reads that run's latest checkpoint and goes on
-// only when its recorded position says the rebase stage found nothing left
-// to change (pipeline.NothingLeft). It then takes the pass's branch's
-// exclusion, which every run creation takes, reads the pass again and asks
-// the store whether the retirement would be refused as the records stand
-// (store.CheckRetirement), so a run started, a relaunch, or a hold offering
-// to relaunch the worker since the loop chose the pass ends nothing (P6).
-// Only then, still holding the branch, does it end the worker as a landed
-// task's is ended, through the session this service holds and with no hold,
-// verifies the end by a probe reading the terminal dead, closes the pass's
-// stall holds on that reading as stallhold.go's closure does, and writes the
-// retirement record through store.RetireHousekeepingPass, which refuses it
-// when something moved the pass meanwhile. A worker this service does not
-// hold, which only a stop ends, reads Unobserved, and nothing is written.
-// AGE-487 tracks giving every delivery task whose rebase leaves nothing to
-// deliver an end of its own; once it lands, this end is removed rather than
-// kept beside it (P14).
+// No end here. PRD section 6's nothing left to deliver (AGE-487, proposed
+// and not built) lands a pass whose run's rebase leaves nothing to deliver
+// as it lands any delivery task, and a landed pass is no longer open under
+// the one-at-a-time rule. Until that is built, such a pass is where its
+// records put it: it resolves Ready from the passed run, its worker runs
+// on, the wake names it each interval while something moves it, and once
+// nothing does it is offered the retirement hold like any other end that
+// does not land. Nothing here reads a run's position, and the program
+// retires no pass on its own.
 //
-// # Every other end, by an answer
+// # The end, by an answer
 //
 // answerRetirement answers the retirement hold: keep closes it and leaves
 // the pass open; retire, under the task's slot, refuses a pass whose worker
@@ -113,7 +101,7 @@ import (
 // resolver; any other answer is refused with the hold open. Standing consent
 // answers no task hold, so it never answers this one.
 //
-// After either retirement the pass's copy is asked the cleanup decision, so
+// After a retirement the pass's copy is asked the cleanup decision, so
 // a copy holding work that has not landed becomes a kept work entry (P15)
 // and nothing is removed without a proof; a copy refused for a report never
 // stored or a decision never registered is kept the same way
@@ -124,10 +112,8 @@ import (
 // whose copy carries no removal (retiredCleanupOwed), so a service that
 // stopped between the two asks it once it opens again and reads the worker
 // dead, and a refusal that changes with the world is asked about again. The
-// terminal it is asked with is retiredTerminal's. An on-proof retirement
-// gives way to an open retirement
-// hold, which waits on a person, and the store refuses a retirement hold for
-// a pass already retired, so the two are never both left standing. A retired
+// terminal it is asked with is retiredTerminal's. The store refuses a
+// retirement hold for a pass already retired. A retired
 // pass is never begun again: every attempt claim refuses it in the store
 // (store.ErrPassRetired), and relaunch.go refuses it before it sweeps
 // anything, and the record of an attempt's session refuses it, so no
@@ -144,13 +130,6 @@ import (
 //   - The due check runs off the loop's goroutine, so a pass report does not
 //     carry it, and a check that is slower than the interval is not begun a
 //     second time until it returns.
-//   - The branch's exclusion orders an on-proof retirement against a run of
-//     the pass within this service, which PRD section 8 gives a home alone.
-//     A push the gate admitted while the retirement held the branch creates
-//     its run once the record is written, so that run is of a retired pass:
-//     its worker was ended by the retirement and its work is the push, which
-//     validates as any run does. Nothing is lost; the pass's claim on the
-//     repository is already released.
 //   - A launch records its attempt's session only once the worker's
 //     process has started, and until then the attempt reads as never
 //     launched, which section 6's "or its latest attempt never had a
@@ -159,9 +138,9 @@ import (
 //     until the launch has settled its record (dispatch.go, launch.go),
 //     the slot every retirement is written under and the retirement
 //     hold's offer reads, so a retire answered meanwhile is refused with
-//     the hold open (errSteerInFlight), the offer and the on-proof
-//     retirement are skipped until the next pass, and a launch that reads a pass
-//     already retired under the slot creates no worker (errLaunchRetired);
+//     the hold open (errSteerInFlight), the offer is skipped until the
+//     next pass, and a launch that reads a pass already retired under the
+//     slot creates no worker (errLaunchRetired);
 //     the pass stays open and resolves Dispatched, in flight, until its
 //     worker is recorded. For a retirement
 //     the slot does not order, written by another incarnation or past a
@@ -174,25 +153,18 @@ import (
 //     decision is asked about as for any retired pass (P6), and between
 //     its start and its end it is a worker no record names, the gap
 //     dispatch.go's crash paragraph states.
-//   - The on-proof retirement is tried once per run whose position read
-//     nothing left; one refused because something moved the pass is tried
-//     again only when a later run of the pass passes, and is otherwise left
-//     to the retirement hold.
 //   - The program cannot tell a rule from a fact; what a pass may change
 //     rests on the worker's instructions and the run's review, and the
 //     review's ask on paths outside housekeeping.paths (internal/stages).
 
 // housekeepingState is what this service remembers between passes about
 // housekeeping, none of it a fact the records do not hold: which
-// repositories' due checks are running now, and which runs' positions were
-// read already. Losing it costs a repeated read and nothing else.
+// repositories' due checks are running now. Losing it costs a repeated
+// check and nothing else.
 type housekeepingState struct {
 	mu sync.Mutex
 	// checking holds the repositories whose due check is running.
 	checking map[string]bool
-	// read holds the runs whose position an on-proof retirement read, and
-	// what it said.
-	read map[string]bool
 }
 
 // housekeepingScope is internal/tasks' HousekeepingScope: the repository's
@@ -231,11 +203,6 @@ func passesByRepository(observed []taskstate.Observed) map[string][]taskstate.Ob
 // detections it wrote. It returns nil when there was neither.
 func (s *Service) superviseHousekeeping(c *incarnation, observed []taskstate.Observed, now time.Time) map[string]taskReport {
 	byRepository := passesByRepository(observed)
-	for _, passes := range byRepository {
-		for _, o := range passes {
-			s.retireOnProofFromPass(o)
-		}
-	}
 	interval := s.cfg.HousekeepingInterval
 	if interval <= 0 {
 		return nil
@@ -332,8 +299,8 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	switch {
 	case errors.As(err, &moved), errors.Is(err, store.ErrPassMoves), errors.Is(err, store.ErrPassRetired), errors.Is(err, store.ErrPassClosed):
 		// Begun again or given a run since the pass read it, so it moves,
-		// or retired on proof or completed since, so its claim is
-		// released: either way it is owed none.
+		// or retired or completed since, so its claim is released: either
+		// way it is owed none.
 	case err != nil:
 		out.Err = errors.Join(out.Err, err)
 	default:
@@ -604,146 +571,12 @@ func passRelaunches(task string) func(string) bool {
 	return func(key string) bool { return isRetryHold(key, task) }
 }
 
-// passWaits is the Relaunches an on-proof retirement of task is decided
-// with: every hold that waits on a person about whether the pass ends, the
-// relaunch holds and its retirement hold, since the program answers none.
-func passWaits(task string) func(string) bool {
-	return func(key string) bool {
-		_, retire := parseRetireHold(key, task)
-		return retire || isRetryHold(key, task)
-	}
-}
-
 // retirementOf is the store request for a retirement of task, anchored to
 // its latest attempt and that attempt's session as the caller read them in
 // attempts, and to run, with the owners' predicates.
 func retirementOf(task string, attempts []store.TaskAttempt, run string) store.Retirement {
 	return store.Retirement{Task: task, Attempt: latestSequence(attempts), Session: latestRef(attempts), Run: run,
 		Relaunches: passRelaunches(task), Ended: runs.Finished, Delivered: taskstate.Delivered}
-}
-
-// retireOnProofFromPass starts the on-proof retirement of an open pass the
-// loop read, when it is a candidate on the file comment's terms, off the
-// loop's goroutine under the task's slot. A slot another writer holds skips
-// the pass until the next one.
-func (s *Service) retireOnProofFromPass(o taskstate.Observed) {
-	snap := o.Snapshot
-	if !passOpen(o) || len(snap.Runs) == 0 || snap.Runs[0].Status != store.RunPassed {
-		return
-	}
-	for _, run := range snap.Runs {
-		if !taskstate.RunSettled(run.Status) {
-			return
-		}
-	}
-	waits := passWaits(snap.Task.ID)
-	for _, h := range snap.Holds {
-		if h.Open() && waits(h.Key) {
-			return
-		}
-	}
-	run := snap.Runs[0].ID
-	s.housekeeping.mu.Lock()
-	_, read := s.housekeeping.read[run]
-	s.housekeeping.mu.Unlock()
-	if read {
-		return
-	}
-	id := snap.Task.ID
-	release, err := s.claimSteer(id)
-	if err != nil {
-		return
-	}
-	if !s.startWork() {
-		release()
-		return
-	}
-	go func() {
-		defer s.work.Done()
-		defer release()
-		err := s.retireOnProof(s.stopCtx, id, run)
-		if err != nil {
-			s.log.Printf("housekeeping pass %s was not retired on run %s: %v", id, run, err)
-		}
-		if s.sup != nil && s.sup.hooks.afterRetireOnProof != nil {
-			s.sup.hooks.afterRetireOnProof(id, run, err)
-		}
-	}()
-}
-
-// errNothingLeftUnread is an on-proof retirement whose run's position did
-// not say nothing was left to change.
-var errNothingLeftUnread = errors.New("service: the run's recorded position does not say its rebase found nothing left to change")
-
-// retireOnProof is the on-proof retirement of one pass on run, under the
-// task's slot, on the file comment's terms. It reports why nothing was
-// written, or nil once the record is.
-func (s *Service) retireOnProof(ctx context.Context, id, run string) error {
-	latest, err := s.checkpoints.Latest(ctx, run)
-	if err != nil {
-		return fmt.Errorf("reading run %s's position: %w", run, err)
-	}
-	nothing := pipeline.NothingLeft(latest.State)
-	s.housekeeping.mu.Lock()
-	if s.housekeeping.read == nil {
-		s.housekeeping.read = make(map[string]bool)
-	}
-	s.housekeeping.read[run] = nothing
-	s.housekeeping.mu.Unlock()
-	if !nothing {
-		return errNothingLeftUnread
-	}
-	o, err := s.tasks().ObserveTask(ctx, id)
-	if err != nil {
-		return err
-	}
-	attempt := latestSequence(o.Snapshot.Attempts)
-	r := retirementOf(id, o.Snapshot.Attempts, run)
-	r.OnProof, r.Relaunches = true, passWaits(id)
-	branch, ok := o.Snapshot.Task.Branch.Get()
-	repository, hasRepository := o.Snapshot.Task.RepositoryID.Get()
-	if !ok || !hasRepository {
-		return fmt.Errorf("%w: pass %s works on no branch, so no run of it can be the proof", store.ErrPassMoves, id)
-	}
-	// The check, the end of the worker and the record are one act against
-	// a new run of the pass: every way a run is created (a push, a start, a
-	// rerun) takes its branch's exclusion, which this holds from the check
-	// to the write, so no run of the pass starts in between. The slot this
-	// runs under keeps a relaunch out the same way. A newer run, a relaunch,
-	// or a hold that offers to relaunch the worker since the loop chose the
-	// pass refuses at the check, and the worker keeps running (P6).
-	release, err := s.holdBranch(ctx, branchKey{repository: repository, branch: branch})
-	if err != nil {
-		return err
-	}
-	defer release()
-	if err := s.store.CheckRetirement(ctx, r); err != nil {
-		return err
-	}
-	if s.betweenRetirementCheckAndEnd != nil {
-		s.betweenRetirementCheckAndEnd()
-	}
-	if ref := latestRef(o.Snapshot.Attempts); ref != "" {
-		if _, err := s.endHeldWorker(id, ref); err != nil {
-			return fmt.Errorf("ending its worker: %w", err)
-		}
-		if s.terminals == nil {
-			return errRelaunchUnprobed
-		}
-		probed := s.terminals.Probe(ctx, ref)
-		if probed.Liveness != taskstate.Dead {
-			return fmt.Errorf("its worker's end could not be verified: the probe of session %s read %s (%s %s), "+
-				"and a worker this service does not hold is ended only by a stop", ref, probed.Liveness, probed.Reason, probed.Detail)
-		}
-		s.closeStallsOnDead(ctx, id, attempt, ref, "", probed)
-	}
-	retired, err := s.store.RetireHousekeepingPass(ctx, r)
-	if err != nil {
-		return err
-	}
-	s.log.Printf("housekeeping pass %s was retired on the proof of run %s, whose rebase found nothing left to change", id, run)
-	s.cleanUpLandedTask(ctx, retired.Record.Task)
-	return nil
 }
 
 // retiredCleanupOwed reports whether o is a retired housekeeping pass whose

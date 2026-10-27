@@ -308,10 +308,6 @@ type supervisionHooks struct {
 	// report once the check, which runs off the loop's goroutine, has
 	// written what it wrote (housekeeping.go).
 	afterHousekeepingCheck func(repository string, report taskReport)
-	// afterRetireOnProof is called once an on-proof retirement the loop
-	// started has written its record or found why it wrote none, with that
-	// reason or nil (housekeeping.go).
-	afterRetireOnProof func(task, run string, err error)
 	// beforeRetirementOffer is called with a pass the loop read open and
 	// decided to offer the retirement hold, after that read and before the
 	// registration, so a test can move the pass in between
