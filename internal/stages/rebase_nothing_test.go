@@ -57,6 +57,18 @@ func nothingAfter(t *testing.T, run *pushRun, out pipeline.Output) stages.Nothin
 	return got
 }
 
+// identifiedPushRun is newPushRun with a committer identity set in the
+// source repository, whose configuration the run's copy shares as a worktree
+// of it: a rebase that replays a commit records a new one, and a CI runner
+// has no identity of its own for git to fall back on, as recordingRun says.
+func identifiedPushRun(t *testing.T) *pushRun {
+	t.Helper()
+	run := newPushRun(t)
+	git(t, run.source, "config", "user.name", "test")
+	git(t, run.source, "config", "user.email", "test@example.invalid")
+	return run
+}
+
 // PRD section 5's rebase row: if nothing remains to change after the rebase,
 // the run ends successfully and the rest is skipped. A branch whose one
 // commit makes the edit the default branch already carries under another
@@ -66,7 +78,7 @@ func nothingAfter(t *testing.T, run *pushRun, out pipeline.Output) stages.Nothin
 // and the stage does not.
 func TestARebaseThatDropsTheBranchsOnlyCommitTakesTheShortCircuit(t *testing.T) {
 	t.Run("the same edit landed under another commit", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		submitted := run.head
 		run.commitOnTopOfUpstream(t, "main", "change.go", "package subject\n\n// the change under validation\n")
 
@@ -81,7 +93,7 @@ func TestARebaseThatDropsTheBranchsOnlyCommitTakesTheShortCircuit(t *testing.T) 
 	})
 
 	t.Run("control: the default branch moved elsewhere", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		run.commitOnTopOfUpstream(t, "main", "elsewhere.go", "package subject\n\n// landed first\n")
 
 		if out := run.rebase(t); diffEmpty(out) {
@@ -112,7 +124,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	const change = "package subject\n\n// the change under validation\n"
 
 	t.Run("the same edit landed under another commit lands", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		landed := run.commitOnTopOfUpstream(t, "main", "change.go", change)
 
 		out := run.rebase(t)
@@ -126,7 +138,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("an edit the default branch applied and reverted does not land", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		run.commitOnTopOfUpstream(t, "main", "change.go", change)
 		other := t.TempDir()
 		git(t, other, "clone", "--quiet", run.upstream, other)
@@ -146,7 +158,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("a branch already published does not land", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		git(t, run.source, "push", "--quiet", "origin", run.baseCommit+":refs/heads/topic")
 		run.commitOnTopOfUpstream(t, "main", "change.go", change)
 
@@ -161,7 +173,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("a branch with no commit of its own does not land", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		git(t, run.copy, "checkout", "--quiet", "--detach", run.baseCommit)
 		run.head, run.submitted = run.baseCommit, run.baseCommit
 
@@ -176,9 +188,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("a commit together with its revert does not land", func(t *testing.T) {
-		run := newPushRun(t)
-		git(t, run.copy, "config", "user.name", "test")
-		git(t, run.copy, "config", "user.email", "test@example.invalid")
+		run := identifiedPushRun(t)
 		git(t, run.copy, "revert", "--no-edit", "HEAD")
 		run.head = git(t, run.copy, "rev-parse", "HEAD")
 		run.submitted = run.head
@@ -194,7 +204,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("a conflict a fix round resolved by dropping the change does not land", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		run.commitOnTopOfUpstream(t, "main", "change.go", "package subject\n\n// somebody else's change\n")
 		out := run.rebase(t)
 		if len(out.Report.Findings) != 1 || out.Report.Findings[0].ID != "rebase-conflict" {
@@ -216,7 +226,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 	})
 
 	t.Run("control: a change the default branch lacks records no check", func(t *testing.T) {
-		run := newPushRun(t)
+		run := identifiedPushRun(t)
 		run.commitOnTopOfUpstream(t, "main", "elsewhere.go", "package subject\n\n// landed first\n")
 
 		out := run.rebase(t)
@@ -234,7 +244,7 @@ func TestTheRebaseStageRecordsWhetherNothingIsLeftToDeliver(t *testing.T) {
 // rather than taking the short circuit, and the reader refuses a pushed run
 // even were a check recorded beside one.
 func TestAPushedRunNeverLandsOnNothingLeft(t *testing.T) {
-	run := newPushRun(t)
+	run := identifiedPushRun(t)
 	run.commitOnTopOfUpstream(t, "main", "change.go", "package subject\n\n// the change under validation\n")
 	out := run.rebase(t)
 	if lands, why := nothingAfter(t, run, out).Lands(); !lands {

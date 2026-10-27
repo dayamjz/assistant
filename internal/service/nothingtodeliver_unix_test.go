@@ -5,6 +5,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,12 +162,12 @@ func nothingWalk(t *testing.T, branch string, shape nothingShape, adjust func(se
 		refspec := worker + ":refs/heads/" + branch
 		if shape.person {
 			git(t, copyPath, "push", "--quiet", gate.RemoteName, refspec)
-		} else if out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, refspec); err != nil {
-			t.Fatalf("the worker's push of its own branch was refused:\n%s", out)
+		} else {
+			pushAsWorker(t, w, copyPath, refspec)
 		}
 		records := openRecords(t, h)
 		defer func() { _ = records.Close() }()
-		run := runSubmitted(t, records, repository.ID, worker)
+		run := waitRunSubmitted(t, w, records, repository.ID, worker)
 		if shape.holds {
 			waitRunHeld(t, w, run.ID)
 		} else {
@@ -192,6 +193,46 @@ func waitRunHeld(t *testing.T, w launched, id string) machine.Run {
 		if run.Record.Status != store.RunPending && run.Record.Status != store.RunRunning || !time.Now().Before(deadline) {
 			log, _ := os.ReadFile(w.home.ServiceLog())
 			t.Fatalf("run %s reads %s, want held\nthe service log:\n%s", id, run.Record.Status, log)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// pushAsWorker has the task's worker push refspec from dir to the gate, and
+// does not wait to read the worker's answer back. A push that leaves nothing
+// to deliver lands the task, and the landing ends the worker, which can
+// happen before its answer is read (CI run 40431213759 read the capture after
+// the session was closed). Whether the gate admitted the push is read from
+// the record instead, by waitRunSubmitted; a refused push starts no run and
+// fails there with the service log.
+func pushAsWorker(t *testing.T, w launched, dir, refspec string) {
+	t.Helper()
+	command := fmt.Sprintf(": call %d; cd %s && %s", shellCalls.Add(1), shellQuote(dir),
+		shellQuote("git", "push", "--quiet", gate.RemoteName, refspec))
+	if err := w.provider.Send(t.Context(), w.session, shellMarker+command); err != nil {
+		t.Fatalf("sending the worker its push: %v", err)
+	}
+}
+
+// waitRunSubmitted waits for the repository's one run recorded for the
+// commit head, on runSubmitted's terms, and fails with the service log if
+// none is recorded.
+func waitRunSubmitted(t *testing.T, w launched, records *store.Store, repository, head string) store.Run {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		runs, err := records.RunsForRepository(t.Context(), repository)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range runs {
+			if r.SubmittedHead == head {
+				return runSubmitted(t, records, repository, head)
+			}
+		}
+		if !time.Now().Before(deadline) {
+			log, _ := os.ReadFile(w.home.ServiceLog())
+			t.Fatalf("no run was recorded for the pushed %s\nthe service log:\n%s", head, log)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
