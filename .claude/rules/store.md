@@ -25,6 +25,36 @@ paths: ["internal/store/**"]
   `surfaced_at` in the same transaction. `untaskedShape` serves the second
   and third shapes' offer, handout and acknowledgement; `DrainAll` and
   `AcknowledgeAll` take every shape in one transaction.
+- housekeepingMigration (63) is PRD section 6's housekeeping mark: the task
+  row's `housekeeping` mark (written once at intake; only a marked
+  investigation of a repository carries the `housekeeping` role).
+  `CreateTask` decides one open pass per repository in its own transaction
+  with the record tier passed in as `Disposition.Delivered`; `PassOpen` is
+  the one statement of "open". housekeepingRetirementMigration (64) is the
+  `housekeeping_retirement` record (`RetireHousekeepingPass`, written once,
+  only while nothing moves the pass as its transaction reads it,
+  `ErrPassMoves`, and answering `stop` under the same resolver on every
+  open hold `Retirement.Relaunches` names, which `internal/service` keys),
+  which `PassOpen` reads as closing the pass, refused by every attempt
+  claim, by `SetAttemptSession` and by `TransitionTaskShape` with
+  `ErrPassRetired`, and anchored to the latest attempt's session so the
+  two writes have exactly one loser and no session is recorded for an
+  attempt of a retired pass after its retirement.
+  housekeepingHoldMigration (65) is the retirement hold's mark on the
+  `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
+  to a pass still open and still; every attempt claim refuses a pass with
+  one open, `ErrPassHeld`, so the offer and a claim have one loser in
+  either order). housekeepingWakesMigration (66) is the queue's fourth
+  shape `housekeeping_wake` about a repository (`AppendHousekeepingWake`
+  is its one append; `untaskedShape` serves its offer, handout and
+  acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in
+  one transaction; `ForgetRepository` refuses a repository with one
+  queued); housekeepingNotificationMigration (67) is its notification
+  twin `housekeeping_notification`, one `notificationShape` with the
+  other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,
+  the due check's comparison base, written with a due check's wake or
+  alone only while the passes the check read are unmoved, re-read in the
+  writing transaction (`DueCheck`, `ErrDueCheckStale`).
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

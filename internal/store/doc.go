@@ -392,12 +392,45 @@
 // shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
 // marker, for a database an earlier build left with a task's wake and no
 // instant.
+// A wake about a repository's housekeeping is the queue's fourth shape,
+// migration 66's housekeeping_wake, PRD section 8's housekeeping-due wake:
+// kept_work_wake's columns with the entry replaced by the repository and the
+// pass it follows, plus the detail it names, stored redacted, under the
+// same seals, once per marker within the repository, which its unique key
+// holds. AppendHousekeepingWake is its one append, and migration 67's
+// housekeeping_notification is its notification record, claimed and settled
+// for the private channel on the other shapes' terms. Migration 68's
+// housekeeping_marker is the due check's comparison base, which the append
+// advances in the wake's own transaction when the wake is a due check's, or
+// AdvanceHousekeepingMarker alone when nothing was due, both only while the
+// passes the check read are unmoved, re-read in the writing transaction
+// (DueCheck, ErrDueCheckStale). ForgetRepository refuses a repository with a
+// wake queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows,
+// their notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the two shapes about no task, and
-// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// count and the acknowledgement for the three shapes about no task, and
+// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
+//
+// Migration 63 adds PRD section 8's housekeeping mark on the task row,
+// written once at intake, and CreateTask decides the one-open-pass rule in
+// its own transaction from every earlier pass's snapshot and the record
+// tier internal/taskstate passes in (Disposition.Delivered), so this package
+// states no tier of its own; PassOpen is the one statement of "open".
+// Migration 64 adds the housekeeping retirement record, written once by
+// RetireHousekeepingPass in the transaction that reads the pass again and
+// finds nothing moving it, which PassOpen reads as closing the pass; the
+// state resolver does not read it. It is refused at every attempt claim,
+// at the record of an attempt's session and at the shape transition that
+// would promote the pass (ErrPassRetired), which with the retirement's
+// session anchor records no session for an attempt of a retired pass after
+// its retirement. Migration 65 marks the retirement hold on the hold row:
+// OfferRetirementHold registers it, fenced by the loop's incarnation, in
+// the transaction that reads the pass again and finds it open and still,
+// and every attempt claim refuses a pass with one open (ErrPassHeld), so
+// the offer and a claim have exactly one loser in either order.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

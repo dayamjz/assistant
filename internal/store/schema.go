@@ -218,6 +218,36 @@ const keptWorkLandingMigration = "kept work landing run"
 // is a constant.
 const keptWorkCarryOnMigration = "kept work carry-on task"
 
+// housekeepingMigration names the migration that adds PRD section 6's
+// housekeeping mark on the task row, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingMigration = "housekeeping passes"
+
+// housekeepingRetirementMigration names the migration that adds PRD section
+// 6's housekeeping retirement record, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingRetirementMigration = "housekeeping retirement"
+
+// housekeepingHoldMigration names the migration that marks a housekeeping
+// pass's retirement hold on the hold row, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingHoldMigration = "housekeeping retirement hold"
+
+// housekeepingWakesMigration names the migration that adds the queue's
+// fourth shape, the housekeeping-due wake about a repository, for the
+// reason sealCheckpointTableMigration is a constant.
+const housekeepingWakesMigration = "housekeeping wakes"
+
+// housekeepingNotificationMigration names the migration that adds the
+// housekeeping wake's notification record, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingNotificationMigration = "housekeeping notifications"
+
+// housekeepingMarkerMigration names the migration that adds the due
+// check's marker, for the reason sealCheckpointTableMigration is a
+// constant.
+const housekeepingMarkerMigration = "housekeeping marker"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2695,6 +2725,198 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, with its carry-on answer, by the task its claim names');
 				END`,
+		},
+	},
+	{
+		version: 63,
+		name:    housekeepingMigration,
+		statements: []string{
+			// PRD section 8's task record: whether the task is a
+			// housekeeping pass, written once at intake and kept by
+			// promotion and relaunch, a row written before the column
+			// reading as not one. It is the one place that fact is stored
+			// (P14). 1 is a pass and NULL is not; no other value is
+			// written. A pass is created as an investigation of a
+			// repository under the housekeeping role, and the housekeeping
+			// role is a pass's alone, which the insert triggers hold.
+			`ALTER TABLE task ADD COLUMN housekeeping INTEGER`,
+			`CREATE TRIGGER task_housekeeping_is_written_at_intake
+				BEFORE UPDATE OF housekeeping ON task
+				WHEN NEW.housekeeping IS NOT OLD.housekeeping
+				BEGIN
+					SELECT RAISE(ABORT, 'store: whether a task is a housekeeping pass is written at its intake and never moved');
+				END`,
+			`CREATE TRIGGER task_housekeeping_pass_is_an_investigation_of_a_repository
+				BEFORE INSERT ON task
+				WHEN NEW.housekeeping IS NOT NULL AND (NEW.housekeeping IS NOT 1 OR NEW.shape <> 'investigation'
+					OR NEW.repository_id IS NULL OR NEW.role IS NOT 'housekeeping')
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping pass is created as an investigation of a repository under the housekeeping role');
+				END`,
+			`CREATE TRIGGER task_housekeeping_role_is_a_passes
+				BEFORE INSERT ON task
+				WHEN NEW.role = 'housekeeping' AND NEW.housekeeping IS NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: the housekeeping role is assigned to a housekeeping pass and no other task');
+				END`,
+		},
+	},
+	{
+		version: 64,
+		name:    housekeepingRetirementMigration,
+		statements: []string{
+			// PRD section 8's housekeeping retirement record: written once
+			// per pass that ends without a terminal record, naming how it
+			// was retired, the retirement hold a person's answer closed,
+			// and when. It is appended and sealed, and kept while its task
+			// stands.
+			`CREATE TABLE housekeeping_retirement (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				hold_key    TEXT NOT NULL REFERENCES hold(key),
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER housekeeping_retirement_is_a_passes
+				BEFORE INSERT ON housekeeping_retirement
+				WHEN NOT EXISTS (SELECT 1 FROM task WHERE task.id = NEW.task_id AND task.housekeeping = 1)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a retirement is recorded for a housekeeping pass and no other task');
+				END`,
+			`CREATE TRIGGER housekeeping_retirement_is_written_once
+				BEFORE UPDATE ON housekeeping_retirement
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping retirement is written once and is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_retirement_is_not_removed
+				BEFORE DELETE ON housekeeping_retirement
+				WHEN EXISTS (SELECT 1 FROM task WHERE task.id = OLD.task_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping retirement is not deleted while its pass stands');
+				END`,
+		},
+	},
+	{
+		version: 65,
+		name:    housekeepingHoldMigration,
+		statements: []string{
+			// The retirement hold is the one hold the store registers
+			// itself (OfferRetirementHold), and the one hold an attempt
+			// claim reads: no attempt of a pass begins while one is open
+			// (ErrPassHeld). The mark says which holds those are; every
+			// other hold reads back unknown.
+			`ALTER TABLE hold ADD COLUMN housekeeping_retirement INTEGER`,
+		},
+	},
+	{
+		version: 66,
+		name:    housekeepingWakesMigration,
+		statements: []string{
+			// PRD section 8's housekeeping-due wake, the queue's fourth
+			// shape: a wake about a repository rather than a task, keyed by
+			// the repository and by the pass it follows, or by none before
+			// the first pass. It is kept_work_wake's shape with the entry
+			// replaced by the repository and the pass, plus the detail the
+			// wake names (what could not be read, or the open pass and what
+			// it waits on), under the same seals. A detection is raised
+			// once, which the unique key over the repository and the
+			// marker holds. A row is not deleted while its repository
+			// stands; ForgetRepository takes the acknowledged rows after
+			// the repository row and refuses while one is queued.
+			`CREATE TABLE housekeeping_wake (
+				id               INTEGER PRIMARY KEY AUTOINCREMENT,
+				repository_id    TEXT NOT NULL REFERENCES repository(id),
+				pass             TEXT REFERENCES task(id),
+				kind             TEXT NOT NULL,
+				marker           TEXT NOT NULL,
+				detail           TEXT NOT NULL,
+				created_at       TEXT NOT NULL,
+				handled_at       TEXT,
+				acknowledged_by  TEXT,
+				handed_out_at    TEXT,
+				handed_out_to    TEXT,
+				handed_out_under TEXT,
+				handouts         INTEGER,
+				UNIQUE (repository_id, marker)
+			) STRICT`,
+			`CREATE INDEX housekeeping_wake_unacknowledged ON housekeeping_wake(id) WHERE handled_at IS NULL`,
+			`CREATE TRIGGER housekeeping_wake_is_appended
+				BEFORE UPDATE OF id, repository_id, pass, kind, marker, detail, created_at ON housekeeping_wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON housekeeping_wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON housekeeping_wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+			`CREATE TRIGGER housekeeping_wake_is_not_removed
+				BEFORE DELETE ON housekeeping_wake
+				WHEN OLD.handled_at IS NULL OR EXISTS (SELECT 1 FROM repository WHERE repository.id = OLD.repository_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a housekeeping wake is kept after it is drained and is not deleted while its repository stands');
+				END`,
+		},
+	},
+	{
+		version: 67,
+		name:    housekeepingNotificationMigration,
+		statements: []string{
+			// Migration 46's notification record for the queue's fourth
+			// shape, on kept_work_notification's terms, keyed by the
+			// housekeeping wake it is about, and removed only with it.
+			`CREATE TABLE housekeeping_notification (
+				housekeeping_wake_id INTEGER PRIMARY KEY REFERENCES housekeeping_wake(id),
+				claimed_at           TEXT NOT NULL,
+				outcome              TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code            INTEGER,
+				detail               TEXT,
+				settled_at           TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER housekeeping_notification_claim_is_written_once
+				BEFORE UPDATE OF housekeeping_wake_id, claimed_at ON housekeeping_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON housekeeping_notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER housekeeping_notification_is_not_removed
+				BEFORE DELETE ON housekeeping_notification
+				WHEN EXISTS (SELECT 1 FROM housekeeping_wake w JOIN repository r ON r.id = w.repository_id
+					WHERE w.id = OLD.housekeeping_wake_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its housekeeping wake stands');
+				END`,
+		},
+	},
+	{
+		version: 68,
+		name:    housekeepingMarkerMigration,
+		statements: []string{
+			// The marker the due check advances, one row per repository: the
+			// pass the check followed, or none before the first pass, and
+			// when it last fetched the default branch for it. Like every
+			// marker it is the comparison base for the next check and not
+			// the repository's state. It goes with its repository.
+			`CREATE TABLE housekeeping_marker (
+				repository_id TEXT PRIMARY KEY REFERENCES repository(id),
+				pass          TEXT REFERENCES task(id),
+				checked_at    TEXT NOT NULL
+			) STRICT`,
 		},
 	},
 }
