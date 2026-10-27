@@ -45,10 +45,20 @@ type hkSubject struct {
 	upstream  string
 	checks    chan hkCheck
 	first     passReport
-	// offerMu guards onOffer, which the loop's beforeRetirementOffer hook
-	// calls when a test set it.
-	offerMu sync.Mutex
-	onOffer func(task string)
+	// offerMu guards onOffer and onDueRead, which the loop's
+	// beforeRetirementOffer and afterDueRead hooks call when a test set
+	// them.
+	offerMu   sync.Mutex
+	onOffer   func(task string)
+	onDueRead func()
+}
+
+// afterDueRead sets what the loop does between a due check's read of the
+// default branch and its write of the wake or the marker.
+func (s *hkSubject) afterDueRead(f func()) {
+	s.offerMu.Lock()
+	defer s.offerMu.Unlock()
+	s.onDueRead = f
 }
 
 // beforeOffer sets what the loop does between its read of a pass and its
@@ -81,6 +91,14 @@ func openHousekeeping(t *testing.T, document string, plant hkPlant) *hkSubject {
 			sub.offerMu.Unlock()
 			if f != nil {
 				f(task)
+			}
+		}
+		hooks.afterDueRead = func(string) {
+			sub.offerMu.Lock()
+			f := sub.onDueRead
+			sub.offerMu.Unlock()
+			if f != nil {
+				f()
 			}
 		}
 	})
@@ -377,6 +395,72 @@ func TestAnEmptyTrustedScopeRaisesNothingAndAnUntrustedOneHasNoEffect(t *testing
 	wakes := untrusted.wakes(t)
 	if len(wakes) != 1 || wakes[0].Pass.IsKnown() || !strings.Contains(wakes[0].Detail, "was ever created") {
 		t.Fatalf("an empty list outside the default branch left %+v, want the due wake before the first pass", wakes)
+	}
+}
+
+// A due check's facts are the passes as the loop read them before the
+// fetch, and a pass created while the fetch is in flight makes them stale:
+// a wake raised from them would name a base the new pass replaced, or say
+// no pass was ever created, and the coordinator acting on it once that pass
+// closed would create a second pass at the same base. The store reads the
+// passes again in the write (store.ErrDueCheckStale), so the check writes
+// neither wake nor marker, whether the pass created meanwhile is already
+// closed or still open, and the next check follows the pass that was
+// created. The positive controls are that next check, which reads the new
+// pass and advances the marker, and the open pass's own wake, which is
+// written while it is open.
+func TestADueCheckWritesNothingOnceAPassWasCreatedWhileItRead(t *testing.T) {
+	t.Parallel()
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		closedPass(t, records, "taskhkraceaa", heldGit(t, sub.upstream, "rev-parse", "main"))
+	})
+	if sub.checkStarted(t, sub.first, false) {
+		t.Fatal("the first pass checked a repository whose last pass was created within the interval")
+	}
+	moved := sub.merge(t, "AGENTS.md", "a renamed command\n")
+	sub.clock.Advance(time.Hour)
+	sub.afterDueRead(func() {
+		sub.afterDueRead(nil)
+		closedPass(t, sub.records(t), "taskhkracebb", moved)
+	})
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a check whose repository got a pass while it read raised %+v, want nothing", wakes)
+	}
+	if _, found, err := sub.records(t).HousekeepingMarkerOf(t.Context(), hkRepository); err != nil || found {
+		t.Fatalf("the stale check advanced the marker (found %v, %v), want it left alone", found, err)
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("the next interval's pass did not check: %+v", r.Housekeeping)
+	}
+	marker, found, err := sub.records(t).HousekeepingMarkerOf(t.Context(), hkRepository)
+	if err != nil || !found || marker.Pass != "taskhkracebb" {
+		t.Fatalf("the next check's marker is %+v, %v, %v, want it advanced for the pass created meanwhile", marker, found, err)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a branch unmoved since the pass created meanwhile raised %+v", wakes)
+	}
+
+	sub.merge(t, "CLAUDE.md", "a moved path\n")
+	sub.clock.Advance(time.Hour)
+	sub.afterDueRead(func() {
+		sub.afterDueRead(nil)
+		passTask(t, sub.records(t), "taskhkracecc")
+	})
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("after a move and an interval the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a check whose repository got an open pass while it read raised %+v, want nothing", wakes)
+	}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	wakes := sub.wakes(t)
+	if len(wakes) != 1 || wakes[0].Pass != store.Known("taskhkracecc") {
+		t.Fatalf("the open pass's wake is %+v, want one naming taskhkracecc", wakes)
 	}
 }
 

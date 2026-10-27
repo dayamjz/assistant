@@ -55,7 +55,16 @@ import (
 // which no pass was created. The interval therefore spaces the fetches too,
 // one per repository per interval, which is what housekeeping.interval's
 // floor is chosen against; the cost is that a default branch that moves just
-// after a check that found it unmoved is seen up to an interval later.
+// after a check that found it unmoved is seen up to an interval later. The
+// check's facts, which pass it follows and that pass's base, are what the
+// loop read before the fetch, and a pass created while the fetch was in
+// flight makes them stale: a wake raised from them would say no pass was
+// ever created, or name a base the new pass replaced, and acting on it
+// would create a redundant pass. So the wake and the marker are written
+// only while the pass the check followed is still the repository's newest
+// and no pass is open, read again in the writing transaction
+// (store.DueCheck, store.ErrDueCheckStale); a check that finds its reading
+// moved writes nothing, and the next supervision pass reads the new pass.
 //
 // # An open pass
 //
@@ -368,18 +377,26 @@ func retireDetail(r store.Repository, o taskstate.Observed, interval time.Durati
 		}
 	}
 	return fmt.Sprintf("housekeeping pass %s of repository %s was created at %s and %s. Retiring it releases its claim on the repository, "+
-		"so the next pass can be created, and nothing begins its work again. %s. Its copy is then asked the cleanup decision, which keeps "+
-		"anything not yet landed for you to decide on. Answer %q to retire it, or %q to leave it open, which offers this again "+
-		"after another interval of %s.",
+		"so the next pass can be created, and nothing begins its work again. %s. %s Answer %q to retire it, or %q to leave it open, "+
+		"which offers this again after another interval of %s.",
 		o.Snapshot.Task.ID, r.ID, o.Snapshot.Task.CreatedAt.UTC().Format(time.RFC3339), passWaitsOn(o, false), left,
-		machine.AnswerRetire, machine.AnswerKeep, interval)
+		retireCopy(o), machine.AnswerRetire, machine.AnswerKeep, interval)
+}
+
+// retireCopy is retireDetail's sentence about the pass's copy: a dispatch
+// cuts one, so a pass never dispatched has none to decide on.
+func retireCopy(o taskstate.Observed) string {
+	if len(o.Snapshot.Attempts) == 0 {
+		return "It was never dispatched, so it has no copy to decide on."
+	}
+	return "Its copy is then asked the cleanup decision, which keeps anything not yet landed for you to decide on."
 }
 
 // raiseHousekeeping appends one housekeeping-due detection, classified on
 // the kind table's terms, under the incarnation's fence, with check
 // advanced in the same transaction when it is not nil, and reports the
 // write. A marker already raised and acknowledged is nothing owed.
-func (s *Service) raiseHousekeeping(c *incarnation, w store.HousekeepingWakeRequest, check *store.HousekeepingCheck) taskReport {
+func (s *Service) raiseHousekeeping(c *incarnation, w store.HousekeepingWakeRequest, check *store.DueCheck) taskReport {
 	wake, _ := supervisor.Of(supervisor.KindHousekeepingDue)
 	det := detection{
 		Kind:    supervisor.KindHousekeepingDue,
@@ -396,6 +413,9 @@ func (s *Service) raiseHousekeeping(c *incarnation, w store.HousekeepingWakeRequ
 	cancel()
 	switch {
 	case errors.Is(err, store.ErrWakeHandled):
+		return taskReport{Watched: true}
+	case errors.Is(err, store.ErrDueCheckStale):
+		s.log.Printf("the housekeeping due check of repository %s wrote nothing: %v", w.Repository, err)
 		return taskReport{Watched: true}
 	case err != nil:
 		out.Err = err
@@ -475,9 +495,10 @@ func (s *Service) dueCheckFromPass(c *incarnation, r store.Repository, last *tas
 
 // dueCheck is one repository's due check, on the file comment's terms: one
 // fetch of the default branch, the trusted scope and the tip read there, and
-// the wake or the marker written under the incarnation that started it.
+// the wake or the marker written under the incarnation that started it,
+// held to the passes as the loop read them.
 func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, lastCreated time.Time, base store.Optional[string], now time.Time) taskReport {
-	checked := &store.HousekeepingCheck{Repository: r.ID, Pass: follows, CheckedAt: now}
+	checked := &store.DueCheck{Check: store.HousekeepingCheck{Repository: r.ID, Pass: follows, CheckedAt: now}, Delivered: taskstate.Delivered}
 	which := "none"
 	if follows != "" {
 		which = follows
@@ -497,6 +518,9 @@ func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, l
 	trusted, tip, _, err := s.trustedLayerAt(ctx, bare, r, ref, forWhat)
 	if err != nil {
 		return raise(fmt.Sprintf("the due check of repository %s could not read its default branch or its trusted configuration: %v", r.ID, err))
+	}
+	if s.sup.hooks.afterDueRead != nil {
+		s.sup.hooks.afterDueRead(r.ID)
 	}
 	resolution, err := config.ResolveRun(s.global, trusted, config.Absent(config.OriginPushed))
 	if err != nil {
@@ -521,11 +545,18 @@ func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, l
 		r.DefaultBranch, r.ID, tip, b, follows, lastCreated.UTC().Format(time.RFC3339)))
 }
 
-// advanceHousekeeping writes a due check's marker with no wake.
-func (s *Service) advanceHousekeeping(c *incarnation, check store.HousekeepingCheck) taskReport {
+// advanceHousekeeping writes a due check's marker with no wake, or nothing
+// once the passes moved since the check read them, on the file comment's
+// terms.
+func (s *Service) advanceHousekeeping(c *incarnation, check store.DueCheck) taskReport {
 	ctx, cancel := s.sup.bound(c.ctx)
 	defer cancel()
-	return taskReport{Watched: true, Err: s.store.AdvanceHousekeepingMarker(ctx, c.inc, check)}
+	err := s.store.AdvanceHousekeepingMarker(ctx, c.inc, check)
+	if errors.Is(err, store.ErrDueCheckStale) {
+		s.log.Printf("the housekeeping due check of repository %s wrote nothing: %v", check.Check.Repository, err)
+		return taskReport{Watched: true}
+	}
+	return taskReport{Watched: true, Err: err}
 }
 
 // retireHoldSpace is the key space of a pass's retirement holds under the

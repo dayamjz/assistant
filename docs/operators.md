@@ -501,10 +501,10 @@ Two keys set it up:
 
 - `housekeeping.paths`, read only from the default branch's `assistant.json`,
   is the scope: the files a pass keeps true and the only ones it may change.
-  The default is `AGENTS.md`, `**/AGENTS.md`, `CLAUDE.md`, `**/CLAUDE.md`,
-  `.claude/rules/**`, `.cursor/rules/**`, `README.md` and
-  `assistant-knowledge.md`. A pattern with no slash names that file at any
-  depth, so `README.md` also covers every `README.md` in a subdirectory. A
+  The default is `AGENTS.md`, `CLAUDE.md`, `.claude/rules/**`,
+  `.cursor/rules/**`, `README.md` and `assistant-knowledge.md`. A pattern
+  with no slash names that file at any depth, so `AGENTS.md` covers every
+  `AGENTS.md` in a subdirectory too. A
   list replaces the default rather than adding to it, and an empty list turns
   housekeeping off for the repository. A pushed branch's value has no effect.
 - `housekeeping.interval`, in `config.yaml` only, is how long after one pass

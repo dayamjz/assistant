@@ -360,7 +360,7 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	inc := incarnationOf(t, s)
 	request := HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due", Marker: "due:none:1", Detail: "no pass was ever created"}
 	checked := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	first, err := s.AppendHousekeepingWake(ctx, inc, request, &HousekeepingCheck{Repository: "repo-1", CheckedAt: checked})
+	first, err := s.AppendHousekeepingWake(ctx, inc, request, &DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked}, Delivered: relayed})
 	if err != nil || first.Disposition != WakeAppended || first.Wake.Repository != "repo-1" || first.Wake.Pass.IsKnown() || !first.Wake.Queued() {
 		t.Fatalf("the first append = %+v, %v", first, err)
 	}
@@ -378,7 +378,7 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 		Marker: "due:none:2", Detail: "d"}, nil); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a replaced incarnation's append = %v, want ErrStaleIncarnation", err)
 	}
-	if err := s.AdvanceHousekeepingMarker(ctx, stale, HousekeepingCheck{Repository: "repo-1", CheckedAt: checked.Add(time.Hour)}); !errors.Is(err, ErrStaleIncarnation) {
+	if err := s.AdvanceHousekeepingMarker(ctx, stale, DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked.Add(time.Hour)}, Delivered: relayed}); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a replaced incarnation's marker = %v, want ErrStaleIncarnation", err)
 	}
 
@@ -416,6 +416,72 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	}
 	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 0 {
 		t.Fatalf("the repository's wakes outlived it: %+v, %v", rows, err)
+	}
+}
+
+// A due check reads the repository's passes before it fetches, so its wake
+// and its marker are written only while that reading still holds, read
+// again in the writing transaction: a pass created meanwhile, open or
+// already closed, refuses both with ErrDueCheckStale, and so does a pass
+// that is open whichever pass the check followed. The wake about an open
+// pass carries no check and is written while the pass is open. The
+// positive controls are the check before any pass, and the check that
+// follows the pass created meanwhile once it closed.
+func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	checked := time.Date(2026, 10, 27, 7, 0, 0, 0, time.UTC)
+	check := func(pass string) DueCheck {
+		return DueCheck{Check: HousekeepingCheck{Repository: "repo-1", Pass: pass, CheckedAt: checked}, Delivered: relayed}
+	}
+	due := func(marker, pass string) HousekeepingWakeRequest {
+		return HousekeepingWakeRequest{Repository: "repo-1", Pass: pass, Kind: "housekeeping-due", Marker: marker, Detail: "d"}
+	}
+	c := check("")
+	if out, err := s.AppendHousekeepingWake(ctx, inc, due("due:none:1", ""), &c); err != nil || out.Disposition != WakeAppended {
+		t.Fatalf("the check before any pass = %+v, %v, want it written", out, err)
+	}
+	mustPass(t, s, "taskpassonea")
+	if _, err := s.AppendHousekeepingWake(ctx, inc, due("due:none:2", ""), &c); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("a due wake following none while taskpassonea is open = %v, want ErrDueCheckStale", err)
+	}
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, check("")); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("the marker following none while taskpassonea is open = %v, want ErrDueCheckStale", err)
+	}
+	if out, err := s.AppendHousekeepingWake(ctx, inc, HousekeepingWakeRequest{Repository: "repo-1", Pass: "taskpassonea",
+		Kind: "housekeeping-due", Marker: "open:taskpassonea:1", Detail: "d"}, nil); err != nil || out.Disposition != WakeAppended {
+		t.Fatalf("the open pass's own wake = %+v, %v, want it written", out, err)
+	}
+	relay(t, s, "taskpassonea")
+	if _, err := s.AppendHousekeepingWake(ctx, inc, due("due:none:3", ""), &c); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("a due wake following none once taskpassonea closed = %v, want ErrDueCheckStale, since it is the newest", err)
+	}
+	if marker, found, err := s.HousekeepingMarkerOf(ctx, "repo-1"); err != nil || !found || marker.Pass != "" || !marker.CheckedAt.Equal(checked) {
+		t.Fatalf("the marker reads %+v, %v, %v, want the first check's, untouched by the refused ones", marker, found, err)
+	}
+	c = check("taskpassonea")
+	c.Check.CheckedAt = checked.Add(time.Hour)
+	if out, err := s.AppendHousekeepingWake(ctx, inc, due("due:taskpassonea:4", "taskpassonea"), &c); err != nil || out.Disposition != WakeAppended {
+		t.Fatalf("the check following the closed newest pass = %+v, %v, want it written", out, err)
+	}
+	if marker, found, err := s.HousekeepingMarkerOf(ctx, "repo-1"); err != nil || !found || marker.Pass != "taskpassonea" {
+		t.Fatalf("the marker reads %+v, %v, %v, want it advanced for taskpassonea", marker, found, err)
+	}
+	mustPass(t, s, "taskpasstwob")
+	if _, err := s.AppendHousekeepingWake(ctx, inc, due("due:taskpassonea:5", "taskpassonea"), &c); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("a due wake following taskpassonea once taskpasstwob exists = %v, want ErrDueCheckStale", err)
+	}
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, check("taskpassonea")); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("the marker following taskpassonea once taskpasstwob exists = %v, want ErrDueCheckStale", err)
+	}
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked}}); err == nil || errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("a check naming no record tier = %v, want a refusal of its own", err)
+	}
+	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 3 {
+		t.Fatalf("the wakes are %+v, %v, want the three written ones", rows, err)
 	}
 }
 

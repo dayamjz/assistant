@@ -308,6 +308,11 @@ type supervisionHooks struct {
 	// report once the check, which runs off the loop's goroutine, has
 	// written what it wrote (housekeeping.go).
 	afterHousekeepingCheck func(repository string, report taskReport)
+	// afterDueRead is called with the repository of a due check that has
+	// read its default branch and its trusted configuration, before the
+	// check writes its wake or its marker, so a test can create a pass in
+	// between (housekeeping.go).
+	afterDueRead func(repository string)
 	// beforeRetirementOffer is called with a pass the loop read open and
 	// decided to offer the retirement hold, after that read and before the
 	// registration, so a test can move the pass in between

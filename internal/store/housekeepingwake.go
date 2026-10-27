@@ -95,6 +95,46 @@ type HousekeepingCheck struct {
 	CheckedAt  time.Time
 }
 
+// DueCheck is what a due check asks the store to write: its marker, and the
+// record tier its reading of the repository's passes is held to, PassOpen's
+// second argument. The check read the pass it follows, Check.Pass, as the
+// repository's newest and closed, or read none, before it fetched, and its
+// wake and its marker say so, so both are written only while that still
+// holds, read again in the writing transaction: the newest pass is the one
+// followed, and no pass is open. Otherwise the write is refused with
+// ErrDueCheckStale and nothing is written.
+type DueCheck struct {
+	// Check is the marker to advance.
+	Check HousekeepingCheck
+	// Delivered is the record tier that closes a pass, on PassOpen's terms.
+	Delivered func(TaskSnapshot) bool
+}
+
+// stillTx reads the repository's passes inside the writing transaction and
+// refuses the check's writes once they moved, on DueCheck's terms.
+func (c DueCheck) stillTx(ctx context.Context, tx *sql.Tx) error {
+	if c.Delivered == nil {
+		return errors.New("a due check names no record tier")
+	}
+	passes, err := passesOf(ctx, tx, c.Check.Repository)
+	if err != nil {
+		return fmt.Errorf("reading the housekeeping passes of repository %s: %w", c.Check.Repository, err)
+	}
+	newest := ""
+	if len(passes) > 0 {
+		newest = passes[0].Task.ID
+	}
+	if newest != c.Check.Pass {
+		return fmt.Errorf("%w: the check followed pass %q and the newest is %q", ErrDueCheckStale, c.Check.Pass, newest)
+	}
+	for _, p := range passes {
+		if PassOpen(p, c.Delivered) {
+			return fmt.Errorf("%w: pass %s is open", ErrDueCheckStale, p.Task.ID)
+		}
+	}
+	return nil
+}
+
 // HousekeepingWakeAppend is AppendHousekeepingWake's answer, on WakeAppend's
 // terms.
 type HousekeepingWakeAppend struct {
@@ -105,11 +145,15 @@ type HousekeepingWakeAppend struct {
 // AppendHousekeepingWake appends an actionable housekeeping wake and, when
 // check is not nil, advances the repository's due-check marker in the same
 // transaction, so a check that surfaced is never recorded without its wake
-// nor the reverse. It is fenced by the incarnation on
-// AppendWakeWithMarkers's terms. A marker already raised for the repository
-// answers WakeAlreadyQueued with its queued row and writes nothing, or
-// ErrWakeHandled once that row was acknowledged, also writing nothing.
-func (s *Store) AppendHousekeepingWake(ctx context.Context, inc Incarnation, w HousekeepingWakeRequest, check *HousekeepingCheck) (HousekeepingWakeAppend, error) {
+// nor the reverse, and refuses both with ErrDueCheckStale, wrapped, once
+// the repository's passes moved since the check read them, on DueCheck's
+// terms, so a due wake is never written while a pass is open. A wake with
+// no check, the one about an open pass, is held to neither. It is fenced
+// by the incarnation on AppendWakeWithMarkers's terms. A marker already
+// raised for the repository answers WakeAlreadyQueued with its queued row
+// and writes nothing, or ErrWakeHandled once that row was acknowledged,
+// also writing nothing.
+func (s *Store) AppendHousekeepingWake(ctx context.Context, inc Incarnation, w HousekeepingWakeRequest, check *DueCheck) (HousekeepingWakeAppend, error) {
 	if err := w.validate(); err != nil {
 		return HousekeepingWakeAppend{}, err
 	}
@@ -131,6 +175,11 @@ func (s *Store) AppendHousekeepingWake(ctx context.Context, inc Incarnation, w H
 		case !isNoRows(err):
 			return err
 		}
+		if check != nil {
+			if err := check.stillTx(ctx, tx); err != nil {
+				return err
+			}
+		}
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO housekeeping_wake (repository_id, pass, kind, marker, detail, created_at, handled_at, acknowledged_by)
 			VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
@@ -143,7 +192,7 @@ func (s *Store) AppendHousekeepingWake(ctx context.Context, inc Incarnation, w H
 			return err
 		}
 		if check != nil {
-			if err := advanceHousekeepingMarkerTx(ctx, tx, *check); err != nil {
+			if err := advanceHousekeepingMarkerTx(ctx, tx, check.Check); err != nil {
 				return err
 			}
 		}
@@ -163,16 +212,20 @@ func (s *Store) AppendHousekeepingWake(ctx context.Context, inc Incarnation, w H
 
 // AdvanceHousekeepingMarker advances the repository's due-check marker with
 // no wake, for a check that found nothing due, fenced by the incarnation on
-// the same terms.
-func (s *Store) AdvanceHousekeepingMarker(ctx context.Context, inc Incarnation, check HousekeepingCheck) error {
+// the same terms and refused with ErrDueCheckStale, wrapped, on DueCheck's
+// terms.
+func (s *Store) AdvanceHousekeepingMarker(ctx context.Context, inc Incarnation, check DueCheck) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := fenceIncarnation(ctx, tx, inc); err != nil {
 			return err
 		}
-		return advanceHousekeepingMarkerTx(ctx, tx, check)
+		if err := check.stillTx(ctx, tx); err != nil {
+			return err
+		}
+		return advanceHousekeepingMarkerTx(ctx, tx, check.Check)
 	})
 	if err != nil {
-		return fmt.Errorf("store: advancing the housekeeping marker of repository %s: %w", check.Repository, err)
+		return fmt.Errorf("store: advancing the housekeeping marker of repository %s: %w", check.Check.Repository, err)
 	}
 	return nil
 }

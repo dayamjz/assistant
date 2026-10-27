@@ -124,7 +124,10 @@ assistant coordinator create --housekeeping --project NAME \
   needs raises it too, naming what. It is listed under `housekeeping_wakes`,
   with `repository`, `pass` (the pass it follows) and `detail`, numbered
   apart from every other shape and acknowledged as `hNUMBER`. Acknowledging
-  it creates nothing: create the pass with your notes, or do nothing.
+  it creates nothing: create the pass with your notes, or do nothing. A due
+  wake whose `pass` is not the repository's newest pass, or that names none
+  while one exists, was raised before that pass was created: acknowledge it
+  and create nothing.
 - A pass open for a whole interval raises the same wake naming it and what it
   waits on, again each interval. When something still moves it (a run not
   ended, a worker that reads live or cannot be read), escalate it to the

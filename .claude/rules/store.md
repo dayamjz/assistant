@@ -25,7 +25,7 @@ paths: ["internal/store/**"]
   `surfaced_at` in the same transaction. `untaskedShape` serves the second
   and third shapes' offer, handout and acknowledgement; `DrainAll` and
   `AcknowledgeAll` take every shape in one transaction.
-- housekeepingMigration (59) is PRD section 6's housekeeping: the task row's
+- housekeepingMigration (60) is PRD section 6's housekeeping: the task row's
   `housekeeping` mark (written once at intake; only a marked investigation
   of a repository carries the `housekeeping` role), the
   `housekeeping_retirement` record (`RetireHousekeepingPass`, written once,
@@ -37,7 +37,9 @@ paths: ["internal/store/**"]
   refuses a pass with one open, `ErrPassHeld`, so the offer and a claim
   have one loser in either order), the queue's fourth
   shape `housekeeping_wake` about a repository with its notification twin,
-  and `housekeeping_marker`, the due check's comparison base. `CreateTask`
+  and `housekeeping_marker`, the due check's comparison base, both written
+  for a due check only while the passes it read are unmoved, re-read in
+  the writing transaction (`DueCheck`, `ErrDueCheckStale`). `CreateTask`
   decides one open pass per repository in its own transaction with the
   record tier passed in as `Disposition.Delivered`; `PassOpen` is the one
   statement of "open".

@@ -17,7 +17,7 @@ func TestHousekeepingDefaultsToOffWithTheAgentContextList(t *testing.T) {
 	if c.HousekeepingInterval != 0 {
 		t.Errorf("HousekeepingInterval = %v, want zero, so no pass is due until the operator sets it", c.HousekeepingInterval)
 	}
-	want := "AGENTS.md,**/AGENTS.md,CLAUDE.md,**/CLAUDE.md,.claude/rules/**,.cursor/rules/**,README.md,assistant-knowledge.md"
+	want := "AGENTS.md,CLAUDE.md,.claude/rules/**,.cursor/rules/**,README.md,assistant-knowledge.md"
 	if got := strings.Join(c.HousekeepingPaths.Strings(), ","); got != want {
 		t.Errorf("HousekeepingPaths = %q, want %q", got, want)
 	}

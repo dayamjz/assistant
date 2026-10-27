@@ -924,9 +924,7 @@ var defaultJudgePaths = func() PatternSet {
 // at the root.
 var defaultHousekeepingPatterns = []string{
 	"AGENTS.md",
-	"**/AGENTS.md",
 	"CLAUDE.md",
-	"**/CLAUDE.md",
 	".claude/rules/**",
 	".cursor/rules/**",
 	"README.md",
