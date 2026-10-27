@@ -306,6 +306,7 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		// their seals require: refuseUnlessForgettable has refused a queued
 		// wake, so every wake left here is acknowledged.
 		for _, forget := range []string{
+			`DELETE FROM housekeeping_notification WHERE housekeeping_wake_id IN (SELECT id FROM housekeeping_wake WHERE repository_id = ?)`,
 			`DELETE FROM housekeeping_wake WHERE repository_id = ?`,
 		} {
 			if _, err := tx.ExecContext(ctx, forget, id); err != nil {

@@ -591,9 +591,10 @@ func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
 }
 
 // PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
-// repository, appended once per marker under the incarnation fence, drained
-// and acknowledged on the other shapes' terms, the first coordinator's
-// alone, and it holds its repository's records until acknowledged.
+// repository, appended once per marker under the incarnation fence, drained,
+// acknowledged and claimed for the private channel on the other shapes'
+// terms, the first coordinator's alone, and it holds its repository's
+// records until acknowledged.
 func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P8)
@@ -625,6 +626,16 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	}
 	if _, err := s.ForgetRepository(ctx, "repo-1"); !errors.Is(err, ErrHousekeepingWakeQueued) {
 		t.Fatalf("forgetting the repository with its wake queued = %v, want ErrHousekeepingWakeQueued", err)
+	}
+	pending, err := s.PendingHousekeepingNotifications(ctx, 10)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("pending notifications = %+v, %v", pending, err)
+	}
+	if _, err := s.ClaimHousekeepingNotification(ctx, first.Wake.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ClaimHousekeepingNotification(ctx, first.Wake.ID); !errors.Is(err, ErrNotificationClaimed) {
+		t.Fatalf("a second claim = %v, want ErrNotificationClaimed", err)
 	}
 	drained, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"})
 	if err != nil || len(drained.HousekeepingWakes) != 1 || drained.HousekeepingWakes[0].ID != first.Wake.ID {

@@ -198,6 +198,39 @@ func (s *Store) UnacknowledgedHousekeepingWakes(ctx context.Context) (int, error
 	return housekeepingWakeShape.unacknowledged(ctx, s)
 }
 
+// PendingHousekeepingNotifications is PendingNotifications for the queue's
+// fourth shape, on the same terms.
+func (s *Store) PendingHousekeepingNotifications(ctx context.Context, limit int) ([]HousekeepingWake, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("store: a limit of %d pending housekeeping notifications is not a batch size", limit)
+	}
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	return s.queryHousekeepingWakes(ctx, "the pending housekeeping notifications",
+		housekeepingWakeColumns+` WHERE handled_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM housekeeping_notification n WHERE n.housekeeping_wake_id = housekeeping_wake.id)
+		ORDER BY id LIMIT ?`, limit)
+}
+
+// ClaimHousekeepingNotification is ClaimNotification for a housekeeping
+// wake, on the same terms, in housekeeping_notification.
+func (s *Store) ClaimHousekeepingNotification(ctx context.Context, wakeID int64) (Notification, error) {
+	return s.claimNotification(ctx, housekeepingNotifications, wakeID)
+}
+
+// SettleHousekeepingNotification is SettleNotification for a housekeeping
+// wake's claim, on the same terms.
+func (s *Store) SettleHousekeepingNotification(ctx context.Context, wakeID int64, n NotificationSettlement) (Notification, error) {
+	return s.settleNotification(ctx, housekeepingNotifications, wakeID, n)
+}
+
+// HousekeepingNotification is Notification for a housekeeping wake, whose
+// identifier the record's WakeID then carries.
+func (s *Store) HousekeepingNotification(ctx context.Context, wakeID int64) (Notification, error) {
+	return s.notification(ctx, housekeepingNotifications, wakeID)
+}
+
 const housekeepingWakeColumns = `SELECT id, repository_id, pass, kind, marker, detail, created_at, handled_at,
 	acknowledged_by, handed_out_at, handed_out_to, handed_out_under, handouts FROM housekeeping_wake`
 
