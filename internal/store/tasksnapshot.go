@@ -44,6 +44,12 @@ type TaskSnapshot struct {
 	// the snapshot did not see. They are carried for the resolver's terminal
 	// tier, internal/taskstate, which derives Landed from one of them.
 	MergeRecords []MergeRecord
+	// NothingToDeliver are the nothing-to-deliver records of Runs, in Runs'
+	// order, for every attributed run that ended with nothing left to
+	// deliver; a run with none is absent. They are read inside the
+	// snapshot's own transaction for MergeRecords' reason and carried for
+	// the same tier, which derives Landed from one of them.
+	NothingToDeliver []NothingToDeliver
 	// Cleanup is the task's cleanup record, and unknown while none has been
 	// written. It is carried for the same tier, which derives Complete from
 	// it.
@@ -217,6 +223,16 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 			return TaskSnapshot{}, fmt.Errorf("reading the merge record of run %s: %w", r.ID, err)
 		}
 		snap.MergeRecords = append(snap.MergeRecords, record)
+	}
+	for _, r := range snap.Runs {
+		record, err := nothingToDeliverOf(ctx, q, r.ID)
+		switch {
+		case isNoRows(err):
+			continue
+		case err != nil:
+			return TaskSnapshot{}, fmt.Errorf("reading the nothing-to-deliver record of run %s: %w", r.ID, err)
+		}
+		snap.NothingToDeliver = append(snap.NothingToDeliver, record)
 	}
 
 	switch cleanup, err := taskCleanupOf(ctx, q, task.ID); {

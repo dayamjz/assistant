@@ -364,45 +364,71 @@ func (s *Service) stopTask(ctx context.Context, req ipc.Request, r machine.TaskR
 	if err != nil {
 		return machine.TaskStopped{}, err
 	}
-	ref, launched := latest.SessionRef.Get()
-	if !ok || !launched {
+	if !ok {
 		return machine.TaskStopped{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoWorker, r.Task)
 	}
-	ended, err := s.endWorker(r.Task, ref)
+	stopped, err := s.stopClaimed(ctx, req, p, r.Task, latest, "")
 	if err != nil {
-		return machine.TaskStopped{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+		var unverified *stopUnverified
+		var refused *stopRefused
+		if errors.As(err, &unverified) || errors.As(err, &refused) || errors.Is(err, errNoWorker) {
+			return machine.TaskStopped{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+		}
+		return machine.TaskStopped{}, err
+	}
+	return stopped, nil
+}
+
+// stopClaimed is the stop of the worker of the task's latest attempt, on the
+// file comment's terms, for a caller that holds the task's slot: task.stop,
+// and a stop or retry answered to a stall hold. It ends the worker, proves
+// the end by the probe reading it dead, closes every open stall hold of that
+// attempt as the program on that reading but the one named answering, which
+// the caller is answering itself, and registers the stop's hold, or none for
+// a task in the terminal tier. An attempt with no session is errNoWorker, an
+// end refused is *stopRefused and an end the probe does not prove is
+// *stopUnverified, each with nothing registered or closed.
+func (s *Service) stopClaimed(ctx context.Context, req ipc.Request, p placedPeer, task string, latest store.TaskAttempt,
+	answering string) (machine.TaskStopped, error) {
+	ref, launched := latest.SessionRef.Get()
+	if !launched {
+		return machine.TaskStopped{}, fmt.Errorf("%w: task %s", errNoWorker, task)
+	}
+	ended, err := s.endWorker(task, ref)
+	if err != nil {
+		return machine.TaskStopped{}, err
 	}
 	bound, cancel := context.WithTimeout(ctx, stopProbeBound)
 	observed := s.terminals.Probe(bound, ref)
 	cancel()
 	if observed.Liveness != taskstate.Dead {
 		s.log.Printf("the worker of task %s (session %s) was asked to end by %s and the probe answered %s: %s",
-			r.Task, ref, peerOf(req), observed.Liveness, observed.Detail)
-		return machine.TaskStopped{}, fmt.Errorf("%w: %w", ipc.ErrRefused,
-			&stopUnverified{Task: r.Task, Session: ref, Observation: observed})
+			task, ref, peerOf(req), observed.Liveness, observed.Detail)
+		return machine.TaskStopped{}, &stopUnverified{Task: task, Session: ref, Observation: observed}
 	}
-	if finished, ok := s.stoppedFinished(ctx, r.Task); ok {
+	s.closeStallsOnDead(ctx, task, latest.Sequence, ref, answering, observed)
+	if finished, ok := s.stoppedFinished(ctx, task); ok {
 		s.log.Printf("the worker of task %s attempt %d (session %s) was stopped by %s: %s; the task is %s, so no hold was registered",
-			r.Task, latest.Sequence, ref, peerOf(req), ended, finished.State.State)
+			task, latest.Sequence, ref, peerOf(req), ended, finished.State.State)
 		s.askLandedCleanup(ctx, finished)
-		return machine.TaskStopped{Task: r.Task, Attempt: latest.Sequence, Session: ref, Ended: ended,
+		return machine.TaskStopped{Task: task, Attempt: latest.Sequence, Session: ref, Ended: ended,
 			Finished: finished.State.State}, nil
 	}
 	h, err := s.store.RegisterHold(ctx, store.Hold{
-		Key:     stoppedKey(r.Task, latest.Sequence),
-		TaskID:  store.Known(r.Task),
+		Key:     stoppedKey(task, latest.Sequence),
+		TaskID:  store.Known(task),
 		Subject: "whether to begin this work again after its worker was stopped",
 		Detail: fmt.Sprintf("task %s: the %s stopped attempt %d's worker (session %s), which %s, and its copy was left as it was. "+
 			"Answer %q to relaunch it once in the same copy, optionally with a note, or %q to leave it where it stopped.",
-			r.Task, s.senderOf(req, p), latest.Sequence, ref, ended, machine.AnswerRetry, machine.AnswerStop),
+			task, s.senderOf(req, p), latest.Sequence, ref, ended, machine.AnswerRetry, machine.AnswerStop),
 	})
 	if err != nil {
-		return machine.TaskStopped{}, fmt.Errorf("service: the worker of task %s was stopped and its hold could not be registered: %w", r.Task, err)
+		return machine.TaskStopped{}, fmt.Errorf("service: the worker of task %s was stopped and its hold could not be registered: %w", task, err)
 	}
 	s.publishHoldState(h)
 	s.log.Printf("the worker of task %s attempt %d (session %s) was stopped by %s: %s; it holds on %s",
-		r.Task, latest.Sequence, ref, peerOf(req), ended, h.Key)
-	return machine.TaskStopped{Task: r.Task, Attempt: latest.Sequence, Session: ref, Ended: ended, Hold: h}, nil
+		task, latest.Sequence, ref, peerOf(req), ended, h.Key)
+	return machine.TaskStopped{Task: task, Attempt: latest.Sequence, Session: ref, Ended: ended, Hold: h}, nil
 }
 
 // endWorker ends the worker ref names: through the provider's Close when

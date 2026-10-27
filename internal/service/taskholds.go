@@ -471,8 +471,9 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		}
 		return s.respondDomain(ctx, req, r)
 	}
-	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer task %s's hold %q with %q: %s",
-		r.Task, r.Hold, r.Answer, r.Note)); err != nil {
+	p, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer task %s's hold %q with %q: %s",
+		r.Task, r.Hold, r.Answer, r.Note))
+	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
 	switch {
@@ -500,6 +501,18 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 			return machine.TaskAnswered{}, err
 		}
 		out, err := s.answerLocal(ctx, req, r, task, hold)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		o, err := s.tasks().ObserveTask(ctx, r.Task)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		out.Task = s.taskView(ctx, o)
+		return out, nil
+	}
+	if stall, ok := stallHoldOf(hold.Key, r.Task); ok {
+		out, err := s.answerStall(ctx, req, p, r, hold, stall)
 		if err != nil {
 			return machine.TaskAnswered{}, err
 		}

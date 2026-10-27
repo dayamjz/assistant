@@ -75,7 +75,14 @@
 // parse. SocketDir, the tmux wrapper RunOwned installs, and a library a
 // test calls (storetest's database template) call TempDir, which stamps
 // the namespace the running TestMain recorded, so the next start of that
-// package reclaims them.
+// package reclaims them. ReclaimProcess removes, by pid, the directories of
+// a process that is gone, under any namespace TempDir can make; a test that
+// kills a child test process of its own calls it in its cleanup, as
+// internal/journey's TestATimedOutBuildDoesNotOutliveTheHarness does, the
+// one caller today. Nothing calls it on a test's
+// behalf: the owner watch and TestMain do not. A child killed before its own
+// sweep, by a test that does not call it, leaves its directories until its
+// own package next starts and sweeps its namespace.
 //
 // A package that forgets it would otherwise read the resulting agent failures
 // as the code under test misbehaving. The first New in a process refuses

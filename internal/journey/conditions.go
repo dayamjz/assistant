@@ -184,11 +184,14 @@ func Drives() []Drove {
 				"parks the run rather than walking past the failure."},
 		{"stage-stale-documentation", ReachNone, "", noConfiguredCommand},
 		{"stage-lint-violation", ReachNone, "", noConfiguredCommand},
-		{"stage-no-diff-after-rebase", ReachNone, "",
-			"The rebase body performs a real rebase now and ends a run whose change has emptied at " +
-				"its short circuit, so this condition has a mechanism to meet it; no check here " +
-				"drives that branch yet, so nothing about it is established and it stays a named " +
-				"gap until one does."},
+		{"stage-no-diff-after-rebase", ReachBinary, "TestARunWhoseRebaseLeavesNothingToDeliverEndsThroughTheBinary",
+			"A run of this scenario's branch, over a copy of its remote, really replays the branch's " +
+				"commit and drops it: the run passes with every stage after rebase skipped and no agent " +
+				"invoked, and the remote's branch does not move. With the branch removed from the copy " +
+				"first, the run also writes one nothing-to-deliver record naming the run's commit and " +
+				"the default branch's, and changes no task; as planted, with the branch already on the " +
+				"remote, it writes none. The walk is a person's run, so what a task does with the " +
+				"record is held at package reach by internal/service's tests."},
 	}
 }
 

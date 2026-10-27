@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // SecondCheckHeading is the heading dispatch appends the second check to a
@@ -52,6 +53,15 @@ const LandedCleanupAsks = landedAsks
 // this package's external tests.
 func WithBeforeStaleRemovalReleaseForTest(o Options, f func()) Options {
 	o.beforeStaleRemovalRelease = f
+	return o
+}
+
+// WithSettleInterruptForTest returns o with settle's seam set to f, for
+// this package's external tests: a settle whose f returns an error writes
+// nothing, as a service that stopped between a segment's last checkpoint
+// and the record's move leaves the run.
+func WithSettleInterruptForTest(o Options, f func(runID string) error) Options {
+	o.interruptSettle = f
 	return o
 }
 
@@ -215,3 +225,64 @@ func (r *LateRecorder) RecordInvocation(rec agents.Record) {
 // store read can, so a test can put a failed reading at the point it needs
 // one. It exists only in the tests.
 func (s *Service) FailUsageReadsForTest(n int32) { s.usageReadFaults.Store(n) }
+
+// KickedSupervision is the supervisor loop of a service opened with
+// WithKickedSupervisionForTest: untimed, under a clock the test moves, and
+// passing only when kicked, on supervise_internal_test.go's terms, so an
+// external test can drive a stall to its hold through the product's own
+// terminals.
+type KickedSupervision struct {
+	kick  chan chan<- passReport
+	clock *fakeClock
+}
+
+// WithKickedSupervisionForTest is o with the supervisor loop untimed under a
+// clock starting at start, and the handle that moves the clock and kicks
+// passes. A service reopened over the same options shares both.
+func WithKickedSupervisionForTest(o Options, start time.Time) (Options, *KickedSupervision) {
+	k := &KickedSupervision{kick: make(chan chan<- passReport), clock: &fakeClock{now: start}}
+	o.hooks.untimed = true
+	o.hooks.kick = k.kick
+	o.hooks.now = k.clock.Now
+	return o, k
+}
+
+// Advance moves the loop's clock on by d.
+func (k *KickedSupervision) Advance(d time.Duration) { k.clock.Advance(d) }
+
+// Pass kicks one pass and waits for its report, failing the test when the
+// loop takes no kick, the pass is not reported, or it reports a failure. It
+// returns how many wakes of each kind the pass appended for the task.
+func (k *KickedSupervision) Pass(t *testing.T, task string) map[string]int {
+	t.Helper()
+	reply := make(chan passReport, 1)
+	select {
+	case k.kick <- reply:
+	case <-time.After(loopWait):
+		t.Fatal("the loop did not take a pass")
+	}
+	select {
+	case r := <-reply:
+		if r.Err != nil {
+			t.Fatalf("the kicked pass could not read the fleet: %v", r.Err)
+		}
+		appended := make(map[string]int)
+		for id, tr := range r.Tasks {
+			if tr.Err != nil {
+				t.Fatalf("the kicked pass failed over task %s: %v", id, tr.Err)
+			}
+			if id != task {
+				continue
+			}
+			for _, d := range tr.Detections {
+				if d.Disposition == store.WakeAppended {
+					appended[string(d.Kind)]++
+				}
+			}
+		}
+		return appended
+	case <-time.After(loopWait):
+		t.Fatal("the kicked pass was not reported")
+		return nil
+	}
+}

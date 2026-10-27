@@ -190,6 +190,20 @@ const keptWorkWakesMigration = "kept work wakes"
 // constant.
 const taskMachineMigration = "task machine and remote session host"
 
+// stallBaseMigration names the migration that adds the marker an approve of
+// a stall hold restarts the stall count from, for the reason
+// sealCheckpointTableMigration is a constant.
+const stallBaseMigration = "stall base marker"
+
+// captureSessionMigration names the migration that adds the session a
+// marker row's capture digest was read from, for the reason
+// sealCheckpointTableMigration is a constant.
+const captureSessionMigration = "capture session marker"
+
+// nothingToDeliverMigration names the migration that adds PRD section 8's
+// nothing-to-deliver record and the seen mark of one.
+const nothingToDeliverMigration = "nothing-to-deliver record"
+
 // attemptLaunchMigration names the migration that adds a task attempt's
 // launch claim, for the reason sealCheckpointTableMigration is a constant.
 const attemptLaunchMigration = "task attempt launch claim"
@@ -2453,6 +2467,102 @@ var schema = []migration{
 	},
 	{
 		version: 57,
+		name:    stallBaseMigration,
+		statements: []string{
+			// PRD section 6's "a stalled worker holds for you": an approve
+			// answered to a stall hold starts the count of the screen again
+			// from zero. The count a surface is classified on is
+			// stall_repetitions less this column, the value
+			// stall_repetitions had when the loop read the approve, so the
+			// surface markers, which carry stall_repetitions, stay unique
+			// across the restart and a stall that reaches the count again
+			// keys a new hold. It is a marker beside stall_repetitions,
+			// written by the supervisor loop and reset with it on a changed
+			// screen, and like every marker the comparison base for the
+			// next pass and not the task's state. Nullable and without a
+			// default, so a row written before the column existed reads
+			// back zero, which is no restart.
+			`ALTER TABLE wake_marker ADD COLUMN stall_base INTEGER`,
+		},
+	},
+	{
+		version: 58,
+		name:    captureSessionMigration,
+		statements: []string{
+			// PRD section 6: "a relaunched worker's new terminal starts a
+			// count of its own". The capture digest alone cannot tell a new
+			// session that shows the same screen from the old one, so the
+			// count a relaunch should restart carried on. This column is
+			// the session reference the digest was read from; the store
+			// derives the change epoch from the two together, so a new
+			// session is a change whatever it shows. It is a marker like
+			// capture_digest, and like every marker the comparison base for
+			// the next pass and not the task's state. Nullable and without
+			// a default, so a row written before the column existed reads
+			// back unknown, which the next capture of a live session reads
+			// as one change.
+			`ALTER TABLE wake_marker ADD COLUMN capture_session TEXT`,
+		},
+	},
+	{
+		version: 59,
+		name:    nothingToDeliverMigration,
+		statements: []string{
+			// PRD section 8's nothing-to-deliver record: written once, in
+			// the transaction that ends a run on section 5's empty-diff
+			// short circuit, of a branch the run's push anchor found absent
+			// where it would push, whose submitted commits P12's content
+			// check found present by content in the default-branch commit
+			// the rebase stage read. It names the run, that commit, the
+			// submitted commit, the commits the check examined and its
+			// answer, and the checkpoint entry those facts were read from. A
+			// task's Landed is derived from it, beside the merge record, and
+			// neither the run row nor the task row stores the fact again.
+			//
+			// One row per run, keyed by the run with no foreign key, for
+			// merge_record's reason. The answer is the one value the record
+			// is written on, so a row naming any other cannot be stored.
+			`CREATE TABLE nothing_to_deliver (
+				run            TEXT PRIMARY KEY,
+				default_commit TEXT NOT NULL CHECK (default_commit <> ''),
+				submitted      TEXT NOT NULL CHECK (submitted <> ''),
+				examined       TEXT NOT NULL,
+				answer         TEXT NOT NULL CHECK (answer = 'present'),
+				checkpoint     INTEGER NOT NULL CHECK (checkpoint > 0),
+				recorded_at    TEXT NOT NULL
+			) STRICT`,
+			// Written once means written once, on merge_record's terms, and
+			// the delete seal is merge_record's as forgetRunRecordsMigration
+			// narrowed it: refused while the run it describes stands, which
+			// only ForgetRepository ends.
+			`CREATE TRIGGER nothing_to_deliver_is_written_once
+				BEFORE UPDATE ON nothing_to_deliver
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a nothing-to-deliver record is written once by the end of its run and is not updated');
+				END`,
+			`CREATE TRIGGER nothing_to_deliver_is_not_removed
+				BEFORE DELETE ON nothing_to_deliver
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a nothing-to-deliver record is written once by the end of its run and is not deleted while its run stands');
+				END`,
+			// A seen mark of a nothing-to-deliver record is keyed by its run,
+			// as a merge record's is, so its delete seal is narrowed on the
+			// same terms: refused while the record it marks stands. A mark of
+			// a task's cleanup record keeps the whole seal, as before.
+			`DROP TRIGGER seen_mark_is_not_removed`,
+			`CREATE TRIGGER seen_mark_is_not_removed
+				BEFORE DELETE ON seen_mark
+				WHEN (OLD.kind <> 'merge' AND OLD.kind <> 'nothing-to-deliver')
+					OR (OLD.kind = 'merge' AND EXISTS (SELECT 1 FROM merge_record WHERE run = OLD.key))
+					OR (OLD.kind = 'nothing-to-deliver' AND EXISTS (SELECT 1 FROM nothing_to_deliver WHERE run = OLD.key))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not deleted while the record it marks stands');
+				END`,
+		},
+	},
+	{
+		version: 60,
 		name:    attemptLaunchMigration,
 		statements: []string{
 			// When the attempt's worker launch was claimed, written once by

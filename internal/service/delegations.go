@@ -124,7 +124,7 @@ func decideDelegationWith(o delegationObservation, cfg config.Config, now time.T
 	}
 	seen := func(kind supervisor.Kind, marker string) bool { return o.surfaced[surfacedKey(kind, marker)] }
 	if o.hold != nil && o.hold.Open() {
-		marker := "hold:" + o.hold.Key
+		marker := supervisor.HoldOpenedMarker(o.hold.Key)
 		if !seen(supervisor.KindHoldOpened, marker) {
 			wake, _ := supervisor.Of(supervisor.KindHoldOpened)
 			detect(wake, marker, supervisor.WindowOpen, false)

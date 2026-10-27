@@ -67,11 +67,16 @@ paths: ["internal/service/**"]
 - Run activity: whether anything is advancing a run is a third fact neither
   the record nor the checkpoint holds: it lives in the slot a run advances
   in, and `report` reads it rather than inferring it.
-- Checks hold and settle: `checkshold.go` is PRD section 11's step 3 and the
-  one producer of `store.ResolvedByProgram`; `settle` turns what the checks
-  body wrote into the record's move, so no stage body decides a run's
+- Checks hold and settle: `checkshold.go` is PRD section 11's step 3 and one
+  of the two producers of `store.ResolvedByProgram`; `settle` turns what the
+  checks body wrote into the record's move, so no stage body decides a run's
   status; `carryOn` decides from what ended the segment rather than from the
   run.
+- Stall hold: `stallhold.go` is PRD section 6's stalled worker and the other
+  producer of `store.ResolvedByProgram`, closing a stall hold whose stall
+  ended by itself. Every writer of a stall hold (that closure, an approve, a
+  stop or retry) takes the task's slot, `claimSteer`, for its whole write;
+  its header owns the answers and the residual gaps.
 - Configuration per run: it reads the repository's own configuration
   document per run, composed by `config.ResolveRun`, and refuses the run
   before anything launches when the trusted copy cannot be read or the

@@ -421,6 +421,22 @@ func decodeStallInspectionCount(k Key, v any) (any, error) {
 	return n, nil
 }
 
+// decodeStallHoldCount accepts an integer between MinStallHoldCount and
+// MaxStallHoldCount, and refuses one outside rather than clamping it.
+func decodeStallHoldCount(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < MinStallHoldCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall hold count must be at least %d", MinStallHoldCount))
+	}
+	if n > MaxStallHoldCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall hold count may be at most %d", MaxStallHoldCount))
+	}
+	return n, nil
+}
+
 // decodeDecisionModel accepts one of the three decision-model modes, spelled
 // exactly. Any other text is refused rather than read as the default, because
 // a misspelled mode is a mode the operator did not get.

@@ -32,8 +32,8 @@ import (
 //
 // # Retrying the cleanup
 //
-// cleanup.go's landing sites run once, when the merge record or the local
-// landing record is written, and a terminal that did not read Dead then,
+// cleanup.go's landing sites run once, when the merge record, the
+// nothing-to-deliver record or the local landing record is written, and a terminal that did not read Dead then,
 // because the worker was one this service could not end or had not yet
 // exited, left the copy standing. The decision is therefore asked whenever
 // the task's terminal is observed Dead, from three places, each handing internal/tasks the liveness a resolution read

@@ -265,6 +265,16 @@ var (
 		Consequence: "Nothing in that domain is watched by it until it is begun again or the domain is taken back.",
 		Decision:    "Run assistant tasks to see how the domain's work stands.",
 	}
+	phraseNoticeStallHold = Phrase{
+		Outcome:     "This work's worker has shown the same screen through repeated inspections, and a decision about it is waiting on an answer.",
+		Consequence: "Nothing has been ended: the worker carries on and stays watched until the decision is answered.",
+		Decision:    "Run assistant watch to see the decision and the answers that close it.",
+	}
+	phraseNoticeStallEnded = Phrase{
+		Outcome:     "This work's worker, which had shown the same screen for so long that you were asked about it, has moved on by itself.",
+		Consequence: "That decision is no longer needed, and the program closed it.",
+		Decision:    "Nothing to decide; run assistant tasks to see how the work stands.",
+	}
 	phraseNoticeHandedUp = Phrase{
 		Outcome:     "The coordinator of this work's domain handed a decision about it up to you.",
 		Consequence: "It asked for something it is not allowed to do itself, and nothing was done.",
@@ -287,11 +297,21 @@ var noticeRows = map[supervisor.Kind]Phrase{
 	supervisor.KindSubordinateGone:       phraseNoticeDomainCoordinatorGone,
 	supervisor.KindSubordinateEscalated:  phraseNoticeHandedUp,
 	supervisor.KindKeptWork:              phraseNoticeKeptWork,
+	supervisor.KindStallClosed:           phraseNoticeStallEnded,
 }
 
 // QueuedWakePhrase is the row one listed notice reads as, chosen by its
-// kind, which the row never names.
+// kind, which the row never names. A hold-opened notice about a stall hold
+// reads as a row of its own, because that hold stops nothing: its worker
+// carries on and is watched.
 func QueuedWakePhrase(w QueuedWake) Phrase {
+	if supervisor.Kind(w.Wake.Kind) == supervisor.KindHoldOpened {
+		if key, ok := supervisor.HoldOfMarker(w.Wake.Marker); ok {
+			if _, stall := supervisor.ParseStallHold(key); stall {
+				return phraseNoticeStallHold
+			}
+		}
+	}
 	if row, ok := noticeRows[supervisor.Kind(w.Wake.Kind)]; ok {
 		return row
 	}
@@ -376,7 +396,7 @@ func coordinatorRows() []Phrase {
 		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
 		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,
 		phraseNoticeUnproven, phraseNoticeIdle, phraseNoticeOutsideWait, phraseNoticeCheckResult, phraseNoticeUnfamiliar,
-		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp,
+		phraseNoticeDomainCoordinatorGone, phraseNoticeHandedUp, phraseNoticeStallHold, phraseNoticeStallEnded,
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
 		phraseDomainRetried, phraseDelegationEndedByAnswer,
