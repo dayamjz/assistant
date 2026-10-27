@@ -84,8 +84,9 @@ paths: ["internal/service/**"]
   claim) and `launch.go` follows a proven dispatch in the same pass, under
   the slot the dispatch or relaunch took, which stays unsettled until the
   launch's record of its session is settled (`dispatched.settle`), so a
-  stop, a relaunch, a retirement or a retirement hold's offer never
-  interleaves with a worker created and not yet recorded. A path already
+  stop, a relaunch or a retirement never interleaves with a worker created
+  and not yet recorded, and the retirement hold's offer, which reads that
+  state through `launching`, is skipped meanwhile. A path already
   standing at the copy's path is asserted and never removed, and `Close`
   ends only the sessions this service created.
 - Terminals: every task reader is built through `reader`, probing through

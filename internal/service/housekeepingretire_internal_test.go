@@ -728,14 +728,17 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 	}
 }
 
-// The retirement hold is offered under the pass's slot, which a dispatch or
-// relaunch holds unsettled through the launch that follows it: while it is
-// held, a pass that reads as nothing moving (its attempt claimed and no
-// session yet, which is how a launch under way reads) is offered no hold,
+// The retirement hold is not offered while a dispatch or relaunch holds the
+// pass's slot unsettled, which it does through the launch that follows it:
+// a pass that reads as nothing moving (its attempt claimed and no session
+// yet, which is how a launch under way reads) is offered no hold then,
 // since the hold would resolve it Held and take it out of flight while its
-// worker is being created (P10); once the slot is released the next pass
-// offers the hold, which is the control that the read looks at the slot.
-func TestTheRetirementHoldIsNotOfferedWhileThePassesSlotIsHeld(t *testing.T) {
+// worker is being created (P10); once the launch has settled the slot the
+// next pass offers the hold. The control is the same slot taken by a stop's
+// claim instead, which excludes no launch and does not put the offer off:
+// the landed pass's cleanup ask takes the slot that way on the same pass,
+// and an offer that waited on it was offered a pass late on a slow host.
+func TestTheRetirementHoldIsNotOfferedWhileALaunchHoldsThePassesSlot(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P10)
 	const pass = "taskhkslotaa"
@@ -743,21 +746,28 @@ func TestTheRetirementHoldIsNotOfferedWhileThePassesSlotIsHeld(t *testing.T) {
 		passTask(t, records, pass)
 		launched(t, records, pass, "", "")
 	})
-	release, err := sub.service.claimSteer(pass)
+	// The loop's dispatch at open took the slot and settled it without a
+	// proof (the pass has no copy here); a relaunch takes a held slot again.
+	settle, err := sub.service.claimRelaunch(pass)
 	if err != nil {
-		t.Fatalf("taking the pass's slot as a launch does: %v", err)
+		t.Fatalf("taking the pass's slot as a relaunch does: %v", err)
 	}
 	sub.clock.Advance(time.Hour)
 	if r := sub.pass(t); r.Housekeeping[hkRepository].Err != nil {
 		t.Fatalf("the pass reported a failure over the repository: %v", r.Housekeeping[hkRepository].Err)
 	}
 	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
-		t.Fatalf("with its slot held the pass was offered %+v, want no retirement hold", holds)
+		t.Fatalf("with a relaunch holding its slot unsettled the pass was offered %+v, want no retirement hold", holds)
 	}
-	release()
+	settle(tasks.Isolation{})
+	release, err := sub.service.claimSteer(pass)
+	if err != nil {
+		t.Fatalf("taking the settled slot as a stop does: %v", err)
+	}
+	defer release()
 	sub.pass(t)
 	if holds := sub.retireHolds(t, pass); len(holds) != 1 || !holds[0].Open() {
-		t.Fatalf("with its slot released the pass carries %+v, want one open retirement hold", holds)
+		t.Fatalf("with the launch settled and a stop's claim on the slot the pass carries %+v, want one open retirement hold", holds)
 	}
 }
 

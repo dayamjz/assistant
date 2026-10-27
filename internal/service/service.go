@@ -357,9 +357,14 @@ type Service struct {
 	// through claimRelaunch, which is the one way a slot is retaken.
 	isolated map[string]tasks.Isolation
 	// claiming holds the tasks whose slot a dispatch or a relaunch has
-	// taken and not yet settled, so a relaunch cannot retake a slot that a
-	// claim in flight holds. dispatch.go owns it beside isolated.
+	// taken and not yet settled, or a stop or another steer holds through
+	// claimSteer, so a relaunch cannot retake a slot that a claim in flight
+	// holds. dispatch.go owns it beside isolated.
 	claiming map[string]bool
+	// steering holds the tasks whose slot claimSteer holds, the subset of
+	// claiming that is not a dispatch or relaunch in flight, so launching
+	// can tell the two apart. steer.go writes it; dispatch.go reads it.
+	steering map[string]bool
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
@@ -688,6 +693,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		afterMergeReadPass:        o.afterMergeReadPass,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
+		steering:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),
 		delegated:                 make(map[string]launchedSubordinate),
 		survivors:                 session.NewSurvivors(),

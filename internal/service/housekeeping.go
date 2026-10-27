@@ -65,8 +65,9 @@ import (
 // once per interval while the pass stays open, whether or not the default
 // branch moved, and whether or not something moves it: that is the long-run
 // escalation the coordinator relays. When nothing moves it
-// (supervisor.PassMoves), it is also offered the retirement hold, under the
-// task's slot so no launch is under way, keyed by the interval, the latest
+// (supervisor.PassMoves), it is also offered the retirement hold, unless a
+// dispatch or relaunch holds its slot unsettled, which is a launch under
+// way (dispatch.go's launching), keyed by the interval, the latest
 // attempt and the newest run it was decided against, so at most one is
 // registered per interval, none while an earlier one is unanswered, and a
 // retire answer given after a run started or the worker was begun again is
@@ -156,10 +157,10 @@ import (
 //     session" counts as nothing moving the pass. Within this service the
 //     dispatch or relaunch holds the task's slot unsettled from its claim
 //     until the launch has settled its record (dispatch.go, launch.go),
-//     the slot every retirement and the retirement hold's offer are
-//     written under, so a retire answered meanwhile is refused with the
-//     hold open (errSteerInFlight), the offer and the on-proof retirement
-//     are skipped until the next pass, and a launch that reads a pass
+//     the slot every retirement is written under and the retirement
+//     hold's offer reads, so a retire answered meanwhile is refused with
+//     the hold open (errSteerInFlight), the offer and the on-proof
+//     retirement are skipped until the next pass, and a launch that reads a pass
 //     already retired under the slot creates no worker (errLaunchRetired);
 //     the pass stays open and resolves Dispatched, in flight, until its
 //     worker is recorded. For a retirement
@@ -308,16 +309,17 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	if s.sup.hooks.beforeRetirementOffer != nil {
 		s.sup.hooks.beforeRetirementOffer(id)
 	}
-	// Under the task's slot: a launch under way holds it unsettled from
-	// its claim until its record is settled, and reads as nothing moving
-	// the pass until then, so the offer waits for the next pass rather
-	// than registering a hold that would take a launching pass out of
-	// flight.
-	release, err := s.claimSteer(id)
-	if err != nil {
+	// A launch under way holds the task's slot unsettled from its claim
+	// until its record is settled, and reads as nothing moving the pass
+	// until then, so the offer waits for the next pass rather than
+	// registering a hold that would take a launching pass out of flight.
+	// It reads the slot rather than taking it, so a stop or the cleanup
+	// ask holding the slot, which exclude nothing here, do not put the
+	// offer off; a launch that begins after this read claims a new attempt,
+	// which the offer's anchors refuse.
+	if s.launching(id) {
 		return out
 	}
-	defer release()
 	ctx, cancel := s.sup.bound(c.ctx)
 	h, err := s.store.OfferRetirementHold(ctx, c.inc, store.RetirementOffer{
 		Hold: store.Hold{Key: rh.key(), TaskID: store.Known(id),

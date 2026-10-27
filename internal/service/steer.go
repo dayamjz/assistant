@@ -335,10 +335,12 @@ func (s *Service) claimSteer(id string) (func(), error) {
 		return nil, fmt.Errorf("%w: task %s", errSteerInFlight, id)
 	}
 	s.claiming[id] = true
+	s.steering[id] = true
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.claiming, id)
+		delete(s.steering, id)
 	}, nil
 }
 

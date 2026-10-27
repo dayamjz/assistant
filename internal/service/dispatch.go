@@ -275,9 +275,10 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // second process against one record; and it stays unsettled, which is what
 // claimSteer and claimRelaunch refuse on, from the claim until the launch
 // has settled the record of its session (dispatched.settle), so nothing
-// that takes the task's slot, a stop, a relaunch, a housekeeping pass's
-// retirement or the offer of its retirement hold, interleaves with a
-// worker being created and not yet recorded. What came of the launch is
+// that takes the task's slot, a stop, a relaunch or a housekeeping pass's
+// retirement, interleaves with a worker being created and not yet
+// recorded, and the offer of a pass's retirement hold, which reads the
+// slot through launching, is skipped meanwhile. What came of the launch is
 // logged, and a refusal of the launch's own assertion is recorded the way
 // dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
@@ -498,6 +499,9 @@ func (s *Service) slotMaps() {
 	if s.claiming == nil {
 		s.claiming = make(map[string]bool)
 	}
+	if s.steering == nil {
+		s.steering = make(map[string]bool)
+	}
 }
 
 // takeSlot marks the task's slot taken and unsettled and returns the
@@ -511,6 +515,20 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 		s.isolated[id] = proof
 		delete(s.claiming, id)
 	}
+}
+
+// launching reports whether a dispatch or a relaunch holds the task's slot
+// unsettled, which it does through the launch that follows it: the slot is
+// claimed, and not by claimSteer, which marks what it holds in steering
+// and can hold nothing while a claim in flight does. A stop or a cleanup
+// ask holding the slot, and a dispatch that ended without a proof and
+// settled, do not read as a launch. It is what the offer of a housekeeping
+// pass's retirement hold reads (housekeeping.go), so that offer is skipped
+// while a worker may be created and not yet recorded, and not otherwise.
+func (s *Service) launching(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claiming[id] && !s.steering[id]
 }
 
 // isolationOf reports the proof this service holds for a task, and whether it
