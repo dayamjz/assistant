@@ -290,27 +290,127 @@ func TestAFirstPassIsDueOncePerInterval(t *testing.T) {
 	}
 }
 
-// A repository that has had a pass gets no due check at this link, open or
-// closed: a later pass's due check is the link above this one, and until it
-// lands such a repository raises nothing. The positive control is
-// TestAFirstPassIsDueOncePerInterval.
-func TestARepositoryThatHadAPassIsNotChecked(t *testing.T) {
+// A repository whose newest pass is open gets no due check: while a pass
+// is open no second one is created. The positive control is
+// TestAPassIsNotDueOnAMoveAloneButOnceTheIntervalAlsoPassed, whose last pass
+// is closed.
+func TestARepositoryWhosePassIsOpenIsNotChecked(t *testing.T) {
 	t.Parallel()
-	for name, plant := range map[string]hkPlant{
-		"open": func(t *testing.T, records *store.Store, sub *hkSubject) { passTask(t, records, "taskhkhadaaa") },
-		"closed": func(t *testing.T, records *store.Store, sub *hkSubject) {
-			closedPass(t, records, "taskhkhadaab", sub.tip(t))
-		},
-	} {
-		sub := openHousekeeping(t, housekeepingConfig, plant)
-		sub.merge(t, "AGENTS.md", "a renamed command\n")
-		sub.clock.Advance(2 * time.Hour)
-		if sub.checkStarted(t, sub.first, false) {
-			t.Fatalf("%s: the first pass checked a repository that has had a pass", name)
-		}
-		if r := sub.pass(t); sub.checkStarted(t, r, false) || len(sub.wakes(t)) != 0 {
-			t.Fatalf("%s: a repository that has had a pass was checked or raised: %+v, %+v", name, r.Housekeeping, sub.wakes(t))
-		}
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, "taskhkhadaaa")
+	})
+	sub.merge(t, "AGENTS.md", "a renamed command\n")
+	sub.clock.Advance(2 * time.Hour)
+	if sub.checkStarted(t, sub.first, false) {
+		t.Fatal("the first pass checked a repository whose pass is open")
+	}
+	if r := sub.pass(t); sub.checkStarted(t, r, false) || len(sub.wakes(t)) != 0 {
+		t.Fatalf("a repository whose pass is open was checked or raised: %+v, %+v", r.Housekeeping, sub.wakes(t))
+	}
+}
+
+// PRD section 6's housekeeping: the base of a pass is the default-branch
+// commit its copy was cut at, which is what its worker read, and not the
+// knowledge revision its launch recorded at a fresh fetch of the upstream.
+// A primary checkout behind the upstream cuts the copy at the older commit
+// while the launch records the newer one, so a pass that found nothing
+// drifted at the older tree has not checked what the newer commit changed:
+// with the upstream still at that commit, the due check raises the wake
+// naming it past the copy's commit. The control is a pass whose copy was
+// cut at the upstream's tip, which raises nothing.
+func TestTheBaseOfAPassIsTheCommitItsCopyWasCutAtNotTheKnowledgeItsLaunchRead(t *testing.T) {
+	t.Parallel()
+	var older, newer string
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		older = sub.tip(t)
+		newer = sub.merge(t, "CLAUDE.md", "a claim the older tree does not hold\n")
+		passTask(t, records, "taskhkbaseaa")
+		launched(t, records, "taskhkbaseaa", newer, "")
+		cutAt(t, records, "taskhkbaseaa", older)
+		relayed(t, records, "taskhkbaseaa")
+	})
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 1 || !strings.Contains(wakes[0].Detail, newer) || !strings.Contains(wakes[0].Detail, older) {
+		t.Fatalf("the due wake is %+v, want one naming the tip %s past %s, the commit the pass's copy was cut at", wakes, newer, older)
+	}
+
+	control := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, "taskhkbaseab")
+		launched(t, records, "taskhkbaseab", "", "")
+		cutAt(t, records, "taskhkbaseab", sub.tip(t))
+		relayed(t, records, "taskhkbaseab")
+	})
+	control.clock.Advance(time.Hour)
+	if r := control.pass(t); !control.checkStarted(t, r, false) {
+		t.Fatalf("the control did not check: %+v", r.Housekeeping)
+	}
+	if wakes := control.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a pass whose copy was cut at the tip raised %+v", wakes)
+	}
+}
+
+// The row's combination, one half: the default branch moved past the last
+// pass's base while the interval has not passed since that pass was created
+// raises nothing and fetches nothing; once the interval has passed, the
+// check fetches and raises one wake naming the pass, its base and the tip.
+func TestAPassIsNotDueOnAMoveAloneButOnceTheIntervalAlsoPassed(t *testing.T) {
+	t.Parallel()
+	var base string
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		base = heldGit(t, sub.upstream, "rev-parse", "main")
+		closedPass(t, records, "taskhkmoveaa", base)
+	})
+	if sub.checkStarted(t, sub.first, false) {
+		t.Fatal("the first pass checked a repository whose last pass was created within the interval")
+	}
+	moved := sub.merge(t, "AGENTS.md", "a renamed command\n")
+	if r := sub.pass(t); sub.checkStarted(t, r, false) || len(sub.wakes(t)) != 0 {
+		t.Fatalf("a move within the interval checked or raised: %+v, %+v", r.Housekeeping, sub.wakes(t))
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	wakes := sub.wakes(t)
+	if len(wakes) != 1 || wakes[0].Kind != string(supervisor.KindHousekeepingDue) || wakes[0].Pass != store.Known("taskhkmoveaa") ||
+		!strings.Contains(wakes[0].Detail, base) || !strings.Contains(wakes[0].Detail, moved) {
+		t.Fatalf("the due wake is %+v, want one about pass taskhkmoveaa naming its base %s and the tip %s", wakes, base, moved)
+	}
+}
+
+// The row's combination, other half: the interval passed with the default
+// branch still at the last pass's base raises nothing, and the check is not
+// made again within another interval; once the branch has moved and another
+// interval has passed, it raises the wake.
+func TestAPassIsNotDueOnTheIntervalAloneButOnceTheBranchAlsoMoved(t *testing.T) {
+	t.Parallel()
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		closedPass(t, records, "taskhkstilla", heldGit(t, sub.upstream, "rev-parse", "main"))
+	})
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	if got := sub.wakes(t); len(got) != 0 {
+		t.Fatalf("an unmoved branch raised %+v", got)
+	}
+	marker, found, err := sub.records(t).HousekeepingMarkerOf(t.Context(), hkRepository)
+	if err != nil || !found || marker.Pass != "taskhkstilla" {
+		t.Fatalf("the due check's marker is %+v, %v, %v, want it advanced for the pass", marker, found, err)
+	}
+	moved := sub.merge(t, "CLAUDE.md", "a moved path\n")
+	if r := sub.pass(t); sub.checkStarted(t, r, false) {
+		t.Fatal("the check ran again within an interval of the last")
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("another interval on, the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 1 || !strings.Contains(wakes[0].Detail, moved) {
+		t.Fatalf("the due wake is %+v, want one naming the tip %s", wakes, moved)
 	}
 }
 
@@ -426,6 +526,66 @@ func TestADueCheckWritesNothingOnceAPassWasCreatedWhileItRead(t *testing.T) {
 		if len(wakes) != 0 || found {
 			t.Fatalf("%s: a check whose repository got a pass while it read raised %+v with the marker found %v, want nothing", name, wakes, found)
 		}
+	}
+}
+
+// A due check that follows a pass reads its facts as the loop read them
+// before the fetch too, and a pass created while the fetch is in flight makes them stale:
+// a wake raised from them would name a base the new pass replaced, or say
+// no pass was ever created, and the coordinator acting on it once that pass
+// closed would create a second pass at the same base. The store reads the
+// passes again in the write (store.ErrDueCheckStale), so the check writes
+// neither wake nor marker, whether the pass created meanwhile is already
+// closed or still open, and the next check follows the pass that was
+// created. The positive controls are that next check, which reads the new
+// pass and advances the marker, and the open pass's own wake, which is
+// written while it is open.
+func TestADueCheckFollowingAPassWritesNothingOnceAnotherWasCreatedWhileItRead(t *testing.T) {
+	t.Parallel()
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		closedPass(t, records, "taskhkraceaa", heldGit(t, sub.upstream, "rev-parse", "main"))
+	})
+	if sub.checkStarted(t, sub.first, false) {
+		t.Fatal("the first pass checked a repository whose last pass was created within the interval")
+	}
+	moved := sub.merge(t, "AGENTS.md", "a renamed command\n")
+	sub.clock.Advance(time.Hour)
+	sub.afterDueRead(func() {
+		sub.afterDueRead(nil)
+		closedPass(t, sub.records(t), "taskhkracebb", moved)
+	})
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("once the interval passed, the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a check whose repository got a pass while it read raised %+v, want nothing", wakes)
+	}
+	if _, found, err := sub.records(t).HousekeepingMarkerOf(t.Context(), hkRepository); err != nil || found {
+		t.Fatalf("the stale check advanced the marker (found %v, %v), want it left alone", found, err)
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("the next interval's pass did not check: %+v", r.Housekeeping)
+	}
+	marker, found, err := sub.records(t).HousekeepingMarkerOf(t.Context(), hkRepository)
+	if err != nil || !found || marker.Pass != "taskhkracebb" {
+		t.Fatalf("the next check's marker is %+v, %v, %v, want it advanced for the pass created meanwhile", marker, found, err)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a branch unmoved since the pass created meanwhile raised %+v", wakes)
+	}
+
+	sub.merge(t, "CLAUDE.md", "a moved path\n")
+	sub.clock.Advance(time.Hour)
+	sub.afterDueRead(func() {
+		sub.afterDueRead(nil)
+		passTask(t, sub.records(t), "taskhkracecc")
+	})
+	if r := sub.pass(t); !sub.checkStarted(t, r, false) {
+		t.Fatalf("after a move and an interval the pass did not check: %+v", r.Housekeeping)
+	}
+	if wakes := sub.wakes(t); len(wakes) != 0 {
+		t.Fatalf("a check whose repository got an open pass while it read raised %+v, want nothing", wakes)
 	}
 }
 
