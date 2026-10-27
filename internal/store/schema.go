@@ -238,6 +238,11 @@ const housekeepingHoldMigration = "housekeeping retirement hold"
 // reason sealCheckpointTableMigration is a constant.
 const housekeepingWakesMigration = "housekeeping wakes"
 
+// housekeepingNotificationMigration names the migration that adds the
+// housekeeping wake's notification record, for the reason
+// sealCheckpointTableMigration is a constant.
+const housekeepingNotificationMigration = "housekeeping notifications"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2852,6 +2857,44 @@ var schema = []migration{
 				WHEN OLD.handled_at IS NULL OR EXISTS (SELECT 1 FROM repository WHERE repository.id = OLD.repository_id)
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a housekeeping wake is kept after it is drained and is not deleted while its repository stands');
+				END`,
+		},
+	},
+	{
+		version: 67,
+		name:    housekeepingNotificationMigration,
+		statements: []string{
+			// Migration 46's notification record for the queue's fourth
+			// shape, on kept_work_notification's terms, keyed by the
+			// housekeeping wake it is about, and removed only with it.
+			`CREATE TABLE housekeeping_notification (
+				housekeeping_wake_id INTEGER PRIMARY KEY REFERENCES housekeeping_wake(id),
+				claimed_at           TEXT NOT NULL,
+				outcome              TEXT CHECK (outcome IN ('sent', 'failed')),
+				exit_code            INTEGER,
+				detail               TEXT,
+				settled_at           TEXT,
+				CHECK ((outcome IS NULL) = (settled_at IS NULL)),
+				CHECK (outcome IS NOT NULL OR (exit_code IS NULL AND detail IS NULL)),
+				CHECK (outcome IS NOT 'sent' OR exit_code = 0)
+			) STRICT`,
+			`CREATE TRIGGER housekeeping_notification_claim_is_written_once
+				BEFORE UPDATE OF housekeeping_wake_id, claimed_at ON housekeeping_notification
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is claimed once and the claim is not rewritten');
+				END`,
+			`CREATE TRIGGER housekeeping_notification_is_settled_once
+				BEFORE UPDATE OF outcome, exit_code, detail, settled_at ON housekeeping_notification
+				WHEN OLD.outcome IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is settled once and the first outcome stands');
+				END`,
+			`CREATE TRIGGER housekeeping_notification_is_not_removed
+				BEFORE DELETE ON housekeeping_notification
+				WHEN EXISTS (SELECT 1 FROM housekeeping_wake w JOIN repository r ON r.id = w.repository_id
+					WHERE w.id = OLD.housekeeping_wake_id)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its housekeeping wake stands');
 				END`,
 		},
 	},
