@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -149,11 +150,90 @@ func (s *hkSubject) answer(t *testing.T, id, hold, answer string) (machine.TaskA
 	return s.service.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: id, Hold: hold, Answer: answer})
 }
 
+// A pass whose run ended on the empty-diff short circuit, written by the
+// real pipeline, without a nothing-to-deliver record, as a run whose
+// branch was already published or whose work was not proven present ends
+// (PRD section 6's nothing left to deliver, "what this does not
+// establish"), lands nothing and is retired by nobody but a person: the
+// pass is where its records put it, resolving Ready, not retired however
+// many passes the loop makes, and once its worker reads dead and an
+// interval has passed it is offered the retirement hold like any other end
+// that does not land; retire then releases its claim and a later pass can
+// be created. TestAPassWhoseRunLeftNothingToDeliverLandsAndIsNotRetired is
+// the run that did write the record.
+func TestAPassWhoseRunWroteNoNothingToDeliverRecordIsRetiredOnlyByAnAnswer(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhkproofa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-proof")
+		sub.terminals.dead("pane-proof")
+		passRun(t, records, "run-proof", store.RunPassed, true)
+	})
+	for i := 0; i < 3; i++ {
+		sub.pass(t)
+	}
+	if _, found := sub.retirement(t, pass); found {
+		t.Fatal("a pass whose run rebased to nothing was retired by the program")
+	}
+	if got := sub.observedTask(t, pass); got.State != taskstate.Ready {
+		t.Fatalf("the pass resolves %s, want Ready from its passed run", got.State)
+	}
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("before an interval the pass carries %+v, want no retirement hold", holds)
+	}
+	var open *store.PassOpenError
+	if err := sub.createPass(t); !errors.As(err, &open) || open.Pass != pass {
+		t.Fatalf("a pass after one still open = %v, want it refused naming %s", err, pass)
+	}
+	sub.retireOnAnswer(t, pass)
+	if record, found := sub.retirement(t, pass); !found || record.Hold == "" {
+		t.Fatalf("the retirement record is %+v (%v), want one naming the answered hold", record, found)
+	}
+	if err := sub.createPass(t); err != nil {
+		t.Fatalf("a pass after the retired one was refused: %v", err)
+	}
+}
+
+// PRD section 13's housekeeping row and section 6's nothing left to
+// deliver: a pass whose run's rebase left nothing to deliver, with the
+// run's nothing-to-deliver record written as its end writes it, lands.
+// It resolves Landed from that record, is in the terminal tier and so no
+// longer open, a later pass can be created at once, and after an interval
+// it is offered no retirement hold and no retirement is written: the
+// program retires nothing, and this pass needs no retirement.
+func TestAPassWhoseRunLeftNothingToDeliverLandsAndIsNotRetired(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhklandaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-landnothing")
+		sub.terminals.dead("pane-landnothing")
+		run := passRun(t, records, "run-landnothing", store.RunRunning, true)
+		if _, err := records.TransitionRunOnNothingToDeliver(t.Context(), run.ID, []store.RunStatus{store.RunRunning}, store.RunPassed,
+			store.NothingToDeliver{DefaultCommit: "main", Submitted: run.SubmittedHead, Examined: []string{run.SubmittedHead},
+				Answer: store.NothingToDeliverAnswer, Checkpoint: 1}); err != nil {
+			t.Fatalf("ending run %s on nothing to deliver: %v", run.ID, err)
+		}
+	})
+	if got := sub.observedTask(t, pass); got.State != taskstate.Landed || !got.Basis.NothingToDeliver {
+		t.Fatalf("the pass resolves %+v, want Landed from the run's nothing-to-deliver record", got)
+	}
+	if err := sub.createPass(t); err != nil {
+		t.Fatalf("a pass after one that landed on nothing to deliver was refused: %v", err)
+	}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("the landed pass was offered %+v, want no retirement hold", holds)
+	}
+	if _, found := sub.retirement(t, pass); found {
+		t.Fatal("the landed pass was retired")
+	}
+}
+
 // PRD section 13: a pass whose run was cancelled stays open until a
-// retirement hold is answered retire, and keep leaves it open; the
-// answered retirement releases the claim so a later pass can be created.
-// Each hold is registered here keyed as the offer keys one, which is the
-// next link's.
+// retirement hold is answered retire, and keep leaves it open, offering the
+// hold again only after another interval; the answered retirement releases
+// the claim so a later pass can be created.
 func TestACancelledPassStaysOpenUntilItsRetirementHoldIsAnsweredRetire(t *testing.T) {
 	t.Parallel()
 	const pass = "taskhkcancel"
@@ -162,22 +242,36 @@ func TestACancelledPassStaysOpenUntilItsRetirementHoldIsAnsweredRetire(t *testin
 		sub.terminals.dead("pane-cancel")
 		passRun(t, records, "run-cancel", store.RunTerminated, false)
 	})
-	first := sub.holdRetirement(t, pass, 1)
-	kept, err := sub.answer(t, pass, first.Key, machine.AnswerKeep)
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("after an interval the cancelled pass carries %+v, want one open retirement hold", holds)
+	}
+	kept, err := sub.answer(t, pass, holds[0].Key, machine.AnswerKeep)
 	if err != nil || kept.Effect != machine.AnswerRecorded {
 		t.Fatalf("keep answered %+v, %v", kept, err)
-	}
-	if h, err := sub.records(t).Hold(t.Context(), first.Key); err != nil || h.Open() || h.Resolution != store.Known(machine.AnswerKeep) {
-		t.Fatalf("the kept hold reads %+v (%v), want it answered keep", h, err)
 	}
 	var open *store.PassOpenError
 	if err := sub.createPass(t); !errors.As(err, &open) || open.Pass != pass {
 		t.Fatalf("a pass after one kept open = %v, want it refused naming %s", err, pass)
 	}
-	if _, found := sub.retirement(t, pass); found {
-		t.Fatal("keep wrote the retirement record")
+	sub.pass(t)
+	if again := sub.retireHolds(t, pass); len(again) != 1 {
+		t.Fatalf("within the same interval the hold was offered again: %+v", again)
 	}
-	offered := sub.holdRetirement(t, pass, 2)
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	holds = sub.retireHolds(t, pass)
+	var offered store.Hold
+	for _, h := range holds {
+		if h.Open() {
+			offered = h
+		}
+	}
+	if len(holds) != 2 || !offered.Open() {
+		t.Fatalf("another interval on, the pass carries %+v, want the hold offered again", holds)
+	}
 	if _, err := sub.answer(t, pass, offered.Key, "maybe"); !errors.Is(err, ipc.ErrInvalidRequest) {
 		t.Fatalf("an answer outside retire and keep = %v, want it refused", err)
 	}
@@ -203,20 +297,68 @@ func TestACancelledPassStaysOpenUntilItsRetirementHoldIsAnsweredRetire(t *testin
 	}
 }
 
-// PRD section 13: an answer of retire after a run attributed to the pass
-// has started is refused with the hold left open, naming the run, and
-// writes no record.
-func TestARetireAfterARunStartedIsRefused(t *testing.T) {
+// The positive control on retirement: a landed pass needs none. Its merge
+// record puts it in the terminal tier, so it is offered no retirement hold
+// however long ago it was created, and the next pass can be created.
+func TestALandedPassNeedsNoRetirement(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhklanded"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		promotedPass(t, records, pass, "pane-landed")
+		sub.terminals.dead("pane-landed")
+		passRun(t, records, "run-landed", store.RunPassed, false)
+		if _, err := records.RecordMergeOfPassedRun(t.Context(), "run-landed",
+			store.PullRequestRead{PullRequest: 7, End: store.PullRequestMerged}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	if got := sub.retireHolds(t, pass); len(got) != 0 {
+		t.Fatalf("a landed pass was offered retirement: %+v", got)
+	}
+	if err := sub.createPass(t); err != nil {
+		t.Fatalf("a pass after the landed one was refused: %v", err)
+	}
+}
+
+// PRD section 13: a promoted pass with an open report decision and a run
+// still advancing resolves Held and gets no retirement hold; once that run
+// ends and the worker reads dead, it gets one (the positive control); and an
+// answer of retire after a run attributed to the pass has started is
+// refused with the hold left open.
+func TestARetireAfterARunStartedIsRefusedAndAHeldPassThatMovesIsNotOffered(t *testing.T) {
 	t.Parallel()
 	const pass = "taskhkheldaa"
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
 		promotedPass(t, records, pass, "pane-held")
-		sub.terminals.dead("pane-held")
-		passRun(t, records, "run-held", store.RunFailed, false)
+		sub.terminals.live("pane-held", "validating\n")
+		passRun(t, records, "run-held", store.RunRunning, false)
+		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: tasks.HoldKey(pass, "f1"), TaskID: store.Known(pass),
+			Subject: "whether the README's rule should be reworded", Detail: "the proposed wording"}); err != nil {
+			t.Fatal(err)
+		}
 	})
-	hold := sub.holdRetirement(t, pass, 1)
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	if got := sub.observedTask(t, pass); got.State != taskstate.Held {
+		t.Fatalf("the pass resolves %s, want Held from its open report decision", got.State)
+	}
+	if got := sub.retireHolds(t, pass); len(got) != 0 {
+		t.Fatalf("a held pass whose run validates was offered retirement: %+v", got)
+	}
+
+	if _, err := sub.records(t).TransitionRun(t.Context(), "run-held", []store.RunStatus{store.RunRunning}, store.RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	sub.terminals.dead("pane-held")
+	sub.pass(t)
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("once nothing moves the pass it carries %+v, want one open retirement hold", holds)
+	}
 	passRun(t, sub.records(t), "run-later", store.RunRunning, false)
-	_, err := sub.answer(t, pass, hold.Key, machine.AnswerRetire)
+	_, err := sub.answer(t, pass, holds[0].Key, machine.AnswerRetire)
 	if !errors.Is(err, ipc.ErrRefused) || !errors.Is(err, store.ErrPassMoves) || !strings.Contains(err.Error(), "run-later") {
 		t.Fatalf("retire after a run started = %v, want it refused naming the run", err)
 	}
@@ -244,7 +386,12 @@ func TestARetireAnswersStopOnTheHoldsThatWouldRelaunchTheWorker(t *testing.T) {
 			}
 		}
 	})
-	holds := []store.Hold{sub.holdRetirement(t, pass, 1)}
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 {
+		t.Fatalf("the pass carries %+v, want one retirement hold", holds)
+	}
 	answered, err := sub.answer(t, pass, holds[0].Key, machine.AnswerRetire)
 	if err != nil || answered.Effect != machine.AnswerRetired {
 		t.Fatalf("retire answered %+v, %v", answered, err)
@@ -350,36 +497,168 @@ func TestAPassUnchangedInAStageSurfacesAtTheEscalationWindow(t *testing.T) {
 	}
 }
 
-// retireOnAnswer registers the pass's retirement hold, keyed as the offer
-// keys one, and answers it retire, as the coordinator relaying a person's
-// answer does.
-func (s *hkSubject) retireOnAnswer(t *testing.T, pass string) {
-	t.Helper()
-	hold := s.holdRetirement(t, pass, 1)
-	if answered, err := s.answer(t, pass, hold.Key, machine.AnswerRetire); err != nil || answered.Effect != machine.AnswerRetired {
-		t.Fatalf("retire answered %+v, %v", answered, err)
+// PRD section 6: the retirement hold is offered to an open pass that
+// nothing moves, decided where the hold is registered. A reported
+// investigation pass the loop read open, whose findings the coordinator
+// records relayed between that read and the registration, is in the
+// terminal tier by then, so it is offered nothing, since a retire answer
+// could only be refused, and the loop reports no failure. A run of the pass
+// started in between moves it, and is refused the same way. The positive
+// control is the same pass with nothing done in between, which is offered
+// the hold. A pass the loop read with its attempt not yet launched, whose
+// launch records that attempt's session in between, is moved by that
+// launch and refused the same way: the offer is anchored to the session
+// the loop read, none, as the retirement is.
+func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(t *testing.T) {
+	t.Parallel()
+	reported := func(id, ref string) hkPlant {
+		return func(t *testing.T, records *store.Store, sub *hkSubject) {
+			passTask(t, records, id)
+			launched(t, records, id, "", ref)
+			sub.terminals.dead(ref)
+			if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: "nothing drifted",
+				Report: []byte(`{"summary":"nothing drifted"}`)}, nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// unlaunched is a pass whose first attempt is claimed and has no
+	// session, as one reads while its launch is under way.
+	unlaunched := func(id string) hkPlant {
+		return func(t *testing.T, records *store.Store, sub *hkSubject) {
+			passTask(t, records, id)
+			launched(t, records, id, "", "")
+		}
+	}
+	for name, c := range map[string]struct {
+		plant   func(id string) hkPlant
+		between func(t *testing.T, sub *hkSubject, id string)
+	}{
+		"relayed": {func(id string) hkPlant { return reported(id, "pane-offer") }, func(t *testing.T, sub *hkSubject, id string) {
+			ctx := context.Background()
+			events, err := sub.records(t).TaskEvents(ctx, id, 0, 0)
+			if err == nil {
+				_, _, err = sub.records(t).RecordTaskRelay(ctx, id, events[len(events)-1].Sequence)
+			}
+			if err != nil {
+				t.Errorf("relaying pass %s: %v", id, err)
+			}
+		}},
+		"a session recorded": {unlaunched, func(t *testing.T, sub *hkSubject, id string) {
+			if err := sub.records(t).SetAttemptSession(context.Background(), id, 1, "pane-launched", store.SessionHost{}); err != nil {
+				t.Errorf("recording the session of pass %s's launch: %v", id, err)
+			}
+			sub.terminals.live("pane-launched", "working\n")
+		}},
+		"a run started": {func(id string) hkPlant { return reported(id, "pane-offer") }, func(t *testing.T, sub *hkSubject, id string) {
+			// The loop's goroutine runs this, so a failure is reported
+			// with Errorf and the assertions after the pass fail too.
+			ctx := context.Background()
+			records := sub.records(t)
+			events, err := records.TaskEvents(ctx, id, 0, 0)
+			if err == nil {
+				_, _, err = records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, hkRepository, hkBranch,
+					config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil)
+			}
+			var build store.Build
+			if err == nil {
+				build, err = store.CurrentBuild()
+			}
+			if err == nil {
+				_, err = records.CreateRun(ctx, store.Run{ID: "run-" + id, RepositoryID: hkRepository, Branch: hkBranch,
+					SubmittedHead: "aaaa", Base: "main", Intent: "correct the drift", IntentSource: "task", ConfigDigest: "cfg", Build: build})
+			}
+			if err != nil {
+				t.Errorf("promoting pass %s and starting its run: %v", id, err)
+			}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			const pass = "taskhkoffera"
+			sub := openHousekeeping(t, housekeepingConfig, c.plant(pass))
+			sub.beforeOffer(func(task string) {
+				if task == pass {
+					c.between(t, sub, task)
+				}
+			})
+			sub.clock.Advance(time.Hour)
+			r := sub.pass(t)
+			if err := r.Housekeeping[hkRepository].Err; err != nil {
+				t.Fatalf("the pass reported a failure over the repository: %v", err)
+			}
+			if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+				_, answered := sub.answer(t, pass, holds[0].Key, machine.AnswerRetire)
+				t.Fatalf("the pass carries %+v, want no retirement hold; answering it retire = %v", holds, answered)
+			}
+		})
+	}
+
+	control := openHousekeeping(t, housekeepingConfig, reported("taskhkofferb", "pane-offer-control"))
+	control.clock.Advance(time.Hour)
+	control.pass(t)
+	if holds := control.retireHolds(t, "taskhkofferb"); len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("with nothing done between the read and the registration the pass carries %+v, want one open retirement hold", holds)
 	}
 }
 
-// holdRetirement registers the pass's retirement hold for the interval
-// epoch, keyed as the offer keys one against the latest attempt and the
-// newest run the store records, and returns it.
-func (s *hkSubject) holdRetirement(t *testing.T, pass string, epoch int64) store.Hold {
+// The retirement hold is not offered while a dispatch or relaunch holds the
+// pass's slot unsettled, which it does through the launch that follows it:
+// a pass that reads as nothing moving (its attempt claimed and no session
+// yet, which is how a launch under way reads) is offered no hold then,
+// since the hold would resolve it Held and take it out of flight while its
+// worker is being created (P10); once the launch has settled the slot the
+// next pass offers the hold. The control is the same slot taken by a stop's
+// claim instead, which excludes no launch and does not put the offer off:
+// the landed pass's cleanup ask takes the slot that way on the same pass,
+// and an offer that waited on it was offered a pass late on a slow host.
+func TestTheRetirementHoldIsNotOfferedWhileALaunchHoldsThePassesSlot(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	const pass = "taskhkslotaa"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, pass)
+		launched(t, records, pass, "", "")
+	})
+	// The loop's dispatch at open took the slot and settled it without a
+	// proof (the pass has no copy here); a relaunch takes a held slot again.
+	settle, err := sub.service.claimRelaunch(pass)
+	if err != nil {
+		t.Fatalf("taking the pass's slot as a relaunch does: %v", err)
+	}
+	sub.clock.Advance(time.Hour)
+	if r := sub.pass(t); r.Housekeeping[hkRepository].Err != nil {
+		t.Fatalf("the pass reported a failure over the repository: %v", r.Housekeeping[hkRepository].Err)
+	}
+	if holds := sub.retireHolds(t, pass); len(holds) != 0 {
+		t.Fatalf("with a relaunch holding its slot unsettled the pass was offered %+v, want no retirement hold", holds)
+	}
+	settle(tasks.Isolation{})
+	release, err := sub.service.claimSteer(pass)
+	if err != nil {
+		t.Fatalf("taking the settled slot as a stop does: %v", err)
+	}
+	defer release()
+	sub.pass(t)
+	if holds := sub.retireHolds(t, pass); len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("with the launch settled and a stop's claim on the slot the pass carries %+v, want one open retirement hold", holds)
+	}
+}
+
+// retireOnAnswer passes an interval, so the pass, which nothing moves, is
+// offered its retirement hold, and answers it retire, as the coordinator
+// relaying a person's answer does.
+func (s *hkSubject) retireOnAnswer(t *testing.T, pass string) {
 	t.Helper()
-	snap, err := s.records(t).TaskSnapshot(t.Context(), pass)
-	if err != nil {
-		t.Fatal(err)
+	s.clock.Advance(time.Hour)
+	s.pass(t)
+	holds := s.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("after an interval pass %s carries %+v, want one open retirement hold", pass, holds)
 	}
-	rh := retireHold{Task: pass, Epoch: epoch, Attempt: latestSequence(snap.Attempts)}
-	if len(snap.Runs) > 0 {
-		rh.Run = snap.Runs[0].ID
+	if answered, err := s.answer(t, pass, holds[0].Key, machine.AnswerRetire); err != nil || answered.Effect != machine.AnswerRetired {
+		t.Fatalf("retire answered %+v, %v", answered, err)
 	}
-	hold, err := s.records(t).RegisterHold(t.Context(), store.Hold{Key: rh.key(), TaskID: store.Known(pass),
-		Subject: "whether to retire the pass", Detail: "d"})
-	if err != nil {
-		t.Fatalf("registering pass %s's retirement hold: %v", pass, err)
-	}
-	return hold
 }
 
 // settleQueue takes a pass, waits for the due check it starts, and then

@@ -344,9 +344,10 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // settles it after the backup's launch (dispatched.handSlot), so nothing
 // that takes the task's slot, a stop, a relaunch or a housekeeping pass's
 // retirement, interleaves with a worker being created and not yet
-// recorded, and a reader of that state (launching) can tell a launch in
-// flight from a settled slot. What came of the launch is logged, and a
-// refusal of the launch's own assertion is recorded the way dispatch's is.
+// recorded, and the offer of a pass's retirement hold, which reads the
+// slot through launching, is skipped meanwhile. What came of the launch is
+// logged, and a refusal of the launch's own assertion is recorded the way
+// dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	if !s.intake.TryRLock() {
 		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
@@ -650,7 +651,8 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 // claimed, and not by claimSteer, which marks what it holds in steering
 // and can hold nothing while a claim in flight does. A stop or a cleanup
 // ask holding the slot, and a dispatch that ended without a proof and
-// settled, do not read as a launch. It is for a reader that must not act
+// settled, do not read as a launch. It is what the offer of a housekeeping
+// pass's retirement hold reads (housekeeping.go), so that offer is skipped
 // while a worker may be created and not yet recorded, and not otherwise.
 func (s *Service) launching(id string) bool {
 	s.mu.Lock()

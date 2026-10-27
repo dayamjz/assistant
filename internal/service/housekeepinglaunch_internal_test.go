@@ -147,9 +147,10 @@ func retirementHoldOf(t *testing.T, records *store.Store, task string) (store.Ho
 // unsettled from its claim until the launch has recorded the worker's
 // session, so meanwhile the pass stays open and resolves Dispatched, which
 // is in flight, and the stop hook's reading, taken with no probe, blocks a
-// turn from ending while the worker is being created, and a retire answered
-// on a hold planted meanwhile is refused as a stop would be, writing
-// nothing. Once the launch has recorded its session,
+// turn from ending while the worker is being created; no retirement hold is
+// offered meanwhile (TestTheRetirementHoldIsNotOfferedWhileALaunchHoldsThePassesSlot),
+// and a retire answered on a hold planted past that offer is refused as a
+// stop would be, writing nothing. Once the launch has recorded its session,
 // the same answer is refused on the probe reading the worker live. Before
 // the slot covered the launch, the answer at that point read the attempt as
 // never launched and was written, and the hook read nothing in flight while

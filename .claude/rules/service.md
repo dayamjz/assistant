@@ -131,7 +131,8 @@ paths: ["internal/service/**"]
   launch's record of its session is settled (`dispatched.settle`), a worker
   fallback at the launch included (`switchWorker` is handed it unsettled), so a
   stop, a relaunch or a retirement never interleaves with a worker created
-  and not yet recorded, which `launching` reads. A path already
+  and not yet recorded, and the retirement hold's offer, which reads that
+  state through `launching`, is skipped meanwhile. A path already
   standing at the copy's path is asserted and never removed, and `Close`
   ends only the sessions this service created.
 - Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
@@ -139,9 +140,12 @@ paths: ["internal/service/**"]
   intake reads, the due check off the loop's goroutine, once per interval
   per repository, which raises the housekeeping-due wake, the open pass's
   wake each interval it stays open (a pass something moves is in flight
-  whatever it resolves, `supervisor.PassMoves`), the retirement hold's
-  answers (`retire` and `keep`, the program retiring no pass on its own),
-  and `passRun`,
+  whatever it resolves, `supervisor.PassMoves`), the retirement hold
+  offered to an open pass nothing moves unless a launch holds its slot
+  (`launching`), and the hold's answers (the program retires no pass on
+  its own; a run that rebases to nothing lands its pass from the
+  nothing-to-deliver record `runs.go` writes, which `taskstate.Delivered`
+  reads for the one-open-pass rule), and `passRun`,
   which marks a run the records attribute to a pass (`store.TasksOfRun`)
   for the review's scope ask. Its header owns the residual gaps.
 - Terminals: every task reader is built through `reader`, probing through
