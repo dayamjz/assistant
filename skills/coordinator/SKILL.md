@@ -301,7 +301,10 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   digest, which you may read (each path and name also in `path_bytes` or
   `name_bytes`, its exact bytes in base64, since a JSON string loses a byte
   that is not UTF-8), and removes nothing: removing the copy on a
-  confirmation is not in this build, and `--confirm` is refused. To let
+  confirmation is not in this build, and `--confirm` is refused. A
+  confirmation is the person's alone: it is refused under `--json` and
+  from any process not in the foreground of a terminal, which your tool's
+  commands are not, so never try to give one. To let
   the project's new tasks go ahead, tell the person their answers are land
   and carry-on, or committing or removing its uncommitted work and pushing
   its commits, after which the program removes the copy on that proof when

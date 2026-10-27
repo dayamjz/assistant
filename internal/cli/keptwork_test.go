@@ -144,10 +144,12 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // PRD section 9's discard through the command line, as this build takes it
 // (docs/prd.md, sections 6 and 9): --answer discard alone answers with what
 // would be lost and the digest, in the structured answer, and reads out as
-// the shown row. Given again with --confirm and that digest, under --json,
-// from a process not at a terminal, and from one at a terminal alike, it is
-// refused with the row saying removal is not in this build, and the copy
-// and its entry are as they were. The rows are held to the vocabulary.
+// the shown row. Given again with --confirm and that digest under --json,
+// and from a process not at a terminal, it is refused before the service is
+// asked with the row saying a discard is confirmed only at a terminal; from
+// one at a terminal, in the foreground, it is refused with the row saying
+// removal is not in this build. Either way the copy and its entry are as
+// they were. The rows are held to the vocabulary.
 // --confirm beside any other answer, or with no digest, is incorrect usage
 // before anything is asked.
 func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
@@ -225,15 +227,20 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	if _, err := os.Stat(entry.CopyPath); err != nil {
 		t.Fatalf("showing the discard removed the copy: %v", err)
 	}
-	deferred := machine.PhraseDiscardRemovalDeferred.String()
+	deferred, needsTerminal := machine.PhraseDiscardRemovalDeferred.String(), machine.PhraseDiscardNeedsTerminal.String()
 	vocabtest.Assert(t, deferred)
-	for _, refused := range []invocation{
-		run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
-		run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
-		atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest),
+	vocabtest.Assert(t, needsTerminal)
+	for _, refused := range []struct {
+		how string
+		got invocation
+		row string
+	}{
+		{"under --json", run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
+		{"off a terminal", run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
+		{"at a terminal", atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), deferred},
 	} {
-		if said := refused.stdout + refused.stderr; refused.code != machine.ExitFailure || !strings.Contains(said, deferred) {
-			t.Fatalf("a confirmed discard exited %s:\n%s\nwant it refused with the row %q", refused.code, said, deferred)
+		if said := refused.got.stdout + refused.got.stderr; refused.got.code != machine.ExitFailure || !strings.Contains(said, refused.row) {
+			t.Fatalf("a discard confirmed %s exited %s:\n%s\nwant it refused with the row %q", refused.how, refused.got.code, said, refused.row)
 		}
 	}
 	if _, err := os.Stat(entry.CopyPath); err != nil {
