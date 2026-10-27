@@ -181,8 +181,14 @@ type Resolution struct {
 	// Progress is whether the answer rests on positive evidence that work is
 	// proceeding, which PRD section 6's supervisor absorbs a wake on and
 	// nothing else. It is derived here and nowhere else, and it is true in
-	// exactly two cases: Validating from SourceRun with Inputs.Advancing, and
-	// Running from SourceProcess with a Live terminal. Every other answer is
+	// exactly three cases: Validating from SourceRun with Inputs.Advancing,
+	// Running from SourceProcess with a Live terminal, and a housekeeping
+	// pass that resolves Held from SourceHold while its newest run has not
+	// settled and Inputs.Advancing says the service is advancing it. The
+	// third is PRD section 6's housekeeping: the hold tier sits above the
+	// run tier, so a promoted pass with an open report decision resolves
+	// Held while its run validates, and the run's stage is still positive
+	// evidence for that pass's terminal. Every other answer is
 	// no progress, including a run the service says it is advancing while
 	// the record says it has settled: the record decided the state, and a
 	// slot that disagrees with it is not evidence. A terminal record is

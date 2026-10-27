@@ -4,9 +4,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
+
+// RunSettled is internal/runs' Finished and nothing of its own (P14): the
+// move table owns which statuses a run moves out of, so the pass's "every
+// attributed run has ended" means one thing to the supervisor, the resolver
+// and the store's retirement, including for a status this build does not
+// define, which the move table reads as one it cannot take further and so
+// as ended, rather than as a run that moves the pass forever.
+func TestRunSettledIsTheMoveTablesEnd(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	for _, status := range append(store.RunStatuses(), "parked-forever") {
+		if got, want := taskstate.RunSettled(status), runs.Finished(status); got != want {
+			t.Errorf("RunSettled(%s) = %v, and runs.Finished says %v", status, got, want)
+		}
+	}
+	if !taskstate.RunSettled("parked-forever") {
+		t.Error("a status nobody defined reads as a run still moving its pass")
+	}
+}
 
 // Delivered is the terminal tier and nothing else: an investigation's
 // findings relayed record, and a landed run's merge record, put a task
@@ -33,6 +54,38 @@ func TestDeliveredIsTheTerminalTierAlone(t *testing.T) {
 	} {
 		if got := taskstate.Delivered(c.snap); got != c.want {
 			t.Errorf("%s: Delivered = %v, want %v", name, got, c.want)
+		}
+	}
+}
+
+// PRD section 6's housekeeping: a pass that resolves Held from its hold tier
+// while the service advances its newest run, which has not settled, rests on
+// positive evidence, and the same reading of a task that is no pass does
+// not, nor a pass whose run is not being advanced or has settled.
+func TestAHeldPassWhoseRunAdvancesIsProgress(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	hold := store.Hold{Key: "k", TaskID: store.Known("t"), Subject: "a report decision"}
+	in := func(pass, advancing bool, status store.RunStatus) taskstate.Inputs {
+		return taskstate.Inputs{
+			Task:      store.Task{ID: "t", Shape: store.TaskDelivery, Housekeeping: pass},
+			Runs:      []store.Run{{ID: "r", Status: status, CreatedAt: at}},
+			Holds:     []store.Hold{hold},
+			Process:   taskstate.Live,
+			Advancing: advancing,
+		}
+	}
+	got := taskstate.Resolve(in(true, true, store.RunRunning))
+	if got.State != taskstate.Held || got.Source != taskstate.SourceHold || !got.Progress {
+		t.Fatalf("a held pass whose run advances resolves %+v, want Held from its hold with progress", got)
+	}
+	for name, c := range map[string]taskstate.Inputs{
+		"no pass":       in(false, true, store.RunRunning),
+		"not advancing": in(true, false, store.RunRunning),
+		"a settled run": in(true, true, store.RunFailed),
+	} {
+		if r := taskstate.Resolve(c); r.Progress {
+			t.Errorf("%s: %+v reads as progress", name, r)
 		}
 	}
 }

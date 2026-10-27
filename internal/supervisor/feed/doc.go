@@ -29,7 +29,12 @@
 // and a run the service is driving is resolved as if nothing drives it. Both
 // lean toward in flight or unknown, which is the safe direction, and a
 // service reading its own fleet supplies its own reading through InFlightFrom
-// rather than this one.
+// rather than this one. A retired housekeeping pass reads the same here as
+// there: supervisor.PassMoves reads its terminal as moving under no probe's
+// reading, because its retirement read that terminal dead or before it had a
+// session and internal/store records no session for an attempt of a retired
+// pass after its retirement, so only a run of its branch not yet ended, or a
+// queued wake, keeps one in flight, both of which are the record's.
 //
 // # The writer
 //
