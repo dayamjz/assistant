@@ -4,24 +4,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// RunSettled is runStates' reading of which statuses a run has ended in, and
-// internal/runs' move table owns which statuses a run moves out of: the two
-// answer alike for every status, so the pass's "every attributed run has
-// ended" cannot mean one thing to the supervisor and another to the store.
+// RunSettled is internal/runs' Finished and nothing of its own (P14): the
+// move table owns which statuses a run moves out of, so the pass's "every
+// attributed run has ended" means one thing to the supervisor, the resolver
+// and the store's retirement, including for a status this build does not
+// define, which the move table reads as one it cannot take further and so
+// as ended, rather than as a run that moves the pass forever.
 func TestRunSettledIsTheMoveTablesEnd(t *testing.T) {
 	t.Parallel()
-	for _, status := range store.RunStatuses() {
+	principles.Cite(t, principles.P14)
+	for _, status := range append(store.RunStatuses(), "parked-forever") {
 		if got, want := taskstate.RunSettled(status), runs.Finished(status); got != want {
 			t.Errorf("RunSettled(%s) = %v, and runs.Finished says %v", status, got, want)
 		}
 	}
-	if taskstate.RunSettled("parked-forever") {
-		t.Error("a status nobody defined reads as settled")
+	if !taskstate.RunSettled("parked-forever") {
+		t.Error("a status nobody defined reads as a run still moving its pass")
 	}
 }
 

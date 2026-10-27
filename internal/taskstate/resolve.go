@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -22,14 +23,17 @@ var runStates = map[store.RunStatus]State{
 	store.RunTerminated: Failed,
 }
 
-// RunSettled reports whether a run in this status has ended, passed, failed
-// or terminated, as runStates reads it: a run whose task state is Ready or
-// Failed. A pending, running or held run, and a status with no entry, has
-// not. internal/runs' move table owns which statuses a run moves out of,
-// and a test holds the two to the same answer over every status.
+// RunSettled reports whether a run in this status has ended: it is
+// internal/runs' Finished, which that package's move table owns, read from
+// here so that the supervisor, whose imports stop at this package, asks the
+// one owner (P14). A status with no move out of it has ended on the table's
+// terms, a status this build does not define among them: a run nobody can
+// take further moves no pass, as it reclaims no copy, rather than keeping a
+// pass in flight on the strength of not being understood. runStates above
+// is the resolver's coarser reading of a status as a task state and says
+// nothing about ending.
 func RunSettled(status store.RunStatus) bool {
-	state, ok := runStates[status]
-	return ok && (state == Ready || state == Failed)
+	return runs.Finished(status)
 }
 
 // Resolve answers what is true of a task now, from the records that own the

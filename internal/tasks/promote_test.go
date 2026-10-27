@@ -149,6 +149,22 @@ func (s *promotionSubject) investigation(t *testing.T) task {
 // entry is appended, so the task resolves Dispatched or Queued.
 func (s *promotionSubject) cut(t *testing.T, blocker store.Optional[string]) task {
 	t.Helper()
+	return s.cutTask(t, blocker, false)
+}
+
+// pass is investigation for a housekeeping pass: the same task recorded as
+// a marked investigation of the repository under the housekeeping role, as
+// a marked create records one.
+func (s *promotionSubject) pass(t *testing.T) task {
+	t.Helper()
+	tk := s.cutTask(t, store.Unknown[string](), true)
+	s.workerSays(t, tk.id, "started", "here")
+	return tk
+}
+
+// cutTask is cut, recording a housekeeping pass when housekeeping is set.
+func (s *promotionSubject) cutTask(t *testing.T, blocker store.Optional[string], housekeeping bool) task {
+	t.Helper()
 	ctx := context.Background()
 	id, err := home.NewTaskID()
 	if err != nil {
@@ -158,10 +174,16 @@ func (s *promotionSubject) cut(t *testing.T, blocker store.Optional[string]) tas
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.CreateTask(ctx, store.Task{
+	record := store.Task{
 		ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "interactive", WorktreePath: copyPath,
 		RepositoryID: store.Known(cleanupRepository),
-	}, store.Disposition{Blocker: blocker}); err != nil {
+	}
+	disposition := store.Disposition{Blocker: blocker}
+	if housekeeping {
+		record.Role, record.Housekeeping = config.RoleHousekeeping, true
+		disposition.Delivered = taskstate.Delivered
+	}
+	if _, err := s.store.CreateTask(ctx, record, disposition); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {

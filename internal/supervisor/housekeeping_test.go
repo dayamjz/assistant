@@ -67,6 +67,7 @@ func TestPassMovesIsReadFromTheRecordsAndTheProbe(t *testing.T) {
 		"a live worker":        {passObserved(run(store.RunFailed), "pane", taskstate.Live), true, false},
 		"an unobserved worker": {passObserved(run(store.RunFailed), "pane", taskstate.Unobserved), true, false},
 		"a dead worker":        {passObserved(run(store.RunTerminated), "pane", taskstate.Dead), false, false},
+		"an unrecognized run":  {passObserved(run("parked-forever"), "pane", taskstate.Dead), false, false},
 		"no session":           {passObserved(nil, "", taskstate.Unobserved), false, false},
 	} {
 		for _, side := range []struct {

@@ -236,6 +236,10 @@ type Promotion struct {
 	// record the project's own, on Request.Delivery's terms: it may be
 	// stricter than the project's and never lighter, which is a
 	// *PostureError.
+	// A housekeeping pass is recorded gated whatever the project declares,
+	// and a request for another posture on a pass is refused as malformed
+	// (ErrRequest), since its scope is held at review and a local task starts
+	// no run.
 	Delivery string
 	// Environment is the environment the worker runs under, as
 	// agents.WorkerEnvironment computes it for a launch; the assertion
@@ -336,8 +340,24 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: the repository the delivery works in: %w", err)
 	}
-	posture, err := q.recordedPosture(ctx, repository, req.Task, requested)
+	record, err := q.store.Task(ctx, req.Task)
 	if err != nil {
+		return Promoted{}, fmt.Errorf("tasks: the task to promote: %w", err)
+	}
+	var posture config.Delivery
+	if record.Housekeeping {
+		// A housekeeping pass is delivered through the gate whatever its
+		// project declares, PRD section 6's housekeeping: its scope is
+		// held at the review of the run its push starts, and a task under
+		// the local posture starts no run, so a pass under it would change
+		// files outside housekeeping.paths with no ask. The project's
+		// posture is not read: nothing here depends on it.
+		if requested != "" && requested != config.DeliveryGated {
+			return Promoted{}, fmt.Errorf("%w: a housekeeping pass is delivered through the gate, under the %s posture and not %s",
+				ErrRequest, config.DeliveryGated, requested)
+		}
+		posture = config.DeliveryGated
+	} else if posture, err = q.recordedPosture(ctx, repository, req.Task, requested); err != nil {
 		return Promoted{}, err
 	}
 	gatePath, err := q.gatePath(ctx, repository)
