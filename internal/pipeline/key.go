@@ -96,6 +96,15 @@ const (
 	// KeySubmitted and moves when a rebase or a fix round rewrites it, so it
 	// carries a merge rule, which is what lets more than one node write it.
 	KeyHead Key = "head"
+	// KeyResolution records the resolution a rebase fix round left in the
+	// run's copy without committing it, as an opaque record of the copy's
+	// uncommitted state. A round that changes the copy and commits nothing,
+	// because a conflict is still unresolved, writes it, so that change is
+	// part of the run's state and the convergence bound does not take the
+	// round for one that changed nothing. A round that commits writes it
+	// empty. Its zero value, empty, is how a run without it behaved, so the
+	// key is late.
+	KeyResolution Key = "rebase.resolution"
 	// KeyIntent is what the change set out to do, in words.
 	KeyIntent Key = "intent"
 	// KeyIntentSupplied says whether the intent was supplied as authoritative
@@ -111,6 +120,20 @@ const (
 	// it and does not run its body while it holds, which is PRD section 5's
 	// empty-diff short circuit; the rebase stage is what sets it.
 	KeyDiffEmpty Key = "diff.empty"
+	// KeyDiffEmptyCheck is what the rebase stage recorded beside the
+	// empty-diff short circuit, in the same write as KeyDiffEmpty: the
+	// default-branch commit it read at its fresh fetch, and the answer of
+	// P12's content check of the commits the run was submitted with against
+	// that commit. PRD section 6's "nothing left to deliver" reads it from
+	// the run's position, so a run that ended on the short circuit is told
+	// apart from one whose work is on the default branch by content. Its
+	// encoding belongs to internal/stages, which writes it and exports the
+	// one reader, beside the push anchor's.
+	//
+	// Its row is late, because empty is how every run behaved before it
+	// existed: a run that checkpointed without it reads as having recorded
+	// no check, which writes no nothing-to-deliver record.
+	KeyDiffEmptyCheck Key = "diff.empty.check"
 	// KeyApproved is the commit a completed review approved. PRD section 5 has
 	// the push stage require a durable record of one this commit descends
 	// from; nothing in this package checks that.
@@ -245,9 +268,13 @@ var sharedKeys = []keySpec{
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
 	{KeyNoCodeHost, graph.KindBool, graph.MergeNone, ownerRun, true},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
+	// A fix round writes it each time it changes the copy, so it carries
+	// the head's merge rule for the head's reason.
+	{KeyResolution, graph.KindText, graph.MergeLastWriteWins, ownerStage, true},
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun, false},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage, false},
+	{KeyDiffEmptyCheck, graph.KindText, graph.MergeNone, ownerStage, true},
 	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage, false},
 	// The anchor carries a merge rule because the stage that observes it takes
 	// fix rounds, so a run may write it more than once. Each write is a fresh
@@ -298,6 +325,18 @@ func (s Stage) FixKey() Key { return Key("fix." + s.String()) }
 // holds to the stage's report.
 func (s Stage) HeldKey() Key { return Key("held." + s.String()) }
 
+// RerunKey says the usage ceiling refused the stage's last automatic fix
+// round, so that round never started and is still owed: the stage's next
+// execution that reports fix-eligible findings records OutcomeRerun rather
+// than OutcomeFixable, and the run takes the round again over the edge
+// rerunEntry builds, not the one the refusal already counted. The fix node is
+// its one writer and writes it every round, true when the ceiling refused the
+// round and false when the round started, and the stage node reads it at a
+// stage that takes automatic rounds. A round a person asked for never writes
+// it: a retry does not carry a request. It is late because false is how every
+// run behaved before it existed.
+func (s Stage) RerunKey() Key { return Key("rerun." + s.String()) }
+
 // RequestKey is where what a person asked for with a fix round at this stage's
 // hold lands: the encoded FixRequest. It is the hold's graph.Halt.Detail key,
 // so it belongs to that halt point alone on the same terms as AnswerKey, and
@@ -331,6 +370,7 @@ func buildSchema() map[Key]keySpec {
 		add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
 		add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
 		add(keySpec{row.stage.RequestKey(), graph.KindText, graph.MergeNone, ownerPipeline, false})
+		add(keySpec{row.stage.RerunKey(), graph.KindBool, graph.MergeNone, ownerPipeline, true})
 	}
 	return out
 }

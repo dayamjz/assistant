@@ -199,11 +199,51 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// intakeTest and interruptIntake are intake's seam between a task's row
+	// and its instructions file, which export_test.go's
+	// WithIntakeInterruptForTest sets and the product never does; Open hands
+	// them to internal/tasks' InterruptAfterRecordForTest.
+	intakeTest      testing.TB
+	interruptIntake func() error
+	// landingTest and interruptLanding are a landing's seam between its run
+	// and the entry's record of it, which export_test.go's
+	// WithLandingInterruptForTest sets and the product never does.
+	landingTest      testing.TB
+	interruptLanding func(run string) error
+	// carryOnTest and interruptCarryOn are a carry on's seam between the
+	// copy's move to the new task and the entry's mark, which
+	// export_test.go's WithCarryOnInterruptForTest sets and the product
+	// never does.
+	carryOnTest      testing.TB
+	interruptCarryOn func() error
+	// interruptCarryOnClaim is a carry on's seam between the answer's read
+	// or write of the claim and its completion, which export_test.go's
+	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
+	// product never does.
+	interruptCarryOnClaim func() error
+	// cleanupAskSpacing replaces landedAskSpacing for this service, which
+	// export_test.go's WithCleanupAskSpacingForTest sets and the product
+	// never does; zero is landedAskSpacing.
+	cleanupAskSpacing time.Duration
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
 	// does.
 	beforeStaleRemovalRelease func()
+	// interruptSettle is the Service field of the same name, which
+	// export_test.go's WithSettleInterruptForTest sets and the product never
+	// does.
+	interruptSettle func(runID string) error
+	// afterIntakeBranchRelease is the Service field of the same name, which
+	// export_test.go's WithAfterIntakeBranchReleaseForTest sets and the
+	// product never does. It is here rather than only on the Service because
+	// Open builds the queue that runs it.
+	afterIntakeBranchRelease func()
+	// afterMergeReadPass is the Service field of the same name, which
+	// export_test.go's WithAfterMergeReadPassForTest sets and the product
+	// never does. It is here rather than only on the Service because Open
+	// starts the pass that runs it.
+	afterMergeReadPass func()
 	// sweepCopy is the Service field of the same name, set before recovery
 	// runs. It is here rather than only on the Service because recovery
 	// sweeps finished runs' copies inside Open, so a test that records what
@@ -216,7 +256,8 @@ type Options struct {
 //
 // It is safe for concurrent use. Its one exclusion is per run: a run advances
 // in one place at a time, and everything else is either read-only or
-// serialized by the packages it composes.
+// serialized by the packages it composes, except the intake field's, which
+// keeps a dispatch pass's read of the tasks out of a task intake.
 type Service struct {
 	// usageReadFaults is how many of the next usage budget readings fail,
 	// which only this package's tests set (export_test.go), so a test can
@@ -373,12 +414,69 @@ type Service struct {
 	// wakes.wait reads the queue again; wakewait.go owns it and says why it
 	// is a hint and never a record.
 	wakeBell wakeBell
+	// intake keeps a dispatch pass's read of the tasks apart from a task
+	// intake: createTask holds the write side across internal/tasks' Create,
+	// which writes a task's record before its instructions file, and
+	// dispatchDue reads the tasks only under the read side, skipping its pass
+	// while an intake holds or is taking the write side. dispatch.go's dispatchDue says
+	// why the skip loses nothing. It is not mu, because an intake reads the
+	// gate and the project's configuration while it holds it.
+	intake sync.RWMutex
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// betweenHeldAndRelease runs in a dispatch that kept work held, after
+	// the refusal and before the slot is given back. It is nil in
+	// production and set only by this package's tests, which use it to
+	// close the entry and run another dispatch pass inside that window.
+	betweenHeldAndRelease func()
+	// betweenLandingClaimAndStart runs in a landing of kept work after its
+	// claim and before it brings the commit into the gate and starts the
+	// run. It is nil in production and set only by this package's tests,
+	// which use it to make a second answer inside that window.
+	betweenLandingClaimAndStart func()
+	// betweenLandingStartAndRecord runs in a landing after its run was
+	// started and before the run is named on the entry, and an error it
+	// returns ends the landing there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithLandingInterruptForTest.
+	betweenLandingStartAndRecord func(run string) error
+	// betweenCarryOnMoveAndMark runs in a carry on after the copy was moved
+	// to the new task's path and before anything else, and an error it
+	// returns ends the carry on there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithCarryOnInterruptForTest.
+	betweenCarryOnMoveAndMark func() error
+	// betweenCarryOnClaimAndCompletion runs in a carry-on answer after it
+	// read or wrote the entry's claim and before the completion reads the
+	// entry, and an error it returns ends the answer there. It is nil in
+	// production and set only through WithCarryOnClaimInterruptForTest.
+	betweenCarryOnClaimAndCompletion func() error
+	// landings is the kept work entries a landing is carrying out in this
+	// service now, keyed by entry: the in-process half of the landing's
+	// exactly-once, on keptanswer.go's terms. It is read and written under
+	// mu.
+	landings map[int64]bool
+	// beforeHoldRead runs in a dispatch of the task it is given once the
+	// task's resolution is read and before the dispatch reads whether kept
+	// work holds it. It is nil in production and set only by this package's
+	// tests, which use it to end a pass's context at that read so the read
+	// alone fails.
+	beforeHoldRead func(id string)
+	// afterStallStopEnded runs in a stop or retry answered to a stall hold,
+	// after the stop ended the worker and proved it dead and before the
+	// answer is recorded on the stall hold. It is nil in production and set
+	// only by this package's tests, which use it to put a second answer to
+	// the same hold inside that window.
+	afterStallStopEnded func()
+	// betweenTrustedFetchAndResolve runs in fetchTrusted after the default
+	// branch has been fetched under ref and before ref is resolved. It is nil
+	// in production and set only by this package's tests, which use it to
+	// hold one reader of a trusted copy there while another reads its own.
+	betweenTrustedFetchAndResolve func(ref string)
 	// beforeRefusalEnd runs in endRefused, after begin refused a run and
 	// before the run is ended. It is nil in production and set only by this
 	// package's tests, which use it to hold the run pending while they
@@ -388,12 +486,50 @@ type Service struct {
 	// recovery runs before each anchored release of a dead eject's
 	// reservation. It is nil in production.
 	beforeStaleRemovalRelease func()
+	// interruptSettle runs at the start of settle, before anything is
+	// written, and a non-nil error from it is returned as settle's own, as a
+	// service that stopped between a segment's last checkpoint and the
+	// record's move leaves the run. It is nil in production and set only by
+	// this package's tests.
+	interruptSettle func(runID string) error
+	// afterIntakeBranchRelease runs once internal/tasks has given back the
+	// branch exclusion an intake or a promotion took through newQueue's
+	// Exclude. For a delivery intake that is after the task's record and
+	// before its instructions file. It is nil in production and set only by
+	// this package's tests, which use it to run a dispatch pass at that
+	// moment.
+	afterIntakeBranchRelease func()
+	// afterMergeReadPass runs on mergeread.go's goroutine after each pass of
+	// the read for merges a person made, the first of which Open starts. It
+	// is nil in production and set only by this package's tests, which use
+	// it to start a run only once the opening pass is over, so that pass
+	// cannot read the run's pull request (#595).
+	afterMergeReadPass func()
 	// afterConsentRegistered runs in underStandingConsent once
 	// writeConsentAnswer has registered a standing-consent hold and before
 	// the answer is given. It is nil in production and set only by this
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// beforeSessionRecord runs in launchTask once the session is held
+	// pending and immediately before the store write that records the
+	// attempt's session reference, outside mu, with the task and the
+	// reference. It is nil in production and set only by this package's
+	// tests, which use it to make that write wait on a held store or to read
+	// the service while the session is pending.
+	beforeSessionRecord func(id, ref string)
+	// afterSessionRecorded runs in launchTask once the store write that
+	// records the attempt's session reference has succeeded and before the
+	// pending mark is settled, outside mu, with the task and the reference.
+	// It is nil in production and set only by this package's tests, which
+	// use it to hold a launch at the point the record names a session still
+	// pending.
+	afterSessionRecorded func(id, ref string)
+	// awaitingSessionRecord runs in sessionOf when the session it found is
+	// still pending, just before it waits for the record's write, with the
+	// task. It is nil in production and set only by this package's tests,
+	// which use it to know a reader is waiting rather than guess.
+	awaitingSessionRecord func(id string)
 	// sweepCopy stands in for the sweep this service asks of a copy: the
 	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
 	// one runsweep.go asks of a finished run's. It is nil in production,
@@ -417,11 +553,15 @@ type Service struct {
 	// head, and a run that recorded no observed head. It is memory and
 	// nothing durable, guarded by mu; mergeread.go owns it.
 	mergeReadsSettled map[string]bool
-	// landedTried holds, per landed task, the session reference whose Dead
-	// terminal the cleanup decision was last asked under, so the supervisor
-	// pass asks once per reference rather than at every interval. It is
-	// memory and nothing durable, guarded by mu; landed.go owns it.
-	landedTried map[string]string
+	// landedTried holds, per task, how often and when the cleanup decision
+	// was asked under the session reference whose terminal it last read
+	// Dead, so the supervisor pass asks again on landed.go's spacing and
+	// bound rather than at every interval or never. It is memory and
+	// nothing durable, guarded by mu; landed.go owns it.
+	landedTried map[string]landedAsk
+	// landedSpacing is landedAskSpacing, or the spacing a test set through
+	// Options; landed.go reads it.
+	landedSpacing time.Duration
 	// windowTried holds, per reported investigation, the session reference
 	// of a worker this service did not launch whose end by verified
 	// identity it already asked for after the promotion window, so the
@@ -429,8 +569,8 @@ type Service struct {
 	windowTried map[string]string
 	// windowKept holds, per reported investigation, the session reference
 	// whose ended worker its copy was last handed to keepWork under for the
-	// promotion window, with the entry recorded or found, or the copy read
-	// as scratch, so the pass keeps once per reference per service life;
+	// promotion window, with the keep settled (keepWork's answer), so the
+	// pass keeps once per reference per service life;
 	// the store's RecordKeptWork is what keeps a later life from writing a
 	// second entry. Memory and nothing durable, guarded by mu; landed.go
 	// owns it.
@@ -618,6 +758,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies:                make(map[string]*topology),
 		advancing:                 make(map[string]*slot),
 		beforeStaleRemovalRelease: o.beforeStaleRemovalRelease,
+		interruptSettle:           o.interruptSettle,
+		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
+		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
+		afterMergeReadPass:        o.afterMergeReadPass,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),
@@ -637,13 +781,6 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	if s.terminals == nil {
 		s.terminals = heldTerminals{s}
 	}
-	// Both hosts are built with their own redactor because the redactor is
-	// otherwise chosen per topology; all are redact.New, which
-	// internal/redact makes the one owner of what is removed.
-	github := o.Forge
-	if github == nil {
-		github = forge.NewGitHubHost(redact.New())
-	}
 	if s.catalog == nil {
 		// The shipped adapters are built with the recorder that feeds the
 		// store's agent invocation history, so a run's cost is recorded
@@ -661,17 +798,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	}
 	s.judge = judge.FromEnvironment(lookup,
 		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
-	gitlab := o.GitLab
-	if gitlab == nil {
-		token, _ := lookup(forge.GitLabTokenVariable)
-		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
-		if err != nil {
-			return nil, unstarted(err)
-		}
-		gitlab = host
-	}
-	s.forge = forge.Hosts{GitHub: github, GitLab: gitlab}
-	if err := s.openParts(ctx, o); err != nil {
+	if err := s.openParts(ctx, o, lookup); err != nil {
 		s.log.Printf("the service could not start: %v", err)
 		_ = s.Close()
 		return nil, err
@@ -697,15 +824,53 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	return s, nil
 }
 
+// git returns the options every repository this service opens is opened
+// with: redact.New, and the operator's git_deadline as the invocation
+// deadline where a caller's context carries none, PRD section 8's process
+// model. internal/vcs reads no configuration, so this is the route that
+// bound takes to a git this service starts; internal/tasks is given the same
+// value through its GitDeadline, internal/gate these options through
+// gate.WithGitOptions, and the stage and fix seams get gitWith. A handle
+// internal/vcs derives from one of these, a worktree AddWorktree creates,
+// carries the same options.
+func (s *Service) git() []vcs.Option {
+	return s.gitWith(redact.New())
+}
+
+// gitWith is git with the redactor a topology chose, for the stage and fix
+// seams, which apply that same redactor to what they persist.
+func (s *Service) gitWith(redactor redact.Redactor) []vcs.Option {
+	return []vcs.Option{vcs.WithRedactor(redactor), vcs.WithInvocationDeadline(s.cfg.GitDeadline)}
+}
+
 // openParts opens everything Open owns once the lock is held. It is separate
 // so that a failure part way through is cleaned up by Close rather than by an
 // unwinding sequence written twice.
-func (s *Service) openParts(ctx context.Context, o Options) error {
+func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) (string, bool)) error {
 	global, cfg, digest, err := resolveConfig(s.home.ConfigFile())
 	if err != nil {
 		return err
 	}
 	s.global, s.cfg, s.digest = global, cfg, digest
+	// The code hosts are built once the operator's configuration is read,
+	// because the GitHub host runs gh under its gh_deadline. Both are built
+	// with their own redactor because the redactor is otherwise chosen per
+	// topology; all are redact.New, which internal/redact makes the one owner
+	// of what is removed.
+	github := o.Forge
+	if github == nil {
+		github = forge.NewGitHubHost(redact.New(), forge.WithInvocationDeadline(s.cfg.GHDeadline))
+	}
+	gitlab := o.GitLab
+	if gitlab == nil {
+		token, _ := lookup(forge.GitLabTokenVariable)
+		host, err := forge.NewGitLabHost(redact.New(), forge.WithGitLabToken(token))
+		if err != nil {
+			return err
+		}
+		gitlab = host
+	}
+	s.forge = forge.Hosts{GitHub: github, GitLab: gitlab}
 	records, err := store.Open(ctx, s.home.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		return err
@@ -715,7 +880,31 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
 	}
-	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err == nil && o.interruptCleanupMark != nil {
+	if o.interruptLanding != nil {
+		if o.landingTest == nil {
+			return errors.New("service: the landing interrupt is a test's seam and takes the test")
+		}
+		s.betweenLandingStartAndRecord = o.interruptLanding
+	}
+	if o.interruptCarryOn != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnMoveAndMark = o.interruptCarryOn
+	}
+	if o.interruptCarryOnClaim != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on claim interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnClaimAndCompletion = o.interruptCarryOnClaim
+	}
+	if o.interruptIntake != nil {
+		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {
+			return err
+		}
+	}
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
+		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {
 		err = s.cleaner.InterruptBeforeMarkForTest(o.cleanupTest, o.interruptCleanupMark)
 	}
 	if err != nil {
@@ -1058,8 +1247,9 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		resolved.cfg,
 		s.forge,
 		redactor,
-		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithKnowledge(resolved.knowledge)
+		s.gitWith(redactor)...,
+	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store).WithRebaseRecords(s.store).
+		WithKnowledge(resolved.knowledge)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which
@@ -1074,7 +1264,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		resolved.cfg,
 		built.runs.FixerRequires(),
 		redactor,
-		vcs.WithRedactor(redactor),
+		s.gitWith(redactor)...,
 	)
 	pipe, err := pipeline.New(pipeline.Options{
 		Stages:                      s.observeStages(s.newStages(deps)),

@@ -71,7 +71,7 @@ func TestReadLineageReadsTheTerminalsForegroundGroup(t *testing.T) {
 // foreground, so the reading is evidence of a terminal and not of a person.
 func TestATmuxPanesProcessIsInTheForegroundOfItsTerminal(t *testing.T) {
 	tmux := standin.Tmux(t)
-	dir, err := os.MkdirTemp("", "t")
+	dir, err := standin.TempDir("t")
 	if err != nil {
 		t.Fatal(err)
 	}

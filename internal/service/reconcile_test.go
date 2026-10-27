@@ -31,29 +31,9 @@ func (blockingTerminals) Capture(context.Context, string) (session.Capture, erro
 	return session.Capture{}, errors.New("never reached: nothing probes live")
 }
 
-// waitSession polls the service until it holds a session for the task.
+// waitSession polls the service until it holds a session for the task,
+// and fails the test when launchWait runs out first.
 func waitSession(t *testing.T, running *service.Service, id string) (session.Provider, *session.Session) {
-	t.Helper()
-	return waitSessionOr(t, running, id, t.Fatalf)
-}
-
-// waitRelaunchedSession is waitSession for a session a relaunch launches,
-// which waits on a sweep of the standing copy clearing first: the wait that
-// runs out is reported through service.FatalUnlessSweepsStoppedClearing,
-// so a host that started refusing every sweep after the test's
-// service.RequireSweepClearsHere skips on that helper's terms rather than
-// failing here, unestablished naming what the test would have established.
-func waitRelaunchedSession(t *testing.T, running *service.Service, id, unestablished string) (session.Provider, *session.Session) {
-	t.Helper()
-	return waitSessionOr(t, running, id, func(format string, args ...any) {
-		t.Helper()
-		service.FatalUnlessSweepsStoppedClearing(t, unestablished, format, args...)
-	})
-}
-
-// waitSessionOr is the wait both share, reporting a wait that runs out
-// through fatalf, which must not return.
-func waitSessionOr(t *testing.T, running *service.Service, id string, fatalf func(format string, args ...any)) (session.Provider, *session.Session) {
 	t.Helper()
 	deadline := time.Now().Add(launchWait)
 	for {
@@ -61,10 +41,51 @@ func waitSessionOr(t *testing.T, running *service.Service, id string, fatalf fun
 			return provider, launched
 		}
 		if !time.Now().Before(deadline) {
-			fatalf("the service never held a session for task %s", id)
+			t.Fatalf("the service never held a session for task %s", id)
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// withRestartedService opens a service over o, the restart that relaunches
+// task id's dead terminal as it opens, and hands body that service and the
+// session the relaunch launched; the service is closed when body returns.
+//
+// The relaunch sweeps the task's standing copy first, inside Open, and is
+// refused, and left for the next start, while any process of this host
+// that the sweep cannot read, and that neither of agents.Sweeper's
+// carve-outs sets aside, runs, as P6 requires. Nothing a test does orders
+// against the host's processes, so one can start after
+// service.RequireSweepClearsHere looked and be gone before the test looks
+// again, and a wait for the session alone then failed on P6's refusal
+// working (#586). So every sweep the service asks is recorded, the restart
+// must have asked exactly one of the copy, and that sweep is held to
+// service.SweepsAsked.UntilClear: a refusal its own answer puts on
+// processes the test did not place in the copy is met by closing the
+// service and opening the next, which is the next start and asks the next
+// sweep, and a run of them reports the host on that helper's terms. A
+// refused relaunch records nothing, so the next start reads what this one
+// read. Once a sweep has cleared, the relaunch went ahead, and a session
+// that does not follow fails the test: no sweep explains it.
+func withRestartedService(t *testing.T, o service.Options, h *home.Home, id, unestablished string,
+	body func(running serviceUnderTest, provider session.Provider, launched *session.Session)) {
+	t.Helper()
+	o, sweeps := service.WithSweepsRecordedForTest(o)
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, closeService := openService(t, o)
+	defer func() { closeService() }()
+	if n := sweeps.Of(copyPath); n != 1 {
+		t.Fatalf("the restart asked %d sweep(s) of the copy %s as it opened, want the relaunch's one", n, copyPath)
+	}
+	sweeps.UntilClear(t, unestablished, copyPath, func() {
+		closeService()
+		running, closeService = openService(t, o)
+	})
+	provider, launched := waitSession(t, running.service, id)
+	body(running, provider, launched)
 }
 
 // launchedAndEnded runs one service over the task, which dispatches and
@@ -133,8 +154,7 @@ func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
 	o, agent := workerOptions(t, h)
 	var second session.Reference
 	var read string
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
 		if got := observed(t, taskState, running.client, id); !readsRunning(got) {

@@ -513,7 +513,7 @@ func TestStatusListsKeptWorkWhoseOwnerNamesNoRepository(t *testing.T) {
 		Mode: "headless", WorktreePath: copyPath}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	unowned, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: task, CopyPath: copyPath, Holds: []string{"aaaa"}, Reason: "unproven"})
+	unowned, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: task, CopyPath: copyPath, Holds: []string{"aaaa"}, Reason: "unproven", Against: "dddd"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestStatusListsKeptWorkWhoseOwnerNamesNoRepository(t *testing.T) {
 		Base: "bbbb", Intent: "validate", IntentSource: "push", Build: build, ConfigDigest: "cfg"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := records.RecordKeptWork(ctx, store.KeptCopy{RunID: "run-of-other", CopyPath: "/w/run-of-other", Holds: []string{"bbbb"}, Reason: "unproven"}); err != nil {
+	if _, _, err := records.RecordKeptWork(ctx, store.KeptCopy{RunID: "run-of-other", CopyPath: "/w/run-of-other", Holds: []string{"bbbb"}, Reason: "unproven", Against: "dddd"}); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()

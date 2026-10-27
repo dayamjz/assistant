@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
+	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // Exclude takes one branch's exclusion and returns the function that gives
@@ -67,6 +72,13 @@ type Deps struct {
 	// means no role is configured, so a task that names one is refused and
 	// a task that names none runs as the worker role on the agent list.
 	Roles config.Roles
+	// GitDeadline is the deadline every git invocation this package makes
+	// runs under where its caller's context carries none: PRD section 10's
+	// git_deadline, which internal/service resolves and passes. It is
+	// required, and a value of zero or less is refused rather than left to
+	// internal/vcs's fallback, so a caller that forgot it learns at
+	// construction instead of running under a bound the operator did not set.
+	GitDeadline time.Duration
 }
 
 // ErrIncomplete is returned by New when a dependency is missing.
@@ -85,6 +97,9 @@ type Queue struct {
 	gatePath GatePath
 	posture  ProjectPosture
 	roles    config.Roles
+	// git are the options every repository this Queue opens is opened with,
+	// from gitOptions.
+	git []vcs.Option
 	// betweenReadAndWrite runs after an intake, a release or a promotion
 	// has read the records it decides from and before it writes. It is nil
 	// in production and set only by this package's tests, which use it to
@@ -96,9 +111,28 @@ type Queue struct {
 	// set only by this package's tests, which use it to stand in for a
 	// crash there.
 	betweenFlipAndCopy func()
+	// betweenRecordAndInstructions runs in an intake after the task's row
+	// is written and before its instructions file is, and an error it
+	// returns ends the intake there, which is the state a service that
+	// stopped there leaves. It is nil in production and set only through
+	// InterruptAfterRecordForTest.
+	betweenRecordAndInstructions func() error
 }
 
-// New builds a Queue, refusing with ErrIncomplete when any dependency is nil.
+// InterruptAfterRecordForTest makes every intake this Queue makes stop after
+// the task's row is written and before its instructions file is whenever f
+// returns an error, which is the state a service that stopped there leaves.
+// It takes the test, so nothing but a test installs it.
+func (q *Queue) InterruptAfterRecordForTest(tb testing.TB, f func() error) error {
+	if tb == nil {
+		return errors.New("tasks: InterruptAfterRecordForTest is a test's seam and takes the test")
+	}
+	q.betweenRecordAndInstructions = f
+	return nil
+}
+
+// New builds a Queue, refusing with ErrIncomplete when any required
+// dependency is nil or the git deadline is not positive.
 func New(d Deps) (*Queue, error) {
 	switch {
 	case d.Home == nil:
@@ -115,9 +149,11 @@ func New(d Deps) (*Queue, error) {
 		return nil, fmt.Errorf("%w: no gate locator", ErrIncomplete)
 	case d.Posture == nil:
 		return nil, fmt.Errorf("%w: no posture reader", ErrIncomplete)
+	case d.GitDeadline <= 0:
+		return nil, fmt.Errorf("%w: no git deadline", ErrIncomplete)
 	}
 	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate,
-		gatePath: d.GatePath, posture: d.Posture, roles: d.Roles}, nil
+		gatePath: d.GatePath, posture: d.Posture, roles: d.Roles, git: gitOptions(d.GitDeadline)}, nil
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks
@@ -153,3 +189,11 @@ func Clears(s taskstate.State) bool {
 // dispatch onto a branch whose worker may still be there; the floor fails
 // toward queueing.
 func Live(s taskstate.State) bool { return !Clears(s) }
+
+// gitOptions are the options every repository this package opens is opened
+// with: this package's redactor, and deadline as the invocation deadline
+// where a caller's context carries none. A Queue and a Cleaner each build
+// theirs here once, so the two cannot open a repository differently.
+func gitOptions(deadline time.Duration) []vcs.Option {
+	return []vcs.Option{vcs.WithRedactor(redact.New()), vcs.WithInvocationDeadline(deadline)}
+}

@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -85,6 +86,8 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 	if err := h.Create(); err != nil {
 		t.Fatalf("home.Create: %v", err)
 	}
+	// Seeded for time alone, as internal/store/storetest's comment says.
+	storetest.Seed(t, h.Database())
 	s, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -96,7 +99,7 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
 	provider := forgetest.New(t, script)
-	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host()})
+	cleaner, err := NewCleaner(CleanupDeps{Home: h, Store: s, Forge: provider.Host(), GitDeadline: vcs.DefaultInvocationDeadline})
 	if err != nil {
 		t.Fatalf("NewCleaner: %v", err)
 	}
@@ -160,7 +163,7 @@ func (s *cleanupSubject) record(t *testing.T, shape store.TaskShape, branch stor
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
-	if _, err := s.store.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {

@@ -3,6 +3,8 @@ package vcs
 import (
 	"context"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 )
 
@@ -99,7 +101,7 @@ func (r *Repository) SymbolicTarget(ctx context.Context, name string) (string, e
 // pattern that names a prefix, such as refs/heads/, matches everything under
 // it.
 func (r *Repository) ListRefs(ctx context.Context, patterns ...string) ([]Ref, error) {
-	args := []string{"for-each-ref", "--format=%(refname)%00%(objectname)%00%(*objectname)"}
+	args := []string{"for-each-ref", refFormat}
 	for _, p := range patterns {
 		if err := checkArg("ref pattern", p); err != nil {
 			return nil, err
@@ -109,7 +111,115 @@ func (r *Repository) ListRefs(ctx context.Context, patterns ...string) ([]Ref, e
 		args = append(args, "--")
 		args = append(args, patterns...)
 	}
-	out, err := r.run(ctx, "list-refs", args...)
+	return r.listRefs(ctx, "list-refs", args...)
+}
+
+// RootRefs returns the references git keeps outside refs/ for this working
+// copy, as git for-each-ref --include-root-refs lists them: HEAD, and the
+// ones an operation writes, such as ORIG_HEAD, which a reset, a rebase or a
+// merge leaves naming where HEAD stood, AUTO_MERGE, CHERRY_PICK_HEAD or
+// REBASE_HEAD, each this working copy's own. FETCH_HEAD and MERGE_HEAD are
+// not among them: git lists neither as a reference.
+//
+// That option is git 2.45's (rootRefsFloor). Under an older git, which keeps
+// every reference in files since it has no other reference backend, they
+// are read as git 2.45 defines a root reference (isRootRefName) from the
+// names in this working copy's own repository directory, each resolved by
+// git, so the answer is the same set under either.
+func (r *Repository) RootRefs(ctx context.Context) ([]Ref, error) {
+	listed, err := r.gitAtLeast(ctx, rootRefsFloor)
+	if err != nil {
+		return nil, err
+	}
+	if !listed {
+		return r.rootRefsByName(ctx)
+	}
+	refs, err := r.listRefs(ctx, "root-refs", "for-each-ref", "--include-root-refs", refFormat)
+	if err != nil {
+		return nil, err
+	}
+	var roots []Ref
+	for _, ref := range refs {
+		if !strings.HasPrefix(ref.Name, "refs/") {
+			roots = append(roots, ref)
+		}
+	}
+	return roots, nil
+}
+
+// rootRefsFloor is the git version whose for-each-ref takes
+// --include-root-refs, as major and minor.
+var rootRefsFloor = [2]int{2, 45}
+
+// rootRefsByName is RootRefs under a git older than rootRefsFloor: every
+// name in this working copy's own repository directory that isRootRefName
+// takes, resolved by git to the object it names and the one that peels to,
+// in name order. A name git answers is no reference, a broken file or a
+// directory among them, is left out, as git leaves it out of its own
+// listing; any other failure of a read, a git the context or the
+// invocation deadline ended among them, is an error, never a shorter
+// list.
+func (r *Repository) rootRefsByName(ctx context.Context) ([]Ref, error) {
+	out, err := r.run(ctx, "git-dir", "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return nil, err
+	}
+	dir := strings.TrimSpace(string(out))
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("vcs: reading the root references in %s: %w", dir, err)
+	}
+	var refs []Ref
+	for _, e := range entries {
+		if !isRootRefName(e.Name()) {
+			continue
+		}
+		// --verify --quiet answers a name that is no reference by exiting
+		// 1; that alone is taken as one, and any
+		// other failure, a git ended by the context or the invocation
+		// deadline among them, is the read's.
+		object, code, err := r.runExpecting(ctx, "root-ref", []int{1}, "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name())
+		if err != nil {
+			return nil, err
+		}
+		if code == 1 {
+			continue
+		}
+		peeled, err := r.run(ctx, "root-ref-peeled", "rev-parse", "--verify", "--quiet", "--end-of-options", e.Name()+"^{}")
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, Ref{Name: e.Name(), Object: strings.TrimSpace(string(object)), Commit: strings.TrimSpace(string(peeled))})
+	}
+	return refs, nil
+}
+
+// isRootRefName is git 2.45's rule for a root reference's name: uppercase
+// letters, '-' and '_' alone, ending in _HEAD or one of the few names that
+// do not, and neither FETCH_HEAD nor MERGE_HEAD, which git keeps as no
+// reference.
+func isRootRefName(name string) bool {
+	if name == "" || name == "FETCH_HEAD" || name == "MERGE_HEAD" {
+		return false
+	}
+	for _, c := range name {
+		if (c < 'A' || c > 'Z') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	if strings.HasSuffix(name, "_HEAD") {
+		return true
+	}
+	return slices.Contains([]string{"HEAD", "AUTO_MERGE", "BISECT_EXPECTED_REV", "NOTES_MERGE_PARTIAL", "NOTES_MERGE_REF", "MERGE_AUTOSTASH"}, name)
+}
+
+// refFormat is the format every reference listing reads: each reference's
+// name, the object it points at and the object that peels to.
+const refFormat = "--format=%(refname)%00%(objectname)%00%(*objectname)"
+
+// listRefs runs a reference listing in refFormat and reads it.
+func (r *Repository) listRefs(ctx context.Context, op string, args ...string) ([]Ref, error) {
+	out, err := r.run(ctx, op, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +230,7 @@ func (r *Repository) ListRefs(ctx context.Context, patterns ...string) ([]Ref, e
 		}
 		parts := strings.Split(line, "\x00")
 		if len(parts) != 3 {
-			return nil, &outputError{op: "list-refs", detail: "expected three fields per reference, got " + line}
+			return nil, &outputError{op: op, detail: "expected three fields per reference, got " + line}
 		}
 		ref := Ref{Name: parts[0], Object: parts[1], Commit: parts[1]}
 		if parts[2] != "" {

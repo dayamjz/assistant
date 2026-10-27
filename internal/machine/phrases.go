@@ -2,11 +2,14 @@ package machine
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -240,12 +243,48 @@ var phraseTaskLandedLocally = Phrase{
 	Decision:    "Nothing to decide.",
 }
 
+// phraseTaskNothingToDeliver is the row for a task its run's
+// nothing-to-deliver record landed, PRD section 6's "nothing left to
+// deliver": the change was already on the shared branch and nothing was
+// delivered. It never says the work merged or was validated, because no
+// check ran on it.
+var phraseTaskNothingToDeliver = Phrase{
+	Outcome:     "This change was already on the shared branch, so nothing was delivered.",
+	Consequence: "Another change made the same edit first, and nothing was validated or merged for this one; its local copy stays until removing it is proven safe.",
+	Decision:    "Nothing to decide.",
+}
+
 // phraseLandedLocallyNow is the row for an approval whose fast-forward was
 // made, AnswerLanded, on phraseTaskLandedLocally's terms.
 var phraseLandedLocallyNow = Phrase{
 	Outcome:     "Your approval was taken, and your local default branch was moved to the change without validation.",
 	Consequence: "Nothing was shared, and nothing checked the change before it moved.",
 	Decision:    "Nothing to decide.",
+}
+
+// phraseTaskWaitsOnKeptWork is the row for a task the program dispatched and
+// kept work in its project holds, PRD section 6's "it waits, naming the kept
+// work and the three answers": Task.KeptWork names the entries, which the
+// structured rendering carries and this row points at, and the row names
+// the three answers. It says what this build does: the task starts once
+// every entry is decided or its work turns up somewhere safe; the answers
+// are given on section 9's hold answer, and discard shows what removing
+// the copy would lose and removes nothing (its removal is deferred).
+var phraseTaskWaitsOnKeptWork = Phrase{
+	Outcome:     "This work has not begun, because work kept in a local copy of the same project is waiting on your decision first.",
+	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
+	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key, and in this build discard shows what removing it would lose without removing it.",
+}
+
+// phraseTaskKeptWorkUnread is the row for a task the program dispatched
+// whose answer could not read whether kept work holds it
+// (Task.KeptWorkUnread). It claims neither that a worker is being launched
+// nor that the task waits, since either may be true, and says what each
+// would mean.
+var phraseTaskKeptWorkUnread = Phrase{
+	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy of its project is holding it could not be read just now.",
+	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy holds it, it begins once that work is decided or turns up somewhere safe.",
+	Decision:    "Nothing to decide yet; ask again for a current answer.",
 }
 
 // phraseTaskHeld is the row for a task internal/taskstate resolved Held from
@@ -257,6 +296,16 @@ var phraseLandedLocallyNow = Phrase{
 var phraseTaskHeld = Phrase{
 	Outcome:     "This work is waiting on an answer from you.",
 	Consequence: "Nothing more is done with it until you answer.",
+	Decision:    taskAnswerDecision,
+}
+
+// phraseTaskStallHeld is phraseTaskHeld for a task whose hold tier answered
+// from a stall hold, PRD section 6's: the decision is the same kind and is
+// answered the same way, but the hold ends nothing, so the work is not said
+// to stop.
+var phraseTaskStallHeld = Phrase{
+	Outcome:     "This work is waiting on an answer from you about a worker whose screen has not changed through repeated inspections.",
+	Consequence: "Nothing has been ended: its worker carries on and stays watched until you answer.",
 	Decision:    taskAnswerDecision,
 }
 
@@ -356,8 +405,13 @@ func WaitingPhrase(on string) Phrase {
 // program appended is NoWordYet. Running without Resolution.Progress is
 // phraseWorkerUnseen, so a worker no live terminal was observed for is
 // never read as a worker at its work. Held resolved from the hold tier is
-// phraseTaskHeld, which says how a hold naming the task is answered; Held
+// phraseTaskHeld, which says how a hold naming the task is answered, or
+// phraseTaskStallHeld when that hold is a stall hold, which stops nothing; Held
 // from a run or from the worker's own history keeps the table's row.
+// Dispatched carrying Task.KeptWork is phraseTaskWaitsOnKeptWork, because
+// that task is waiting on kept work and no worker is being launched, and
+// Dispatched with Task.KeptWorkUnread is phraseTaskKeptWorkUnread, because
+// which of the two holds could not be read.
 // Reported points at assistant --json tasks for the stored report and never
 // carries its summary or findings, which Task.Report holds for the
 // structured answer (P13). A state outside the table, which the
@@ -370,11 +424,19 @@ func TaskPhrase(t Task) Phrase {
 		return WaitingPhrase(t.Waiting)
 	case unconfirmed(t):
 		return phraseWorkerUnseen
+	case state == taskstate.Held && t.State.Source == taskstate.SourceHold && isStallHold(t.State.Basis.Hold):
+		return phraseTaskStallHeld
 	case state == taskstate.Held && t.State.Source == taskstate.SourceHold:
 		return phraseTaskHeld
+	case state == taskstate.Dispatched && len(t.KeptWork) > 0:
+		return phraseTaskWaitsOnKeptWork
+	case state == taskstate.Dispatched && t.KeptWorkUnread:
+		return phraseTaskKeptWorkUnread
 	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
 		t.State.Basis.LandedLocally != "":
 		return phraseTaskLandedLocally
+	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.NothingToDeliver:
+		return phraseTaskNothingToDeliver
 	case state == taskstate.Unknown && t.State.Source == taskstate.SourceNone && noteTailed(t.State.Basis.EventKind):
 		return NoWordYet
 	}
@@ -659,7 +721,9 @@ const holdPlaceholder = "a decision"
 // which internal/store refuses to register, is phrased with a placeholder so
 // the row never reads as waiting on nothing. An open hold naming a task and
 // no run, which internal/service answers given the task, says how: with
-// --task and --answer, as phraseTaskHeld does.
+// --task and --answer, as phraseTaskHeld does. An open stall hold, PRD
+// section 6's, holds no work still: its worker carries on and is watched, and
+// its row says so rather than that the work does not move.
 func HoldPhrase(h store.Hold) Phrase {
 	subject := strings.TrimSpace(h.Subject)
 	if subject == "" {
@@ -670,9 +734,13 @@ func HoldPhrase(h store.Hold) Phrase {
 		if h.TaskID.IsKnown() && !h.RunID.IsKnown() {
 			decision = taskAnswerDecision
 		}
+		consequence := "The work it holds does not move until you answer."
+		if isStallHold(h.Key) {
+			consequence = "Nothing has been ended: its worker carries on and stays watched until you answer."
+		}
 		return Phrase{
 			Outcome:     "A decision is waiting on you: " + subject + ".",
-			Consequence: "The work it holds does not move until you answer.",
+			Consequence: consequence,
 			Decision:    decision,
 		}
 	}
@@ -760,6 +828,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryUndispatchable
 	case AnswerStopped:
 		return phraseNotRetried
+	case AnswerWorkerStopped:
+		return phraseWorkerStopped
 	case AnswerLanded:
 		return phraseLandedLocallyNow
 	}
@@ -907,12 +977,12 @@ var (
 		Decision:    "Nothing to decide.",
 	}
 	phraseLandedSince = Phrase{
-		Outcome:     "This work was merged or cleared away since you last marked what you had seen, newest first.",
+		Outcome:     "This work was merged, found already on the shared branch, or cleared away since you last marked what you had seen, newest first.",
 		Consequence: "It is shown here until you mark it as seen.",
 		Decision:    "Once you have read it, run assistant watch --mark-seen to mark it.",
 	}
 	phraseNothingLanded = Phrase{
-		Outcome:     "Nothing was merged or cleared away since you last marked what you had seen.",
+		Outcome:     "Nothing was merged, found already on the shared branch, or cleared away since you last marked what you had seen.",
 		Consequence: "There is nothing new to read here.",
 		Decision:    "Nothing to decide.",
 	}
@@ -946,8 +1016,18 @@ var (
 		Consequence: "Nothing of it is left here, and nothing was lost.",
 		Decision:    "Nothing to decide.",
 	}
+	phraseAlreadyShared = Phrase{
+		Outcome:     "This work was already on the shared branch, so nothing was delivered.",
+		Consequence: "Another change made the same edit first; nothing was validated or merged for this one.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseCopyClearedAlreadyShared = Phrase{
+		Outcome:     "This work's local copy was removed, because the same change was already on the shared branch.",
+		Consequence: "Nothing of it is left here, and nothing was lost.",
+		Decision:    "Nothing to decide.",
+	}
 	phraseNothingMarked = Phrase{
-		Outcome:     "Nothing was marked as seen, because nothing merged or cleared away was shown.",
+		Outcome:     "Nothing was marked as seen, because nothing merged, found already on the shared branch, or cleared away was shown.",
 		Consequence: "What you marked before stands.",
 		Decision:    "Nothing to decide.",
 	}
@@ -989,7 +1069,7 @@ func DigestPhrase(d Digest) Phrase {
 		return phraseDigestQuiet
 	}
 	p := Phrase{
-		Outcome: fmt.Sprintf("In short: %d decision(s) are waiting on you, %d item(s) were merged or cleared away since you last marked what you had seen, "+
+		Outcome: fmt.Sprintf("In short: %d decision(s) are waiting on you, %d item(s) were merged, found already on the shared branch, or cleared away since you last marked what you had seen, "+
 			"%d piece(s) of work are under way, %d change(s) are being validated now, and %d piece(s) of work stopped without asking you anything.",
 			d.Waiting, d.Landed, d.UnderWay, d.Advancing, d.Stopped),
 		Consequence: "Each count is of the lines below.",
@@ -1006,7 +1086,7 @@ func DigestPhrase(d Digest) Phrase {
 	case d.Unconfirmed > 0:
 		p.Decision = "Check on the work no worker was seen at."
 	case d.Landed > 0:
-		p.Decision = "Once you have read what was merged or cleared away, run assistant watch --mark-seen to mark it."
+		p.Decision = "Once you have read what was merged, found already on the shared branch, or cleared away, run assistant watch --mark-seen to mark it."
 	}
 	return p
 }
@@ -1026,17 +1106,25 @@ func digestRows() []Phrase {
 
 // phraseDigestQuiet is the digest of a read with nothing in any part.
 var phraseDigestQuiet = Phrase{
-	Outcome:     "In short: nothing waits on you, nothing new was merged or cleared away, and nothing is under way or stopped.",
+	Outcome:     "In short: nothing waits on you, nothing new was merged, found already on the shared branch, or cleared away, and nothing is under way or stopped.",
 	Consequence: "Nothing here needs you right now.",
 	Decision:    "Nothing to decide.",
 }
 
 // LandedPhrase is what a person reads about one landed record: the merge
-// row for a merge record and the cleared-away row for a cleanup record.
-// It is the record's row and not the task's, so a task whose copy was
-// removed after it merged reads as merged on its merge record's line.
+// row for a merge record, the already-shared row for a nothing-to-deliver
+// record, and the cleared-away row for a cleanup record, worded for the
+// record the task landed on. It is the record's row and not the task's, so a
+// task whose copy was removed after it merged reads as merged on its merge
+// record's line, and a task whose change was already on the shared branch
+// is never read as merged on any line.
 func LandedPhrase(l Landed) Phrase {
-	if l.Cleanup != nil && l.Merge == nil {
+	switch {
+	case l.NothingToDeliver != nil:
+		return phraseAlreadyShared
+	case l.Cleanup != nil && l.Merge == nil && l.Task.State.Basis.NothingToDeliver:
+		return phraseCopyClearedAlreadyShared
+	case l.Cleanup != nil && l.Merge == nil:
 		return phraseCopyCleared
 	}
 	return phraseWasMerged
@@ -1047,7 +1135,7 @@ func LandedPhrase(l Landed) Phrase {
 // what was shown is what brings them into the next read.
 func LandedMorePhrase(more int) Phrase {
 	return Phrase{
-		Outcome:     fmt.Sprintf("And %d more were merged or cleared away that are not shown here.", more),
+		Outcome:     fmt.Sprintf("And %d more were merged, found already on the shared branch, or cleared away that are not shown here.", more),
 		Consequence: "They stay unseen, and are shown once those above are marked as seen.",
 		Decision:    "Mark those above as seen to read the rest.",
 	}
@@ -1061,7 +1149,7 @@ func MarkedPhrase(m Marked) Phrase {
 		return phraseNothingMarked
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("What was shown above as merged or cleared away, %d item(s), is now marked as seen.", len(m.Marks)),
+		Outcome:     fmt.Sprintf("What was shown above as merged, found already on the shared branch, or cleared away, %d item(s), is now marked as seen.", len(m.Marks)),
 		Consequence: "It is not shown here again; anything that arrived after this read still is.",
 		Decision:    "Nothing to decide.",
 	}
@@ -1284,17 +1372,17 @@ var (
 		CeilingReached: {
 			Outcome:     "This step did not start the agent call it needed, because agent use recorded for this home has reached the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Raise the ceiling in your own configuration and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once recorded use has aged out of the ceiling's window, or you have raised the ceiling in your own configuration and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnestablished: {
 			Outcome:     "This step did not start the agent call it needed, because some recorded calls did not report a count the ceiling you set is on, so the ceiling could not be weighed.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Set the ceiling on counts every agent reports and restart the service, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Once those calls have aged out of the ceiling's window, or you have set the ceiling on counts every agent reports and restarted the service, answer retry to run this step again; or answer to go on without the check.",
 		},
 		CeilingUnread: {
 			Outcome:     "This step did not start the agent call it needed, because the record of agent use could not be read to weigh against the ceiling you set.",
 			Consequence: "Nothing was checked by that call, so approving carries the change past a check that did not happen.",
-			Decision:    "Run assistant doctor, then end this run with assistant --cancel and start a fresh one; or answer to go on without the check.",
+			Decision:    "Run assistant doctor, and once the record can be read, answer retry to run this step again; or answer to go on without the check.",
 		},
 	}
 )
@@ -1456,6 +1544,10 @@ const (
 	// UpstreamKindUnrecorded is a Check.Kind for CheckUpstream when neither
 	// a repository record nor origin names where validated changes go.
 	UpstreamKindUnrecorded = "upstream-unrecorded"
+	// UpstreamKindUnreadable is a Check.Kind for CheckUpstream when what
+	// names where validated changes go, the repository record or origin,
+	// could not be read. The check's detail carries what failed.
+	UpstreamKindUnreadable = "upstream-unreadable"
 	// CheckStages is whether every stage has an implementation in this build.
 	CheckStages = "stages"
 )
@@ -1558,6 +1650,11 @@ var (
 		Consequence: "A run cannot start from it until assistant init records the upstream.",
 		Decision:    "Run assistant init here.",
 	}
+	phraseUpstreamUnreadable = Phrase{
+		Outcome:     "Where validated changes from this checkout go could not be read from its repository record or its origin.",
+		Consequence: "Whether a run from here can open a pull request cannot be said until it can be read.",
+		Decision:    "Run assistant --json doctor for what could not be read and why, put it right, then run assistant doctor again.",
+	}
 )
 
 // phraseByUpstreamKind is the one table from an upstream check's kind to what
@@ -1568,6 +1665,7 @@ var phraseByUpstreamKind = map[string]Phrase{
 	UpstreamKindLocal:       phraseUpstreamLocal,
 	UpstreamKindUnsupported: phraseUpstreamUnsupported,
 	UpstreamKindUnrecorded:  phraseUpstreamUnrecorded,
+	UpstreamKindUnreadable:  phraseUpstreamUnreadable,
 }
 
 // phraseCheckUnfamiliar is the row for a check under a name the table has
@@ -1937,7 +2035,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
+	out = append(out, phraseTaskHeld, phraseTaskWaitsOnKeptWork, phraseTaskKeptWorkUnread, phraseTaskStallHeld, NoWordYet, phraseWorkerUnseen, phraseTaskLandedLocally, phraseTaskNothingToDeliver, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting, PhraseSeveralHoldsUnnamed)
 	out = append(out, UncertaintiesPhrase(2), FollowUpsPhrase(1))
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
@@ -1958,12 +2056,14 @@ func TablePhrases() []Phrase {
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
+	out = append(out, keptAnswerRows()...)
+	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		if name == CheckUpstream {
-			for _, kind := range []string{UpstreamKindGitHub, UpstreamKindGitLab, UpstreamKindLocal, UpstreamKindUnsupported, UpstreamKindUnrecorded} {
+			for _, kind := range slices.Sorted(maps.Keys(phraseByUpstreamKind)) {
 				out = append(out, CheckPhrase(Check{Name: name, Kind: kind}))
 			}
 			continue
@@ -1988,7 +2088,7 @@ func TablePhrases() []Phrase {
 		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
-	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
+	out = append(out, phraseWasMerged, phraseCopyCleared, phraseAlreadyShared, phraseCopyClearedAlreadyShared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, digestRows()...)
 	out = append(out, defaultBranchRows()...)
@@ -2000,4 +2100,11 @@ func TablePhrases() []Phrase {
 	out = append(out, changeRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)
+}
+
+// isStallHold reports whether key is a stall hold's, PRD section 6's, on
+// internal/supervisor's key space, the one owner of that composition.
+func isStallHold(key string) bool {
+	_, ok := supervisor.ParseStallHold(key)
+	return ok
 }

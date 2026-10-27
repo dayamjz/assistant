@@ -366,7 +366,7 @@ func TestTheSubordinateMembersCarryTheirDomainAndRefuseAnInvalidOne(t *testing.T
 		t.Fatal("the coordinator's members carry a domain")
 	}
 	task := seedDomainTask(t, s, "tasksenderaa", "alpha")
-	if _, err := s.BeginTaskAttempt(ctx, task.ID, 0); err != nil {
+	if _, err := s.BeginFirstTaskAttempt(ctx, task.ID, OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendMessage(ctx, task.ID, 1, "hello", SentBySubordinate("No")); !errors.Is(err, ErrUnknownSender) {

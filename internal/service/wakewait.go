@@ -227,15 +227,19 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 		if err != nil {
 			return machine.Wakes{}, err
 		}
-		if offered+offeredDomain > 0 {
+		offeredKept, err := s.store.OfferedKeptWorkWakes(ctx, handout.Held, handout.Route)
+		if err != nil {
+			return machine.Wakes{}, err
+		}
+		if offered+offeredDomain+offeredKept > 0 {
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.drainBoth(ctx, limit, handout)
+			wakes, err := s.drainAll(ctx, limit, handout)
 			if err != nil {
 				return machine.Wakes{}, err
 			}
-			if len(wakes.Wakes)+len(wakes.DomainWakes) > 0 {
+			if len(wakes.Wakes)+len(wakes.DomainWakes)+len(wakes.KeptWorkWakes) > 0 {
 				return wakes, nil
 			}
 		}
@@ -246,25 +250,25 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			return s.drainBoth(ctx, limit, s.wakeHandout(req, p))
+			return s.drainAll(ctx, limit, s.wakeHandout(req, p))
 		case <-ctx.Done():
 			return machine.Wakes{}, ended()
 		}
 	}
 }
 
-// drainBoth is one drain of both shapes under one handout, the one both
+// drainAll is one drain of every shape under one handout, the one both
 // wakes.list and wakes.wait answer with: the task rows, then the domain
-// rows, each bounded by limit, and the second none on a subordinate's
-// route, handed out in one store transaction (store.DrainBoth), so a drain
-// that fails or is cancelled between the two hands out nothing it does not
-// return.
-func (s *Service) drainBoth(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
-	wakes, domainWakes, err := s.store.DrainBoth(ctx, limit, handout)
+// rows, then the kept-work rows, each bounded by limit, and the last two
+// none on a subordinate's route, handed out in one store transaction
+// (store.DrainAll), so a drain that fails or is cancelled between two
+// shapes hands out nothing it does not return.
+func (s *Service) drainAll(ctx context.Context, limit int, handout store.WakeHandout) (machine.Wakes, error) {
+	drained, err := s.store.DrainAll(ctx, limit, handout)
 	if err != nil {
 		return machine.Wakes{}, err
 	}
-	return machine.Wakes{Wakes: wakes, DomainWakes: domainWakes}, nil
+	return machine.Wakes{Wakes: drained.Wakes, DomainWakes: drained.DomainWakes, KeptWorkWakes: drained.KeptWorkWakes}, nil
 }
 
 // wakeHandout is what a coordinator's drain made now hands rows out as, on

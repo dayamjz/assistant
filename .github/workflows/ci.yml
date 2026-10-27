@@ -26,36 +26,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # v6 or newer, because v5 reads only go.mod's `go` directive and would
-      # install go1.25.0; v6 installs the `toolchain` directive's version when
-      # one is present, which go.mod pins for darwin/arm64's race detector
-      # (#321), and sets GOTOOLCHAIN=local so no later step switches away.
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      # The terminal session provider's tests run against a real tmux, and
-      # the Test step requires one, so they fail here rather than skip.
-      - name: Install tmux
-        shell: bash
-        run: |
-          if ! command -v tmux >/dev/null 2>&1; then
-            if [ "$RUNNER_OS" = "macOS" ]; then
-              brew install tmux
-            else
-              sudo apt-get update && sudo apt-get install -y tmux
-            fi
-          fi
-          tmux -V
-
-      # The Linux Test step runs its tests under tini in a process namespace
-      # of their own; the Test step says why.
-      - name: Install tini
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update && sudo apt-get install -y tini
-          tini --version
+      # Go, tmux and tini: what scripts/ci-test.sh runs the suite with.
+      - uses: ./.github/actions/test-env
 
       - name: Verify formatting
         run: |
@@ -90,55 +62,37 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: make lint-guard-test
 
-      # The race detector is the point of this job, so it is not optional.
-      # The timeout is explicit because internal/service has run past go
-      # test's ten-minute default on a macOS runner, which fails the package
-      # with a panic and no assertion having failed.
-      # Verbose output goes to a file so a skipped test leaves a trace: a
-      # package that skipped its assertions still reads ok, and the step
-      # after this one lists every skip with its message.
-      # On Linux the tests run in a PID namespace of their own, as this
-      # runner's user, with tini as its first process so an orphan is reaped
-      # as it is on the host. tini stays root, so the namespace still holds
-      # one process whose working directory the tests cannot read: the
-      # tests that need a real refused read find it there, and it is the
-      # ancestor of every test, which the sweep sets aside. A sleep of the
-      # nobody user stands beside the tests for the ones that need another
-      # user's process off their parent chain, which the sweep sets aside
-      # because it shares no user and refuses a signal. The runner holds processes of its own user
-      # whose working directory cannot be read (its systemd user manager,
-      # (sd-pam) and a running sudo, #152), and agents.Sweeper refuses to
-      # clear while such a process runs, as P6 requires and the owner kept,
-      # so on the bare host every test asserting a clear sweep can only skip.
-      # In the namespace the process table is the test run's own, so those
-      # tests run, and ASSISTANT_REQUIRE_SWEEP_CLEAR turns a skip of theirs
-      # into a failure. macOS has no PID namespace and its runner holds the
-      # same kind of sudo, so there those tests skip naming it, and the
-      # Skipped tests step lists them: a green macOS lane establishes nothing
-      # about a relaunch or a sweep that has to clear.
+      # The leftover guard's own tests. The Test step then proves the guard
+      # fails on planted leftovers before it trusts the real comparison.
+      - name: Leak guard tests
+        run: python3 scripts/leak-check-test.py -v
+
+      # The flake ledger's tests (scripts/flake-ledger.py, which the CI lanes
+      # read failures from). They start no process and read nothing from the
+      # network but a server they run on 127.0.0.1; nothing in the ledger
+      # depends on the platform beyond SIGALRM, which both runners have.
+      - name: Flake ledger tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/flake-ledger-test.py -v
+
+      # The CI test script's own tests (scripts/ci-test-test.py): the values
+      # it refuses before anything runs.
+      - name: CI test script tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/ci-test-test.py -v
+
+      # The repeat gate's plan (scripts/repeat-plan.py): which packages a
+      # pull request's change makes .github/workflows/repeat.yml run.
+      - name: Repeat plan tests
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/repeat-plan-test.py -v
+
+      # The race suite in CI's test environment. scripts/ci-test.sh owns that
+      # environment (Linux's PID namespace, macOS's TMPDIR, the leak check
+      # around the run and per package) and says why each part is there.
       - name: Test
         shell: bash
-        env:
-          ASSISTANT_REQUIRE_TMUX: "1"
-        run: |
-          set -o pipefail
-          run=()
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            export ASSISTANT_REQUIRE_SWEEP_CLEAR=1
-            run=(sudo --preserve-env env "PATH=$PATH" "HOME=$HOME"
-              unshare --pid --fork --mount-proc tini --
-              bash -c 'setpriv --reuid=65534 --regid=65534 --clear-groups sleep infinity &
-                uid=$1 gid=$2; shift 2
-                exec setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"' bash "$(id -u)" "$(id -g)")
-          fi
-          "${run[@]}" go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
-          grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
-          if [ -n "${status:-}" ]; then
-            echo "::group::full test output"
-            cat test.log
-            echo "::endgroup::"
-            exit "$status"
-          fi
+        run: bash scripts/ci-test.sh
 
       - name: Skipped tests
         if: always()
@@ -153,13 +107,21 @@ jobs:
             echo "No test skipped on ${{ matrix.os }}."
           fi
 
+      # A job cut off at timeout-minutes prints no full test output; this
+      # names the packages test.log never reported, still running or not yet
+      # started, and the flake ledger attaches them to the job's timeout.
+      - name: Unfinished packages
+        if: always()
+        shell: bash
+        run: bash scripts/ci-test.sh unfinished
+
   lint:
     name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      # v6 for the same toolchain reason as the check job.
+      # v6 for the toolchain reason .github/actions/test-env gives.
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
@@ -171,3 +133,68 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+      # The same lint cross-checked for the other two platforms the module
+      # builds for. Build constraints decide which files a run sees, so a
+      # symbol read only from a linux || darwin file is unused on Windows and
+      # only a run with that GOOS says so (#435). Both are cross-checks on
+      # this runner: they type-check and lint, and run nothing there.
+      #
+      # Each one analyses into a fresh cache of its own. golangci-lint keys a
+      # package's cached result by its path and its compiled and ignored
+      # files in sequence, with no GOOS in the key, so a package whose
+      # constrained files sort last hashes the same for every GOOS, and a
+      # cache shared across targets hands Windows the Linux result (#462's
+      # review reproduced a Windows-only unused var passing that way).
+      # skip-cache is what makes the step's GOLANGCI_LINT_CACHE hold: with
+      # caching on, the action sets GOLANGCI_LINT_CACHE to the one directory
+      # it restores and saves, ~/.cache/golangci-lint, over the step's own.
+      # The cost is that these two steps analyse from nothing on every run.
+      - name: golangci-lint (darwin)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: darwin
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-darwin
+        with:
+          version: v2.12.2
+          skip-cache: true
+      - name: golangci-lint (windows)
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: windows
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint-windows
+        with:
+          version: v2.12.2
+          skip-cache: true
+
+  # A re-run that passes turns a run green with the failure it re-ran past
+  # out of sight. From the second attempt on, this job lists every failure
+  # of the earlier attempts (scripts/flake-ledger.py) and fails for one that
+  # no open issue names, so a test may pass on a re-run but never silently.
+  # On a first attempt it is skipped, which a required check reads as
+  # passing. Re-running failed jobs re-runs this one too, since it needs
+  # them.
+  reruns:
+    # --own-job below names this job, so its own earlier failure is not
+    # one more failure that needs an issue.
+    name: re-runs
+    needs: [check, lint]
+    if: ${{ !cancelled() && github.run_attempt > 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+      # shell: bash runs with pipefail, so the ledger's exit is the step's.
+      # The script starts with the ledger, not set -o pipefail, which the
+      # ledger takes for the Test step of a log from before ci-test.sh.
+      - name: Every earlier attempt's failure has an open issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/flake-ledger.py --repo "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" \
+            --require-open-issues --own-job re-runs --tz America/Los_Angeles | tee -a "$GITHUB_STEP_SUMMARY"

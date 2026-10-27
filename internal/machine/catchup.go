@@ -234,17 +234,24 @@ type Landed struct {
 	Task Task `json:"task"`
 	// Merge is the merge record, for a merge.
 	Merge *store.MergeRecord `json:"merge,omitempty"`
+	// NothingToDeliver is the nothing-to-deliver record, for a run whose
+	// change was already on the default branch, PRD section 6's "nothing
+	// left to deliver".
+	NothingToDeliver *store.NothingToDeliver `json:"nothing_to_deliver,omitempty"`
 	// Cleanup is the cleanup record, for a copy removed after the work
 	// landed.
 	Cleanup *store.TaskCleanup `json:"cleanup,omitempty"`
 }
 
 // Record names the landed record the way that record is keyed, which is
-// what the seen mark holds: a merge record by its run, a cleanup record by
-// its task.
+// what the seen mark holds: a merge record and a nothing-to-deliver record by
+// their run, a cleanup record by its task.
 func (l Landed) Record() store.SeenRecord {
 	if l.Merge != nil {
 		return store.SeenRecord{Kind: store.SeenMerge, Key: l.Merge.Run}
+	}
+	if l.NothingToDeliver != nil {
+		return store.SeenRecord{Kind: store.SeenNothingToDeliver, Key: l.NothingToDeliver.Run}
 	}
 	if l.Cleanup != nil {
 		return store.SeenRecord{Kind: store.SeenCleanup, Key: l.Cleanup.TaskID}
@@ -258,6 +265,9 @@ func (l Landed) Record() store.SeenRecord {
 func (l Landed) At() time.Time {
 	if l.Merge != nil {
 		return l.Merge.RecordedAt
+	}
+	if l.NothingToDeliver != nil {
+		return l.NothingToDeliver.RecordedAt
 	}
 	if l.Cleanup != nil {
 		if at, ok := l.Cleanup.RemovedAt.Get(); ok {

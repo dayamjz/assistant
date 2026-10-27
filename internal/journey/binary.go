@@ -1,14 +1,31 @@
 package journey
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
+
+// processStarted is when this package began initializing. binaryBuildContext
+// measures the build's deadline from here.
+var processStarted = time.Now()
+
+// buildGrace is procgroup.Run's grace for the build: how long the go command
+// has to exit once its group was ended, and its output to reach its end
+// once it exited.
+const buildGrace = 5 * time.Second
 
 // BinaryVariable names the environment variable that points this harness at a
 // built assistant binary.
@@ -20,13 +37,23 @@ import (
 // checkout.
 const BinaryVariable = "ASSISTANT_BINARY"
 
-// productBinary is resolved once per process. Which binary is under test is a
-// fact about the run rather than about a test, and building it once is the
-// difference between one compile and one per test.
-var productBinary struct {
+// productBinaryState is one resolution of the assistant binary. Binary keeps
+// the process on a single state. resetProductBinary replaces it, which a test
+// does so a selector it resolved, or a checkout build, does not become the
+// binary the rest of the process drives.
+type productBinaryState struct {
 	once sync.Once
 	path string
 	err  error
+}
+
+// productBinary is the resolution Binary returns. resetProductBinary replaces
+// it. A caller that never replaces it resolves once, which is one compile for
+// the process rather than one per call.
+var productBinary atomic.Pointer[productBinaryState]
+
+func init() {
+	productBinary.Store(&productBinaryState{})
 }
 
 // Binary returns the assistant binary this harness drives.
@@ -43,10 +70,45 @@ var productBinary struct {
 // separation and the home's lock behave differently across platforms, and only
 // a real process finds those differences.
 func Binary() (string, error) {
-	productBinary.once.Do(func() {
-		productBinary.path, productBinary.err = resolveBinary()
+	state := productBinary.Load()
+	state.once.Do(func() {
+		state.path, state.err = resolveBinary()
 	})
-	return productBinary.path, productBinary.err
+	return state.path, state.err
+}
+
+// resetProductBinary forgets the binary this process resolved. The next
+// Binary resolves again. A test uses it so the selector or checkout build
+// it resolved does not stay in the cache after the test returns. It does
+// not remove a directory a build created. Cleanup does, including one the
+// cache no longer names.
+func resetProductBinary() {
+	productBinary.Store(&productBinaryState{})
+}
+
+// productBuildDirs are the directories a successful resolveBinary created.
+// Cleanup removes them. The cache is a different fact: resetProductBinary
+// can forget a path, and a build the control makes through resolveBinary
+// is never stored there. A selector named by BinaryVariable is not recorded.
+var productBuildDirs struct {
+	mu   sync.Mutex
+	dirs []string
+}
+
+func recordProductBuildDir(dir string) {
+	productBuildDirs.mu.Lock()
+	productBuildDirs.dirs = append(productBuildDirs.dirs, dir)
+	productBuildDirs.mu.Unlock()
+}
+
+func removeProductBuildDirs() {
+	productBuildDirs.mu.Lock()
+	dirs := productBuildDirs.dirs
+	productBuildDirs.dirs = nil
+	productBuildDirs.mu.Unlock()
+	for _, dir := range dirs {
+		_ = os.RemoveAll(dir)
+	}
 }
 
 // resolveBinary is Binary without the memoization, so the whole answer is in
@@ -73,21 +135,69 @@ func resolveBinary() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp("", "assistant-binary")
+	dir, err := standin.TempDir("bin")
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory to build the binary into: %w", err)
 	}
 	built := filepath.Join(dir, "assistant"+exeSuffix())
-	cmd := exec.Command("go", "build", "-o", built, "./cmd/assistant")
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		// Cleanup removes this directory by way of productBinary.path, which a
-		// failed build never sets, so a build that failed has to take its own
-		// directory with it or nothing ever will.
+	cmd, life, err := buildCommand(built)
+	if err != nil {
 		_ = os.RemoveAll(dir)
-		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out)
+		return "", err
 	}
+	defer func() { _ = life.Close() }()
+	cmd.Dir = root
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	ctx, cancel := binaryBuildContext(processStarted, testBinaryTimeout())
+	defer cancel()
+	if err := procgroup.Run(ctx, cmd, buildGrace); err != nil {
+		// A failed build is not recorded, so Cleanup will not see this
+		// directory. Remove it here.
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out.String())
+	}
+	recordProductBuildDir(dir)
 	return built, nil
+}
+
+// binaryBuildContext is the context the product-binary build runs under.
+//
+// timeout is the test binary's -timeout, measured from started, which is
+// this package's initialization. The testing harness arms the same timeout
+// later, at the start of the run, so this deadline leads the alarm by the
+// time between initialization and that start. Run ends the group when it
+// handles the cancellation. It does not promise to win that race: with one
+// processor the alarm can exit the process while Run is still blocked, and
+// a context deadline does not run then. buildCommand is what ends the group
+// in that case, on the platforms where it ties the command to this process.
+// A non-positive timeout leaves the context without a deadline, so the
+// build is not ended while this process stays alive.
+func binaryBuildContext(started time.Time, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.Background(), func() {}
+	}
+	remaining := time.Until(started.Add(timeout))
+	if remaining <= 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, cancel
+	}
+	return context.WithTimeout(context.Background(), remaining)
+}
+
+// testBinaryTimeout is the test binary's -timeout, or zero when this process
+// is not one.
+func testBinaryTimeout() time.Duration {
+	f := flag.Lookup("test.timeout")
+	if f == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(f.Value.String())
+	if err != nil {
+		return 0
+	}
+	return d
 }
 
 // executable reports why a path this harness was pointed at cannot be run,
@@ -152,8 +262,8 @@ func ModuleRoot() (string, error) {
 }
 
 // Cleanup removes what this package created for the lifetime of the process:
-// the fixture it built, the copies of this binary it stood on a PATH, and the
-// product binary it built when it was not given one.
+// the fixture it built, the copies of this binary it stood on a PATH, and
+// every directory a successful product build created.
 //
 // A consuming package calls it from TestMain after the tests have run. None of
 // it belongs to any one test, so no test can clean it up, and a test binary
@@ -161,14 +271,12 @@ func ModuleRoot() (string, error) {
 // directory of whatever machine ran it.
 //
 // It removes nothing it did not create. A binary named by BinaryVariable is
-// somebody else's artifact and is left alone.
+// somebody else's artifact and is not among the directories a build recorded.
 func Cleanup() {
 	for _, dir := range []string{shims.dir, built.root} {
 		if dir != "" {
 			_ = os.RemoveAll(dir)
 		}
 	}
-	if productBinary.path != "" && os.Getenv(BinaryVariable) == "" {
-		_ = os.RemoveAll(filepath.Dir(productBinary.path))
-	}
+	removeProductBuildDirs()
 }

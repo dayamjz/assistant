@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,6 +45,25 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 	if err = os.WriteFile(sentinel, []byte("keep this work"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// The backup's launch is held at the moment its reference is recorded,
+	// before its hold is settled, until a reader is waiting on that
+	// settlement, so the loop below reads the service in the order #538 lost
+	// on CI rather than wherever the poll happens to land. The first
+	// recording is the primary's, which this goroutine makes.
+	release := make(chan struct{})
+	var letGo sync.Once
+	var recordings atomic.Int32
+	s.afterSessionRecorded = func(string, string) {
+		if recordings.Add(1) == 1 {
+			return
+		}
+		select {
+		case <-release:
+		case <-s.stopCtx.Done():
+		}
+	}
+	s.awaitingSessionRecord = func(string) { letGo.Do(func() { close(release) }) }
+	t.Cleanup(func() { letGo.Do(func() { close(release) }) })
 	first, err := s.launchTask(t.Context(), d)
 	if err != nil {
 		t.Fatal(err)
@@ -57,7 +79,17 @@ func TestQuotaWorkerHandoffPreservesUncommittedWork(t *testing.T) {
 			if adapter != "cursor" {
 				t.Fatalf("backup attributed to %s", adapter)
 			}
-			_, current, _ := s.sessionOf(sub.task)
+			// launchTask holds a session before it records the reference,
+			// so a record naming the backup's session is a session held;
+			// sessionOf answers it once the hold is settled.
+			_, current, held := s.sessionOf(sub.task)
+			if !held || current == nil {
+				t.Fatalf("attempt %d records session %v and this service holds no session for task %s",
+					attempts[1].Sequence, attempts[1].SessionRef, sub.task)
+			}
+			if recorded, _ := attempts[1].SessionRef.Get(); current.Reference().String() != recorded {
+				t.Fatalf("attempt %d records session %s and this service holds %s", attempts[1].Sequence, recorded, current.Reference())
+			}
 			if current.Reference() == first.Reference() {
 				t.Fatal("worker was not replaced")
 			}
@@ -184,6 +216,51 @@ func TestCursorBackupWithTmuxIsRefusedBeforeAnyWorkerStarts(t *testing.T) {
 	}
 	if _, has, err := s.store.TaskFallback(t.Context(), sub.task); err != nil || has {
 		t.Fatalf("invalid backup was sealed: %v %v", has, err)
+	}
+}
+
+// A worker backup whose context window its adapter has not declared is
+// refused before any worker starts, as any backup it cannot run is: the
+// primary is not started on the strength of a backup that could never take
+// over, and nothing is sealed. Codex declares no window, and a window with no
+// model is one no adapter can express.
+func TestABackupWithAnUndeclaredContextWindowIsRefusedBeforeAnyWorkerStarts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		backup config.Role
+		window string
+	}{
+		{"codex at standard", config.Role{Agent: agents.CodexName, Provider: "openai", Type: "gpt", Version: "6-astra", ContextWindow: config.ContextStandard}, "context standard"},
+		{"a window with no model", config.Role{Agent: agents.CodexName, ContextWindow: config.Context1M}, "context 1m"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			primary := standin.New(t, standin.Script{})
+			backup := standin.NewCodex(t, standin.Script{})
+			sub := newLaunchSubjectAs(t, primary, "pages")
+			s := sub.service
+			s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
+			s.cfg.Roles = config.Roles{"pages": {Agent: agents.ClaudeName, Fallback: &tc.backup}}
+			d, err := s.dispatchTask(t.Context(), sub.task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = s.launchTask(t.Context(), d)
+			var refused *routeRefused
+			if !errors.As(err, &refused) || !errors.Is(err, agents.ErrUndeclaredModel) {
+				t.Fatalf("the launch answered %v, want a *routeRefused over ErrUndeclaredModel for the backup's window", err)
+			}
+			// PRD section 10: the refusal names the role, the triple, and
+			// the window, on the backup's path as on the primary's.
+			if detail := routeRefusedDetail(t, sub); !strings.Contains(detail, "the pages role") || !strings.Contains(detail, tc.window) {
+				t.Fatalf("route-refused detail %q does not name the pages role and %s", detail, tc.window)
+			}
+			if len(primary.Calls()) != 0 || len(backup.Calls()) != 0 {
+				t.Fatal("a backup whose window cannot be expressed let a worker start")
+			}
+			if _, has, err := s.store.TaskFallback(t.Context(), sub.task); err != nil || has {
+				t.Fatalf("the refused backup was sealed: %v %v", has, err)
+			}
+		})
 	}
 }
 

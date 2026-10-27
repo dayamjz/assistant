@@ -18,6 +18,10 @@ var (
 	// ErrRefNotFound is returned when a revision does not resolve to a commit
 	// in this repository.
 	ErrRefNotFound = errors.New("vcs: revision does not resolve to a commit")
+	// ErrObjectNotFound is returned by ObjectType for an object the
+	// repository does not have. An object it has but could not read is an
+	// error that does not match it.
+	ErrObjectNotFound = errors.New("vcs: object is not in the repository")
 	// ErrPathNotFound is returned when a path does not exist at the requested
 	// commit. A path that exists but is not a regular file resolves here and
 	// then fails in cat-file, which reports a *CommandError instead.
@@ -34,6 +38,10 @@ var (
 	ErrNoMergeBase = errors.New("vcs: commits have no common ancestor")
 	// ErrRebaseConflict is returned when a rebase stops due to conflicts.
 	ErrRebaseConflict = errors.New("vcs: rebase stopped due to conflicts")
+	// ErrRebaseBackend is returned by RebaseStatus, RebaseContinue and
+	// RebaseSkip when the working copy holds a rebase-apply directory, which
+	// Rebase does not create. Nothing is changed.
+	ErrRebaseBackend = errors.New("vcs: the copy holds a rebase-apply directory, which this package's rebase does not create")
 	// ErrInvalidArgument is returned when an argument would be read by git as
 	// an option, is empty where a value is required, or contains a byte that
 	// cannot survive the wire format the operation parses. The refusal happens

@@ -11,19 +11,20 @@ import "github.com/dayamjz/assistant/internal/store"
 //
 // What the rows claim is what this build does: the copy stays unless the
 // cleanup decision later removes it on a proof, which closes the entry, and
-// nothing else removes it. Answering an entry and holding new task work in
-// its project until it is answered are #411's second part and are not in
-// this build, so no row offers an answer this build would refuse and every
-// row that speaks of new work says it still starts.
+// nothing else removes it; while an entry is open, no new task in its
+// project starts (internal/store's keptworkhold.go), and a push still runs.
+// So a row that says a new task waits says it waits until the work is
+// decided or turns up somewhere safe. This build takes the three answers
+// (keptanswer.go), so a row that offers an answer names how they are given.
 var (
 	phraseKeptWork = Phrase{
 		Outcome:     "This work was kept in its local copy, because it is not yet on the shared branch or anywhere else safe.",
-		Consequence: "The copy stays unless its work later turns up somewhere safe, and new work in the same project still starts, because this build does not yet hold it off until you decide.",
-		Decision:    "Read what it holds with --json; landing it, carrying it on or discarding it is not yet something this build does for you.",
+		Consequence: "The copy stays unless its work later turns up somewhere safe, and no new task in the same project starts until then or until the work is decided; your own pushes still go ahead.",
+		Decision:    "Read what it holds with --json; to have it validated, answer land with assistant, --task and the work's identifier or --run= and the validation's, --answer land and --hold with the entry's key, which assistant --json status shows; or carry-on in place of land to begin new work in the copy, or discard to be shown what removing it would lose.",
 	}
 	phraseKeptWorkPart = Phrase{
 		Outcome:     "This work was kept in local copies because it is not yet anywhere safe, oldest first.",
-		Consequence: "Each copy stays unless its work later turns up somewhere safe, and new work in the same project still starts, because this build does not yet hold it off until you decide.",
+		Consequence: "Each copy stays unless its work later turns up somewhere safe, and no new task in the same project starts until then or until that work is decided; your own pushes still go ahead.",
 		Decision:    "Read what each one holds with --json.",
 	}
 	phraseNothingKept = Phrase{
@@ -31,16 +32,30 @@ var (
 		Consequence: "No local copy is waiting on a decision of yours.",
 		Decision:    "Nothing to decide.",
 	}
+	phraseRunKeptWork = Phrase{
+		Outcome:     "Work kept in a local copy of this project is waiting on your decision.",
+		Consequence: "This validation goes ahead regardless, but no new task in the project starts until that copy's work is decided or turns up somewhere safe.",
+		Decision:    "Read what is kept, and how to decide it, with assistant status.",
+	}
 	phraseNoticeKeptWork = Phrase{
 		Outcome:     "This work's local copy was kept, because what it holds is not yet anywhere safe.",
-		Consequence: "It stays unless its work later turns up somewhere safe, and new work in its project still starts, because this build does not yet hold it off until you decide.",
-		Decision:    "Tell the person, and read what it holds with assistant --json status.",
+		Consequence: "It stays unless its work later turns up somewhere safe, and no new task in its project starts until then or until it is decided; the person's own pushes still go ahead.",
+		Decision:    "Tell the person, and read what it holds with assistant --json status; it is answered land with --answer land and --hold naming the entry's key.",
 	}
 )
 
 // KeptWorkPhrase is the line for one open kept work entry, in the
 // catch-up read and in status alike.
 func KeptWorkPhrase(store.KeptWork) Phrase { return phraseKeptWork }
+
+// RunKeptWorkPhrase is the line a run's answer carries while its project
+// holds open kept work, Run.KeptWork, and false when it holds none.
+func RunKeptWorkPhrase(r Run) (Phrase, bool) {
+	if len(r.KeptWork) == 0 {
+		return Phrase{}, false
+	}
+	return phraseRunKeptWork, true
+}
 
 // KeptWorkPartPhrase is the row at the head of the catch-up read's kept work
 // part, or that part's empty row when it lists nothing.
@@ -53,5 +68,5 @@ func KeptWorkPartPhrase(c CatchUp) Phrase {
 
 // keptWorkRows is this file's rows for TablePhrases.
 func keptWorkRows() []Phrase {
-	return []Phrase{phraseKeptWork, phraseKeptWorkPart, phraseNothingKept, phraseNoticeKeptWork}
+	return []Phrase{phraseKeptWork, phraseKeptWorkPart, phraseNothingKept, phraseRunKeptWork, phraseNoticeKeptWork}
 }

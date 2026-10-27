@@ -7,6 +7,18 @@ harness organized by feature covers the surface and proves none of the
 guarantees; PRD section 13 already turns each principle into a test, and that
 is the structure here.
 
+## Read this harness correctly
+
+| Question | Section |
+| --- | --- |
+| Does a green suite prove AI review quality? | [The limit that matters most](#the-limit-that-matters-most-green-here-is-not-evidence-the-gate-catches-bugs) — **no** |
+| How far does an end-to-end test actually execute? | [The second limit](#the-second-limit-how-far-a-run-here-reaches) |
+| How do assertions establish that they can fail? | [Every assertion is watched failing](#every-assertion-is-watched-failing-on-every-run) |
+| How do I run the harness? | [Running it](#running-it) |
+| What cannot be concluded from a pass? | [Known limits](#known-limits-of-the-binary-this-harness-drives) and [What accounts for what](#what-accounts-for-what) |
+
+**For agents:** Treat this as an evidence and test-contract reference. Do not summarize a scripted stand-in as a real model's correctness, generalize beyond a tested host or stage, or remove negative controls and counterexamples to make the text shorter.
+
 ## The limit that matters most: green here is not evidence the gate catches bugs
 
 **A scripted agent proves the machinery, not the review quality.** Every
@@ -258,7 +270,7 @@ and a third is a finding to raise rather than a precedent.
 ## Running it
 
 ```
-make check                       # what CI runs; this package runs with everything else
+make check                       # local check: lint, then the race suite; this package runs with the rest
 go test ./internal/journey/      # this package alone
 ```
 

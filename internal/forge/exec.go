@@ -3,7 +3,6 @@ package forge
 import (
 	"context"
 	"os"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,9 +52,13 @@ const DefaultProviderGrace = 2 * time.Second
 // handful of requests to the code host with an answer bounded by
 // DefaultMaxOutput, so a provider still running at two minutes is taken as
 // wedged rather than slow, and is ended with its process group. A caller's
-// own deadline is kept even when it is later. It is a fixed value rather than
-// a configuration key; whether an operator should be able to change it is an
-// open question for the owner (#430).
+// own deadline is kept even when it is later.
+//
+// This package reads no configuration. The operator's gh_deadline reaches an
+// adapter only through WithInvocationDeadline, which internal/service passes
+// to the GitHub host it builds; a host built without it, as the command
+// line's own probe is, runs under this value, which is gh_deadline's default
+// (config.DefaultGHDeadline; a test in internal/config holds the two equal).
 const DefaultInvocationDeadline = 2 * time.Minute
 
 // providerEnv is applied over the base environment of every invocation.
@@ -227,12 +230,11 @@ type procResult struct {
 	// the process never ran.
 	startErr error
 	// waitErr is what waiting on the process reported. A failing status is
-	// reported here as an *exec.ExitError and takes precedence over anything
-	// else the wait found, so the value worth testing for is
-	// exec.ErrWaitDelay: it means the wait for the output pipes was abandoned
-	// at the grace deadline, which is how a caller tells output that was
-	// collected whole from output that may be missing bytes the provider
-	// wrote.
+	// reported here as an *exec.ExitError, joined to anything else the wait
+	// found, so the value worth testing for is exec.ErrWaitDelay: it means
+	// the wait for the output pipes was abandoned at the grace deadline,
+	// which is how a caller tells output that was collected whole from
+	// output that may be missing bytes the provider wrote.
 	waitErr error
 	// ended is the error of the context the invocation ran under, read once
 	// it returned: the caller's context's error, or the invocation
@@ -250,7 +252,7 @@ type procResult struct {
 func runProvider(ctx context.Context, s *settings, env []string, stdin string, args []string) procResult {
 	ctx, cancel := procgroup.Bound(ctx, s.deadline)
 	defer cancel()
-	cmd := exec.Command(s.bin, args...)
+	cmd := procgroup.Command(s.bin, args...)
 	cmd.Dir = s.dir
 	cmd.Env = env
 	// With nothing to carry, standard input stays os.DevNull, which is the end

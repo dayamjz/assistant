@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -45,10 +46,10 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept"); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-kept", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	// The copy holds a commit of the worker's that no remote has, and the
@@ -63,7 +64,7 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	heldGit(t, copyPath, "add", "-A")
 	heldGit(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
 	head := heldGit(t, copyPath, "rev-parse", "HEAD")
-	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))), GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +106,11 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	if entry.TaskID.Or("") != id || entry.RunID.IsKnown() || entry.Reason != string(tasks.ReasonUnproven) ||
 		!slices.Contains(entry.Holds, head) || entry.CopyPath != copyPath || entry.Answered() {
 		t.Fatalf("the entry = %+v, want task %s's unanswered copy at %s, unproven, holding %s", entry, id, copyPath, head)
+	}
+	// The task names no repository, so there is no default branch to say
+	// what of that the copy alone holds, and the entry says so.
+	if entry.Established() || !entry.Unestablished.IsKnown() {
+		t.Fatalf("the entry = %+v, want it to say what it holds is not established against a default branch", entry)
 	}
 	if redact.New().Redact(entry.Detail) != entry.Detail || entry.Detail == "" {
 		t.Fatalf("the entry's detail %q is not the redacted account of the refusal", entry.Detail)
@@ -160,10 +166,10 @@ func TestAWindowKeepAStoppedServiceMissedIsRecordedByTheNext(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatal(err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, "pane-window"); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, "pane-window", store.SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(copyPath, 0o700); err != nil {
@@ -176,7 +182,7 @@ func TestAWindowKeepAStoppedServiceMissedIsRecordedByTheNext(t *testing.T) {
 	heldGit(t, copyPath, "add", "-A")
 	heldGit(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
 	head := heldGit(t, copyPath, "rev-parse", "HEAD")
-	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+	reporter, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records, Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))), GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +293,7 @@ func TestAnInterruptedTaskCopyRemovalIsCompletedAtTheNextOpen(t *testing.T) {
 	}
 
 	cleaner, err := tasks.NewCleaner(tasks.CleanupDeps{Home: h, Store: records,
-		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))})
+		Forge: forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh"))), GitDeadline: config.DefaultGitDeadline})
 	if err != nil {
 		t.Fatal(err)
 	}

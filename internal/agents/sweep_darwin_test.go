@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // realLsof is the real output of the lsof run the listing makes, with this
@@ -124,20 +125,43 @@ func TestASweepOfACopyWhoseNameLsofCouldRenderDifferentlyFails(t *testing.T) {
 	}
 }
 
-// sweepReturnSlack is what a test allows past a run's deadline for the sweep
+// sweepReturnSlack is what a test allows past a run's deadline for the run
 // to hand its answer back: scheduling, not any wait the run makes, since the
-// run bounds all of those by its deadline.
+// run bounds all of those by its deadline. It is allowed on the run alone,
+// never on a whole sweep, whose reads of the process table before the run
+// are not under the deadline and grow with the host's load (#515).
 const sweepReturnSlack = 300 * time.Millisecond
+
+// standInWarm is the argument that makes a stand-in lsof exit at once,
+// before it writes anything; the run never passes it, since it passes lsof's
+// own arguments.
+const standInWarm = "warm"
 
 // standInLsof writes a program into dir that stands where lsof is: a shell
 // running body, in which PIDS is the file every process it starts writes
 // its identifier to, the shell first. It returns the program and that file.
+//
+// It runs the program once, with standInWarm, before returning, so the
+// first run of a newly written program is over before any run under test
+// starts its deadline. On the darwin/amd64 host #471 was seen on, a first
+// run of a newly written script took 0.36 to 0.79 seconds and a second about
+// 10 milliseconds; a run under test starts its deadline before it starts the
+// program, so without this run that cost fell inside the deadline and could
+// spend a 500 millisecond one before the shell wrote its identifier (#469).
+// Whether a host charges a first run at all is the platform's; this run only
+// moves whatever it charges ahead of the deadline.
 func standInLsof(t *testing.T, dir, body string) (program, pids string) {
 	t.Helper()
 	program, pids = filepath.Join(dir, "lsof"), filepath.Join(dir, "pids")
-	script := "#!/bin/sh\necho $$ > " + pids + "\n" + strings.ReplaceAll(body, "PIDS", pids)
-	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
+	script := "#!/bin/sh\n[ \"$1\" = " + standInWarm + " ] && exit 0\necho $$ > " + pids + "\n" + strings.ReplaceAll(body, "PIDS", pids)
+	if err := procgroup.WriteProgram(program, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
+	}
+	if out, err := exec.Command(program, standInWarm).CombinedOutput(); err != nil {
+		t.Fatalf("running the stand-in lsof once before the run: %v (%s)", err, out)
+	}
+	if _, err := os.Stat(pids); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stand-in lsof's run before the run wrote %s (%v), want nothing written", pids, err)
 	}
 	return program, pids
 }
@@ -170,11 +194,23 @@ func startedPIDs(t *testing.T, file string, n int) []int {
 // sweepOverStandIn sweeps an empty copy of a fresh home under a context that
 // never ends, as internal/service's sweepFinished gives it, with the
 // stand-in body standing where lsof is under deadline. It waits for the n
-// identifiers the stand-in writes, fails the test unless the sweep answers
-// within deadline and sweepReturnSlack of its start, and fails it unless
-// every one of those processes reads gone by identifier soon after. It
-// returns what the sweep answered.
-func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) (agents.SweepResult, error) {
+// identifiers the stand-in writes, fails the test unless the stand-in's run
+// answers within deadline and sweepReturnSlack of the run's start, and fails
+// it unless every one of those processes reads gone by identifier soon
+// after. It returns what the sweep answered and how long the run took, which
+// endedAtItsShare holds against lsof's share for a body still running then.
+//
+// The bound is asked of the run, as agents.SweepWithLsof times it, and not
+// of the whole sweep: the deadline bounds the external program, and the
+// listing's reads of every process in the table before it start are this
+// process's own work, which a loaded host was seen to stretch past the
+// slack (#515).
+//
+// With release, once all n identifiers are written it sends the stand-in's
+// shell, the first of them, SIGUSR1, verified by identity first, so a body
+// that waits for that signal ends on an order the test gives rather than on
+// a sleep racing the deadline.
+func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration, release bool) (agents.SweepResult, time.Duration, error) {
 	t.Helper()
 	requiresIdentityRead(t)
 	base := sweepBase(t)
@@ -183,15 +219,14 @@ func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) 
 	program, pidFile := standInLsof(t, base, body)
 
 	type answer struct {
-		r       agents.SweepResult
-		err     error
-		elapsed time.Duration
+		r   agents.SweepResult
+		ran time.Duration
+		err error
 	}
 	done := make(chan answer, 1)
 	go func() {
-		started := time.Now()
-		r, err := agents.SweepWithLsof(context.WithoutCancel(t.Context()), agents.NewSweeper(h, sweepGrace, nil), dir, program, deadline)
-		done <- answer{r, err, time.Since(started)}
+		r, ran, err := agents.SweepWithLsof(context.WithoutCancel(t.Context()), agents.NewSweeper(h, sweepGrace, nil), dir, program, deadline)
+		done <- answer{r, ran, err}
 	}()
 	pids := startedPIDs(t, pidFile, n)
 	t.Cleanup(func() {
@@ -199,6 +234,18 @@ func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) 
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
+	if release {
+		id, present, err := agents.Identify(pids[0])
+		if err != nil || !present {
+			t.Fatalf("the stand-in lsof's shell %d reads present %v (%v) before it was released, want it waiting", pids[0], present, err)
+		}
+		if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
+			t.Fatalf("the stand-in lsof's shell %d reads %v (%v) before it was released, want it waiting", pids[0], presence, err)
+		}
+		if err := syscall.Kill(id.PID, syscall.SIGUSR1); err != nil {
+			t.Fatalf("releasing the stand-in lsof's shell %d: %v", id.PID, err)
+		}
+	}
 
 	var got answer
 	select {
@@ -206,8 +253,8 @@ func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) 
 	case <-time.After(deadline + sweepEnded):
 		t.Fatalf("the sweep was still blocked on the stand-in lsof %s past a deadline of %s", sweepEnded, deadline)
 	}
-	if got.elapsed > deadline+sweepReturnSlack {
-		t.Fatalf("the sweep answered %s, %v after %s, past its deadline of %s and %s of slack", got.r, got.err, got.elapsed, deadline, sweepReturnSlack)
+	if got.ran > deadline+sweepReturnSlack {
+		t.Fatalf("the sweep answered %s, %v with the stand-in lsof's run taking %s, past its deadline of %s and %s of slack", got.r, got.err, got.ran, deadline, sweepReturnSlack)
 	}
 	for _, pid := range pids {
 		gone := time.Now().Add(sweepEnded)
@@ -222,54 +269,90 @@ func sweepOverStandIn(t *testing.T, body string, n int, deadline time.Duration) 
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	return got.r, got.err
+	return got.r, got.ran, got.err
+}
+
+// endedAtItsShare fails the test when a run whose stand-in lsof was still
+// running as lsof's share of deadline passed answered in ran, less than that
+// share. Such a run can only be ended by that share passing, since
+// procgroup.Run answers before its context ends only once the leader has
+// exited, so an earlier answer is one the deadline did not cause. A run whose
+// leader exits sooner is not held to it: output still held open a grace
+// after that exit is agents.ErrSweepTimedOut then, well inside the share.
+func endedAtItsShare(t *testing.T, ran, deadline time.Duration) {
+	t.Helper()
+	if share := agents.LsofShare(deadline); ran < share {
+		t.Fatalf("the stand-in lsof's run, still running as lsof's share %s of its deadline %s passed, answered after %s, before that share", share, deadline, ran)
+	}
 }
 
 // TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing holds
 // P15 for the listing's one external program: with a program standing where
 // lsof is that never exits and ignores SIGTERM, beside a process it started
-// in its group, a sweep under a context that never ends answers within the
-// run's deadline with agents.ErrSweepTimedOut and the zero result, which is
-// not clear, and neither process is running afterwards, checked by
+// in its group, a sweep under a context that never ends answers
+// agents.ErrSweepTimedOut and the zero result, which is not clear, with the
+// run answering no earlier than lsof's share of the deadline and within the
+// deadline, and neither process is running afterwards, checked by
 // identifier. Without the deadline the sweep blocks for as long as the
 // stand-in runs.
 func TestASweepWhoseLsofNeverExitsEndsItAtTheDeadlineAndProvesNothing(t *testing.T) {
 	principles.Cite(t, principles.P15)
-	r, err := sweepOverStandIn(t, "trap '' TERM\n/bin/sleep 3600 &\necho $! >> PIDS\nwait\n", 2, 500*time.Millisecond)
+	const deadline = 500 * time.Millisecond
+	r, ran, err := sweepOverStandIn(t, "trap '' TERM\n/bin/sleep 3600 &\necho $! >> PIDS\nwait\n", 2, deadline, false)
 	if !errors.Is(err, agents.ErrSweepTimedOut) || r.Clear() || r.String() != (agents.SweepResult{}).String() {
 		t.Fatalf("the sweep over a stand-in lsof that never exits answered %s, %v, want the zero result and agents.ErrSweepTimedOut", r, err)
 	}
 	if errors.Is(err, agents.ErrSweepUnsupported) || errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("the timed out sweep answered %v, which a caller would read as another refusal", err)
 	}
+	endedAtItsShare(t, ran, deadline)
 }
 
 // TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline is review's case
 // against the whole run's bound: a program standing where lsof is leaves a
 // descendant in its group that ignores SIGTERM and holds none of its output,
-// and then exits on its own, once before lsof's share of the deadline is
-// spent and once after. Either way the sweep answers within the deadline,
+// and then exits: in one row when the test releases it, before lsof's share
+// of the deadline is spent, and in the other on its own, after that share.
+// Either way the sweep answers within the deadline,
 // the descendant is gone by identifier, and the answer is a failure beside
 // the zero result: the listing's own refusal of output that does not report
 // this process when the program exited in time, and agents.ErrSweepTimedOut
 // when it did not. Ending the descendant only by a polite step, or only
 // after the deadline's wait, fails the bound.
+//
+// Each row's order is one the test fixes rather than a margin. The program
+// that exits before its share waits until the test releases it, which the
+// test does as soon as both identifiers are written, so it exits as early as
+// the run lets it; a trap set before it writes anything makes that release
+// an exit with status zero. The program that exits after its share sleeps
+// past the share first, and that sleep starts only once the run, deadline
+// already counting, has started it.
 func TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	const deadline = 2 * time.Second
 	for _, c := range []struct {
-		name     string
-		exit     string
-		timedOut bool
+		name    string
+		wait    string
+		release bool
+		want    error
 	}{
-		{"exits before its share", "1.6", false},
-		{"exits after its share", "1.94", true},
+		{"exits before its share", "trap 'exit 0' USR1\n", true, agents.ErrLsofNoSelf},
+		{"exits after its share", "", false, agents.ErrSweepTimedOut},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			body := "(trap '' TERM; exec /bin/sleep 3600) >/dev/null 2>&1 </dev/null &\necho $! >> PIDS\n/bin/sleep " + c.exit + "\nexit 0\n"
-			r, err := sweepOverStandIn(t, body, 2, deadline)
-			if err == nil || r.Clear() || r.String() != (agents.SweepResult{}).String() || errors.Is(err, agents.ErrSweepTimedOut) != c.timedOut {
-				t.Fatalf("the sweep over a stand-in lsof that %s answered %s, %v, want a failure beside the zero result, timed out %v", c.name, r, err, c.timedOut)
+			body := c.wait + "(trap '' TERM; exec /bin/sleep 3600) >/dev/null 2>&1 </dev/null &\necho $! >> PIDS\n"
+			if c.release {
+				body += "wait\n"
+			} else {
+				body += "/bin/sleep " + strconv.FormatFloat((agents.LsofShare(deadline)+140*time.Millisecond).Seconds(), 'f', -1, 64) + "\n"
+			}
+			body += "exit 0\n"
+			r, ran, err := sweepOverStandIn(t, body, 2, deadline, c.release)
+			if !errors.Is(err, c.want) || r.Clear() || r.String() != (agents.SweepResult{}).String() {
+				t.Fatalf("the sweep over a stand-in lsof that %s answered %s, %v, want %v beside the zero result", c.name, r, err, c.want)
+			}
+			if !c.release {
+				endedAtItsShare(t, ran, deadline)
 			}
 		})
 	}
@@ -283,13 +366,36 @@ func TestALsofRunEndsWhatItLeftInItsGroupInsideTheDeadline(t *testing.T) {
 // never as a timeout.
 func TestALsofRunThatExitsAtOnceIsNotWaitedOnUntilTheDeadline(t *testing.T) {
 	const deadline = 5 * time.Second
-	started := time.Now()
-	r, err := sweepOverStandIn(t, "exit 0\n", 1, deadline)
-	if took := time.Since(started); took > deadline/2 {
-		t.Fatalf("the sweep over a stand-in lsof that exits at once took %s, want well inside its deadline of %s", took, deadline)
+	r, took, err := sweepOverStandIn(t, "exit 0\n", 1, deadline, false)
+	if took > deadline/2 {
+		t.Fatalf("the stand-in lsof's run that exits at once took %s, want well inside its deadline of %s", took, deadline)
 	}
 	if err == nil || errors.Is(err, agents.ErrSweepTimedOut) || r.Clear() {
 		t.Fatalf("the sweep over a stand-in lsof that exits at once answered %s, %v, want the listing's own refusal and the zero result", r, err)
+	}
+}
+
+// TestALsofRunWhoseOutputIsHeldPastItsExitIsTimedOutBeforeItsShare is
+// review's case against holding every agents.ErrSweepTimedOut to lsof's share
+// of the deadline: a program standing where lsof is starts a descendant in a
+// process group of its own that holds the output open for as long as the
+// deadline, and exits at once. The sweep answers agents.ErrSweepTimedOut and
+// the zero result within the deadline, the output having not been complete
+// within the run's grace, and the descendant is gone by identifier once it
+// lets go. That answer comes one grace after lsof's exit rather than at its
+// share, which is why endedAtItsShare is asked only of a run whose lsof was
+// still running then. The descendant holds the output past the share as
+// well, so the answer is the same timeout whichever of the two ends the run.
+// The descendant is started under set -m, as
+// TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation
+// starts it.
+func TestALsofRunWhoseOutputIsHeldPastItsExitIsTimedOutBeforeItsShare(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	const deadline = 2 * time.Second
+	hold := strconv.FormatFloat(deadline.Seconds(), 'f', -1, 64)
+	r, _, err := sweepOverStandIn(t, "set -m\n/bin/sleep "+hold+" &\nset +m\necho $! >> PIDS\nexit 0\n", 2, deadline, false)
+	if !errors.Is(err, agents.ErrSweepTimedOut) || r.Clear() || r.String() != (agents.SweepResult{}).String() {
+		t.Fatalf("the sweep over a stand-in lsof whose output is held past its exit answered %s, %v, want the zero result and agents.ErrSweepTimedOut", r, err)
 	}
 }
 
@@ -302,11 +408,11 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 	blockers := hostBlockers(t)
 	h, _ := sweepHome(t, sweepBase(t), "timely")
 	dir := makeTaskCopy(t, h)
-	r, err := agents.SweepWithLsof(t.Context(), agents.NewSweeper(h, sweepGrace, nil), dir, "/usr/sbin/lsof", agents.LsofDeadline)
+	r, _, err := agents.SweepWithLsof(t.Context(), agents.NewSweeper(h, sweepGrace, nil), dir, "/usr/sbin/lsof", agents.LsofDeadline)
 	if err != nil {
 		t.Fatalf("sweeping an empty copy with the real lsof under the production deadline: %v", err)
 	}
-	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of an empty copy")
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep of an empty copy")
 	hostLimit(t, blockers, "that a timely lsof run clears the sweep")
 }
 
@@ -317,15 +423,16 @@ func TestASweepWhoseLsofExitsInTimeStillClears(t *testing.T) {
 // output open for hold, and exits at once. The run never takes that output
 // as whole once its deadline has passed or its context has ended: held past
 // the deadline it is agents.ErrSweepTimedOut within the deadline, never a
-// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled at the
-// cancellation, cancelled once the leader has exited and the descendant
+// bare exec.ErrWaitDelay; cancelled while held it is context.Canceled
+// within the run's grace of the cancellation, which is how long held output
+// is waited on, cancelled once the leader has exited and the descendant
 // holds the output, never a wait for the deadline, and that holds when the
 // descendant lets go of the output after the cancellation too, which is
 // never a success, and when the cancellation comes after the cutoff has
-// killed a leader that was still running, during the cleanup after it,
-// the cancellation wins over the timeout. The last row is the positive control: let go at once
-// and not cancelled, the same output is read and accepted, so the refusals
-// above are not the output's.
+// killed a leader that was still running, during the wait for its output
+// after that, the cancellation wins over the timeout. The last row is the
+// positive control: let go at once and not cancelled, the same output is
+// read and accepted, so the refusals above are not the output's.
 func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	requiresIdentityRead(t)
@@ -343,42 +450,37 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 		run      string
 		deadline time.Duration
 		cancel   bool
-		cancelAt time.Duration
 		want     error
 		within   time.Duration
 	}{
-		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, 0, agents.ErrSweepTimedOut, 500 * time.Millisecond},
-		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, 0, context.Canceled, 0},
-		{"cancelled after the cutoff while held", "3600", "3600", 2 * time.Second, true, 1900 * time.Millisecond, context.Canceled, 0},
-		{"let go at once", "0", "0.05", 2 * time.Second, false, 0, nil, 2 * time.Second},
+		{"held past the deadline", "3600", "0.05", 500 * time.Millisecond, false, agents.ErrSweepTimedOut, 500 * time.Millisecond},
+		{"held when cancelled", "3600", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go after the cancellation", "1", "0.05", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"cancelled after the cutoff while held", "3600", "3600", 5 * time.Second, true, context.Canceled, agents.LsofGrace(5 * time.Second)},
+		{"let go at once", "0", "0.05", 2 * time.Second, false, nil, 2 * time.Second},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			body := "/usr/bin/perl -e 'setpgrp(0,0); open(my $f, \">>\", $ARGV[0]) or die; print $f \"$$\\n\"; close $f; select(undef, undef, undef, $ARGV[1])' PIDS " + c.hold + " &\n" +
+			// The descendant is started under set -m, which POSIX defines as
+			// running every job in a process group of its own, so the shell
+			// starts it outside the leader's group rather than the descendant
+			// leaving that group itself, a step that raced the leader's exit
+			// and the group's ending that follows it. Without set -m every
+			// row whose descendant holds the output fails.
+			body := "set -m\n/bin/sleep " + c.hold + " &\nset +m\necho $! >> PIDS\n" +
 				"printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n/bin/sleep " + c.run + "\nexit 0\n"
 			program, pidFile := standInLsof(t, t.TempDir(), body)
 			ctx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
 			defer cancel()
 			// A cancelled row cancels once the leader has exited and the
 			// descendant is holding the output, so the cancellation lands in
-			// the output wait, and is timed from there. A row with cancelAt
-			// cancels at that point from the start instead: past the cutoff
-			// that killed a leader still running, during the cleanup that
-			// follows it, which a cancellation wins over the timeout.
+			// the output wait, and is timed from there. A leader that runs
+			// for an hour has exited only because the cutoff killed it, so
+			// that row's cancellation lands in the output wait after the
+			// cutoff, which a cancellation wins over the timeout.
 			started := make(chan time.Time, 1)
 			started <- time.Now()
 			returned := make(chan struct{})
-			if c.cancelAt > 0 {
-				<-started
-				go func() {
-					select {
-					case <-returned:
-					case <-time.After(c.cancelAt):
-						started <- time.Now()
-						cancel()
-					}
-				}()
-			} else if c.cancel {
+			if c.cancel {
 				<-started
 				go func() {
 					for {
@@ -432,5 +534,57 @@ func TestALsofRunWhoseOutputIsHeldOpenAnswersAtTheDeadlineOrTheCancellation(t *t
 				t.Fatalf("the read answered %v, %v, want %v and no working directories", cwds, err, c.want)
 			}
 		})
+	}
+}
+
+// TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole is review's case
+// against the accepted status: lsof's status of one is an answer, but only
+// when its output reached its end. A program standing where lsof is prints
+// this process's working directory, leaves a descendant in a group of its
+// own holding the output open with a second record still to print, and
+// exits with status one. The read refuses with agents.ErrSweepTimedOut and
+// returns no working directories, rather than the one record it had, since a
+// listing cut short would under-report a blocker (P6). The descendant waits
+// on a sleep of an hour, so its record comes past the grace by construction
+// rather than by a margin. The positive control is the same program with no
+// descendant, whose status of one is read with its record.
+func TestALsofRunExitingOneWhoseOutputWasCutIsNotReadAsWhole(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresIdentityRead(t)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := filepath.EvalSymlinks(wd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const deadline = 2 * time.Second
+	self := "printf 'p%s\\nfcwd\\nn%s\\n' " + strconv.Itoa(os.Getpid()) + " '" + cwd + "'\n"
+	other := "printf 'p1\\nfcwd\\nn/\\n'"
+
+	// Under set -m the shell starts the descendant as a job in a process
+	// group of its own, which is the one holder ending lsof's group does not
+	// reach; the descendant's group is ended by the cleanup, its leader
+	// verified by identity first.
+	body := "set -m\n(/bin/sleep 3600; " + other + ") &\nset +m\necho $! >> PIDS\n" + self + "exit 1\n"
+	program, pidFile := standInLsof(t, t.TempDir(), body)
+	cwds, err := agents.ReadCwdsWithLsof(context.Background(), program, deadline)
+	pids := startedPIDs(t, pidFile, 2)
+	if id, present, idErr := agents.Identify(pids[1]); idErr == nil && present {
+		t.Cleanup(func() {
+			if presence, err := id.Presence(); err == nil && presence == agents.PresencePresent {
+				_ = syscall.Kill(-id.PID, syscall.SIGKILL)
+			}
+		})
+	}
+	if !errors.Is(err, agents.ErrSweepTimedOut) || cwds != nil {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output held open answered %v, %v, want agents.ErrSweepTimedOut and no working directories", cwds, err)
+	}
+
+	control, _ := standInLsof(t, t.TempDir(), self+"exit 1\n")
+	cwds, err = agents.ReadCwdsWithLsof(context.Background(), control, deadline)
+	if err != nil || cwds[os.Getpid()] != cwd {
+		t.Fatalf("the read of a stand-in lsof that exited 1 with its output whole answered %v, %v, want this process's working directory %q", cwds, err, cwd)
 	}
 }

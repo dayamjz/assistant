@@ -6,6 +6,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -54,7 +55,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 	if err != nil {
 		t.Fatalf("recording the blocker: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, blocker.ID, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, blocker.ID, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the blocker's attempt: %v", err)
 	}
 	successor, err := records.CreateTask(ctx, store.Task{
@@ -95,6 +96,7 @@ func TestAPushThatCannotReplaceTheRunItDisplacedReleasesTheSuccessor(t *testing.
 		catalog:   agents.NewCatalog(),
 		starting:  make(map[branchKey]*branchGate),
 		advancing: make(map[string]*slot),
+		cfg:       config.Config{GitDeadline: config.DefaultGitDeadline},
 	}
 	if s.queue, err = s.newQueue(); err != nil {
 		t.Fatalf("building the queue: %v", err)

@@ -58,6 +58,32 @@
 // it is safe to call unconditionally and nothing else in TestMain has to know
 // about it.
 //
+// A package whose tests make a temporary directory does so with TempDir.
+// TestMain calls RegisterTempTag before anything that calls TempDir,
+// including a child re-execution that makes a directory, and calls
+// SweepTempDirs after every mode that makes this binary another process
+// and before the tests run. RegisterTempTag records the caller's directory,
+// inside the module, as the namespace. '_' in that directory and a slash
+// between directories encode differently, so two directories do not share
+// one. An absolute path is made relative by walking up to go.mod. A
+// non-absolute path is accepted only when it begins with the main module
+// path recorded in the binary, which is the form -trimpath leaves, and that
+// path is not opened. TempDir and SweepTempDirs use only that namespace and
+// refuse when none is recorded, so a call cannot stamp
+// another package's directories. SweepTempDirs removes a directory whose
+// recorded owner is gone and leaves a live owner and a name it cannot
+// parse. SocketDir, the tmux wrapper RunOwned installs, and a library a
+// test calls (storetest's database template) call TempDir, which stamps
+// the namespace the running TestMain recorded, so the next start of that
+// package reclaims them. ReclaimProcess removes, by pid, the directories of
+// a process that is gone, under any namespace TempDir can make; a test that
+// kills a child test process of its own calls it in its cleanup, as
+// internal/journey's TestATimedOutBuildDoesNotOutliveTheHarness does, the
+// one caller today. Nothing calls it on a test's
+// behalf: the owner watch and TestMain do not. A child killed before its own
+// sweep, by a test that does not call it, leaves its directories until its
+// own package next starts and sweeps its namespace.
+//
 // A package that forgets it would otherwise read the resulting agent failures
 // as the code under test misbehaving. The first New in a process refuses
 // instead: it puts one handshake invocation through the adapter, and a binary
@@ -84,7 +110,18 @@
 // whatever environment a test starts it with, and Tmux refuses a test that
 // does not run inside RunOwned. The check RunOwned runs once the tests have
 // returned fails the package naming every process of its binary, and every
-// process carrying its identity, still running.
+// process carrying its identity, still running. Before it, RunOwned has the
+// binary start no further process, and the check lists again until a
+// listing comes back empty, so what an exiting process starts is listed
+// too; only then, on a pass, does RunOwned end the sweep and remove the
+// wrapper's directory itself, so neither outlives a binary whose check
+// passed, and the sweep stays for a binary that failed its check or never
+// reached it. What neither the check nor the sweep can see is not ended
+// either way: a process running another program that is not read as
+// carrying the identity, which on some macOS machines includes Apple's
+// shells and /bin/sleep, whose environment the read cannot find there. Nor is
+// any file a test leaves removed: the wrapper's directory is the only path
+// RunOwned removes. RunOwned's doc comment owns those gaps.
 //
 // That wiring serves a caller who can be handed a Runner. One in another
 // process cannot be: internal/agents resolves the configured agent by name off
@@ -168,6 +205,33 @@
 // scripted envelope as Codex JSONL events rather than as one result object,
 // on the terms serveCodexExec and codexWire state. Call.Session reads the
 // thread after its resume subcommand.
+//
+// NewCursor's one-shot invocations are `cursor-agent --print --output-format
+// json`, told apart from the Claude Code adapter's by the grant flag only the
+// Cursor adapter writes, --mode or --force, before the "--". The prompt is
+// the one word after it, and a scripted envelope is written as the CLI's
+// result object, camelCase usage keys and all, on the terms serveCursorPrint
+// and cursorWire state. A one-shot whose options carry none of --trust,
+// --yolo, -f or --force is refused as the CLI refused one in a directory it
+// had not been told to trust: the recorded refusal on standard error, nothing
+// on standard output, status 1, no step consumed. The stand-in keeps no
+// record of a directory trusted earlier, so every directory is untrusted to
+// it, which is what a run's fresh copy is to the CLI.
+//
+// The OpenAI adapter's one-shot invocations carry --output-format and
+// neither --print nor --prompt-file, and take the prompt on standard input.
+// A runner built from agents.OpenAIFactory over New's Arguments reaches this
+// mode, and a scripted envelope is written as the result object that
+// adapter's reader decodes, two token counts under prompt_tokens and
+// completion_tokens, on the terms openaiWire states. No CLI's output backs
+// that shape: it is the reader's model, so a test over it holds the adapter
+// to its own reading and to nothing a real CLI printed.
+//
+// Where a CLI's output was recorded, internal/agents/testdata holds it, and
+// TestTheModelledUsageKeysAreTheRecordedOnes holds each one-shot wire's usage
+// keys here to the keys that recording carries, so a key the model drops or
+// misspells fails there rather than reading as unreported in every test
+// that runs against it.
 //
 // Line mode is the scripted adapter's: no --print at all, and no screen
 // reader flag. NewWorker builds

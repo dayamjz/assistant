@@ -298,8 +298,10 @@
 //
 // Every provider invocation runs under a deadline and in a process group of
 // its own, through internal/procgroup, which is PRD section 8's rule for an
-// external program. The deadline is the caller's context's, or
-// DefaultInvocationDeadline where that context carries none, as one derived
+// external program. The deadline is the caller's context's, or the
+// adapter's invocation deadline (WithInvocationDeadline, which
+// internal/service sets from the operator's gh_deadline, and otherwise
+// DefaultInvocationDeadline) where that context carries none, as one derived
 // through context.WithoutCancel does not. On linux and darwin the provider is
 // the leader of its group, and the whole group is sent SIGKILL when the
 // provider exits and when the deadline passes, before the provider is

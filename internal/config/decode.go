@@ -3,8 +3,11 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"path"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -389,6 +392,18 @@ func decodeCommandTimeout(k Key, v any) (any, error) {
 	return decodeBoundedDuration(k, v, "a command timeout", "30m", MinCommandTimeout, MaxCommandTimeout)
 }
 
+// decodeGitDeadline is decodeBoundedDuration between MinGitDeadline and
+// MaxGitDeadline.
+func decodeGitDeadline(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a git deadline", "10m", MinGitDeadline, MaxGitDeadline)
+}
+
+// decodeGHDeadline is decodeBoundedDuration between MinGHDeadline and
+// MaxGHDeadline.
+func decodeGHDeadline(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a gh deadline", "2m", MinGHDeadline, MaxGHDeadline)
+}
+
 // decodeRecheckWindow is decodeBoundedDuration between MinRecheckWindow and
 // MaxRecheckWindow.
 func decodeRecheckWindow(k Key, v any) (any, error) {
@@ -408,6 +423,22 @@ func decodeStallInspectionCount(k Key, v any) (any, error) {
 	}
 	if n > MaxStallInspectionCount {
 		return nil, keyErr(k, v, fmt.Sprintf("a stall inspection count may be at most %d", MaxStallInspectionCount))
+	}
+	return n, nil
+}
+
+// decodeStallHoldCount accepts an integer between MinStallHoldCount and
+// MaxStallHoldCount, and refuses one outside rather than clamping it.
+func decodeStallHoldCount(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < MinStallHoldCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall hold count must be at least %d", MinStallHoldCount))
+	}
+	if n > MaxStallHoldCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall hold count may be at most %d", MaxStallHoldCount))
 	}
 	return n, nil
 }
@@ -503,15 +534,12 @@ func decodeDelivery(k Key, v any) (any, error) {
 // deliveriesExpected lists the closed set as a refusal names it, in the
 // table's order: "gated" or "local".
 func deliveriesExpected() string {
-	names := Deliveries()
-	quoted := make([]string, len(names))
-	for i, d := range names {
-		quoted[i] = quote(string(d))
+	postures := Deliveries()
+	names := make([]string, len(postures))
+	for i, d := range postures {
+		names[i] = string(d)
 	}
-	if len(quoted) <= 2 {
-		return strings.Join(quoted, " or ")
-	}
-	return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
+	return oneOf(names)
 }
 
 // decodeSessionProvider reads a session provider, spelled exactly. Any other
@@ -525,7 +553,252 @@ func decodeSessionProvider(k Key, v any) (any, error) {
 	if p := SessionProvider(s); p.Recognized() {
 		return p, nil
 	}
-	return nil, keyErr(k, v, `expected "pipe" or "tmux"`)
+	names := make([]string, len(sessionProviders))
+	for i, p := range sessionProviders {
+		names[i] = string(p)
+	}
+	return nil, keyErr(k, v, "expected "+oneOf(names))
+}
+
+// oneOf lists names as a refusal offers them, quoted and in the order given:
+// "a" or "b", or "a", "b", or "c".
+func oneOf(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = quote(n)
+	}
+	if len(quoted) <= 2 {
+		return strings.Join(quoted, " or ")
+	}
+	return strings.Join(quoted[:len(quoted)-1], ", ") + ", or " + quoted[len(quoted)-1]
+}
+
+// decodeRemoteDisconnectGrace is decodeBoundedDuration between
+// MinRemoteDisconnectGrace and MaxRemoteDisconnectGrace.
+func decodeRemoteDisconnectGrace(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a remote disconnect grace", "30m", MinRemoteDisconnectGrace, MaxRemoteDisconnectGrace)
+}
+
+// limitFields are the names of PlacementLimits' fields as a document writes
+// them, for placement.local and for each remote host.
+var limitFields = []string{"max_workers", "min_free_disk", "max_load"}
+
+// decodePlacementLocal reads this machine's placement limits: an object
+// holding any of the three limits and nothing else. An empty object sets no
+// limit, as omitting the key does.
+func decodePlacementLocal(k Key, v any) (any, error) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, keyErr(k, v, "expected an object holding any of max_workers, min_free_disk, and max_load")
+	}
+	if field, found := unknownField(m, limitFields...); found {
+		return nil, keyErr(k, v, "has an unrecognized field "+quote(field))
+	}
+	return decodeLimits(m, func(value any, detail string) error { return keyErr(k, value, detail) })
+}
+
+// decodeLimits reads the three placement limits out of an object whose other
+// fields its caller has already accounted for. refuse builds a refusal of one
+// field's value, so a limit of a remote host says which host it belongs to.
+// Each limit is refused at zero rather than read as unset: an unset limit is
+// written by omitting it, so a zero in a Config always means unset and never
+// a limit of nothing.
+func decodeLimits(m map[string]any, refuse func(value any, detail string) error) (PlacementLimits, error) {
+	var l PlacementLimits
+	if raw, ok := m["max_workers"]; ok {
+		n, isNumber := raw.(json.Number)
+		i, err := n.Int64()
+		if !isNumber || err != nil {
+			return PlacementLimits{}, refuse(raw, "max_workers must be a whole number")
+		}
+		if i < 1 || int64(int(i)) != i {
+			return PlacementLimits{}, refuse(raw, "max_workers must be at least 1; omit it to set no limit")
+		}
+		l.MaxWorkers = int(i)
+	}
+	if raw, ok := m["min_free_disk"]; ok {
+		s, isString := raw.(string)
+		if !isString {
+			return PlacementLimits{}, refuse(raw, `min_free_disk must be a size with its unit, such as "20GiB"`)
+		}
+		n, detail := decodeByteSize(s)
+		if detail != "" {
+			return PlacementLimits{}, refuse(raw, "min_free_disk "+detail)
+		}
+		if n == 0 {
+			return PlacementLimits{}, refuse(raw, "min_free_disk must be more than zero; omit it to set no limit")
+		}
+		l.MinFreeDiskBytes = n
+	}
+	if raw, ok := m["max_load"]; ok {
+		n, isNumber := raw.(json.Number)
+		f, err := n.Float64()
+		if !isNumber || err != nil || math.IsInf(f, 0) || math.IsNaN(f) {
+			return PlacementLimits{}, refuse(raw, "max_load must be a number")
+		}
+		if f <= 0 {
+			return PlacementLimits{}, refuse(raw, "max_load must be more than zero; omit it to set no limit")
+		}
+		l.MaxLoad = f
+	}
+	return l, nil
+}
+
+// byteUnits are the units a size may be written in, each meaning exactly one
+// thing: the decimal units are powers of 1000 and the binary ones powers of
+// 1024, so "20GB" and "20GiB" are different sizes and neither is guessed.
+var byteUnits = []struct {
+	name  string
+	bytes int64
+}{
+	{"B", 1},
+	{"KB", 1000}, {"MB", 1000 * 1000}, {"GB", 1000 * 1000 * 1000}, {"TB", 1000 * 1000 * 1000 * 1000},
+	{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"TiB", 1 << 40},
+}
+
+// decodeByteSize reads a size written as a whole number of digits followed
+// at once by one of byteUnits' names, such as "20GiB" or "500MB", and returns
+// it in bytes, or a detail saying why it is refused. A bare number is refused
+// for decodeChecksTimeout's reason, since the unit is what a reader would
+// have to assume, and so are a fraction, a sign, a space, and a size too
+// large to count in bytes.
+func decodeByteSize(s string) (int64, string) {
+	digits := strings.TrimRightFunc(s, unicode.IsLetter)
+	unit := s[len(digits):]
+	names := make([]string, len(byteUnits))
+	var per int64
+	for i, u := range byteUnits {
+		names[i] = u.name
+		if u.name == unit {
+			per = u.bytes
+		}
+	}
+	if per == 0 {
+		return 0, "must end in a unit, one of " + strings.Join(names, ", ")
+	}
+	if digits == "" || strings.TrimLeft(digits, "0123456789") != "" {
+		return 0, `must be a whole number of digits followed at once by its unit, such as "20GiB"`
+	}
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || n > math.MaxInt64/per {
+		return 0, "is too large"
+	}
+	return n * per, ""
+}
+
+// decodeRemoteHosts reads the remote hosts: a list of at most MaxRemoteHosts
+// objects, each naming host, root, and bridge and optionally the three
+// placement limits, and nothing else. An empty list names no host, as
+// omitting the key does. Which session provider the hosts need is not
+// checked here, since a decoder consults no other key: requireHerdr checks
+// it once the document is read.
+func decodeRemoteHosts(k Key, v any) (any, error) {
+	items, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLen(k, v, "remote hosts", len(items), MaxRemoteHosts); err != nil {
+		return nil, err
+	}
+	out := make([]RemoteHost, 0, len(items))
+	for i, item := range items {
+		entry := listEntry{key: k, noun: "host", index: i, value: item}
+		m, ok := item.(map[string]any)
+		if !ok {
+			return nil, entry.err("must be an object with host, root, and bridge")
+		}
+		if field, found := unknownField(m, append([]string{"host", "root", "bridge"}, limitFields...)...); found {
+			return nil, entry.err("has an unrecognized field " + quote(field))
+		}
+		var h RemoteHost
+		for _, f := range []struct {
+			name string
+			into *string
+			path bool
+		}{{"host", &h.Host, false}, {"root", &h.Root, true}, {"bridge", &h.Bridge, true}} {
+			raw, ok := m[f.name]
+			if !ok {
+				return nil, entry.err("has no " + f.name)
+			}
+			s, isString := raw.(string)
+			if !isString {
+				return nil, entry.fieldErr(raw, f.name+" must be a string")
+			}
+			if err := checkPrintable(k, raw, entry.of(f.name), s); err != nil {
+				return nil, err
+			}
+			if detail := remoteHostField(f.name, s, f.path); detail != "" {
+				return nil, entry.fieldErr(raw, f.name+" "+detail)
+			}
+			*f.into = s
+		}
+		h.Limits, err = decodeLimits(m, entry.fieldErr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, nil
+}
+
+// remoteHostField checks one of a remote host's three text fields and returns
+// why it is refused, or "" when it is not. The host is one word that is not
+// an option, because it is handed to ssh as the destination. Root and bridge
+// are paths on the remote host, which is a POSIX system, so they are judged
+// by package path rather than by this machine's filepath: each is absolute
+// and in its one clean spelling, so the path a reader sees is the path used.
+// The root is never "/", which holds the system's own files and so can never
+// be the empty or absent root a bridge needs at first use.
+func remoteHostField(name, s string, isPath bool) string {
+	if !isPath {
+		switch {
+		case s == "":
+			return "is empty"
+		case strings.HasPrefix(s, "-"):
+			return "begins with \"-\", which ssh would read as an option"
+		case strings.IndexFunc(s, unicode.IsSpace) >= 0:
+			return "contains a space; name the host as your SSH configuration names it"
+		}
+		return ""
+	}
+	switch {
+	case !path.IsAbs(s):
+		return "must be an absolute path"
+	case path.Clean(s) != s:
+		return "must be written as " + quote(path.Clean(s))
+	case name == "root" && s == "/":
+		return "may not be the filesystem root"
+	}
+	return ""
+}
+
+// decodePlacementArch reads the architectures a repository's tasks may run
+// on: a list of distinct names, each one of Architectures. An empty list
+// allows every architecture, as omitting the key does. A name outside the
+// list is refused rather than kept, because a name no machine reports would
+// exclude every machine without saying so; that includes another program's
+// spelling of a known architecture, such as uname's "x86_64".
+func decodePlacementArch(k Key, v any) (any, error) {
+	items, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		entry := listEntry{key: k, noun: "architecture", index: i, value: item}
+		name, ok := item.(string)
+		if !ok {
+			return nil, entry.err("must be a string")
+		}
+		if !slices.Contains(architectures, name) {
+			return nil, entry.err("is not an architecture this program names; expected one of " + strings.Join(architectures, ", "))
+		}
+		if slices.Contains(out, name) {
+			return nil, entry.err("names " + quote(name) + " a second time")
+		}
+		out = append(out, name)
+	}
+	return out, nil
 }
 
 // decodeFixMessage accepts the fix commit subject template. It must contain

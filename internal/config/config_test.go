@@ -150,7 +150,7 @@ func TestPathRuleScopeAndMatching(t *testing.T) {
 	if c.ReviewPathRules[1].Matches("internal/config/key.go") {
 		t.Error("the docs rule must not match a file under internal")
 	}
-	if !c.ReviewPathRules[1].Matches("docs/prd.html") {
+	if !c.ReviewPathRules[1].Matches("docs/prd.md") {
 		t.Error("the docs rule must match a file under docs")
 	}
 }
@@ -169,12 +169,13 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 		KeyRunBudget, KeyIgnorePatterns, KeyReviewPathRules, KeyJudgePaths, KeyDocumentOwnership,
 		KeySuppressProjectInstructions, KeyNoCI, KeyChecksTimeout, KeySessionReuse,
 		KeyDecisionModel, KeySupervisionBeaconInterval, KeyEscalationWindow, KeyRecheckWindow,
-		KeyStallInspectionCount, KeyRelaunchAttempts, KeyStopGrace, KeyCommandTimeout, KeyPromotionWindow, KeyCommitFixMessage, KeyAllowPushedCommands,
+		KeyStallInspectionCount, KeyStallHoldCount, KeyRelaunchAttempts, KeyStopGrace, KeyCommandTimeout, KeyGitDeadline, KeyGHDeadline, KeyPromotionWindow, KeyCommitFixMessage, KeyAllowPushedCommands,
 		KeyAutonomyMerge,
 		KeyDelivery, KeyAllowStandingConsent, KeySessionProvider,
 		KeyUsageCeilingWindow, KeyUsageCeilingInputTokens, KeyUsageCeilingOutputTokens,
 		KeyUsageCeilingCacheReadTokens, KeyUsageCeilingCacheCreationTokens,
 		KeyNotifyCommand, KeyRunUsageBudgetOutputTokens,
+		KeyRemoteHosts, KeyPlacementLocal, KeyPlacementArch, KeyRemoteDisconnectGrace,
 	} {
 		if !seen[k] {
 			t.Errorf("%s is missing from Keys()", k)

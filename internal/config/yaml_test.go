@@ -32,7 +32,7 @@ judge_paths: [spec/**]
 document:
   ownership:
     - subject: the schema
-      document: docs/prd.html
+      document: docs/prd.md
 suppress_project_instructions: true
 no_ci: true
 checks_timeout: 30m
@@ -42,10 +42,13 @@ supervision_beacon_interval: 30s
 escalation_window: 15m
 recheck_window: 3h
 stall_inspection_count: 5
+stall_hold_count: 4
 relaunch_attempts: 3
 stop_grace: 45s
 promotion_window: 2h
 command_timeout: 45m
+git_deadline: 20m
+gh_deadline: 3m
 commit:
   fix_message: "fix(gate): {summary}"
 allow_pushed_commands: true
@@ -53,7 +56,7 @@ autonomy:
   merge: [owner/name]
 delivery: local
 allow_standing_consent: true
-session_provider: tmux
+session_provider: herdr
 usage_ceiling:
   window: 24h
   input_tokens: 1
@@ -64,6 +67,20 @@ notify:
   command: notify-me --channel private
 run_usage_budget:
   output_tokens: 5
+remote_hosts:
+  - host: studio
+    root: /Users/me/remote
+    bridge: /Users/me/bin/assistant
+    max_workers: 4
+    min_free_disk: 20GiB
+    max_load: 6.5
+placement:
+  local:
+    max_workers: 8
+    min_free_disk: 500MB
+    max_load: 12
+  arch: [arm64, amd64]
+remote_disconnect_grace: 2h
 `
 
 const wholeSchemaJSON = `{
@@ -75,7 +92,7 @@ const wholeSchemaJSON = `{
 	"ignore_patterns": ["docs/**", "*.md"],
 	"review": {"path_rules": [{"paths": ["internal/**"], "guidance": "check the contracts"}]},
 	"judge_paths": ["spec/**"],
-	"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.html"}]},
+	"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.md"}]},
 	"suppress_project_instructions": true,
 	"no_ci": true,
 	"checks_timeout": "30m",
@@ -85,19 +102,26 @@ const wholeSchemaJSON = `{
 	"escalation_window": "15m",
 	"recheck_window": "3h",
 	"stall_inspection_count": 5,
+	"stall_hold_count": 4,
 	"relaunch_attempts": 3,
 	"stop_grace": "45s",
 	"promotion_window": "2h",
 	"command_timeout": "45m",
+	"git_deadline": "20m",
+	"gh_deadline": "3m",
 	"commit": {"fix_message": "fix(gate): {summary}"},
 	"allow_pushed_commands": true,
 	"autonomy": {"merge": ["owner/name"]},
 	"delivery": "local",
 	"allow_standing_consent": true,
-	"session_provider": "tmux",
+	"session_provider": "herdr",
 	"usage_ceiling": {"window": "24h", "input_tokens": 1, "output_tokens": 2, "cache_read_tokens": 3, "cache_creation_tokens": 4},
 	"notify": {"command": "notify-me --channel private"},
-	"run_usage_budget": {"output_tokens": 5}
+	"run_usage_budget": {"output_tokens": 5},
+	"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
+		"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
+	"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
+	"remote_disconnect_grace": "2h"
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

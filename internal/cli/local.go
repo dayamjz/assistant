@@ -858,15 +858,28 @@ func codeHost(kind forge.RemoteKind, getenv func(string) string) machine.Check {
 // and checks stages, and the kind of remote it is, which is what codeHost
 // probes for. It reads the repository record when init has run, and otherwise
 // reads origin from the working copy, so doctor can say whether a run can open
-// a pull request before anything is recorded. An upstream it cannot read is
+// a pull request before anything is recorded. An upstream it cannot learn is
 // reported with the kind RemoteGitHub, which is the host codeHost probes when
 // nothing names another.
+//
+// Only errNoUpstream, no record and no remote named origin, is reported as
+// unrecorded. Every other error is a read that failed, of the record, of the
+// working copy or of origin, and is reported as unreadable with the error as
+// the detail, so a failure this function does not foresee is never told to a
+// person as a missing remote.
 func upstreamDelivery(ctx context.Context, records *store.Store, working string) (machine.Check, forge.RemoteKind) {
 	upstream, err := upstreamURL(ctx, records, working)
-	if err != nil {
+	if errors.Is(err, errNoUpstream) {
 		return machine.Check{
 			Name:   machine.CheckUpstream,
 			Kind:   machine.UpstreamKindUnrecorded,
+			Detail: err.Error(),
+		}, forge.RemoteGitHub
+	}
+	if err != nil {
+		return machine.Check{
+			Name:   machine.CheckUpstream,
+			Kind:   machine.UpstreamKindUnreadable,
 			Detail: err.Error(),
 		}, forge.RemoteGitHub
 	}
@@ -905,8 +918,18 @@ func upstreamDelivery(ctx context.Context, records *store.Store, working string)
 	}
 }
 
+// errNoUpstream is upstreamURL's answer for a working copy with no repository
+// record and no remote named origin, the one case where nothing names an
+// upstream rather than where reading what names one failed.
+var errNoUpstream = errors.New("this working copy has no remote named origin and no repository record yet; run assistant init")
+
 // upstreamURL is the upstream assistant init would record for this working
-// copy: the repository row when one exists, otherwise origin.
+// copy: the repository row when one exists, otherwise origin. It reports
+// errNoUpstream when neither exists, and any other error when reading either
+// failed. The working copy is read through a repository given
+// internal/redact's redactor, so a credential git repeats in its error is
+// removed from what this returns when it is in a shape that package
+// recognizes.
 func upstreamURL(ctx context.Context, records *store.Store, working string) (string, error) {
 	repository, err := records.RepositoryAt(ctx, working)
 	if err == nil {
@@ -921,7 +944,7 @@ func upstreamURL(ctx context.Context, records *store.Store, working string) (str
 	}
 	upstream, err := repo.RemoteURL(ctx, "origin")
 	if errors.Is(err, vcs.ErrRemoteNotFound) {
-		return "", fmt.Errorf("this working copy has no remote named origin and no repository record yet; run assistant init")
+		return "", errNoUpstream
 	}
 	if err != nil {
 		return "", fmt.Errorf("reading this working copy's origin: %w", err)

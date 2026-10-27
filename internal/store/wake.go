@@ -90,6 +90,21 @@ type WakeRequest struct {
 	Kind string
 	// Marker is the detector's idempotency component.
 	Marker string
+	// Surfaces names the kept work entry the wake raises, unknown for a
+	// wake that raises none. When the wake is appended the entry's
+	// surfaced_at is recorded in the same transaction, on
+	// AppendKeptWorkWake's terms, so no entry is left raised and not
+	// recorded as surfaced. An entry that does not exist is ErrNotFound.
+	Surfaces Optional[int64]
+	// Registers is a hold the wake registers, unknown for a wake that
+	// registers none: PRD section 6's stall hold, which the surface that
+	// reached the count registers. It is registered in the same transaction
+	// as the wake and the markers, under the same incarnation fence, on
+	// RegisterHold's terms: a key already there is that hold unchanged,
+	// open or answered, so a replayed surface registers nothing new. It must
+	// name the wake's task and no run, and is refused before anything is
+	// read otherwise.
+	Registers Optional[Hold]
 }
 
 // WakeDisposition is what AppendWakeWithMarkers did with the wake. The zero
@@ -140,12 +155,19 @@ type WakeMarkers struct {
 	// CaptureDigest is the digest of the terminal's normalized screen at the
 	// last capture, and unknown when the last pass could not capture it.
 	CaptureDigest Optional[string] `json:"capture_digest"`
-	// ChangeEpoch counts the passes whose capture digest differed from the
-	// one recorded before, with no row and an unknown digest counting as one
-	// absence. The store derives it in the transaction that records the new
-	// digest, so it is never handed over: a loop composing a terminal kind's
-	// marker reads it from here, and a terminal that returns to a screen it
-	// showed before carries a higher epoch than it did then.
+	// CaptureSession is the session reference CaptureDigest was read from,
+	// and unknown when no session was captured or the row was written before
+	// the column existed. A capture of another session is a change of
+	// screen whatever its digest, PRD section 6's "a relaunched worker's new
+	// terminal starts a count of its own".
+	CaptureSession Optional[string] `json:"capture_session"`
+	// ChangeEpoch counts the passes whose capture digest or capture session
+	// differed from the one recorded before, with no row and an unknown
+	// digest counting as one absence. The store derives it in the
+	// transaction that records the new capture, so it is never handed over:
+	// a loop composing a terminal kind's marker reads it from here, and a
+	// terminal that returns to a screen it showed before carries a higher
+	// epoch than it did then.
 	ChangeEpoch int64 `json:"change_epoch"`
 	// EventSequence is the highest task event sequence the loop had seen.
 	EventSequence int64 `json:"event_sequence"`
@@ -160,6 +182,14 @@ type WakeMarkers struct {
 	// surfaced, PRD section 11's repeated stall, which the next escalation of
 	// the same stall carries in its marker.
 	StallRepetitions int64 `json:"stall_repetitions"`
+	// StallBase is the value StallRepetitions had when the loop last read
+	// an approve answered to a stall hold on the current screen, PRD section
+	// 6's "the count of its screen starts again from zero": the count a
+	// surface is classified on is StallRepetitions less StallBase. It is
+	// zero when no approve restarted the count, and a changed screen resets
+	// it with StallRepetitions. A row written before the column existed
+	// reads zero.
+	StallBase int64 `json:"stall_base"`
 	// UnobservedSince is when the terminal first could not be observed, and
 	// unknown while it is observed.
 	UnobservedSince Optional[time.Time] `json:"unobserved_since"`
@@ -175,14 +205,16 @@ type WakeMarkers struct {
 
 // MarkerAdvance is what a pass of the loop hands over to become the task's
 // markers: every column of WakeMarkers the loop decides. ChangeEpoch is not
-// among them, because the store derives it from the digest, and UpdatedAt is
-// assigned at the write.
+// among them, because the store derives it from the digest and the session,
+// and UpdatedAt is assigned at the write.
 type MarkerAdvance struct {
 	CaptureDigest    Optional[string]
+	CaptureSession   Optional[string]
 	EventSequence    int64
 	Surfaced         bool
 	WindowStart      Optional[time.Time]
 	StallRepetitions int64
+	StallBase        int64
 	UnobservedSince  Optional[time.Time]
 	GoneSurfacedAt   Optional[time.Time]
 }
@@ -197,6 +229,9 @@ func (a MarkerAdvance) validate(taskID string) error {
 	if a.StallRepetitions < 0 {
 		return fmt.Errorf("store: task %s: a stall repetition count of %d is not a count", taskID, a.StallRepetitions)
 	}
+	if a.StallBase < 0 || a.StallBase > a.StallRepetitions {
+		return fmt.Errorf("store: task %s: a stall base of %d is not within the repetition count %d", taskID, a.StallBase, a.StallRepetitions)
+	}
 	return nil
 }
 
@@ -209,6 +244,14 @@ func (w WakeRequest) validate() error {
 	}
 	if strings.TrimSpace(w.Marker) == "" {
 		return fmt.Errorf("store: task %s: a %s wake has no marker", w.TaskID, w.Kind)
+	}
+	if h, ok := w.Registers.Get(); ok {
+		if err := validateHold(h); err != nil {
+			return err
+		}
+		if task, named := h.TaskID.Get(); !named || task != w.TaskID || h.RunID.IsKnown() {
+			return fmt.Errorf("store: task %s: a %s wake registers hold %s, which does not name the task alone", w.TaskID, w.Kind, h.Key)
+		}
 	}
 	return nil
 }
@@ -223,7 +266,8 @@ func (w WakeRequest) validate() error {
 // to decide again. What is taken is the incarnation: the write is refused
 // with ErrStaleIncarnation, markers included, when inc is not the current
 // one, decided inside the same transaction, so a loop the watchdog replaced
-// writes nothing however late it unwedges.
+// writes nothing however late it unwedges. A hold the request registers is
+// part of the same write and the same fence.
 //
 // A row with the same task, kind and marker that is still queued is the same
 // wake, replayed: the answer is WakeAlreadyQueued, the markers are advanced
@@ -253,6 +297,11 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 			return err
 		}
 		out.Markers = markers
+		if h, ok := w.Registers.Get(); ok {
+			if err := insertHold(ctx, tx, h); err != nil {
+				return err
+			}
+		}
 		existing, err := wakeByKey(ctx, tx, w)
 		switch {
 		case err == nil && existing.Queued():
@@ -264,16 +313,22 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 		case !isNoRows(err):
 			return err
 		}
+		now := nowUTC()
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO wake (task_id, kind, marker, created_at, handled_at, acknowledged_by)
 			VALUES (?, ?, ?, ?, NULL, NULL)`,
-			w.TaskID, w.Kind, w.Marker, encodeTime(nowUTC()))
+			w.TaskID, w.Kind, w.Marker, encodeTime(now))
 		if err != nil {
 			return err
 		}
 		id, err := result.LastInsertId()
 		if err != nil {
 			return err
+		}
+		if entry, ok := w.Surfaces.Get(); ok {
+			if err := markKeptWorkSurfacedTx(ctx, tx, entry, now); err != nil {
+				return err
+			}
 		}
 		appended, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
 		if err != nil {
@@ -342,7 +397,7 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	switch {
 	case err == nil:
 		epoch = before.ChangeEpoch
-		if before.CaptureDigest != a.CaptureDigest {
+		if before.CaptureDigest != a.CaptureDigest || before.CaptureSession != a.CaptureSession {
 			epoch++
 		}
 	case isNoRows(err):
@@ -358,21 +413,23 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	}
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO wake_marker (task_id, capture_digest, change_epoch, event_sequence, surfaced,
-			window_start, stall_repetitions, unobserved_since, gone_surfaced_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO wake_marker (task_id, capture_digest, capture_session, change_epoch, event_sequence, surfaced,
+			window_start, stall_repetitions, stall_base, unobserved_since, gone_surfaced_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(task_id) DO UPDATE SET
 			capture_digest = excluded.capture_digest,
+			capture_session = excluded.capture_session,
 			change_epoch = excluded.change_epoch,
 			event_sequence = excluded.event_sequence,
 			surfaced = excluded.surfaced,
 			window_start = excluded.window_start,
 			stall_repetitions = excluded.stall_repetitions,
+			stall_base = excluded.stall_base,
 			unobserved_since = excluded.unobserved_since,
 			gone_surfaced_at = excluded.gone_surfaced_at,
 			updated_at = excluded.updated_at`,
-		taskID, a.CaptureDigest, epoch, a.EventSequence, surfaced,
-		optionalTimeText(a.WindowStart), a.StallRepetitions, optionalTimeText(a.UnobservedSince),
+		taskID, a.CaptureDigest, a.CaptureSession, epoch, a.EventSequence, surfaced,
+		optionalTimeText(a.WindowStart), a.StallRepetitions, a.StallBase, optionalTimeText(a.UnobservedSince),
 		optionalTimeText(a.GoneSurfacedAt), encodeTime(now),
 	); err != nil {
 		return WakeMarkers{}, err
@@ -380,8 +437,8 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	return wakeMarkersOf(ctx, tx, taskID)
 }
 
-const wakeMarkerColumns = `SELECT task_id, capture_digest, change_epoch, event_sequence, surfaced,
-	window_start, stall_repetitions, unobserved_since, gone_surfaced_at, updated_at`
+const wakeMarkerColumns = `SELECT task_id, capture_digest, capture_session, change_epoch, event_sequence, surfaced,
+	window_start, stall_repetitions, coalesce(stall_base, 0), unobserved_since, gone_surfaced_at, updated_at`
 
 func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, error) {
 	var m WakeMarkers
@@ -389,8 +446,8 @@ func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, 
 	var window, unobserved, goneSurfaced Optional[string]
 	var updated string
 	if err := q.QueryRowContext(ctx, wakeMarkerColumns+` FROM wake_marker WHERE task_id = ?`, taskID).Scan(
-		&m.TaskID, &m.CaptureDigest, &m.ChangeEpoch, &m.EventSequence, &surfaced,
-		&window, &m.StallRepetitions, &unobserved, &goneSurfaced, &updated,
+		&m.TaskID, &m.CaptureDigest, &m.CaptureSession, &m.ChangeEpoch, &m.EventSequence, &surfaced,
+		&window, &m.StallRepetitions, &m.StallBase, &unobserved, &goneSurfaced, &updated,
 	); err != nil {
 		return WakeMarkers{}, err
 	}
@@ -726,36 +783,49 @@ func drainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]
 	return out, nil
 }
 
-// DrainBoth is DrainWakes and DrainDomainWakes under one handout in one
-// transaction: the task rows, then the domain rows, each bounded by limit,
-// and the second none on a subordinate's route. Either both shapes are
-// handed out or neither is, so a drain whose second half fails, or whose
-// context ends between the two, leaves no row handed out that its caller
-// was not given.
-func (s *Store) DrainBoth(ctx context.Context, limit int, h WakeHandout) ([]Wake, []DomainWake, error) {
+// Drained is one drain of every shape the queue has, handed out under one
+// handout in one transaction.
+type Drained struct {
+	Wakes         []Wake
+	DomainWakes   []DomainWake
+	KeptWorkWakes []KeptWorkWake
+}
+
+// DrainAll is DrainWakes, DrainDomainWakes and the kept-work wakes' drain
+// under one handout in one transaction: the task rows, then the domain
+// rows, then the kept-work rows, each bounded by limit, and the last two
+// none on a subordinate's route. Every shape is handed out or none is, so
+// a drain whose later half fails, or whose context ends between two, leaves
+// no row handed out that its caller was not given.
+func (s *Store) DrainAll(ctx context.Context, limit int, h WakeHandout) (Drained, error) {
 	if limit < 1 {
-		return nil, nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+		return Drained{}, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
 	}
 	if err := h.validate(); err != nil {
-		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+		return Drained{}, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	var wakes []Wake
-	var domainWakes []DomainWake
+	var out Drained
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		if wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
+		if out.Wakes, err = drainWakesTx(ctx, tx, limit, h); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		domainWakes, err = drainDomainWakesTx(ctx, tx, limit, h)
+		if out.DomainWakes, err = drainDomainWakesTx(ctx, tx, limit, h); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		out.KeptWorkWakes, err = drainKeptWorkWakesTx(ctx, tx, limit, h)
 		return err
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("store: draining wakes: %w", err)
+		return Drained{}, fmt.Errorf("store: draining wakes: %w", err)
 	}
-	return wakes, domainWakes, nil
+	return out, nil
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.
@@ -862,15 +932,15 @@ func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now s
 	return nil
 }
 
-// AcknowledgeAll acknowledges task wakes and domain wakes in one
-// transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes' terms for
-// each shape: every row of both shapes is checked before any is written,
-// so a batch naming one row of either shape that is unknown or already
-// acknowledged closes nothing, which is the whole-batch refusal an
-// acknowledgement naming both shapes is held to. A batch naming no row of
-// either shape is refused.
-func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, by Acknowledger) error {
-	if len(wakes)+len(domainWakes) == 0 {
+// AcknowledgeAll acknowledges task wakes, domain wakes and kept-work wakes
+// in one transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes'
+// terms for each shape: every row of every shape is checked before any is
+// written, so a batch naming one row of any shape that is unknown or
+// already acknowledged closes nothing, which is the whole-batch refusal an
+// acknowledgement naming several shapes is held to. A batch naming no row
+// of any shape is refused.
+func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWorkWakes []int64, by Acknowledger) error {
+	if len(wakes)+len(domainWakes)+len(keptWorkWakes) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")
 	}
 	who, err := acknowledgerText(by)
@@ -885,7 +955,12 @@ func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes []int64, 
 			}
 		}
 		if len(domainWakes) > 0 {
-			return acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now)
+			if err := acknowledgeDomainWakesTx(ctx, tx, domainWakes, who, now); err != nil {
+				return err
+			}
+		}
+		if len(keptWorkWakes) > 0 {
+			return keptWorkWakeShape.acknowledgeTx(ctx, tx, keptWorkWakes, who, now)
 		}
 		return nil
 	})

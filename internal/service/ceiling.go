@@ -35,6 +35,17 @@ import (
 // because some call in the window left a set count unreported, and a record
 // that could not be read. Missing information is never read as room.
 //
+// The one call whose silence on a count is not missing information is a call
+// by an agent that declares it does not report that count, in its adapter's
+// declaration in internal/agents' capability table. declarations hands the
+// comparison this service's catalog's lookup of that declaration by the
+// agent name the record carries, so an agent that is not installed here
+// still has its declaration read, and an agent this build has no adapter
+// for, such as one an earlier build recorded, has none and is held to every
+// count. The comparison leaves an exempt call out of that count and says how
+// many it left out; the usage view reads the same lookup, so the two report
+// one comparison.
+//
 // A refusal reaching a stage is not a failure of the run and does not strand
 // it. observe.go turns it into a hold: the stage reports
 // machine.CeilingHeldReport, an ask for a person whose remedy lies outside
@@ -55,15 +66,33 @@ import (
 //     owns that drop. A worker's own turns and any price are not in the
 //     record, so not in the ceiling either.
 //   - A call that reported no count the ceiling is set on refuses every
-//     start while it stays in the window. That is the fail-closed reading of
-//     an unknown, and the remedy is the person's: a ceiling on counts their
-//     agents report, or the window passing.
+//     start while it stays in the window, unless its agent declares it does
+//     not report that count. That is the fail-closed reading of an unknown,
+//     and the remedy is the person's: a ceiling on counts their agents
+//     report, or the window passing. A failed call that printed no usage is
+//     such a call even by an agent that declares every count.
+//   - A count left out for an agent that declares it does not report it is
+//     not bounded for that agent at all: its calls may spend any amount of
+//     it and the total, which is of the calls that reported it, understates
+//     what was spent by them.
 //   - The ceiling is read when the service opens. A changed ceiling takes
 //     effect on the next start of the service, as every global key does.
 //   - Approving the hold carries the run past a stage whose agent call did
 //     not run, as approving any hold of a stage that could not establish
-//     anything does; the row says so. The hold offers the stage's ordinary
-//     answers, and none of them retries the refused call in place.
+//     anything does; the row says so.
+//   - Retrying is the hold's answer for when there is room again, PRD
+//     section 5's Retry: the finding is marked as a call that never started,
+//     findings.Finding.NotStarted, which is what offers the retry, and
+//     internal/pipeline's retry.go owns the cycle and its bound. It runs the
+//     stage from the top, not the refused call in place: a stage body whose
+//     call was refused starts over, and a fix round the ceiling refused is
+//     taken again only if the stage, run first, still reports something to
+//     fix, so a failure that cleared while the run held costs no fixer call.
+//     That round is taken as the one the refusal counted, so it spends none
+//     of the stage's round limit again; retry.go's rerunEntry says how.
+//     checkRetry in runs.go takes no reading of its own: the re-run's calls
+//     are admitted or refused here like any other, so a retry with no room
+//     holds on the same question again.
 //   - Only calls through containRunner are held to it. The decision-model
 //     checks reach their provider through internal/judge, not through an
 //     agent, and a task's worker is not wrapped here at all.
@@ -102,7 +131,18 @@ func (s *Service) ceilingStanding(ctx context.Context) machine.UsageCeiling {
 	if err != nil {
 		return machine.CeilingUnreadable(ceiling, readAt, err)
 	}
-	return machine.CeilingOf(ceiling, readAt, rows)
+	return machine.CeilingOf(ceiling, readAt, rows, s.declarations())
+}
+
+// declarations is how the ceiling reads an agent's declaration: this
+// service's catalog's, by name, without building the agent. A service with
+// no catalog holds no declaration for any agent, so every call is held to
+// every count.
+func (s *Service) declarations() machine.Declarations {
+	if s.catalog == nil {
+		return nil
+	}
+	return s.catalog.Declared
 }
 
 // ceilingRefusal reports the comparison a refusal carries, when err is one.

@@ -62,6 +62,7 @@ func (e exitStatus) Error() string { return "exited with status " + strconv.Itoa
 // with git after each push.
 func TestAPushFromAShellAtATerminalIsAdmittedThroughTheChain(t *testing.T) {
 	t.Parallel()
+	needsTerminal(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

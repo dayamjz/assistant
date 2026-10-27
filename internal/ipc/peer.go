@@ -111,15 +111,3 @@ func LocalMarker(lookup func(string) string) Marker {
 	}
 	return Marker(lookup(MarkerVar))
 }
-
-// rawControl runs f on the connection's file descriptor.
-func rawControl(uc *net.UnixConn, f func(fd uintptr)) error {
-	raw, err := uc.SyscallConn()
-	if err != nil {
-		return fmt.Errorf("connection has no file descriptor: %w", err)
-	}
-	if err := raw.Control(f); err != nil {
-		return fmt.Errorf("connection file descriptor is unusable: %w", err)
-	}
-	return nil
-}

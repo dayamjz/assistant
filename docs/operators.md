@@ -2,8 +2,23 @@
 
 This is a short guide for the person or agent that pushes work through the gate
 and for whoever owns the repository's CI and merge settings. It describes what
-this build does today. [`prd.html`](prd.html) is the specification, and where
+this build does today. [`prd.md`](prd.md) is the specification, and where
 this page and the code could disagree, the code and the PRD win.
+
+## Start here
+
+This is the detailed **operator reference**, not a short tutorial. Use the [README](../README.md) for a product overview and quick start; use this page when commands, configuration trust, safety decisions or failure recovery matter. The [PRD](prd.md) remains the contract.
+
+| Your question | Read |
+| --- | --- |
+| How do I set up the gate and send a change? | [Push through the assistant remote](#push-through-the-assistant-remote) and [A first run, step by step](#a-first-run-step-by-step) |
+| What should I do when execution stops? | [Answering a hold](#answering-a-hold) and [Bounding what one run spends](#bounding-what-one-run-spends) |
+| How do I run and supervise a fleet? | [Catching up on a fleet](#catching-up-on-a-fleet), [Waiting on a fleet](#waiting-on-a-fleet), and [Delegating a domain](#delegating-a-domain) |
+| How is unfinished work protected? | [Kept work](#kept-work) |
+| Can it merge without me? | [Unattended operating posture](#unattended-operating-posture), [Keep your CI required](#keep-your-ci-required), and [Merge order and stacking](#merge-order-and-stacking) |
+| What is not guaranteed? | [What a pass does not cover](#what-a-pass-does-not-cover) |
+
+**Safety reading rule:** A run **holds** when it needs a person's decision and **parks** when a bound ends its progress. Missing evidence is not success; do not bypass a refusal by assuming the underlying state. The details below are intentionally retained for agents and operators making decisions.
 
 ## Push through the `assistant` remote
 
@@ -172,6 +187,20 @@ environment doctor runs in, so an identity set only in variables such as
 `GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
 make it disagree with what a run meets.
 
+When the rebase leaves nothing to change, because the default branch already
+carries the same change under another commit, the run ends there with every
+later stage skipped and nothing pushed. If the branch was not on the upstream
+when the run looked, and every commit of the run's own is present by content
+in the default branch it read, the run also records that nothing was left to
+deliver, and the task it belongs to lands: its worker is ended, its copy is
+removed once the cleanup proves the work is on the default branch (or kept as
+kept work when it holds anything more), and a task queued behind it goes on.
+`assistant tasks` and the catch-up say the change was already on the shared
+branch and nothing was delivered, never that it merged. Any other run that
+ends this way, such as one whose branch was already published or whose change
+the default branch applied and then reverted, lands nothing, and its task
+stays where its run leaves it.
+
 ## Answering a hold
 
 `assistant --answer approved`, `skipped`, or `cancelled` answers the decision a
@@ -256,6 +285,28 @@ base, and bringing the base in would rewrite their commits: approving carries
 the run on from the branch without the base's newest commits. Approving past
 `rebase-branch-overlap`, `rebase-branch-conflict` or
 `rebase-branch-replay-unverified` reaches the push stage's refusal below.
+
+Those holds are for a branch that already contained commits the run was not
+given. A conflict while rebasing onto the freshly fetched base is not a hold.
+The rebase stays in progress and the copy stands on that base with the
+conflicts in the working tree. The stage reports a fix finding,
+`rebase-conflict`, and a fix round resolves the conflicted files in place.
+The round commits a resolution that differs from the commit the rebase
+stopped on and continues, so that commit is not replayed again ahead of the
+fix. A resolution that matches the stopped commit skips the step and keeps a
+step already replayed. A round that leaves a conflicted file as the conflict
+left it commits nothing and leaves the rebase stopped. So does a round that
+leaves the file holding a line which starts with seven `<`, seven `|`, or
+seven `>` and which none of that conflict's sides held. A shorter run is not
+that line. A `conflict-marker-size` attribute can ask git to write one, and a
+round that changes the file while leaving that shorter marker in it can
+commit the file. `MarkerBaseline` names the other lines that reading does
+not tell apart from content. The round does not abort: an abort would
+discard a step an earlier round of this rebase had already committed. The
+stage's next execution reports that same conflict and does not start another
+rebase. A conflict the code host reports after the push is the other path,
+under Keep your CI required: that rebase is abandoned, the run holds, and no
+automatic fix round is offered.
 
 A push hold whose finding is `push-refused` with reason `would-discard` means
 the branch holds commits the run's commit does not contain and that the run
@@ -354,10 +405,12 @@ What follows for whoever runs the service:
   point. A worker an earlier service started is ended by the identity its
   session reference recorded, and one that cannot be verified is named in
   the service log and left running. Once the worker is ended, a copy that
-  holds work, a commit or a file no commit records, is recorded as one
-  kept-work entry (see Kept work below); a copy exactly as its dispatch cut
-  it holds nothing to keep and gets none. Like every entry, it does not
-  hold a new task in the project yet.
+  holds something the default branch lacks, a commit or a file no commit
+  records, is recorded as one kept-work entry (see Kept work below), and
+  like every entry it holds new tasks in the project until it is answered;
+  a copy holding nothing the default branch lacks gets none. A promotion
+  answers that entry carry on, since the relaunched worker continues in the
+  same copy.
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on
@@ -458,7 +511,7 @@ otherwise the read opens with a digest. That digest is one line counting what fo
 
 - the decisions waiting on you, every open hold and every run held at a
   decision;
-- what was merged or cleared away since you last marked what you had seen;
+- what was merged, found already on the shared branch, or cleared away since you last marked what you had seen;
 - the work under way, and the changes being validated right now;
 - the work that stopped without asking you anything.
 
@@ -472,8 +525,8 @@ tasks there are, and the task's own line says the worker was not seen at it.
 That line is the same in `assistant tasks`. Only a worker whose terminal was
 observed live reads as a worker on the work.
 
-`assistant watch --once --mark-seen` marks as seen exactly the merged and
-cleared-away work that read showed, so the next read, and every read after
+`assistant watch --once --mark-seen` marks as seen exactly the merged,
+already-shared and cleared-away work that read showed, so the next read, and every read after
 it, counts only what landed since. Nothing else is filtered: a decision is
 counted until it is answered, and what is under way or stopped is counted for
 as long as it is true.
@@ -498,19 +551,34 @@ catch-up read (`kept` in `--json`) and in `assistant status`
 (`kept_work` in `--json`): a working copy's status lists the entries whose
 repository is that working copy's, and every status lists the entries whose
 owner names no repository, such as an investigation task started without
-one, because those belong to no working copy. An entry about a task, or about a run
-attributed to a task, also raises one `kept-work` wake, which reaches the
-coordinator and the notify command like any other wake. This build
-deviates from PRD section 6 for an entry about a run no task names, such as
-the run your own push started: it is listed by `status` and the catch-up
-read, but it never reaches the private channel or the coordinator until
-#458 lands.
+one, because those belong to no working copy. Each entry also raises one
+`kept-work` wake, which reaches the coordinator and the notify command like
+any other wake: about the task, for an entry about a task or about a run
+attributed to a task, and otherwise about the entry itself, for an entry
+about a run no task names, such as the run your own push started. The
+second is a wake of its own shape: the notify command's line names the
+entry in `kept_work` and its `project` and `branch` rather than a
+`task_id`, `assistant coordinator wakes` lists it under the project and
+then the branch, and the coordinator acknowledges it as `kNUMBER`, a
+number of its own. Acknowledging the wake answers nothing: the entry is
+listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
-its commit to the upstream branch, the next cleanup of it (for a run's copy,
-the next service start) removes the copy on that proof and closes the entry
-as removed on a proof, recorded as the program's and never as a discard; a
-closed entry is no longer listed. Nothing else removes a kept copy. A
+its commit to the upstream branch, the next cleanup of it removes the copy on
+that proof and closes the entry as removed on a proof, recorded as the
+program's and never as a discard; a closed entry is no longer listed. For a
+run's copy the next cleanup is the next service start. For a task's copy
+whose worker has stopped, the service asks again every five minutes, at most
+six times for that stopped worker, and again when the coordinator stops the
+task or the service starts. A delivery whose commits the gate rebased before publishing them is
+followed through the gate's own record of that rebase, so the copy, which
+still holds the commits under their old identifiers, is removed once the
+published ones are on the task's upstream branch or in the merged pull
+request and hold everything the copy's commits held. A rebase that left
+something out, such as a file only a merge commit added, is not recorded,
+and neither is a later rebase once a fix round took the delivered change
+out or rewrote its lines, so the copy is kept. When the copy is kept
+instead, the service log names each check and what it found. Nothing else removes a kept copy. A
 service that stops between removing the copy and marking it removed leaves
 the entry open; the next start completes the mark from the recorded proof
 and closes it. An entry whose copy is gone with no proof recorded, a copy
@@ -519,11 +587,19 @@ stays open.
 
 `assistant eject --confirm` is refused while the repository has an open
 kept-work entry, before the gate is touched, and the refusal names each
-entry's copy, whose it was and the commits it holds. Until answering kept
-work ships (#411 part 2), the way past it is the work landing: once its
-commits are on the upstream branch or in the default branch, the next
-service start removes the copy on that proof and closes the entry. Part 2's
-discard will be your other way.
+entry's copy, whose it was and the commits it holds. The ways past it are
+an answer that closes the entry (land or carry on, below) or the work
+landing: once its commits are on the upstream branch or in the default
+branch, the next service start removes the copy on that proof and closes
+the entry. Removal on a discard is not in this build.
+
+Eject is also refused, before the gate is touched, while a `kept-work` wake
+about one of the repository's entries is still unacknowledged, even once
+the entry is closed, because the wake stays actionable until the coordinator
+acknowledges it, and forgetting the repository would delete it. The refusal
+names the wake by its number; once the coordinator acknowledges it as
+`kNUMBER`, eject removes the closed entry, its wake and the wake's
+notification record with the run.
 
 Eject is also refused while any run copy of the repository still stands on
 disk, whether its run's cleanup has not decided it yet or kept it, and the
@@ -535,10 +611,174 @@ reserves the removal, and no new run of the repository starts until the
 eject finishes; a service that starts after an eject died releases that
 reservation.
 
-This build records and surfaces kept work and does not yet hold dispatch:
-a new task in a project with an open entry still dispatches. Answering an
-entry (land, carry on or discard) and holding new task work until its
-entries are answered are #411 part 2.
+While a project has an open kept-work entry, no new task in that project
+starts: the task is recorded, `assistant --json tasks` shows it waiting and
+names the entries under `kept_work`, and it starts on its own once every
+entry is answered or closed. When whether kept work holds the task could not
+be read for an answer, the answer says so (`kept_work_unread`) and names no
+entry, rather than reading as a worker being launched. Kept work in one project never holds another,
+a task whose worker was already launched is not held (its relaunch goes
+ahead), and your own push always starts its run, whose answer names the
+project's open entries.
+
+An entry is answered the way a hold is: `assistant --task ID --answer land
+--hold kept-work/N` for a task's copy, or `assistant --run=RUN --answer land
+--hold kept-work/N` for a run's, where `kept-work/N` is the entry's key and
+`assistant --json status` shows the entry's number and owner. This build
+takes land: the copy's commit is brought into the gate and a run of the
+entry's branch starts at it, as a push to the gate would start one, and the
+entry's tasks start. A landing decides from the copy as it stands when you
+answer, by the same reading a discard shows you, never from what the entry
+recorded when the copy was kept. It carries the copy's HEAD and commits
+only, so it is refused, recording nothing, when the copy holds a path no
+commit records (a changed, new, staged or deleted file, one git ignores
+included, each named), a stash, or anything HEAD does not carry that the
+default branch lacks: a commit on another branch, one only a reflog
+records (an amended or rebased-away commit among them), or a tag the
+upstream does not have. What the upstream already holds (its tags and
+branches, cloned or fetched into the copy) is not refused, and neither is
+a file git reports clean because only its line endings or filters differ.
+Put that work on the branch, or remove it (`git reflog expire` for a
+reflog's record), and answer again. It is refused for an investigation's copy too,
+whose delivery is a promotion. The entry stays open and listed until the
+run has started, and only then is it answered land; if the run cannot be
+started, the answer is refused naming why and the entry stays open for
+another answer. A land answer a stopped service recorded and did not carry
+out is carried out at the next start, checked again the same way.
+
+Carry on, `--answer carry-on` with the same flags, creates a new task of
+the same project, shape and branch whose copy is the kept copy, moved to
+the new task's own place and asserted the way every task's copy is before
+anything is written into it; a delivery task's successor is recorded under
+the outlived task's delivery posture when that is stricter than the
+project's now, and under the project's otherwise, so continued work is
+never held to less than the task it continues was; the task the copy outlived keeps its record,
+the new task's instructions are the old intake text, or for a promoted
+task the intent it was promoted with, with a note saying what is already
+there, and the task dispatches into the copy as any task
+does. The entry stays open and listed until the new task owns the copy,
+and only then is it answered carry on; if the new task cannot be created
+(its role is no longer configured, say), nothing is moved, the answer is
+refused naming why, and the entry stays open for another answer.
+Carrying on points the gate's remote at the gate and puts HEAD where
+the task's shape has it, and removes no remote and moves or renames no
+branch, since any of that can leave a commit with nothing naming it: a
+copy with any other remote (any remote at all, for an investigation's
+copy), or a delivery copy whose task branch stands somewhere other than
+HEAD, or whose task branch cannot be created at HEAD because a branch of
+the copy's is in the way of its name (a branch `topic/side` beside the
+task branch `topic`, or `topic` beside `topic/x`), is refused with
+nothing recorded and the refusal says what to change. So is a copy git
+reads a `core.worktree` for, since the move would leave it naming the old
+path: unset it in the copy and answer again. So is a copy with a linked
+worktree (`git worktree list` in the copy shows it), since the move would
+leave the worktree naming the old path and the program writes into no
+worktree it did not make: remove it (`git worktree remove`) and answer
+again. A copy that no
+longer holds a commit or object it was kept on, nothing it names reaching
+it, neither HEAD, a reference, a root reference such as `ORIG_HEAD` nor a
+reflog entry (amended away and then expired and pruned, say), is refused
+the same way, naming what is missing and the entry that recorded it,
+every entry of the copy being read; a copy whose reflog or `ORIG_HEAD`
+still records it, or a commit of which records the object in its tree,
+is carried on, the copy read last right before it is answered, where it
+stands. An entry kept after the copy was last read, in the moment
+before it is answered, refuses the answer rather than being closed unread:
+answer again. A run's copy is not
+carried on in this build (it is a worktree of the gate on a branch of
+yours, which a task's copy cannot be): land it, or push its commit
+yourself.
+
+Discard, `--answer discard` with the same flags, shows exactly what
+removing the copy would lose, read out after its line with each commit,
+object and file on a line of its own after a label and the digest last
+(a value holding a backslash, a quote, a space at either end, or anything
+that does not print is written quoted and escaped, as a Go string literal,
+so no two values read the same), and in the structured answer (`--json`,
+where each path and name also carries its exact bytes, base64, in
+`path_bytes` and `name_bytes`, since a JSON string cannot carry a byte that
+is not UTF-8): what neither the default branch nor the upstream holds,
+the only two places counted as keeping work. That is the
+commits anything in the copy names that neither the default branch nor
+the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
+reflog entry still records, and every stash included, and any tag, tree
+or blob a reference or a reflog entry points at directly that the
+upstream does not have; what the upstream holds now is held and not
+listed, a commit one of the copy's remote-tracking branches names
+included while the upstream's branch of that name still reaches it, so
+one whose branch the upstream has since deleted or rewound is listed (for a run's copy,
+only what its worktree names counts: a commit only the gate's own branches
+or their reflogs record is not listed, since removing the worktree leaves
+them, but they keep nothing either, so a commit the worktree's own HEAD,
+references or their reflogs record is listed even when a gate branch has
+it too, and so are the stash entries made in that worktree); every file
+removing the copy destroys whose content or deletion nothing else holds,
+as git would store it, so a file git reports clean is not listed though
+its line endings differ, and files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
+a file the copy deleted, staged or not, or `repository` for a
+file of the copy's repository directory, a hook or its configuration
+among them, that differs from what git writes into every new repository),
+a directory lost whole named once with a trailing slash; whether git
+reports a change, a file or a stash; and a digest of exactly what is
+shown, each file by what it holds. It records and removes nothing.
+Removing the copy on that answer is not in this build: given again with
+`--confirm DIGEST` it is refused, with nothing read or changed, the copy
+and its entry exactly as they were, and new tasks in the project still
+wait on it. To let them go ahead, answer land or carry-on, or commit or
+remove what is uncommitted, untracked or stashed, and push its commits
+where one of the cleanup proofs above finds them. That proof reads only
+the commits the copy's HEAD and its branches, tags and stash reach, and
+what git reports uncommitted, untracked (and not ignored) or stashed: a
+file git ignores, a commit or object only a reflog or another reference
+reaches, and the copy's repository directory (its hooks and
+configuration) are removed with the copy unchecked, though the discard's
+preview lists them, so copy out anything of those you want first. The
+program removes the copy on that proof, which closes the entry, only when it next asks the cleanup decision
+of the copy (when the run finishes or a landed task's worker is observed
+gone, and again at each start for a finished run's copy), so it is not
+immediate. Removing the copy by hand does not close the entry: one whose
+copy is gone with no proof that its work landed stays open. A copy is shown
+or landed only in the one repository layout this supports, and
+anything else is refused naming why, with nothing of it read or changed:
+a task's copy needs a `.git` directory of its own (not a link or a file
+pointing elsewhere) with no `commondir` file and no linked worktree, a
+run's copy the `.git` file git writes for a worktree, and either needs no
+symbolic link anywhere in its repository directory, `core.symlinks` not
+false, no `core.worktree`, no sparse checkout, its references in files
+rather than a reftable, and its whole history: not shallow, no graft file
+(`info/grafts`), no replacement references (`refs/replace/`), and not a
+partial clone (no `extensions.partialClone`, no remote with `promisor`
+set, no promisor pack), since in each the commits a preview is read from
+are not all the copy holds. Land reads the copy the same way and is refused
+the same; put the copy back in that layout to see it or land it. A copy
+kept again at another state has an entry for each state; carrying it on
+answers and closes all of them, since the whole copy moves to the new
+task, and so is refused unless the copy still holds what every one of
+them recorded. A successor carries the posture the outlived task's own
+push is held to as its floor, gated for a task recorded before a posture
+was, so continued work is never held to less. While one entry of a copy has an answer still being
+carried out (a landing whose run is not started yet, or a carry on not
+finished), the copy's other entries are not answered, and the
+task is not promoted; the answer under way finishes on its own or at the
+next start. An entry whose "what the default branch lacks" is
+not established (the upstream could not be read when the copy was kept) is
+refused rather than shown a list that may be wrong; the next cleanup of the
+unchanged copy establishes it.
+
+A promotion of an investigation whose copy has a kept-work entry (its
+worker ended with its copy kept) answers that entry carry on itself, in the
+promotion's own write, since the promoted worker continues in that copy;
+the entry closes with the promotion and never without it, and the
+promotion is refused, naming what is missing, when the copy no longer
+holds what the entry recorded when the promotion reads it, as a carry on
+of it would be; work lost in the moment between that reading and the
+promotion's write is answered with the write, and the promotion then
+reports the copy refused.
+
+Nothing in the program discards a copy, on its own or on an answer: the
+preview is open to any caller that may answer kept work, and a
+confirmation is refused for everyone in this build. Removal on a confirmed
+discard is deferred (docs/prd.md, sections 6 and 9).
 
 ## Waiting on a fleet
 
@@ -664,7 +904,10 @@ queues, with the wake on standard input as one line of JSON, followed by
 end of file. The line is the wake object itself (`id`, `task_id`, `kind`,
 `marker` and the rest), not the event `assistant --json coordinator listen`
 prints: a `listen` line wraps the same object as its `payload`, beside
-`type` and `revision`, and the command's line has no such wrapper. The
+`type` and `revision`, and the command's line has no such wrapper. A wake
+about no task carries no `task_id`: one about a delegated domain names
+`delegation` and `domain`, and one about kept work no task names names the
+entry in `kept_work`, with its `project` and `branch`. The
 command decides where it goes: a script that posts to your own private chat
 channel, writes a desktop notification, or appends to a file. The line is a
 line of shell, run the way `commands.test` is, in the assistant home (by
@@ -781,10 +1024,11 @@ wrong.
 |---|---|---|---|
 | Active execution | Terminal Live, or a validation run the service is advancing | Absorbs; no wake | Nothing |
 | Declared wait | Worker's most recent word is a declared wait, its terminal is Live or Unobserved, and its recheck window is open; the task resolves Paused | Absorbs until the recheck window elapses, then surfaces `declared-external-wait` once per window; an unchanged screen is not read as a stall | Nothing until a wake surfaces |
-| Stalled screen | Terminal Live, no declared wait, and the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
+| Stalled screen | Terminal Live, no declared wait, and the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once per window; past `stall_inspection_count` surfaces each one demands a deeper inspection | Inspect; do not treat as a crash |
+| Stalled worker held | The same unchanged screen of a task resolving Running has surfaced `stall_inspection_count` plus `stall_hold_count` times (3 and 3 unless configured, so the seventh surface) | Registers a stall hold naming the task and ends nothing: the worker keeps running, its copy is untouched, and the task stays in flight, so its screen is still read every pass. The program closes the hold itself, recorded as the program's resolution, when a pass reads the screen changed (surfacing `stall-closed` once) or a probe reads the worker dead (surfacing `terminal-gone`) | `assistant --task ID --answer approve` to let it run and restart the count, `stop` to end it and keep its copy (its stop's hold then asks about a relaunch), or `retry` to end it and relaunch once in the same copy, counted by `relaunch_attempts` |
 | Dead process | Probe answers Dead; work not landed; no stored report | Queues `terminal-gone` with case `dead`; on restart (or `task.relaunch`) sweeps the standing copy and relaunches in place up to `relaunch_attempts`, acknowledging that session's queued `terminal-gone` wakes as the program | After a restart, read `assistant tasks` before acting on a re-handed wake |
 | Ambiguous / unobserved | Probe answers Unobserved (unheld survivor, unreadable, foreign home, and the like) | Surfaces `terminal-gone` with case `unobservable`; never relaunches; never deletes the standing copy | Probe or wait; never `task.relaunch` |
-| Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
+| Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, stall, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
 | Failed recovery | Relaunch or sweep refused, or past `relaunch_attempts` | Holds or surfaces; does not destroy the copy | Read the hold or service log; answer retry/stop or fix the host |
 
 A legitimate declared wait is never classified as a dead worker. A dead worker
@@ -914,7 +1158,8 @@ What it does not do:
 
 It is not `usage_ceiling`. The ceiling counts every run's calls together over
 a window, refuses the next call once it is reached, and holds that run's stage
-for you. The budget is one run's, counts that run alone from its first call,
+for you; once there is room, `assistant --answer retry` runs that stage again
+in the same run. The budget is one run's, counts that run alone from its first call,
 and parks the run.
 
 ## Watch a worker in a terminal
@@ -933,6 +1178,25 @@ A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
 reason rather than falling back or widening grants; list Claude after Cursor
 if you want Cursor for runs and Claude for attachable workers. See
 `docs/multi-agent-support.md`.
+
+`session_provider: herdr` and the keys for workers on another machine
+(`remote_hosts`, `placement.local`, `placement.arch` and
+`remote_disconnect_grace`, PRD section 8) are parsed and validated. This
+build has no herdr provider and does not act on those keys. The service
+refuses to start on a `config.yaml` that sets any of them, naming the key.
+`sessionHost` starts every provider but tmux on pipes, so a home that named
+`herdr` would have its workers started on pipes; the refusal is what stops
+that. A repository whose default branch's `assistant.json`
+sets `placement.arch` is refused the same way, naming the key, wherever the
+service reads that copy: a run, a delivery task's intake or promotion, and
+standing consent. A task of such a repository that reaches dispatch, an
+investigation or a delivery task taken before the key was added, is not
+dispatched: it stays queued, and the next dispatch pass after the key is
+removed dispatches it. Meanwhile the coordinator is told about it as it is
+about any task with no worker to watch: on the supervisor's second pass over
+it (about one `supervision_beacon_interval` in) and again each `escalation_window`,
+as a worker whose screen has not changed. Only the service log says the wait
+is placement.
 
 Each launch records which adapter it chose on the task attempt in the home's
 database, once, as `adapter`, `route_reason` and `route_skipped`; no command
@@ -1199,6 +1463,36 @@ to each one:
   priority, so one command can still saturate the host by itself: keep the
   commands targeted.
 
+## Bounding git and gh
+
+Every git and `gh` the service runs is ended with its process group when it
+runs too long, so a wedged fetch or a hung code-host request cannot hold a run
+forever. Two keys in your own configuration file set those bounds:
+
+| Key | Default | Accepted | Bounds |
+| --- | --- | --- | --- |
+| `git_deadline` | `10m` | `1m` to `2h` | one git invocation: a clone, a fetch, a push, a read |
+| `gh_deadline` | `2m` | `10s` to `30m` | one `gh` invocation against GitHub |
+
+```yaml
+# config.yaml in the home
+git_deadline: 30m
+```
+
+- Raise `git_deadline` when a large repository's clone or fetch over a slow
+  link needs longer than ten minutes; lower either for a tighter bound.
+- A value outside its range refuses the whole file when the service starts,
+  naming the key. Both are global-only: a repository file naming either is
+  refused, so a branch cannot loosen a bound that protects your machine.
+- They apply where the code calling git or `gh` set no deadline of its own;
+  where it did, that deadline is kept instead.
+- Stage commands keep their own `command_timeout` (above), and no other
+  program's bound is configurable.
+- The command line's own git and `gh` (`assistant init`, `doctor`, a push's
+  receive into the gate) do not read your file and run under the defaults.
+- The GitLab adapter talks HTTP and starts no program, so `gh_deadline` does
+  not bound it.
+
 ## Repositories with no code host
 
 A repository whose upstream is a local path or a `file://` remote has no code
@@ -1318,3 +1612,10 @@ Nothing in this build reads or answers those bots' comments, so treat them as
 input for the human who reviews the pull request. The tests for P4, P7 and the
 judge-path rule show the machinery behaves as specified, not that every review
 is good; `internal/journey/README.md` says what a green run there establishes.
+
+## This repository's own checks
+
+The checks in [Keep your CI required](#keep-your-ci-required) are the ones on
+a repository this gate validates. The checks on this repository are a
+different set. [AGENTS.md](../AGENTS.md) names the ones branch protection
+requires on `main` and points at the workflows that own their settings.

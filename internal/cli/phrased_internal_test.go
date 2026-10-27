@@ -301,6 +301,18 @@ func fixtures(t *testing.T) map[string]any {
 				Run: sampleID, Superseded: sampleID}},
 			Ignored: []machine.Ignored{{Ref: "refs/tags/v1", Reason: "not a branch, and the gate validates branches"}},
 		},
+		// A discard shown, the answer that prints the most: its row, then
+		// what would be lost as machine text after labels, a path carrying a
+		// task identifier among it.
+		"kept work answer": machine.KeptWorkAnswered{
+			Entry:  store.KeptWork{ID: 3, TaskID: store.Known(sampleID), CopyPath: "/home/tasks/" + sampleID + "/copy", Reason: "unproven"},
+			Effect: machine.KeptWorkDiscardShown,
+			Loss: &machine.KeptWorkLoss{Head: "0123456789abcdef0123456789abcdef01234567",
+				Lacks:     []string{"0123456789abcdef0123456789abcdef01234567"},
+				Objects:   []machine.KeptWorkLostObject{{Object: "89abcdef0123456789abcdef0123456789abcdef", Type: "blob", Names: []string{"refs/tags/" + sampleID}}},
+				Files:     []machine.KeptWorkLostPath{{Kind: "new", Path: "notes/" + sampleID + ".txt"}, {Kind: "repository", Path: "hooks/pre-commit"}},
+				Untracked: true, Digest: "0a1b2c3d4e5f"},
+		},
 		"task answer": machine.TaskAnswered{
 			Hold: store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
 				Subject: "whether to begin this work again", Resolution: store.Known(machine.AnswerRetry)},
@@ -357,6 +369,9 @@ func fixtures(t *testing.T) map[string]any {
 				Handouts: store.Known(int64(1))}},
 			{Project: "the parser", Wake: store.Wake{ID: 8, TaskID: sampleID, Kind: string(supervisor.KindHoldOpened), Marker: "hold:" + sampleID,
 				CreatedAt: time.Date(2026, 10, 13, 9, 2, 0, 0, time.UTC)}},
+		}, KeptWorkWakes: []store.KeptWorkWake{
+			{ID: 3, KeptWork: 4, Project: store.Known("the parser"), Branch: store.Known("feature/parser"), Kind: string(supervisor.KindKeptWork), Marker: "kept-work:4",
+				CreatedAt: time.Date(2026, 10, 13, 9, 3, 0, 0, time.UTC)},
 		}},
 		"wakes acknowledged": machine.Acknowledged{Wakes: []int64{7}, By: store.AcknowledgedByCoordinator().String()},
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
@@ -450,6 +465,9 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		"host install": func(v any) []string {
 			a := v.(machine.HostInstall)
 			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}
+		},
+		"kept work answer": func(v any) []string {
+			return keptLossLines(*v.(machine.KeptWorkAnswered).Loss)
 		},
 		"init": func(v any) []string {
 			c := v.(machine.Init).Commands
@@ -928,7 +946,7 @@ func TestEveryEventTypeHasAPhrase(t *testing.T) {
 			if line != machine.PhraseWorkerSpoke.String() {
 				t.Errorf("a worker's history entry renders %q", line)
 			}
-		case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued:
+		case ipc.TypeWakeQueued, ipc.TypeDomainWakeQueued, ipc.TypeKeptWorkWakeQueued:
 			if line != machine.PhraseNoticeQueued.String() {
 				t.Errorf("a pushed wake renders %q", line)
 			}

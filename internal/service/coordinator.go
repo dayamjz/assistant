@@ -100,6 +100,15 @@ import (
 // a subordinate coordinator, and then dispatches what is due in the background, as
 // releaseQueued does after a release: a task intake recorded independent
 // resolves Dispatched and is cut its copy by dispatch.go.
+//
+// The intake runs under the write side of the service's intake exclusion,
+// because intake writes the task's record before its instructions file and
+// the record of an independent task already reads Dispatched: a dispatch
+// pass that read the tasks between the two would refuse the task for having
+// no instructions and keep its slot. dispatchDue reads under the read side
+// and skips its pass while an intake holds or is taking the write side, so
+// the pass that follows here is run whether or not the intake was refused:
+// it is the pass a skipped one left its tasks to.
 func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.TaskCreateRequest) (machine.TaskCreated, error) {
 	p, err := s.admitted(req)
 	if err != nil {
@@ -133,12 +142,18 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 			request.Delivery = string(d.Delivery)
 		}
 	}
+	s.intake.Lock()
 	created, err := s.queue.Create(ctx, request)
+	s.intake.Unlock()
+	if err == nil {
+		s.log.Printf("task %s was created by %s (%s)%s", created.Task.ID, peerOf(req), created.Cause, inDomain(created.Task.Domain))
+	}
+	// Refused or not, this is the pass a pass skipped during the intake left
+	// its tasks to.
+	s.dispatchInBackground()
 	if err != nil {
 		return machine.TaskCreated{}, refusalOf(err)
 	}
-	s.log.Printf("task %s was created by %s (%s)%s", created.Task.ID, peerOf(req), created.Cause, inDomain(created.Task.Domain))
-	s.dispatchInBackground()
 	return machine.TaskCreated{
 		Record: created.Task, Cause: string(created.Cause), BlockerState: created.BlockerState,
 		Instructions: created.Instructions,
@@ -180,8 +195,16 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
 		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent, Delivery: r.Delivery,
+		By:          req.HoldResolver(),
 		Environment: agents.WorkerEnvironment(os.Environ(), nil),
 	})
+	// The flip answers the copy's open kept work, if any, as carry on, which
+	// no longer holds the project's new tasks, so a dispatch pass is asked
+	// for as it is after any answer to kept work. It is asked whatever the
+	// promotion returned: one that failed after its flip, creating the
+	// branch among the ways, has answered the entries all the same, and a
+	// pass over nothing freed dispatches nothing.
+	s.dispatchInBackground()
 	if err != nil {
 		release()
 		return machine.TaskPromoted{}, refusalOf(err)
@@ -435,6 +458,10 @@ func refusalOf(err error) error {
 		errors.Is(err, store.ErrTaskMoved),
 		errors.Is(err, store.ErrTaskShapeMoved),
 		errors.Is(err, store.ErrCleanupRecorded),
+		errors.Is(err, store.ErrKeptWorkCopyOwed),
+		errors.Is(err, store.ErrKeptWorkUnverified),
+		errors.Is(err, tasks.ErrLayoutUnsupported),
+		errors.Is(err, tasks.ErrKeptWorkUnheld),
 		errors.Is(err, store.ErrNotRelayable),
 		errors.Is(err, store.ErrTaskRelayed),
 		errors.Is(err, errRelaunchNotDue),

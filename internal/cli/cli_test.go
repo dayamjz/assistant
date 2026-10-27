@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -491,7 +493,7 @@ func TestDoctorReportsTheCodeHostAndDoesNotBlockOnIt(t *testing.T) {
 	// contract is that the command resolves to something this process may
 	// execute, not that it answers as a provider.
 	planted := filepath.Join(bin, "gh")
-	if err := os.WriteFile(planted, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(planted, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("planting a provider command line: %v", err)
 	}
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
@@ -637,7 +639,7 @@ func agentPATH(t *testing.T, names ...string) string {
 	}
 	script := []byte("#!/bin/sh\nexit 0\n")
 	for _, name := range names {
-		if err := os.WriteFile(filepath.Join(bin, name), script, 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), script, 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -904,16 +906,24 @@ func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
 // through the real cleanup. A cancelled run's copy holds a commit on no
 // remote, so the cancel's cleanup keeps it and records a kept work entry.
 // Eject is then refused before the gate is touched, naming the entry's copy,
-// its run, the commit and the way past. Once the commit is on the upstream
+// its run, the commit and the way past. The supervisor loop raises the
+// entry, which no task names, as a kept-work wake, and the coordinator
+// drains it without acknowledging it. Once the commit is on the upstream
 // branch, the next service start removes the copy on the remote-branch
-// proof and closes the entry, and the same command completes, taking the
-// closed entry with the run.
+// proof and closes the entry, and eject is still refused, naming the wake,
+// because PRD section 8 keeps a wake actionable until it is acknowledged and
+// forgetting the repository would delete it. Once the coordinator
+// acknowledges it, the same command completes, taking the closed entry and
+// its wake with the run.
 func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
 	h := newHome(t)
 	subject := newSubject(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	stop := serveUntilStopped(t, h)
 
 	created := run(t, h, subject, "--json", "init")
@@ -938,13 +948,20 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 		t.Fatalf("status lists kept work %+v, want the cancelled run's one entry:\n%s", status.KeptWork, got.stdout)
 	}
 	entry := status.KeptWork[0]
+	var drained machine.Wakes
+	if got := run(t, h, subject, "--json", "coordinator", "await", "--timeout", "30s"); got.code != machine.ExitOK ||
+		json.Unmarshal([]byte(got.stdout), &drained) != nil || len(drained.KeptWorkWakes) != 1 || drained.KeptWorkWakes[0].KeptWork != entry.ID {
+		t.Fatalf("the wait exited %s handing out kept-work wakes %+v, want entry %d's one:\n%s%s",
+			got.code, drained.KeptWorkWakes, entry.ID, got.stdout, got.stderr)
+	}
+	wake := drained.KeptWorkWakes[0].ID
 
 	refused := run(t, h, subject, "eject", "--confirm")
 	if refused.code != machine.ExitFailure {
 		t.Fatalf("eject --confirm exited %s over open kept work, want failure:\n%s%s", refused.code, refused.stdout, refused.stderr)
 	}
 	said := refused.stdout + refused.stderr
-	for _, want := range []string{entry.CopyPath, "run " + record.ID, record.SubmittedHead, "#411 part 2", "landing"} {
+	for _, want := range []string{entry.CopyPath, "run " + record.ID, record.SubmittedHead, "kept-work/", "--answer land"} {
 		if !strings.Contains(said, want) {
 			t.Fatalf("the refusal does not name %q:\n%s", want, said)
 		}
@@ -970,8 +987,19 @@ func TestEjectIsRefusedWhileTheRepositoryHoldsOpenKeptWork(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	queued := run(t, h, subject, "eject", "--confirm")
+	if queued.code != machine.ExitFailure || !strings.Contains(queued.stderr, "kept-work wake "+strconv.FormatInt(wake, 10)+",") {
+		t.Fatalf("eject --confirm exited %s with kept-work wake %d queued, want it refused naming the wake:\n%s%s",
+			queued.code, wake, queued.stdout, queued.stderr)
+	}
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the eject refused over a queued wake removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	if got := run(t, h, subject, "coordinator", "acknowledge", machine.KeptWorkWakePrefix+strconv.FormatInt(wake, 10)); got.code != machine.ExitOK {
+		t.Fatalf("acknowledging kept-work wake %d exited %s:\n%s%s", wake, got.code, got.stdout, got.stderr)
+	}
 	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
-		t.Fatalf("eject --confirm exited %s once the entry closed:\n%s%s", got.code, got.stdout, got.stderr)
+		t.Fatalf("eject --confirm exited %s once the entry closed and its wake was acknowledged:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 	records := openStore(t, h)
 	defer func() { _ = records.Close() }()
@@ -1651,7 +1679,7 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 
 	plant := func(name string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -1708,7 +1736,7 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	}
 	plant := func(name string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		if err := procgroup.WriteProgram(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
@@ -1740,7 +1768,7 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	if err := os.Symlink(realGit, filepath.Join(noTmux, "git")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(noTmux, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(filepath.Join(noTmux, "claude"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", noTmux)

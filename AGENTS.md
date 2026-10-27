@@ -3,11 +3,11 @@
 `assistant` runs a fleet of coding agents in parallel and puts a validation gate
 in front of your remote, so no change reaches a shared branch until it has been
 independently reviewed, tested, documented, and linted. Package rules are in
-`.claude/rules/<package>.md`; see Code.
+`.claude/rules/<package>.md`; see Code. When writing usage/cost examples or reports, follow [the usage-reporting rule](.claude/rules/usage-reporting.md) so reported token usage is never mistaken for billing.
 
 ## The specification is checked in
 
-- `docs/prd.html` is the product requirements and the contract this code answers
+- `docs/prd.md` is the product requirements and the contract this code answers
   to. Read the section you are working in before you change behavior.
 - Its section 4 lists fifteen numbered principles, `P1` through `P15`. They are
   acceptance criteria, not aspirations: each exists because the failure it
@@ -71,8 +71,18 @@ repository more than one round of review.
 
 ## Code
 
-- Go, formatted with `gofmt`. `make check` is what CI runs and what the gate
-  runs; keep it green.
+- Go, formatted with `gofmt`. `make check` (lint and the race suite) is the
+  local check; keep it green. CI runs the suite through `scripts/ci-test.sh`
+  under the leak check (`scripts/leak-check.py`), so a package that leaves a
+  process or temp entry behind fails CI even when `make check` passes. The gate
+  runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
+- Branch protection on `main` requires five checks: `check (ubuntu-latest)`,
+  `check (macos-latest)`, `lint`, `repeat`, and `re-runs`. That set is the
+  protection rule, which this tree does not store. `.github/workflows/ci.yml`
+  and `.github/workflows/repeat.yml` own what those jobs run.
+  `.github/workflows/stress.yml` is not one of the five, and it owns what
+  the stress workflow runs. The comment on `check` in the `Makefile` owns
+  which workflow runs `make check`.
 - **Package rules live in `.claude/rules/<package>.md`** (`internal/service` is
   `.claude/rules/service.md`) and are part of this agreement. Read the one for
   the package you change, whatever tool you are: Claude Code loads it when it
@@ -116,6 +126,10 @@ repository more than one round of review.
 - Configuration schema: the key table in `internal/config/key.go`. A key's
   default, trust class, decoding, and where it lands in a `Config` are one row;
   add a key by adding a row, never a second list of keys elsewhere.
+- The PRD's path and how it is read: `internal/principles` (`PRDPath`, and
+  `RenderPRD` with `PRD.Section`). A check that reads `docs/prd.md` reads
+  its declarations from the document as it renders, through them, never with
+  a reader of its own and never by matching the source.
 - Execution and every loop bound: `internal/graph`. Add a bound there, never
   beside the counter that reads it.
 - Git: only `internal/vcs` invokes it; add a typed operation there rather than
@@ -127,7 +141,12 @@ repository more than one round of review.
   far and no second strip list exists or should.
 - A lease, an incorporation check, or a force decision belongs in
   `internal/safety` even when shorter at the git call; `internal/vcs` stays
-  mechanism only. `internal/custody` is the only path that moves a person's
+  mechanism only. So does whether a kept copy is the one its registry
+  recorded: every path that answers one asks
+  `tasks.Cleaner.VerifyKeptCopy`, which asks `safety.VerifyKeptCopy`, before
+  it reads or writes the copy (promotion, whose flip answers carry on, asks
+  the same body without a `Cleaner`; `tasks.Cleaner.Keep`, which records a
+  copy as it is kept, reads it as git does and is not one of them). `internal/custody` is the only path that moves a person's
   branch.
 - Only `internal/store` opens the database or writes SQL; add a typed accessor
   there rather than a query elsewhere. The sealed `task_state` table (migration
@@ -136,11 +155,32 @@ repository more than one round of review.
   out to git. Only `internal/agents` starts an agent process. Only
   `internal/findings` parses, normalizes, validates, or refuses a report; there
   is never a second parser.
+- A temporary directory a test makes with `os.MkdirTemp` is
+  `standin.TempDir`'s. `RegisterTempTag` records the caller's directory
+  inside the module as the namespace. A slash and an underscore in that
+  directory stay distinct. An absolute path is made relative by walking up
+  to `go.mod`; a non-absolute path is accepted only as the main module path
+  plus that directory, the form `-trimpath` records, and is not opened.
+  `TempDir` and `SweepTempDirs` use only that recorded namespace. The
+  package's `TestMain` registers and sweeps before tests. A live owner, and
+  a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
+  directories, and a scratch directory the product makes for itself, are
+  not this.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`
   or `systemctl`. Only `internal/checkpoints` serializes a `graph.Checkpoint`
   outside `internal/graph`.
+- Only `internal/procgroup` names a starter, an entry of
+  `internal/procgroup/guard`'s `Starters` (os/exec's constructors and
+  starting methods, `os.StartProcess`, and the syscall and x/sys calls that
+  start a program): build a command with `procgroup.Command` and run it with
+  `procgroup.Run`. The functions that may do otherwise are the rows of the
+  guard's `Exceptions`, each with a typed reason; its test fails the build on
+  any other use in non-test code, and on a row that covers none. A file
+  something runs, tests included, is written by `procgroup.WriteProgram`
+  (#539); the guard's `LoadWrites` test fails the build on any other mode it
+  finds with an execute bit, or one it cannot read, outside `WriteExceptions`.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.

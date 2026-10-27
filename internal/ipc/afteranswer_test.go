@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -71,11 +70,7 @@ func TestWorkDeferredOnARequestNoServerBuiltRunsAtOnce(t *testing.T) {
 // and returns a client connected to it.
 func serveThrough(t *testing.T, handler ipc.Handler, written *atomic.Bool) *ipc.Client {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ipc")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := ipcDir(t)
 	socket := filepath.Join(dir, "s")
 
 	srv, err := ipc.NewServer(ipc.ServerConfig{
@@ -151,11 +146,7 @@ func (c *watchedConn) Write(p []byte) (int, error) {
 // because the defect it guards was an unordered choice between the two, and
 // one attempt would pass by chance about half the time it ran.
 func TestAnAnswerFollowedByTheConnectionEndingIsStillTheAnswer(t *testing.T) {
-	dir, err := os.MkdirTemp("", "ipc")
-	if err != nil {
-		t.Fatalf("temp dir: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	dir := ipcDir(t)
 	socket := filepath.Join(dir, "s")
 
 	accepted := make(chan net.Conn, 1)

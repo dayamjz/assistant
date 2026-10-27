@@ -213,7 +213,8 @@ import (
 //   - AnswerRetryUndispatchable's "nothing will begin it" rests on every
 //     path that begins an attempt reading the record through expectationOf
 //     before its claim, which is structure and not a recorded fact: a third
-//     caller of store.BeginTaskAttempt that skipped that read would falsify
+//     caller of store.BeginFirstTaskAttempt or store.BeginTaskAttempt that
+//     skipped that read would falsify
 //     it with nothing here noticing. The answer stands unspent, so once the
 //     record is put right a later start may act on it; nothing tells the
 //     person when that happens, and nothing watches the record for the
@@ -470,8 +471,9 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		}
 		return s.respondDomain(ctx, req, r)
 	}
-	if _, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer task %s's hold %q with %q: %s",
-		r.Task, r.Hold, r.Answer, r.Note)); err != nil {
+	p, err := s.refuseDecision(ctx, req, r.Task, fmt.Sprintf("asked to answer task %s's hold %q with %q: %s",
+		r.Task, r.Hold, r.Answer, r.Note))
+	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
 	switch {
@@ -499,6 +501,18 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 			return machine.TaskAnswered{}, err
 		}
 		out, err := s.answerLocal(ctx, req, r, task, hold)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		o, err := s.tasks().ObserveTask(ctx, r.Task)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		out.Task = s.taskView(ctx, o)
+		return out, nil
+	}
+	if stall, ok := stallHoldOf(hold.Key, r.Task); ok {
+		out, err := s.answerStall(ctx, req, p, r, hold, stall)
 		if err != nil {
 			return machine.TaskAnswered{}, err
 		}
@@ -680,8 +694,8 @@ func (s *Service) holdIfPastBound(ctx context.Context, id string) (store.Hold, b
 // A refusal of errTaskRecord is AnswerRetryUndispatchable, and nothing
 // begins the work while what it read stands, because of where the read sits
 // rather than because anything records it. An attempt is begun only by
-// store.BeginTaskAttempt, whose two callers here are dispatchClaimed and
-// relaunchClaimed, and a worker is launched only from the dispatched value
+// store.BeginFirstTaskAttempt and store.BeginTaskAttempt, whose callers here
+// are dispatchClaimed and relaunchClaimed, and a worker is launched only from the dispatched value
 // one of them returns; both call expectationOf before they claim, and it
 // refuses with errTaskRecord, recording nothing, a record naming no
 // repository, a reserved copy path that is not home.TaskCopy, a missing
@@ -809,7 +823,7 @@ func severalHoldsUnnamed(taskID string, holds []store.Hold) error {
 // ipc.ErrInvalidRequest when more than one is open. A named hold that is
 // missing, closed, names another task, or names a run is ipc.ErrInvalidRequest.
 //
-// docs/prd.html still says that without --hold the oldest open hold is
+// docs/prd.md still says that without --hold the oldest open hold is
 // answered. Issue #331's owner chose this refusal instead. That document
 // was not changed.
 func (s *Service) taskHoldToAnswer(ctx context.Context, taskID, holdFlag string) (store.Hold, error) {

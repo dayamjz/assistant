@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"strings"
 	"sync"
@@ -105,6 +107,54 @@ func TestAFailedCallIsNeverAnAnswer(t *testing.T) {
 			assertFailed(t, c.Trace(t.Context(), "notes.md", "adds a line", diff), tc.want)
 			assertFailed(t, c.Screen(t.Context(), "notes.md", diff), tc.want)
 		})
+	}
+}
+
+// A client's request survives another provider in the process stopping. That
+// was #470: httptest.Server.Close closes the idle connections of
+// http.DefaultTransport, and a reply with no body puts its connection back
+// among the idle ones before the client has its response, so a sibling
+// subtest's provider stopping at that moment turned "an empty body" into a
+// transport failure. The trace hook PutIdleConn runs at that moment, so the
+// test stops a sibling there rather than waiting for chance to line the two
+// up.
+//
+// The hook does not run on every request, and the test does not ask it to.
+// net/http pools a connection only once its writer has reported the request
+// written, and waits 50ms for that report; a writer descheduled past that
+// (a loaded runner) gets its connection closed instead, and the hook is never
+// called (#568). Such a request still has to come back unreadable, but it
+// stopped no sibling in flight, so it does not count: the test runs until a
+// sibling has stopped in flight on wantStopped requests, and fails if that
+// has not happened within attempts, since a run where connections never go
+// idle tests nothing.
+func TestAnotherProviderStoppingDoesNotReachAClient(t *testing.T) {
+	t.Parallel()
+	const wantStopped, attempts = 200, 2000
+	provider := judgetest.New(t, judgetest.Always(judgetest.Raw(http.StatusOK, "")))
+	c := client(provider)
+	stopped := 0
+	for attempt := 0; stopped < wantStopped; attempt++ {
+		if attempt == attempts {
+			t.Fatalf("a sibling stopped in flight on only %d of %d requests, want %d: connections are not going idle, so nothing was tested",
+				stopped, attempts, wantStopped)
+		}
+		sibling := httptest.NewServer(http.NotFoundHandler())
+		var once sync.Once
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+			PutIdleConn: func(err error) {
+				if err == nil {
+					once.Do(sibling.Close)
+				}
+			},
+		})
+		assertFailed(t, c.Screen(ctx, "notes.md", diff), judge.FailureUnreadable)
+		fired := true
+		once.Do(func() { fired = false })
+		if fired {
+			stopped++
+		}
+		sibling.Close()
 	}
 }
 

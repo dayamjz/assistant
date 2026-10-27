@@ -101,7 +101,7 @@ func delegateDomain(t *testing.T, w launched, domain, posture string) delegated 
 	}
 	return delegated{domain: domain, as: launched{
 		running: w.running, home: w.home, repository: w.repository, gateRepo: w.gateRepo,
-		group: ref.PID, provider: host, session: sub,
+		group: ref.PID, provider: host, session: sub, sweeps: w.sweeps,
 	}}
 }
 
@@ -170,7 +170,8 @@ func finishWorker(t *testing.T, w launched, task string) {
 // recorded nowhere.
 func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *testing.T) {
 	t.Parallel()
-	service.RequireSweepClearsHere(t, "a subordinate relaunching a dead terminal in its domain")
+	const unestablished = "a subordinate relaunching a dead terminal in its domain"
+	service.RequireSweepClearsHere(t, unestablished)
 	launchedWorker(t, "task/base", func(w launched) {
 		delegation := machine.DomainDelegateRequest{Domain: "alpha", Delivery: "gated", Instructions: "x"}
 		for _, method := range []ipc.Method{ipc.MethodDomainDelegate, ipc.MethodDomainEnd} {
@@ -295,6 +296,12 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 		if stored, err := recordsOf(t, w.home).Task(t.Context(), own); err != nil || stored.Shape != store.TaskInvestigation {
 			t.Fatalf("the refused promotion changed the task: %+v (%v)", stored, err)
 		}
+		// An answer to kept work is handed up the same way whichever owner
+		// the entry names: one a run left, which names no task, is refused
+		// as a subordinate's before the entry is read.
+		if _, code := callAs(t, d.as, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{Run: "a-run", Hold: "kept-work/1", Answer: "land"}); code != ipc.CodeSubordinate {
+			t.Fatalf("keptwork.answer of a run's entry from the subordinate answered %q, want %q", code, ipc.CodeSubordinate)
+		}
 		if _, code := callAs(t, d.as, ipc.MethodTaskPromote, machine.TaskPromoteRequest{
 			Task: w.task, Repository: w.repository.ID, Branch: "task/base-p", Intent: "not mine",
 		}); code != ipc.CodeSubordinate {
@@ -336,9 +343,16 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 			t.Fatalf("supervision.assert from the subordinate was refused with %q", code)
 		}
 
-		// The relaunch and the stop over its own domain's worker.
+		// The relaunch and the stop over its own domain's worker. The
+		// relaunch is ordered against this host's processes by
+		// askPastHostSweeps; a refused relaunch records nothing, so the one
+		// that goes through is still attempt 2, and any other refusal fails
+		// here, its reason logged by callAs.
 		finishWorker(t, w, own)
-		answer, code = callAs(t, d.as, ipc.MethodTaskRelaunch, machine.TaskRequest{Task: own})
+		askPastHostSweeps(t, w, unestablished, own, func() bool {
+			answer, code = callAs(t, d.as, ipc.MethodTaskRelaunch, machine.TaskRequest{Task: own})
+			return code == ipc.CodeRefused
+		})
 		if code != "" {
 			t.Fatalf("task.relaunch from the subordinate was refused with %q", code)
 		}

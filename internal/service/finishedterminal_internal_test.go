@@ -64,12 +64,23 @@ func TestALandedOrCompleteTaskWithADeadTerminalRaisesNoTerminalGone(t *testing.T
 		}
 	}
 	deadline := time.Now().Add(loopWait)
-	for !l.service.landedWasTried(landed, "pane-landed") {
+	for landedAskedUnder(l.service, landed, "pane-landed") == 0 {
 		if !time.Now().Before(deadline) {
 			t.Fatal("landed.go never asked the cleanup decision under the landed task's Dead terminal")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+// landedAskedUnder is how many times landed.go counted an ask of the cleanup
+// decision for the task under ref, read from the memory it keeps.
+func landedAskedUnder(s *Service, id, ref string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tried, ok := s.landedTried[id]; ok && tried.ref == ref {
+		return tried.asks
+	}
+	return 0
 }
 
 // plantFinished plants a delivery task that resolves want, Landed or
@@ -110,10 +121,10 @@ func plantFinished(t *testing.T, records *store.Store, id, ref string, want task
 	if err := records.SetTaskRun(ctx, id, run.ID); err != nil {
 		t.Fatalf("attributing the run: %v", err)
 	}
-	if _, err := records.BeginTaskAttempt(ctx, id, 0); err != nil {
+	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
 		t.Fatalf("beginning the attempt of %s: %v", id, err)
 	}
-	if err := records.SetAttemptSession(ctx, id, 1, ref); err != nil {
+	if err := records.SetAttemptSession(ctx, id, 1, ref, store.SessionHost{}); err != nil {
 		t.Fatalf("recording the session of %s: %v", id, err)
 	}
 	if want == taskstate.Complete {

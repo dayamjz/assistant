@@ -3,8 +3,23 @@
 ## Overview
 
 `assistant` drives coding agents through their CLIs. It does not call provider
-HTTP APIs directly. Supported adapters are Cursor (Agent CLI), Claude Code,
-OpenAI, and Grok Build.
+HTTP APIs directly. Adapters include Claude Code, Cursor Agent CLI, OpenAI Codex CLI,
+Grok Build, and a legacy OpenAI stub. Their supported worker/session
+capabilities differ; a supported adapter is not necessarily eligible for
+automatic selection.
+
+## Pick the right section
+
+| Need | Section |
+| --- | --- |
+| Compare CLI adapters and authentication | [Supported agents](#supported-agents) |
+| Configure the default agent or ordered alternatives | [Configuration](#configuration) |
+| Pin providers, models, efforts or roles | [Model pin and fallback list](#model-pin-and-fallback-list), [GPT review roles](#gpt-review-roles), and [Claude roles](#claude-roles) |
+| Understand which workers can run where | [Agent capabilities](#agent-capabilities) and [Worker routing](#worker-routing-gap-02) |
+| Diagnose refused routing or authentication | [Troubleshooting](#troubleshooting) |
+| Understand failure-only role fallback | [Explicit availability fallback](#explicit-availability-fallback) |
+
+**Important distinctions:** A model *provider* is not an interchangeable CLI *agent*. An installed CLI, matching declared capabilities, valid model pin, and usable credentials are all required; configuration does not grant access to a model. Fallback is for recognized availability failures, not for silently hiding an agent's task failure. This document specifies current local adapter behavior, not an available remote-worker service.
 
 ## Supported Agents
 
@@ -82,8 +97,8 @@ named in `agent`. `assistant doctor` lists any that resolve on PATH under
 "named-only agents".
 
 ```yaml
-# .assistant.yaml
-# No agent configuration needed - uses auto → Claude when present
+# ~/.assistant/config.yaml (operator configuration)
+# No agent override needed: auto selects Claude when available
 ```
 
 ### Explicit Agent Selection
@@ -118,8 +133,9 @@ Codex translates the configured `openai` / `gpt` versions `6-astra`,
 `6.1-sol`, and `6-luna` into `gpt-<version>`. A named effort (`low`,
 `medium`, or `high`) is passed as a `model_reasoning_effort` configuration
 override on both fresh and resumed invocations. Omitting it leaves the CLI's
-configured effort in effect. Translation does not establish model access in
-an installed CLI or account.
+configured effort in effect. Codex declares no context window, so a Codex
+role that names `context` is refused before launch. Translation does not
+establish model access in an installed CLI or account.
 
 For example, in the global `config.yaml`:
 
@@ -162,6 +178,31 @@ roles:
 A version outside the table, such as `fable` `9`, fails at parse time and
 names the role.
 
+A role may also name a context window, `context`, as `standard` or `1m`,
+beside a complete provider, type, and version. Claude starts `standard` as
+the identifier above, and `1m` as that identifier with `[1m]` appended, on
+the cells it declares at `1m`: today only `opus` `5.5`. A worker role on
+Opus 5.5 at the one-million-token window starts the worker with
+`--model 'claude-opus-5-5[1m]'`:
+
+```yaml
+roles:
+  worker:
+    agent: claude
+    provider: anthropic
+    type: opus
+    version: "5.5"
+    effort: high
+    context: 1m
+```
+
+A `context` outside `standard` and `1m`, or on a role with no complete
+triple, fails at parse time and names the role. A cell and window the
+adapter has not declared, such as `haiku` `4.5` at `1m`, is refused before
+launch and is never started at the standard window instead. Omitting
+`context` leaves the CLI's own window for that model. The declaration is
+what the adapter asks for; nothing checks the window a started process has.
+
 ### Worker routing (GAP-02)
 
 Task workers are routed separately from the run agent. `agents.Route` picks
@@ -184,7 +225,8 @@ the first runnable entry whose declared capabilities cover the worker need
   and not created.
 - Every successful selection records `adapter`, `route_reason` and
   `route_skipped` on the task attempt before the process starts, and the
-  role, model identifier, and effort when the launch named them. The record
+  role, model identifier (which carries a named `1m` window), and effort
+  when the launch named them. The record
   is written once and is not rewritten.
 - `route_reason` is one of `override` (a pin), `ordered` (the first covering
   entry of a list), `fallback-unavailable` (the role's backup, because the

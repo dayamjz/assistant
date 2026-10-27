@@ -187,7 +187,7 @@ func (h *heldService) assertNotResumed(t *testing.T, runID string) {
 // recorded and a first stage body that waits to be let out.
 func newHeldService(t *testing.T) *heldService {
 	t.Helper()
-	root, err := os.MkdirTemp("", "h")
+	root, err := standin.TempDir("h")
 	if err != nil {
 		t.Fatalf("making a home root: %v", err)
 	}
@@ -309,7 +309,7 @@ func newHeldService(t *testing.T) *heldService {
 // show that code wrong.
 func heldSubject(t *testing.T) (path, upstream, head string) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "s")
+	dir, err := standin.TempDir("s")
 	if err != nil {
 		t.Fatalf("making a subject repository: %v", err)
 	}
@@ -320,7 +320,7 @@ func heldSubject(t *testing.T) (path, upstream, head string) {
 	}
 	heldGit(t, dir, "add", "-A")
 	heldGit(t, dir, "commit", "--quiet", "-m", "first")
-	remote, err := os.MkdirTemp("", "u")
+	remote, err := standin.TempDir("u")
 	if err != nil {
 		t.Fatalf("making an upstream repository: %v", err)
 	}
@@ -371,11 +371,15 @@ func (cursorFactory) Name() string { return agents.CursorName }
 
 func (cursorFactory) AutoEligible() bool { return false }
 
+func (f cursorFactory) Declares() agents.Capabilities { return f.runner.Capabilities() }
+
 func (f cursorFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 func (f fixedRunner) Name() string { return f.runner.Name() }
 
 func (f fixedRunner) AutoEligible() bool { return true }
+
+func (f fixedRunner) Declares() agents.Capabilities { return f.runner.Capabilities() }
 
 func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

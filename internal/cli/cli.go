@@ -47,9 +47,9 @@ type Environment struct {
 	// internal/buildinfo's Line, the one owner of which build this is.
 	Version string
 	// Interactive says a person is at a terminal: standard input and
-	// standard error are both one. Only init reads it, to decide whether it
-	// may ask about each command it offers, reading the answers from Stdin
-	// and writing the questions to Stderr. It is false unless the process
+	// standard error are both one. init reads it, to decide whether it may
+	// ask about each command it offers, reading the answers from Stdin and
+	// writing the questions to Stderr. It is false unless the process
 	// boundary established it, so a caller that does not set it is never
 	// prompted and consents only through --accept-commands.
 	Interactive bool

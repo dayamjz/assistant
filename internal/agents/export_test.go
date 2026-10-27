@@ -72,3 +72,22 @@ var AvailabilityMessage = availabilityMessage
 // translation of a grant, so a test can derive the command line a role's
 // grant writes rather than restating it.
 var ClaudeGrantFlags = claudeGrantFlags
+
+// The bound of each kind of tmux client and the grace each is run with, so a
+// test of a client that never answers can say when its call must have
+// returned.
+const (
+	TmuxStartBound  = tmuxStartBound
+	TmuxTypeBound   = tmuxTypeBound
+	TmuxReadBound   = tmuxReadBound
+	TmuxEndBound    = tmuxEndBound
+	TmuxClientGrace = tmuxClientGrace
+	// TerminalPoll is how often a readiness wait reads the screen again.
+	TerminalPoll = terminalPoll
+)
+
+// InterruptAfterWriteForTest makes w, a worker this package started as a
+// process, call f with each later send's text once its bytes are written and
+// before the send is told, so a test can put the process's end inside that
+// window. It is set between sends, never while one is in flight.
+func InterruptAfterWriteForTest(w Worker, f func(text string)) { w.(*procWorker).afterWrite = f }

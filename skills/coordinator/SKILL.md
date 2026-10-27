@@ -258,6 +258,9 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   ack; `handouts` only counts deliveries. Read the task before every act.
 - Act on each wake, then acknowledge it by its `id` - every id you acted on,
   including one you decided needs nothing further after reading the task.
+  A row of `domain_wakes` or `kept_work_wakes` is numbered apart from the
+  task wakes, so name it `dNUMBER` or `kNUMBER`: a bare number always names
+  a task's wake, and would close a different wake or none.
   Acknowledging is the only thing that records a wake as handled, and a wake
   keeps its task counted as in flight until you do.
 - A wake you were handed and did not acknowledge is handed out again: after
@@ -272,21 +275,58 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the program already relaunched that one, do not call `task.relaunch`
   again. A marker carrying `:again:` is a resurface reminder for the same
   silence, not a second relaunch. Case `unobservable` means probe or wait;
-  never `task.relaunch` on it — only `dead` is a crashed worker the program
+  never `task.relaunch` on it; only `dead` is a crashed worker the program
   relaunches. For `hold-opened`, answer with
   `assistant --task ID --answer ...`, with one exception: a local delivery
   task's approval hold, keyed `task/ID/local-approval/...`, is the person's
   ("You approve", PRD section 6). The service takes an answer to it only
   from a command in the foreground of a terminal, and a command you run is
   refused with code `not-at-terminal`, recording nothing. Tell the person
-  the task waits on their approval and leave the hold open. For
-  `message-unacknowledged`, the
+  the task waits on their approval and leave the hold open. A stall hold,
+  keyed `task/ID/stalled/...`, is a worker still running whose screen has
+  not changed through repeated inspections: nothing was ended. Relay it to
+  the person as a blocker. Its answers are `approve` (let it run and start
+  the count again), `stop` (end it and keep its copy; the stop's own hold
+  then asks whether to begin the work again) and `retry` (end it and begin
+  it again once in the same copy); any other word is refused. For
+  `stall-closed`, the program closed a stall hold itself because the
+  worker's screen changed: tell the person that decision is no longer
+  needed. For `message-unacknowledged`, the
   worker has not acknowledged a message. For `kept-work`, the task's copy,
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. The
+  theirs to decide. An answer is given like a hold's:
+  `assistant --task ID --answer land --hold kept-work/N`, or
+  `--run=RUN` in place of `--task` for a run's copy. Land validates the
+  copy's HEAD as a push would; `--answer carry-on` creates a new task of
+  the same project and branch in the kept copy, with a note, and names it
+  in the answer (`task`), so the old task stays as it ended; a run's copy
+  cannot be carried on; `--answer discard` shows what would be lost with a
+  digest, which you may read (each path and name also in `path_bytes` or
+  `name_bytes`, its exact bytes in base64, since a JSON string loses a byte
+  that is not UTF-8), and removes nothing: removing the copy on a
+  confirmation is not in this build, and `--confirm` is refused. To let
+  the project's new tasks go ahead, tell the person their answers are land
+  and carry-on, or committing or removing its uncommitted work and pushing
+  its commits, after which the program removes the copy on that proof when
+  it next looks at it, which is not immediate, and with it, unchecked,
+  files git ignores, commits only a reflog reaches and the copy's hooks,
+  which the discard preview lists, so they should copy out what they want
+  first; removing it by hand leaves the entry open. Promoting an investigation
+  whose copy has an entry answers that entry carry on by itself. While the
+  project has an open entry, a task you create in it is recorded and not
+  started: it reads `dispatched` and its answer (`task.get`) names the
+  entries holding it under `kept_work`; it starts on its own once they are
+  answered or closed. An answer carrying `kept_work_unread` could not read
+  whether kept work holds the task, so it names no entry either way: ask
+  again rather than telling the person it is starting. Tasks in other projects, work already running and a
+  person's own push are not held. A kept entry no task names, such as the
+  run of the person's own push, reaches you as a `kept-work` wake about the
+  entry instead, listed under `kept_work_wakes` with the entry's id in
+  `kept_work`, its `project` and its `branch`, with numbers of its own, and
+  acknowledged as `kNUMBER`. Acknowledging it closes the wake and answers
+  nothing: the entry stays listed until it is answered or its work lands. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,
@@ -399,10 +439,11 @@ A subordinate still running across a restart is placed from its record and
 its process, so it stays the subordinate of its domain and `end-delegation`
 ends it.
 Wakes about a domain are listed under `domain_wakes` with numbers of their
-own and acknowledged as `dNUMBER`:
+own and acknowledged as `dNUMBER`; wakes about kept work no task names are
+listed under `kept_work_wakes` and acknowledged as `kNUMBER`:
 
 ```sh
-assistant coordinator acknowledge 12 d3
+assistant coordinator acknowledge 12 d3 k5
 assistant --domain DOMAIN --answer retry     # begin its coordinator once more
 assistant --domain DOMAIN --answer stop      # end the delegation
 ```
@@ -436,7 +477,10 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   operator's `promotion_window` (1h unless configured) after the report is
   stored, so promote within it to continue that worker; past it the worker
   is ended and its copy is kept, and a promotion relaunches a worker there
-  from the stored report. The copy stays until you record the findings
+  from the stored report. A copy kept past the window that holds work the
+  default branch lacks is a kept-work entry, which holds new tasks in the
+  project until it is answered; promoting the investigation answers it
+  carry on. The copy stays until you record the findings
   relayed with `assistant coordinator relayed ID`, which also ends any
   worker and removes the copy once that is proven safe; a relayed one
   cannot be promoted. A reported investigation reads `reported`, never

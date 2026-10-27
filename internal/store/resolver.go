@@ -85,10 +85,17 @@ func ResolvedByMachineInterface() Resolver { return Resolver{name: "machine-inte
 // person's decision, or as a caller's, is the misattribution this vocabulary
 // exists to prevent.
 //
-// It has one producer, internal/service, and a test there holds it to that.
-// Every other hold keeps PRD section 8's rule, and in particular a hold on a
-// person's decision about a finding is never closed this way: the pull
-// request's state must not answer a question a person was asked.
+// PRD section 6's stalled worker gives it a second: a stall hold, which asks
+// whether to end a live worker whose screen has stopped changing, is closed
+// this way when a supervision pass reads the screen changed or a probe reads
+// the worker dead, because that question no longer stands either. PRD
+// section 8's hold row still names only the first; section 6 is where the
+// second is specified.
+//
+// Its producers are internal/service's two closers, and a test there holds
+// it to them. Every other hold keeps PRD section 8's rule, and in particular
+// a hold on a person's decision about a finding is never closed this way: the
+// pull request's state must not answer a question a person was asked.
 func ResolvedByProgram() Resolver { return Resolver{name: "program"} }
 
 // ResolvedByStandingConsent is a resolution the program made itself, answering

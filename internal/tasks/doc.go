@@ -29,7 +29,9 @@
 // typed *IsolationError naming the comparison that failed. The comparisons
 // are the ones isolation.go lists in order; every path comparison is by file
 // identity and never by string, so a symbolic link into the primary and a
-// case variant of it on a case-insensitive filesystem are both the primary.
+// case variant of it on a case-insensitive filesystem are both the primary,
+// and .git under the copy is read once more without following a link, since
+// by identity a link there is the other repository's directory it reaches.
 // The remote set is exact, assistant at this home's gate for a delivery copy
 // and none for an investigation copy, because any other route is a push the
 // gate's hooks never see. The environment is refused when vcs.StripRedirecting
@@ -287,8 +289,10 @@
 //     acquires both by design, and nothing here tells a person's push on it
 //     from the task's.
 //   - The instructions file is written after the record, so a crash between
-//     the two leaves a recorded task with no instructions. The reverse
-//     cannot happen, and the dispatch is what finds the gap.
+//     the two leaves a recorded task with no instructions, and a reader
+//     between them sees one that has none yet. The reverse cannot happen;
+//     the dispatch is what finds the crash's gap, and keeping a dispatch's
+//     read out of an intake in flight is the caller's.
 //   - The exclusion is one service's, as internal/service's own doc says of
 //     its branch gate. Two services over one store would not see each
 //     other's holds; the store's anchor then refuses one of two concurrent
@@ -344,13 +348,15 @@
 //     nothing git tracks.
 //   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
 //     importer, as is os.RemoveAll, so only this package calling either
-//     behind a Removal is convention; no type stops another package from
-//     removing a copy it never proved.
+//     behind a Removal is convention, and no type stops another package
+//     from removing a copy it never proved. (A person's discard removes
+//     nothing in this build: its removal is deferred to AGE-486.)
 //   - A caller states the terminal's liveness, and one that states Dead of
 //     a terminal it never probed is indistinguishable from one that did.
 //   - Ignored files are invisible to vcs.Inventory and so to the dirty and
 //     untracked refusals; a file git is configured to ignore goes with the
-//     copy.
+//     copy. The same inventory decides Keep's NothingKept, so a copy whose
+//     only unique content is an ignored file records no kept work entry.
 //   - The record claims the shape, and the removal follows the record: a
 //     promotion that landed between the two would move a copy proven on an
 //     investigation's terms out from under a delivery task. The promotion's

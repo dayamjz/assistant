@@ -124,11 +124,7 @@ func (r *Reader) Observe(ctx context.Context) ([]Observed, error) {
 // resolve asks the two live inputs in the order NewReader states, the slot
 // before the probe, and resolves.
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
-	in := Inputs{
-		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
-		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding,
-		ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
-	}
+	in := InputsOf(snap)
 	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
 		in.Advancing = r.advancing(run.ID)
 	}
@@ -138,4 +134,17 @@ func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolutio
 		}
 	}
 	return Resolve(in)
+}
+
+// InputsOf is the resolver's inputs a snapshot holds, with neither live input
+// asked: the process Unobserved and the run not advancing. It is the one
+// place a store.TaskSnapshot becomes Inputs, so a record the snapshot gains
+// reaches every reader that resolves from records alone, internal/tasks'
+// cleanup proofs among them, and none of them lists the fields again (P14).
+func InputsOf(snap store.TaskSnapshot) Inputs {
+	return Inputs{
+		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
+		MergeRecords: snap.MergeRecords, NothingToDeliver: snap.NothingToDeliver, Cleanup: snap.Cleanup,
+		LocalLanding: snap.LocalLanding, ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
+	}
 }

@@ -2,14 +2,18 @@ package checkpoints_test
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/store/storetest"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -17,6 +21,23 @@ import (
 // carries a scheme. internal/store requires a redactor to open at all, and its
 // own is unexported, so the tests supply one of that shape rather than reaching
 // into another package.
+// TestMain reclaims a directory a killed run of this package left before the
+// examples and tests make another, and removes the database template
+// internal/store/storetest made once they have run.
+func TestMain(m *testing.M) {
+	if err := standin.RegisterTempTag(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := standin.SweepTempDirs(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	storetest.Remove()
+	os.Exit(code)
+}
+
 var seamUserinfo = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@\s]+)@`)
 
 func workingRedactor() vcs.Redactor {
@@ -25,10 +46,14 @@ func workingRedactor() vcs.Redactor {
 	})
 }
 
-// openRecords opens a fresh database in a temporary directory.
+// openRecords opens a fresh database in a temporary directory, seeded from
+// internal/store/storetest's template for time alone, as that package's
+// comment says.
 func openRecords(t *testing.T) *store.Store {
 	t.Helper()
-	return openRecordsAt(t, filepath.Join(t.TempDir(), "state.db"))
+	path := filepath.Join(t.TempDir(), "state.db")
+	storetest.Seed(t, path)
+	return openRecordsAt(t, path)
 }
 
 // openRecordsAt opens the database at path, creating it if it is not there, and

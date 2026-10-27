@@ -55,7 +55,7 @@ existed.
 Bound `review.path_instructions` per rule rather than as one shared pool, so
 adding a rule can never cost an existing one.
 
-The shape is not invented for this ask. `docs/prd.html` section 10 already
+The shape is not invented for this ask. `docs/prd.md` section 10 already
 specifies it for the same setting in this project's own configuration schema:
 
 | Limit | Value | Measured on |

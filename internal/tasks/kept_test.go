@@ -65,26 +65,26 @@ func TestEveryRefusalIsPlacedAsKeptWorkOrNot(t *testing.T) {
 	}
 }
 
-// A promotion window keep is held to the cleanup decision's own reading of
-// an investigation copy: an unchanged copy, scratch on that rule, holds no
-// work and writes no entry, while a copy with a commit or a file no commit
+// A promotion window keep reads an investigation copy as every keep does:
+// an unchanged copy holds nothing the default branch lacks and writes no
+// entry (NothingKept), while a copy with a commit or a file no commit
 // records is one entry naming what it holds, written once however often it
 // is asked. A delivery task's copy and a run's are refused, so the reason
-// names only the copy PRD section 6 keeps for a promotion. The scratch case
-// is the control for the other two: the same keep of the same fixture with
-// work in it does write.
-func TestAPromotionWindowKeepRecordsWorkAndNotScratch(t *testing.T) {
+// names only the copy PRD section 6 keeps for a promotion. The unchanged
+// case is the control for the other two: the same keep of the same fixture
+// with work in it does write.
+func TestAPromotionWindowKeepRecordsWorkAndNotAnUnchangedCopy(t *testing.T) {
 	ctx := context.Background()
 	window := func(id string) Kept {
 		return Kept{Task: id, Reason: KeptPromotionWindow, Detail: "the window passed"}
 	}
-	t.Run("an unchanged copy is scratch and writes nothing", func(t *testing.T) {
+	t.Run("an unchanged copy keeps nothing and writes nothing", func(t *testing.T) {
 		s := newCleanupSubject(t, nil)
 		tk := s.investigationTask(t)
 		s.storeReport(t, tk.id)
 		got, err := s.cleaner.Keep(ctx, window(tk.id))
-		if err != nil || !got.Scratch || got.Recorded || got.Entry.ID != 0 {
-			t.Fatalf("keeping an unchanged copy answered %+v (%v), want scratch and no entry", got, err)
+		if err != nil || !got.NothingKept || got.Recorded || got.Entry.ID != 0 {
+			t.Fatalf("keeping an unchanged copy answered %+v (%v), want nothing kept and no entry", got, err)
 		}
 		if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 0 {
 			t.Fatalf("an unchanged copy left kept work %+v (%v), want none", open, err)
@@ -96,19 +96,19 @@ func TestAPromotionWindowKeepRecordsWorkAndNotScratch(t *testing.T) {
 		s.storeReport(t, tk.id)
 		head := commit(t, tk.copy, "g.txt", "investigated\n", "investigated")
 		first, err := s.cleaner.Keep(ctx, window(tk.id))
-		if err != nil || first.Scratch || !first.Recorded || first.Entry.Reason != KeptPromotionWindow ||
+		if err != nil || first.NothingKept || !first.Recorded || first.Entry.Reason != KeptPromotionWindow ||
 			first.Entry.TaskID.Or("") != tk.id || !slices.Contains(first.Entry.Holds, head) {
 			t.Fatalf("keeping a copy with a commit answered %+v (%v), want an entry holding %s", first, err, head)
 		}
 		again, err := s.cleaner.Keep(ctx, window(tk.id))
-		if err != nil || again.Recorded || again.Scratch || again.Entry.ID != first.Entry.ID {
+		if err != nil || again.Recorded || again.NothingKept || again.Entry.ID != first.Entry.ID {
 			t.Fatalf("keeping the same copy again answered %+v (%v), want entry %d found and not written", again, err, first.Entry.ID)
 		}
 		if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 1 {
 			t.Fatalf("the copy left kept work %+v (%v), want one entry", open, err)
 		}
 	})
-	t.Run("a file no commit records is not scratch", func(t *testing.T) {
+	t.Run("a file no commit records is kept", func(t *testing.T) {
 		s := newCleanupSubject(t, nil)
 		tk := s.investigationTask(t)
 		s.storeReport(t, tk.id)
@@ -116,7 +116,7 @@ func TestAPromotionWindowKeepRecordsWorkAndNotScratch(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := s.cleaner.Keep(ctx, window(tk.id))
-		if err != nil || got.Scratch || !got.Recorded {
+		if err != nil || got.NothingKept || !got.Recorded {
 			t.Fatalf("keeping a copy with an untracked file answered %+v (%v), want an entry", got, err)
 		}
 	})

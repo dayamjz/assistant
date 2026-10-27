@@ -69,7 +69,10 @@
 // anchor above protects, and not the read.
 //
 // The attempt's session_ref is the one record of which session an attempt
-// had, filled once by SetAttemptSession after the process starts. The
+// had, filled once by SetAttemptSession after the process starts, with, for
+// a task on a remote host and only there, the identity of the herdr server
+// hosting it in the same write (taskMachineMigration's host_pid and
+// host_start, the one record of that server). The
 // attempt's adapter, route_reason and route_skipped are the one record of
 // which coding agent agents.Route selected for the worker, why, and what it
 // passed over, filled once by SetAttemptRoute before the process starts.
@@ -78,6 +81,28 @@
 // session_ref column migration 1 gave the task table is neither written nor
 // read by this build: it stays declared because a migration may not remove a
 // column, and holds NULL for every task created here.
+//
+// # The machine a task runs on
+//
+// PRD section 8's task record holds the machine a task runs on, and
+// taskMachineMigration's task.machine is the one place it is stored (P14):
+// a remote host's name, NULL for this machine, which is what every row
+// written before the column reads as. BeginFirstTaskAttempt is the
+// dispatch: it writes the machine, for a remote host, in the transaction
+// that records the first attempt, anchored to no attempt, so of two
+// dispatchers that both found none, one records the attempt and the machine
+// together and the other is refused. BeginTaskAttempt begins only the attempts
+// after it, a relaunch or a dispatch retried after an attempt that never
+// launched, and writes no machine; promotion writes none either. The schema
+// refuses the column at intake and every write of it once the task has an
+// attempt; that nothing writes it between intake and the dispatch is the
+// accessor's, since no other accessor names it. A carry on is placed by
+// CarriedOnFrom, which names the kept work entry and reads the machine off
+// the task it outlived, so the new task gets the kept copy's machine and the
+// caller states none. Everything else points at the task row: a session
+// reference names its task and never a machine, and a kept work entry's
+// machine is read off its owner task's row on every read, this machine for
+// a run's.
 //
 // # What the terminal tier reads
 //
@@ -92,6 +117,14 @@
 // record. The resolver's terminal tier, internal/taskstate, is the consumer,
 // and which attributed run's merge record makes a task Landed is its
 // question: the snapshot carries all of them rather than deciding.
+//
+// A third record lands a task in that tier: PRD section 8's
+// nothing-to-deliver record, which the nothing_to_deliver table holds and
+// TransitionRunOnNothingToDeliver writes in the transaction that moves the
+// run to passed, refusing a submitted commit the run was not given and a
+// checkpoint its history does not hold. TaskSnapshot carries it for every
+// attributed run on the merge record's terms, and it is sealed on the merge
+// record's terms too, its seen mark with it.
 //
 // Two records beside them are written by the same cleanup decision, and
 // migration 18 holds both. RunCleanup is a run's copy's cleanup record on
@@ -127,7 +160,9 @@
 // column the catalog cannot read. The merge record, the run cleanup record
 // and a merge record's seen mark go too: the migration named
 // forgetRunRecordsMigration narrows their delete seals to "while what they
-// describe stands", and ForgetRepository removes them after the run row.
+// describe stands", and ForgetRepository removes them after the run row. The
+// nothing-to-deliver record and its seen mark go on the same terms, which
+// nothingToDeliverMigration writes its seals with.
 //
 // # The message record
 //
@@ -157,6 +192,9 @@
 // keyed by the domain wake, with the same seals and the same accessors
 // under Domain names (PendingDomainNotifications, ClaimDomainNotification,
 // SettleDomainNotification), one implementation serving both tables.
+// Migration 55's kept_work_notification is the same record for the third
+// shape, keyed by the kept-work wake, under KeptWork names, on the same
+// implementation.
 //
 // # The kept work record
 //
@@ -165,8 +203,20 @@
 // once by RecordKeptWork with its one owner, a task or a run, and the
 // project and branch read off that owner's row in the same transaction. A
 // copy holding the same commits at the same path is the same row, so the
-// write is idempotent. Its one revision closes it, made once and only while
-// it is open: AnswerKeptWork with a person's answer and its Resolver, or the
+// write is idempotent, and holds, the commits the copy's references and HEAD
+// stood on, is that identity. keptWorkAgainstMigration adds the entry's
+// basis, which is no part of the identity: lacks, the commits the copy
+// reaches that the default branch tip against does not, or unestablished,
+// the account of why that could not be computed, exactly one on every row
+// written since, which the insert trigger holds; a row written before
+// carries neither and reads as unestablished, which KeptWork.Established
+// reports. The basis is the one thing an open unestablished entry may later
+// have filled in, once, through EstablishKeptWork, and the update trigger
+// holds it to that one direction and to an open row, so an answered or
+// closed row is sealed whole. A land or carry-on claim may be written on
+// an open row and withdrawn whole, which leaves it open. Its one revision
+// otherwise closes it, made once and only while it is open: a person's
+// answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof, so the program never closes an entry by
@@ -181,6 +231,19 @@
 // internal/cli's eject then refuses while any run copy stands on disk, so
 // the gate is never removed under a copy that depends on it. No reservation
 // refuses a kept work entry.
+//
+// An open entry also holds a new task's dispatch in its project, PRD
+// section 6's "kept work is answered before new task work starts".
+// keptworkhold.go is the one predicate (a task naming a project, with no
+// attempt whose worker started by a recorded session, whose project has an
+// open entry), read by KeptWorkHolding, and by BeginFirstTaskAttempt,
+// BeginDispatchAttempt and ClaimAttemptLaunch (attemptLaunchMigration's
+// launch_claimed_at, written once immediately before a worker's process
+// starts), each of the three refusing a held task with a
+// *DispatchHeldError in the transaction that would write. It is derived from
+// the records on every read and stored nowhere. BeginTaskAttempt, the
+// relaunch claim, is not held, and a launch claim alone does not exempt a
+// task: only a recorded session does.
 //
 // # The wake queue and the markers it is written with
 //
@@ -316,6 +379,26 @@
 // UnacknowledgedDomainWakes is the count internal/supervisor's InFlightOf
 // adds to the per-task one.
 //
+// A wake about a kept work entry no task names is the queue's third shape,
+// migration 55's kept_work_wake, PRD section 8's kept-work wake: domain_wake's
+// columns with the delegation replaced by the entry, which owns the row
+// (P14), its project and branch read off the entry at every read, the same
+// seals, a sequence of its own, and no markers, since it is raised once per
+// entry, which its unique key holds. AppendKeptWorkWake is the one append;
+// it refuses an entry answered or closed, and records the entry's
+// surfaced_at in the wake's own transaction, as AppendWakeWithMarkers does
+// for a task's wake naming the entry in WakeRequest.Surfaces, so the
+// supervisor loop reads whether an entry surfaced from the entry whichever
+// shape raised it; TaskWakeKeyed is the read of a task's wake by kind and
+// marker, for a database an earlier build left with a task's wake and no
+// instant.
+// untaskedShape is the one implementation of the offer, the handout, the
+// count and the acknowledgement for the two shapes about no task, and
+// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// kept-work wake and its notification go only with a closed run entry
+// whose run is gone, which only ForgetRepository removes, and it refuses
+// while the wake is unacknowledged (ErrKeptWorkWakeQueued).
+//
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
 // the drain is for and the kinds a subordinate can act on as words, and
@@ -428,9 +511,10 @@
 // speaks for, so a surface that derived ResolvedByMachineInterface and then
 // named ResolvedByPerson in source would be recorded as it asked. No caller
 // here does: the value has no producer in this repository outside the tests
-// that hold this rule. The production resolutions are internal/service's: one
-// recorded as ResolvedByProgram for the one hold PRD section 8 lets the
-// service close itself, which that resolver's own comment names, and the
+// that hold this rule. The production resolutions are internal/service's:
+// those recorded as ResolvedByProgram for the two holds the service closes
+// itself, the checks stage's hold PRD section 8 names and the stall hold PRD
+// section 6 names, which that resolver's own comment states, and the
 // answer to a hold a task raised, recorded as whatever internal/ipc's
 // Request.HoldResolver derives for the request it arrived on, which is
 // ResolvedByMachineInterface, and each answer the program gives a run's

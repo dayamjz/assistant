@@ -45,30 +45,38 @@ func StateInFlight(s taskstate.State) (inFlight, decided bool) {
 }
 
 // TaskInFlight reports whether one task is in flight: its state is, on
-// inFlightByState's terms, or it has a queued wake, whatever its state. The
-// second result is false for a state the table does not decide, which a
-// caller reads as a reading it cannot take and never as not in flight.
-// InFlightOf is this rule over a fleet, and PRD section 9's catch-up lists
-// the tasks it holds true for, so the two cannot count different work.
-func TaskInFlight(s taskstate.State, unacknowledged int) (inFlight, decided bool) {
+// inFlightByState's terms, or it has a queued wake, or an open stall hold,
+// whatever its state. The stall hold is PRD section 6's "a held stall stays
+// watched": a task held on one resolves Held, which on its state alone waits
+// only on a person, but its worker is still running, so it is in flight
+// whatever the queue holds; StallHeld is how a caller reads it. The second
+// result is false for a state the table does not decide, which a caller
+// reads as a reading it cannot take and never as not in flight. InFlightOf
+// is this rule over a fleet, and PRD section 9's catch-up lists the tasks it
+// holds true for, so the two cannot count different work.
+func TaskInFlight(s taskstate.State, unacknowledged int, stallHeld bool) (inFlight, decided bool) {
 	inFlight, decided = StateInFlight(s)
-	return inFlight || unacknowledged > 0, decided
+	return inFlight || unacknowledged > 0 || stallHeld, decided
 }
 
 // InFlightOf is the in-flight reading over a fleet: states is each task's
-// resolved state keyed by task identifier, unacknowledged is how many
-// queued wakes each task has, keyed the same way, which store.UnacknowledgedWakes
-// returns, and domainWakes is how many queued wakes about a domain rather
-// than a task there are, which store.UnacknowledgedDomainWakes returns. A
-// task is in flight when its state is, on inFlightByState's
-// terms, or when it has a queued wake, whatever its state: a hold nobody has
+// resolved state keyed by task identifier; unacknowledged is how many
+// queued wakes each task has, keyed the same way, which
+// store.UnacknowledgedWakes returns; stallHeld is the tasks with an open
+// stall hold, keyed the same way, which StallHeld reads off each task's
+// snapshot; and untasked is how many queued wakes about no task there are:
+// about a domain, which store.UnacknowledgedDomainWakes returns, and about
+// a kept work entry no task names, which store.UnacknowledgedKeptWorkWakes
+// returns. A task is in flight when its state is, on inFlightByState's
+// terms, or when it has a queued wake or an open stall hold, whatever its
+// state: a hold nobody has
 // been told about keeps the guard, and acknowledging the wake is what
 // releases it: a drain hands a row out and releases nothing, so a wake keeps
 // its task in flight until the coordinator acknowledges it acted. A task
 // present only in unacknowledged counts too, and so does a queued wake
-// about a domain, on the same terms: a subordinate coordinator gone, or a
-// delegation holding for a person, that nobody has acknowledged keeps the
-// home in flight whatever every task says.
+// about no task, on the same terms: a subordinate coordinator gone, a
+// delegation holding for a person, or kept work no task names, that nobody
+// has acknowledged keeps the home in flight whatever every task says.
 //
 // The answer is InFlightSome when any task is in flight, InFlightNone when
 // none is, including over an empty fleet, and InFlightUnknown when any task's
@@ -76,10 +84,10 @@ func TaskInFlight(s taskstate.State, unacknowledged int) (inFlight, decided bool
 // about one task would be a reading, and the safe direction is to block.
 // It is pure, and the three inputs are the caller's reads, taken as of
 // whatever consistency the caller arranged.
-func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int, domainWakes int) InFlight {
-	some := domainWakes > 0
+func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int, stallHeld map[string]bool, untasked int) InFlight {
+	some := untasked > 0
 	for task, state := range states {
-		inFlight, decided := TaskInFlight(state, unacknowledged[task])
+		inFlight, decided := TaskInFlight(state, unacknowledged[task], stallHeld[task])
 		if !decided {
 			return InFlightUnknown
 		}

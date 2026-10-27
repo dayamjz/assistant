@@ -20,7 +20,11 @@ import (
 //
 // PRD section 5 asks this stage to fetch fresh upstream and the branch target,
 // then rebase onto them. If nothing remains to change after the rebase, the
-// run ends successfully and the rest is skipped via KeyDiffEmpty.
+// run ends successfully and the rest is skipped via KeyDiffEmpty. Beside it,
+// in the same write, the stage records the default-branch commit it read and
+// whether P12's content check finds the submitted work present in it,
+// KeyDiffEmptyCheck, which PRD section 6's "nothing left to deliver" reads;
+// nothing.go owns that check and its reader.
 //
 // # What it guards against
 //
@@ -57,9 +61,21 @@ import (
 // # Fix rounds
 //
 // This stage has 3 fix rounds available per config.FixRounds.Rebase. When
-// conflicts occur during rebase, the fixer can be invoked to resolve them.
-// That is the first pass only, before anything was pushed; the section below
-// says what a conflict does after the push.
+// the first pass stops on conflicts, the rebase stays in progress and the
+// copy stands on the new base with those conflicts in the working tree. The
+// fix round resolves them there. It commits a resolution that differs from
+// the commit the rebase is stopped on and continues, so the conflicting
+// commit is not replayed again ahead of the fix. A resolution that matches
+// that commit skips the step, and a step already replayed stays. A round that
+// leaves any conflicted file as the conflict left it, or with a marker line
+// git wrote for the conflict still in it, commits nothing and leaves the
+// rebase stopped with that file conflicted, so the next execution reports
+// the conflict again. A round that leaves the index and the worktree
+// unchanged leaves the rebase stopped too, never aborting it, so neither a
+// step an earlier round committed nor a resolution it staged is discarded.
+// An execution that finds a rebase this stage already started does not
+// start a second one: it reports the conflict that rebase is stopped on. The section below says
+// what a conflict does after the push.
 //
 // # After the push: a second pass that rebases a branch the run pushed
 //
@@ -109,6 +125,7 @@ func Rebase(deps StageDeps) pipeline.Implementation {
 		Writes: []pipeline.Key{
 			pipeline.KeyHead,
 			pipeline.KeyDiffEmpty,
+			pipeline.KeyDiffEmptyCheck,
 			pipeline.KeyPushAnchor,
 		},
 		NewBody: func() pipeline.Body {
@@ -141,8 +158,10 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	if err != nil {
 		return pipeline.Output{}, err
 	}
+	recorder := recorderOf(deps, copied, runID, submitted)
 	if pushed != "" {
-		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed, fork: fork})
+		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed, fork: fork,
+			recorder: recorder})
 	}
 
 	// The anchor is taken here, before this stage brings the change up to date
@@ -165,6 +184,17 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		return pipeline.Output{}, err
 	}
 	writes := map[pipeline.Key]graph.Value{pipeline.KeyPushAnchor: anchorValue}
+
+	// A rebase left in progress is one this stage started and a fix round has
+	// not finished. Starting another would stop on the directory that is
+	// already there. A conflict still open is the same fix finding. One whose
+	// current step is already committed is continued, and the ordinary replay
+	// below then checks the result.
+	if out, handled, err := settleOpenRebase(ctx, copied, branch, base); err != nil {
+		return pipeline.Output{}, err
+	} else if handled {
+		return withWrites(out, writes), nil
+	}
 
 	// The branch under validation need not be on the upstream at all: a branch
 	// pushed to the gate for the first time is the ordinary case, and it is
@@ -213,7 +243,7 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	// what this pass does: incorporateBranch says why the base cannot be
 	// rebased onto past it.
 	incorporated, handled, err := incorporateBranch(ctx, copied, incorporating{
-		branch: branch, base: onto, submitted: submitted, anchor: anchor, baseCommit: baseCommit,
+		branch: branch, base: onto, submitted: submitted, anchor: anchor, baseCommit: baseCommit, recorder: recorder,
 	})
 	if err != nil {
 		return pipeline.Output{}, err
@@ -245,6 +275,9 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		if err != nil {
 			return pipeline.Output{}, err
 		}
+		if err := checkNothingLeft(ctx, copied, &output, submitted, targetCommit); err != nil {
+			return pipeline.Output{}, err
+		}
 		return withWrites(output, writes), nil
 	}
 
@@ -255,6 +288,10 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	err = copied.Rebase(ctx, rebaseSpec)
 	if err != nil {
 		if errors.Is(err, vcs.ErrRebaseConflict) {
+			// The copy stays on the new base with the conflicts in the tree.
+			// The fix round resolves them there; aborting first would put a
+			// later fix commit after the conflicting one, and the next replay
+			// would stop on that commit before it reached the fix.
 			return withWrites(rebaseConflictReport(branch, base, target), writes), nil
 		}
 		return pipeline.Output{}, fmt.Errorf("stages: rebasing onto %s: %w", target, err)
@@ -265,19 +302,41 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf("stages: resolving HEAD after rebase: %w", err)
 	}
+	if err := recorder.record(ctx, currentHead, targetCommit, newHead); err != nil {
+		return pipeline.Output{}, err
+	}
 
 	// Check if diff is empty after rebase
 	output, err := checkDiffEmpty(ctx, copied, newHead, targetCommit, submitted)
 	if err != nil {
 		return pipeline.Output{}, err
 	}
-
-	// Update KeyHead with the new commit
-	output.Writes = map[pipeline.Key]graph.Value{
-		pipeline.KeyHead: graph.TextValue(newHead),
+	if err := checkNothingLeft(ctx, copied, &output, submitted, targetCommit); err != nil {
+		return pipeline.Output{}, err
 	}
 
+	// The new head joins what checkDiffEmpty wrote rather than replacing it:
+	// a replay that dropped every commit is exactly the one whose
+	// KeyDiffEmpty the short circuit needs.
+	writes[pipeline.KeyHead] = graph.TextValue(newHead)
 	return withWrites(output, writes), nil
+}
+
+// checkNothingLeft adds the content check nothing.go describes to an output
+// that took the empty-diff short circuit, and leaves any other output as it
+// is.
+func checkNothingLeft(ctx context.Context, copied *vcs.Repository, out *pipeline.Output, submitted, against string) error {
+	if empty, ok := out.Writes[pipeline.KeyDiffEmpty]; !ok {
+		return nil
+	} else if set, _ := empty.Bool(); !set {
+		return nil
+	}
+	checked, err := askEmptyCheck(ctx, copied, submitted, against)
+	if err != nil {
+		return err
+	}
+	out.Writes[pipeline.KeyDiffEmptyCheck] = checked
+	return nil
 }
 
 // readRebaseState reads the facts this stage needs from the run's state.
@@ -349,13 +408,55 @@ func checkDiffEmpty(ctx context.Context, repo *vcs.Repository, head, target, sub
 	}, nil
 }
 
-// rebaseConflictReport builds the report for a rebase that stopped due to conflicts.
+// settleOpenRebase reports a conflict this stage's rebase has already stopped
+// on, or continues a rebase whose current step is already committed.
+//
+// handled is false when the copy has no rebase in progress, so the caller
+// starts the ordinary replay. A conflicted tree is not aborted here: the fix
+// round is what resolves it, on this base.
+func settleOpenRebase(ctx context.Context, copied *vcs.Repository, branch, base string) (pipeline.Output, bool, error) {
+	active, err := copied.RebaseStatus(ctx)
+	if err != nil {
+		return pipeline.Output{}, false, fmt.Errorf("stages: reading whether a rebase is in progress: %w", err)
+	}
+	if !active {
+		return pipeline.Output{}, false, nil
+	}
+	onto := base
+	if onto == "" {
+		onto = branch
+	}
+	target := fmt.Sprintf("refs/remotes/%s/%s", UpstreamRemote, onto)
+	changes, err := copied.Changes(ctx)
+	if err != nil {
+		return pipeline.Output{}, false, fmt.Errorf("stages: reading the in-progress rebase onto %s: %w", target, err)
+	}
+	if changes.Unmerged {
+		return rebaseConflictReport(branch, base, target), true, nil
+	}
+	if err := copied.RebaseContinue(ctx); err != nil {
+		if errors.Is(err, vcs.ErrRebaseConflict) {
+			return rebaseConflictReport(branch, base, target), true, nil
+		}
+		return pipeline.Output{}, false, fmt.Errorf("stages: continuing the rebase onto %s: %w", target, err)
+	}
+	return pipeline.Output{}, false, nil
+}
+
+// rebaseConflictReport builds the fix finding for a rebase that stopped with
+// conflicts while the copy stands on the new base. The fix round resolves
+// those files in place.
 func rebaseConflictReport(branch, base, target string) pipeline.Output {
 	description := fmt.Sprintf(
-		"The rebase onto %s encountered conflicts that need to be resolved. "+
-			"The branch %s could not be automatically rebased onto %s.\n\n"+
-			"A fixer can attempt to resolve these conflicts, or the run can be "+
-			"cancelled if manual intervention is required.",
+		"The rebase onto %s stopped with conflicts. The copy is on that base "+
+			"with the conflicts in the working tree, and the rebase is still in progress. "+
+			"The branch %s could not be replayed onto %s as it stands.\n\n"+
+			"Resolve the conflicted files in place. The resolution is recorded on this "+
+			"base. Leave a file unchanged if its conflict cannot be resolved: while any "+
+			"conflicted file is left as the conflict left it, nothing is recorded and the "+
+			"rebase stays stopped. A file that still holds a conflict marker git wrote "+
+			"is not resolved, staged or not. If a conflicted file's current content "+
+			"already is its resolution, stage it with git add.",
 		target, branch, base)
 
 	return pipeline.Output{

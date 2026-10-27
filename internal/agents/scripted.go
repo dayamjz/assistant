@@ -46,6 +46,10 @@ func (f *scriptedFactory) Name() string { return ScriptedName }
 // caller built, and never by "auto".
 func (f *scriptedFactory) AutoEligible() bool { return false }
 
+// Declares is what every runner this factory builds declares, which
+// scriptedRunner's Capabilities states.
+func (f *scriptedFactory) Declares() Capabilities { return scriptedDeclaration }
+
 // New reports whether the binary resolves, on the same terms ClaudeFactory's
 // New states, and returns a Runner that is also a WorkerRunner when it does.
 func (f *scriptedFactory) New(ctx context.Context, args []string) (Runner, error) {
@@ -69,11 +73,15 @@ func (f *scriptedFactory) New(ctx context.Context, args []string) (Runner, error
 type scriptedRunner struct{ *claudeRunner }
 
 // Capabilities declares resumable sessions, worker sessions and terminal
-// workers, because all three mechanisms are here. Instruction suppression is not declared, for the
-// reason the Claude Code adapter gives.
-func (r *scriptedRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers)
-}
+// workers, because all three mechanisms are here, and the four token counts,
+// because the one-shot path is the Claude Code adapter's and reads its
+// envelope. Instruction suppression is not declared, for the reason the
+// Claude Code adapter gives.
+func (r *scriptedRunner) Capabilities() Capabilities { return scriptedDeclaration }
+
+// scriptedDeclaration is what Capabilities and the factory's Declares both
+// return.
+var scriptedDeclaration = claudeDeclaration
 
 // Start launches the binary as a worker: the configured entry's own
 // arguments and nothing managed, with --print absent, and every send written

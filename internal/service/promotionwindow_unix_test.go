@@ -307,6 +307,10 @@ func TestAReportedWorkerPastThePromotionWindowIsEndedAndAPromotionRelaunchesItFr
 	principles.Cite(t, principles.P15)
 	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation in its copy")
 	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
+	// The copy is a clone of the primary checkout, so with the checkout on
+	// its default branch the copy dispatch cuts holds nothing that branch
+	// lacks.
+	git(t, inv.repository.WorkingPath, "checkout", "--quiet", "main")
 	inv.serve(t, func(running serviceUnderTest) {
 		w := inv.reported(t, running)
 		ended := w.session.Reference().String()
@@ -318,14 +322,15 @@ func TestAReportedWorkerPastThePromotionWindowIsEndedAndAPromotionRelaunchesItFr
 		if got := attemptsOf(t, inv.home, inv.task); len(got) != 1 {
 			t.Fatalf("ending the worker for the window began %d attempts, want none past the first", len(got)-1)
 		}
-		// The copy is exactly as its dispatch cut it, scratch on the cleanup
-		// decision's rule, so it holds no work and is no kept work entry;
-		// the test below is the same window over a copy that holds a commit.
+		// The copy is exactly as its dispatch cut it from the default
+		// branch, so it holds nothing that branch lacks and is no kept work
+		// entry; the test below is the same window over a copy that holds a
+		// commit.
 		if open, wakes := inv.keptWork(t); len(open) != 0 || len(wakes) != 0 {
-			t.Fatalf("a scratch copy kept past the window is kept work %+v with wakes %+v, want neither", open, wakes)
+			t.Fatalf("an unchanged copy kept past the window is kept work %+v with wakes %+v, want neither", open, wakes)
 		}
-		if log := serviceLog(t, inv.home); !strings.Contains(log, "holds no work the cleanup decision would keep it for") {
-			t.Fatalf("the service log does not say the scratch copy was read and recorded as no kept work:\n%s", log)
+		if log := serviceLog(t, inv.home); !strings.Contains(log, "lacks, so no kept work entry is recorded") {
+			t.Fatalf("the service log does not say the unchanged copy was read and recorded as no kept work:\n%s", log)
 		}
 
 		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-passed"), ended)

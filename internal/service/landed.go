@@ -33,8 +33,8 @@ import (
 //
 // # Retrying the cleanup
 //
-// cleanup.go's landing sites run once, when the merge record or the local
-// landing record is written, and a terminal that did not read Dead then,
+// cleanup.go's landing sites run once, when the merge record, the
+// nothing-to-deliver record or the local landing record is written, and a terminal that did not read Dead then,
 // because the worker was one this service could not end or had not yet
 // exited, left the copy standing. The decision is therefore asked whenever
 // the task's terminal is observed Dead, from three places, each handing internal/tasks the liveness a resolution read
@@ -73,10 +73,12 @@ import (
 // promotion relaunches a worker in it (coordinator.go), and once the worker
 // is ended the copy is kept work (P15): endWindow hands it to keepWork with
 // tasks.KeptPromotionWindow, so it is one kept work entry, surfaced as every
-// other entry is, unless internal/tasks reads it as scratch, holding no
-// work. Its cleanup is owed only once the task
-// leaves the investigation lifecycle through its findings relayed record,
-// below. Nothing here reads the report's text: whether it is stored is the
+// other entry is and holding the project's new tasks on dispatch.go's
+// terms, unless internal/tasks reads the copy as holding nothing the
+// default branch lacks (NothingKept). A promotion answers that entry carry
+// on in its flip, as it answers any open entry of its copy, and relaunches
+// in the copy. Its cleanup is owed only once the task leaves the
+// investigation lifecycle through its findings relayed record, below. Nothing here reads the report's text: whether it is stored is the
 // row's to say, and what it says is the relaunch's starting point.
 //
 // # A relayed investigation
@@ -98,18 +100,30 @@ import (
 // one recurring trigger, at the supervisor's beacon interval, so a window's
 // end is acted on up to one interval late, and it bounds
 // itself: a worker is ended at most once, because ending it forgets the
-// handle the next pass would find; and the cleanup is asked at most once per
-// task and session reference observed Dead in this service's life, recorded
-// in landedTried, because a refusal the proof answered (work that reached
-// no upstream, an unreadable remote) answers the same until something
-// outside this service changes, and asking at every interval would fetch
-// the upstream at every interval for nothing. A window's keep settles at
-// most once per task and reference in this service's life, recorded in
-// windowKept, and a failed one is asked again at the next pass. A restart
-// forgets the memory, so each service start asks once more; that and a stop
-// are how a refused cleanup is asked again, and the store's RecordKeptWork
-// finding the entry an earlier life wrote is what keeps a window's keep to
-// one entry across lives. The work runs on a goroutine registered through
+// handle the next pass would find; and the cleanup is asked again for a
+// task and session reference observed Dead only once landedAskSpacing has
+// passed since it was last asked under that reference, and at most
+// landedAsks times in this service's life, counted in landedTried after
+// each answer to an ask made through askLandedCleanup: a landing site's,
+// the pass's and a stop's. cleanup.go's ask when a report is stored is not
+// counted, so it neither spends the bound nor delays the pass. Asking again is what lets a
+// refusal that changes with the world, an upstream that could not be read
+// or a pull request the code host had not yet reported merged, end in a
+// removal without anybody stopping or restarting anything. The spacing is
+// because a refusal the proof answered from what the upstream holds
+// answers the same until something outside this service changes, and
+// asking at every interval would fetch the upstream at every interval for
+// nothing; the bound is because some refusals never change by themselves,
+// work that reached no upstream above all, and nothing retries without a
+// bound. Past it the kept work entry the first refusal raised is what
+// stands, and a stop or a restart, which forgets the memory, asks again.
+// The bound is on how often one task's cleanup is asked, the shape of
+// relaunch_attempts, and not one of internal/graph's loop bounds: it stops
+// no run and parks nothing. A window's keep settles at most once per task
+// and reference in this service's life, recorded in windowKept, and a
+// failed one is asked again at the next pass; the store's RecordKeptWork
+// finding the entry an earlier life wrote is what keeps it to one entry
+// across lives. The work runs on a goroutine registered through
 // startWork, never on the loop's own, because a fetch is not bounded by the
 // beacon interval the loop's calls are held to, and it takes the task's
 // slot through claimSteer, so it never interleaves with a stop, a relaunch
@@ -126,8 +140,13 @@ import (
 //   - The terminal is as of the resolution's probe, and a worker that
 //     starts writing in the copy between that probe and the removal is
 //     caught only by internal/tasks' inventory re-read, as cleanup.go says.
-//   - A refused cleanup is asked again only at a stop or a restart; nothing
-//     watches the upstream for the change that would let the proof pass.
+//   - A refused cleanup is asked again at most landedAsks times, spaced by
+//     landedAskSpacing, under one Dead terminal, and then only at a stop or
+//     a restart; nothing watches the upstream for the change that would let
+//     the proof pass, so a change that comes later than that waits for one.
+//     The memory is the service's, so a restart begins the count afresh.
+//   - landedAskSpacing and landedAsks are constants of this package, chosen
+//     and not measured, and no configuration row sets them.
 //   - What the decision answered goes to the log, as at every task-copy
 //     site, and travels on no answer: task.stop's answer says no hold was
 //     registered and not whether the copy was removed.
@@ -136,11 +155,9 @@ import (
 //     task's (the first gap); one whose reference cannot be verified is
 //     reported in the log once per reference per service life and left
 //     running.
-//   - A copy kept after the window is kept work, but no open entry holds
-//     dispatch in this build (#411's second part), and a reported
-//     investigation that is never promoted or relayed keeps its copy
-//     indefinitely. A promotion is not an answer: an entry the window wrote
-//     stays open on the promoted task until its copy is removed on a proof.
+//   - A reported investigation that is never promoted or relayed keeps its
+//     copy, and the entry the window wrote holds its project's new tasks,
+//     until a person answers the entry or a removal on a proof closes it.
 //   - A survivor whose end the window could not verify, or whose group did
 //     not end, gets no entry in this service's life, because it may still
 //     write in the copy; the next life asks again.
@@ -253,8 +270,9 @@ func (s *Service) endLandedWorker(ctx context.Context, id string) {
 
 // cleanUpLandedTask reads the task through the service's reader and, while
 // it is still owed a cleanup, asks the decision with the terminal that read
-// resolved, remembering a Dead terminal's reference in landedTried so the
-// pass does not ask again for it. It logs what the decision answered.
+// resolved, and counts the ask in landedTried when that terminal read Dead,
+// so the pass asks again only on its spacing and bound. It logs what the
+// decision answered.
 func (s *Service) cleanUpLandedTask(ctx context.Context, id string) {
 	o, err := s.tasks().ObserveTask(ctx, id)
 	if err != nil {
@@ -266,8 +284,11 @@ func (s *Service) cleanUpLandedTask(ctx context.Context, id string) {
 
 // askLandedCleanup asks the cleanup decision for a task read in o, when o
 // says it is still owed one, landed or reported (copyCleanupOwed), with the
-// terminal o resolved, and logs what the decision answered. A Dead terminal's reference is remembered in
-// landedTried first.
+// terminal o resolved, and logs what the decision answered. An ask under a
+// Dead terminal is counted in landedTried once the decision has answered,
+// whatever it answered, so the pass's next ask of the same terminal waits
+// out the spacing; a terminal not Dead is no ask the decision could have
+// granted, and is not counted.
 func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 	if !copyCleanupOwed(o) {
 		return
@@ -277,10 +298,10 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 		s.log.Printf("the isolated copy of task %s was not cleaned up: this service was built without a cleanup decision", id)
 		return
 	}
-	if o.State.Basis.Process == taskstate.Dead {
-		s.markLandedTried(id, latestRef(o.Snapshot.Attempts))
-	}
 	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: id, Terminal: o.State.Basis.Process})
+	if o.State.Basis.Process == taskstate.Dead {
+		s.markLandedTried(id, latestRef(o.Snapshot.Attempts), time.Now())
+	}
 	s.logCleanup(ctx, done, err)
 }
 
@@ -290,12 +311,12 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // has passed, it ends the worker this service still holds for the latest
 // attempt, an expired window's survivor and its copy's keep going to
 // endWindow, a worker read Dead included, and for each one still owed a
-// cleanup, landed or a relayed
-// investigation, whose terminal the pass read Dead under a reference not
-// yet tried, it asks the decision. The work goes to a goroutine registered
-// through startWork under the task's slot, and an expired window is read
-// again there, so a promotion that took the slot first is not undone; a
-// slot already taken, or a service giving up its home, skips the task
+// cleanup, landed or a relayed investigation, whose terminal the pass read
+// Dead under a reference whose ask is due (landedAskDue), it asks the
+// decision. The work goes to a goroutine registered through startWork under
+// the task's slot, and an expired window is read again there, so a
+// promotion that took the slot first is not undone; a slot already taken,
+// or a service giving up its home, skips the task
 // until the next pass. A service built by hand without a cleaner asks
 // nothing; Open never builds one.
 func (s *Service) landedFromPass(observed []taskstate.Observed) {
@@ -314,7 +335,7 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 		held := ref != "" && s.holdsSession(id, ref)
 		survivor := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Unobserved && !s.windowWasTried(id, ref)
 		gone := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
-		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && !s.landedWasTried(id, ref)
+		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && s.landedAskDue(id, ref, now)
 		if !held && !survivor && !gone && !owed {
 			continue
 		}
@@ -358,8 +379,8 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 //
 // Once the worker is ended, the copy is kept and handed to keepWork with
 // tasks.KeptPromotionWindow, which internal/tasks reads the copy for: an
-// entry naming what it holds, or none for a copy that holds no work on the
-// cleanup decision's scratch rule. That is once per reference in this
+// entry naming what it holds, or none for a copy that holds nothing the
+// default branch lacks (NothingKept). That is once per reference in this
 // service's life (windowKept) after the keep settled, and once per copy and
 // commits across lives because RecordKeptWork finds the entry an earlier
 // life wrote; a keep that failed is asked again at the next pass.
@@ -446,24 +467,72 @@ func (s *Service) holdsSession(id, ref string) bool {
 	return ok && held.Reference().String() == ref
 }
 
-// markLandedTried records that the cleanup decision was asked for the task
-// with its terminal read Dead under ref.
-func (s *Service) markLandedTried(id, ref string) {
+// landedAskSpacing is how long the pass waits after the cleanup decision
+// answered for a task under a Dead terminal before it asks again under the
+// same terminal. Five minutes keeps a refused copy's cost to the upstream
+// and the code host at one read of each per five minutes, the pace
+// mergeReadInterval keeps a passed run's pull request read at, and it is
+// short beside how long a person takes to notice a kept copy. It is chosen,
+// not measured.
+const landedAskSpacing = 5 * time.Minute
+
+// landedAsks is the most times the cleanup decision is asked for one task
+// under one Dead terminal in a service's life, counting every ask made
+// through askLandedCleanup. Six, at landedAskSpacing, is about half an hour
+// of asking, which outlasts a code host that is slow to report a merge or an
+// upstream that was briefly unreachable, and then stops asking about work
+// that reached no upstream. It is chosen, not measured.
+const landedAsks = 6
+
+// landedSpacingOf is the spacing a service asks again on: the one a test
+// set, or landedAskSpacing.
+func landedSpacingOf(set time.Duration) time.Duration {
+	if set > 0 {
+		return set
+	}
+	return landedAskSpacing
+}
+
+// landedAsk is what this service remembers about asking the cleanup
+// decision for one task: the session reference whose terminal read Dead,
+// how many times it was asked under it, and when it last answered.
+type landedAsk struct {
+	ref  string
+	asks int
+	last time.Time
+}
+
+// markLandedTried counts one ask of the cleanup decision for the task with
+// its terminal read Dead under ref, answered at at. An ask under another
+// reference than the one remembered begins the count again, because a new
+// attempt's terminal is a terminal nothing has asked under yet.
+func (s *Service) markLandedTried(id, ref string, at time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.landedTried == nil {
-		s.landedTried = make(map[string]string)
+		s.landedTried = make(map[string]landedAsk)
 	}
-	s.landedTried[id] = ref
+	tried := s.landedTried[id]
+	if tried.ref != ref {
+		tried = landedAsk{ref: ref}
+	}
+	tried.asks++
+	tried.last = at
+	s.landedTried[id] = tried
 }
 
-// landedWasTried reports whether the cleanup decision was already asked for
-// the task with its terminal read Dead under ref, in this service's life.
-func (s *Service) landedWasTried(id, ref string) bool {
+// landedAskDue reports whether the pass may ask the cleanup decision for
+// the task with its terminal read Dead under ref, at now: it was never asked
+// under ref in this service's life, or it was asked fewer than landedAsks
+// times and the last answer is landedSpacing old.
+func (s *Service) landedAskDue(id, ref string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tried, ok := s.landedTried[id]
-	return ok && tried == ref
+	if !ok || tried.ref != ref {
+		return true
+	}
+	return tried.asks < landedAsks && now.Sub(tried.last) >= s.landedSpacing
 }
 
 // latestRef is the session reference of the latest of attempts, or the

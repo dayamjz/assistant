@@ -65,7 +65,18 @@
 // The attributes-location variables GIT_ATTR_SOURCE, GIT_ATTR_GLOBAL, and
 // GIT_ATTR_SYSTEM are kept for the same reason; what keeps attributes from
 // selecting a program during a comparison is --no-ext-diff and --no-textconv
-// on the diff command lines in diff.go, not this filter.
+// on the diff command lines in diff.go and on the name listing
+// UncommittedDigest uses. That digest reads a regular file's worktree bytes
+// itself and does not ask git for a patch. A path that is not a regular
+// file, a symlink, or a directory is not opened. A path classified as a
+// regular file is opened without waiting for a writer where the platform
+// can ask for that, and a descriptor that is not a regular file is not
+// read. On a platform whose open cannot ask not to wait, a path replaced
+// by a blocking special file after the stat can still wait. The filter is
+// not what enforces either. A
+// submodule checkout contributes the commit rev-parse HEAD prints in that
+// checkout, so a ref is followed to a commit and the ref storage is that
+// invocation's to read.
 //
 // GIT_PAGER and PAGER are kept because --no-pager on every command line is the
 // single mechanism this package uses against a pager, and a second one would
@@ -131,12 +142,13 @@
 // deadline and run in a process group the invoker ends when the call returns
 // or times out. Every git this package starts goes through internal/procgroup
 // for that, ServeReceivePack included. The deadline is the caller's context's,
-// or the handle's invocation deadline (WithInvocationDeadline, ten minutes by
-// default) where that context carries none, as one derived through
-// context.WithoutCancel does not. On linux and darwin git is the leader of a
-// group of its own, and the whole group is sent SIGKILL when git exits and
-// when the deadline passes, before git is reaped, so a descendant still in
-// the group neither outlives the call nor holds its output pipes.
+// or the handle's invocation deadline (WithInvocationDeadline, which
+// internal/service sets from the operator's git_deadline, and otherwise
+// DefaultInvocationDeadline) where that context carries none, as one derived
+// through context.WithoutCancel does not. On linux and darwin git is the
+// leader of a group of its own, and the whole group is sent SIGKILL when git
+// exits and when the deadline passes, before git is reaped, so a descendant
+// still in the group neither outlives the call nor holds its output pipes.
 //
 // What this does not cover is procgroup's to state, and its package comment
 // does: a descendant that left the group is not ended, only stops being
@@ -226,4 +238,8 @@
 // 2.38, and it checks its own floor before running and refuses with
 // ErrUnsupportedGit below it, because its answer is one a caller removes a
 // copy on and a git that misread the request must not produce one.
+// RootRefs uses for-each-ref's --include-root-refs on git 2.45 or newer and
+// reads the same references by name below it, so it answers on 2.36 too;
+// its test runs both readings under the git on PATH and holds them equal,
+// and under an older git as well when ASSISTANT_TEST_OLD_GIT names one.
 package vcs

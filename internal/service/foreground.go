@@ -12,7 +12,10 @@ import (
 // third relation over one input beside containment (contain.go) and the
 // worker group set (workers.go), and it answers for exactly one request:
 // task.respond on the local landing's approval hold, which PRD section 6
-// gives the person ("You approve") and which local.go raises.
+// gives the person ("You approve") and which local.go raises. (A discard's
+// confirmation, the other answer section 6 gives the person alone, is
+// refused for every caller in this build, its removal deferred, so it is
+// not held to this relation.)
 //
 // # Why this fact
 //

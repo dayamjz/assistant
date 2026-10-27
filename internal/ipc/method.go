@@ -83,6 +83,12 @@ const (
 	// the peer's lineage, and refused ErrNotAtTerminal to a host agent's tool
 	// command and to anything else not there.
 	MethodTaskRespond Method = "task.respond"
+	// MethodKeptWorkAnswer answers a kept work entry, PRD section 9's hold
+	// answer given an entry's key: land, carry-on or discard, for the entry
+	// a task's or a run's copy left. Who answered is derived from this
+	// surface by Request.HoldResolver and never read from the request. It
+	// is refused for a task's worker, on MethodTaskRespond's terms.
+	MethodKeptWorkAnswer Method = "keptwork.answer"
 	// MethodTaskCreate records a new task through internal/tasks' intake,
 	// PRD section 9's coordinator-only service method for creating one. It
 	// is the coordinator's: the handler refuses a caller the worker group
@@ -206,8 +212,8 @@ const (
 	MethodCatchUpMark Method = "catchup.mark"
 	// MethodUsageRead is PRD section 9's usage view: what the agent calls
 	// recorded in a window cost, totalled from section 8's agent invocation
-	// record by agent, model, purpose, role, provider, type, version and
-	// effort, and by run and stage, which
+	// record by agent, model, purpose, role, provider, type, version, effort
+	// and context window, and by run and stage, which
 	// assistant runs --usage prints. It is open, because it reads and
 	// changes nothing, so a driving agent gets the same model a person does.
 	MethodUsageRead Method = "usage.read"
@@ -320,6 +326,7 @@ var specs = []Spec{
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},
 	{MethodTaskEvent, KindRequest, AccessRestricted, "Append an event to the history of the task the caller is the worker of."},
 	{MethodTaskRespond, KindRequest, AccessRestricted, "Answer a hold a task raised with no run behind it."},
+	{MethodKeptWorkAnswer, KindRequest, AccessRestricted, "Answer a kept work entry a task's or a run's copy left."},
 	{MethodTaskCreate, KindRequest, AccessRestricted, "Record a new task through intake, for the coordinator."},
 	{MethodTaskPromote, KindRequest, AccessRestricted, "Promote an investigation task to delivery in place, for the coordinator."},
 	{MethodTaskRelaunch, KindRequest, AccessRestricted, "Relaunch a task whose terminal is gone, in its own copy, for the coordinator."},

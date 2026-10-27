@@ -320,6 +320,10 @@ type Review struct {
 	// binding, which is the product behaving as specified rather than this
 	// package failing.
 	Findings []findings.Finding `json:"findings,omitempty"`
+	// Usage is what the derived answer's envelope reports the invocation
+	// cost. Nil reports DefaultUsage, as every envelope this package builds
+	// does; Reply.WithUsage sets it.
+	Usage *agents.Usage `json:"usage,omitempty"`
 }
 
 // report derives the findings.Report this review answers with from the
@@ -425,6 +429,22 @@ func (r Reply) WithHold(d time.Duration) Reply { r = r.own(); r.Hold = d; return
 // WithIgnoredTerminate returns the reply with SIGTERM ignored for the whole
 // invocation, on the terms IgnoresTerminate states.
 func (r Reply) WithIgnoredTerminate() Reply { r = r.own(); r.IgnoresTerminate = true; return r }
+
+// WithUsage returns the reply reporting u as what the invocation cost, in
+// place of what its envelope or its derived review would have reported. A
+// count left zero in u is written as unreported, on Envelope.Usage's terms.
+// A reply with neither an envelope nor a review prints no envelope, so it has
+// no cost to state and is returned unchanged.
+func (r Reply) WithUsage(u agents.Usage) Reply {
+	r = r.own()
+	switch {
+	case r.Envelope != nil:
+		r.Envelope.Usage = u
+	case r.Review != nil:
+		r.Review.Usage = &u
+	}
+	return r
+}
 
 // own returns the reply with an envelope and review of its own, so a reply
 // derived from another can be adjusted through either pointer without
@@ -554,6 +574,20 @@ func DefaultUsage() agents.Usage {
 	}
 }
 
+// session is the session identifier the envelope reports to c: the one it
+// states, else the one c resumed, else a fresh one derived from c's arrival
+// order, on Envelope.Session's terms.
+func (e Envelope) session(c Call) string {
+	switch {
+	case e.Session != nil:
+		return *e.Session
+	case c.Session() != "":
+		return c.Session()
+	default:
+		return fmt.Sprintf("standin-session-%d", c.Seq)
+	}
+}
+
 // SessionID returns an Envelope.Session reporting exactly id.
 func SessionID(id string) *string { return &id }
 
@@ -578,15 +612,6 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 			subtype = "error_during_execution"
 		}
 	}
-	session := ""
-	switch {
-	case e.Session != nil:
-		session = *e.Session
-	case c.Session() != "":
-		session = c.Session()
-	default:
-		session = fmt.Sprintf("standin-session-%d", c.Seq)
-	}
 	model := e.Model
 	if model == "" {
 		model = c.Model()
@@ -599,7 +624,7 @@ func (e Envelope) wire(c Call) ([]byte, error) {
 		"subtype":    subtype,
 		"is_error":   e.IsError,
 		"result":     e.Result,
-		"session_id": session,
+		"session_id": e.session(c),
 		"model":      model,
 		"num_turns":  e.Usage.Turns,
 		"usage": map[string]any{

@@ -14,7 +14,6 @@ import (
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -322,6 +321,9 @@ type CleanupDeps struct {
 	// the specifier forge.RepositoryOf reads out of the upstream; the service
 	// passes its forge.Hosts, so a gitlab.com upstream is read on GitLab.
 	Forge forge.Host
+	// GitDeadline is Deps.GitDeadline for the repositories a cleanup and a
+	// keep open, on the same terms.
+	GitDeadline time.Duration
 }
 
 // Cleaner is the cleanup decision over one home and one store. It is safe
@@ -331,6 +333,9 @@ type Cleaner struct {
 	home  *home.Home
 	store *store.Store
 	forge forge.Host
+	// git are the options every repository this Cleaner opens is opened
+	// with, from gitOptions.
+	git []vcs.Option
 	// betweenProofAndRemoval runs after the proof is recorded and before
 	// the copy is re-read and removed. It is nil in production and set only
 	// by this package's tests, which use it to change the copy inside the
@@ -358,8 +363,16 @@ func NewCleaner(d CleanupDeps) (*Cleaner, error) {
 		return nil, fmt.Errorf("%w: no store", ErrIncomplete)
 	case d.Forge == nil:
 		return nil, fmt.Errorf("%w: no code host", ErrIncomplete)
+	case d.GitDeadline <= 0:
+		return nil, fmt.Errorf("%w: no git deadline", ErrIncomplete)
 	}
-	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge}, nil
+	// Every repository the cleaner opens is read as its objects record it
+	// (vcs.WithoutReplaceObjects): what a copy holds, what a proof finds
+	// landed and what a discard's preview shows as lost are decided from
+	// the object graph itself, so a replacement reference in the copy can
+	// neither hide a commit from the loss nor make one read as landed.
+	return &Cleaner{home: d.Home, store: d.Store, forge: d.Forge,
+		git: append(gitOptions(d.GitDeadline), vcs.WithoutReplaceObjects())}, nil
 }
 
 // InterruptBeforeMarkForTest makes every removal this Cleaner makes stop
@@ -443,7 +456,7 @@ func (c *Cleaner) CleanUp(ctx context.Context, req TaskCopy) (Cleanup, error) {
 	if !standing {
 		return refuse(ReasonCopyMissing, "nothing stands at "+copyPath+" and no cleanup record accounts for it", nil, nil)
 	}
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, copyPath, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the copy of task %s: %w", task.ID, err)
 	}
@@ -537,7 +550,7 @@ func (c *Cleaner) resumeTask(ctx context.Context, task store.Task, record store.
 			"the task's terminal was %s, and a copy standing on a recorded proof is examined only once it is %s",
 			livenessWord(terminal), taskstate.Dead)}
 	}
-	copied, err := vcs.OpenWorktree(ctx, copyPath, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, copyPath, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the copy of task %s: %w", task.ID, err)
 	}
@@ -625,11 +638,11 @@ func (c *Cleaner) CleanUpRun(ctx context.Context, req RunCopy) (Cleanup, error) 
 	if !standing {
 		return Cleanup{Run: run.ID, Result: CleanupAbsent}, nil
 	}
-	bare, err := vcs.OpenBare(ctx, req.Gate, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, req.Gate, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the gate repository of run %s: %w", run.ID, err)
 	}
-	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, path, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the copy of run %s: %w", run.ID, err)
 	}
@@ -684,11 +697,11 @@ func (c *Cleaner) resumeRun(ctx context.Context, run store.Run, record store.Run
 		}
 		return Cleanup{Run: run.ID, Result: CleanupRemoved, Proof: removal.proof, Examined: record.Examined}, nil
 	}
-	bare, err := vcs.OpenBare(ctx, gate, vcs.WithRedactor(redact.New()))
+	bare, err := vcs.OpenBare(ctx, gate, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the gate repository of run %s: %w", run.ID, err)
 	}
-	copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
+	copied, err := vcs.OpenWorktree(ctx, path, c.git...)
 	if err != nil {
 		return Cleanup{}, fmt.Errorf("tasks: opening the copy of run %s: %w", run.ID, err)
 	}

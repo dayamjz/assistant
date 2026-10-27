@@ -11,12 +11,14 @@ import (
 	"testing"
 )
 
-// store.ResolvedByProgram has exactly one producer in this repository, the
-// checks-hold closer in this package, which is what store's own doc comment
-// on it claims, and store.ResolvedByStandingConsent has exactly one too,
-// consent.go. A second reference would be a second place the program could
-// decide a hold without a person, which PRD section 8 gives it for one hold
-// and no other, so this reads every non-test source file in the module and
+// store.ResolvedByProgram has exactly two producers in this repository, the
+// checks-hold closer in this package and the stall hold's closer, which is
+// what store's own doc comment on it claims, and
+// store.ResolvedByStandingConsent has exactly one, consent.go. A third
+// reference would be a third place the program could close a hold without a
+// person, which PRD section 8 gives it for the checks stage's hold and
+// section 6's stalled worker gives it for the stall hold, and for no other,
+// so this reads every non-test source file in the module and
 // counts every reference to the name: a call, a function value taken and
 // called elsewhere, a dot-imported or unqualified use, all alike, and not
 // only a call through a selector. internal/store's own file holds the
@@ -34,12 +36,13 @@ import (
 // from the build by a constraint this scan does not evaluate, which it
 // counts anyway and so errs toward refusing. Nothing here reads a built
 // binary.
-func TestOnlyTheChecksHoldCloserProducesAProgramResolution(t *testing.T) {
+func TestOnlyTheChecksHoldAndStallHoldClosersProduceAProgramResolution(t *testing.T) {
 	t.Parallel()
 	root := moduleRoot(t)
 	program := references(t, root, "ResolvedByProgram")
 	want := []string{
 		filepath.Join("internal", "service", "checkshold.go"),
+		filepath.Join("internal", "service", "stallhold.go"),
 		filepath.Join("internal", "store", "resolver.go"),
 	}
 	if !equalSets(program, want) {

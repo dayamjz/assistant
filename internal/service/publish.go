@@ -92,7 +92,7 @@ func (s *Service) publishTaskChanges(observed []taskstate.Observed) {
 // compare equal whatever location each carries.
 func sameBasis(a, b taskstate.Basis) bool {
 	return a.RunID == b.RunID && a.RunStatus == b.RunStatus && a.RunUpdatedAt.Equal(b.RunUpdatedAt) &&
-		a.LandedRun == b.LandedRun && a.LandedLocally == b.LandedLocally && a.Hold == b.Hold && a.CleanupRecorded == b.CleanupRecorded && a.CleanupRemoved == b.CleanupRemoved &&
+		a.LandedRun == b.LandedRun && a.NothingToDeliver == b.NothingToDeliver && a.LandedLocally == b.LandedLocally && a.Hold == b.Hold && a.CleanupRecorded == b.CleanupRecorded && a.CleanupRemoved == b.CleanupRemoved &&
 		a.ReportStored == b.ReportStored && a.Relayed == b.Relayed &&
 		a.EventSequence == b.EventSequence && a.EventKind == b.EventKind && a.Process == b.Process && a.Advancing == b.Advancing
 }
@@ -198,6 +198,20 @@ func (s *Service) taskView(ctx context.Context, o taskstate.Observed) machine.Ta
 		t.Escalations = escalations
 	}
 	t.Policy = s.taskPolicy(ctx, o.Snapshot.Task)
+	if o.State.State == taskstate.Dispatched && o.State.Source == taskstate.SourceEvent {
+		// A task the program dispatched waits while its project holds kept
+		// work, read off the kept work record on every answer through the
+		// store's one predicate, the one dispatch.go is refused by (P8); a
+		// read that fails is logged and the answer names none and says the
+		// read failed (KeptWorkUnread), so the task is not read as a
+		// worker being launched while it may be held.
+		holding, err := s.store.KeptWorkHolding(ctx, o.Snapshot.Task.ID)
+		if err != nil {
+			s.log.Printf("the kept work that holds task %s could not be read for its answer: %v", o.Snapshot.Task.ID, err)
+			t.KeptWorkUnread = true
+		}
+		t.KeptWork = holding
+	}
 	return t
 }
 

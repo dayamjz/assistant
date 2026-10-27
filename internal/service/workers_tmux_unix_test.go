@@ -95,7 +95,7 @@ func callFromWindow(t *testing.T, w launched, method ipc.Method, params any) (js
 			case 0:
 				return stdout, ""
 			case 1:
-				return nil, ipc.Code(strings.TrimSpace(string(stderr)))
+				return nil, refusedWith(t, method, string(stderr))
 			default:
 				t.Fatalf("calling %s from a window of the worker's server exited %d: %s", method, status, stderr)
 			}
@@ -188,8 +188,7 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 
 	o, _ := workerOptions(t, h)
 	var second session.Reference
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := waitRelaunchedSession(t, running.service, id, unestablished)
+	withRestartedService(t, o, h, id, unestablished, func(running serviceUnderTest, provider session.Provider, launched *session.Session) {
 		if _, ok := provider.(*session.Tmux); !ok {
 			t.Fatalf("the restarted service relaunched through %T, want the tmux provider", provider)
 		}

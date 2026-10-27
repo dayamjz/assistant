@@ -6,7 +6,9 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
@@ -168,10 +170,24 @@ func recordingStage(stage pipeline.Stage, key pipeline.Key, value string) pipeli
 
 // walk starts the run, which the service walks to its end and settles
 // before it answers, and returns the run as the service then answers for it.
+//
+// It starts the run only once the read for merges a person made that Open
+// starts has returned. That pass reads the merge request of a run that is
+// checks-passed, so a pass that ran late, after this run ended, would read it
+// once more than the walk's scripted reads account for (#595). The next pass
+// is mergeReadInterval, five minutes, later.
 func (w gitLabAutonomyWalk) walk(t *testing.T) machine.Run {
 	t.Helper()
+	opened := make(chan struct{})
+	var once sync.Once
+	opts := service.WithAfterMergeReadPassForTest(w.options(t), func() { once.Do(func() { close(opened) }) })
 	var run machine.Run
-	withServiceOptions(t, w.options(t), func(running serviceUnderTest) {
+	withServiceOptions(t, opts, func(running serviceUnderTest) {
+		select {
+		case <-opened:
+		case <-time.After(time.Minute):
+			t.Fatal("the read for merges the service starts as it opens never returned")
+		}
 		started := startRun(t, running.client, w.subject)
 		run = runByID(t, running.client, started.Record.ID)
 	})

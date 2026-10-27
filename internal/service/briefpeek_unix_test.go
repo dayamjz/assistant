@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -32,6 +33,14 @@ import (
 // instructions exchanges every launched worker needs.
 func streamWorkerOf(t *testing.T, shape store.TaskShape, branch string, exchanges []standin.Exchange,
 	body func(w launched, agent *standin.Agent)) {
+	t.Helper()
+	streamWorkerOfWith(t, shape, branch, exchanges, nil, body)
+}
+
+// streamWorkerOfWith is streamWorkerOf with the service's options changed
+// by with, when it is not nil, before the service opens.
+func streamWorkerOfWith(t *testing.T, shape store.TaskShape, branch string, exchanges []standin.Exchange,
+	with func(service.Options) service.Options, body func(w launched, agent *standin.Agent)) {
 	t.Helper()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -53,6 +62,9 @@ func streamWorkerOf(t *testing.T, shape store.TaskShape, branch string, exchange
 	}, agents.WithTerminationGrace(2*time.Second))
 	o := options(t, h)
 	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
+	if with != nil {
+		o = with(o)
+	}
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, session := launchedSession(t, running.service, id)
 		waitCapture(t, provider, session, "the instructions were read")

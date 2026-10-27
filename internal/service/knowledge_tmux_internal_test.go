@@ -35,7 +35,7 @@ func claudeTmuxLaunchSubject(t *testing.T) *launchSubject {
 	}
 	// A home under /tmp keeps the tmux socket path within internal/agents' limit,
 	// which the launch measurement and a real start both need.
-	root, err := os.MkdirTemp("/tmp", "kn")
+	root, err := standin.TempDir("kn")
 	if err != nil {
 		t.Fatal(err)
 	}

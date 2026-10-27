@@ -308,6 +308,31 @@ func TestAssertIsolatedRefusesEverythingButAnIsolatedCopy(t *testing.T) {
 		refused(t, err, ComparisonPrimary)
 	})
 
+	t.Run("a .git that is a symbolic link to another clone's refuses", func(t *testing.T) {
+		// Identity sees the link as the directory it reaches, so the
+		// repository directory compares equal to .git under the copy; the
+		// entry itself must be a directory of the copy's own (round 37).
+		// The clone linked to has the copy's own shape, so nothing but
+		// the link can refuse it.
+		s := isolationSubject(t)
+		s.investigationClone(t)
+		other := filepath.Join(t.TempDir(), "other")
+		if _, err := vcs.Clone(context.Background(), s.gate, other, ""); err != nil {
+			t.Fatalf("Clone: %v", err)
+		}
+		rawGit(t, other, "switch", "-q", "--detach")
+		own := filepath.Join(s.copy, ".git")
+		if err := os.RemoveAll(own); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+			t.Skipf("cannot make a symbolic link here: %v", err)
+		}
+		want, _ := s.expect(t, store.TaskInvestigation, "")
+		_, err := AssertIsolated(observe(t, s.copy), cleanEnv(), want)
+		refused(t, err, ComparisonGitDir)
+	})
+
 	t.Run("a case variant of the primary refuses on a case-insensitive filesystem", func(t *testing.T) {
 		if runtime.GOOS != "windows" {
 			t.Skip("a case variant names a different file here; the comparison is by identity, so there is nothing to show")

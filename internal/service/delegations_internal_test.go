@@ -696,7 +696,7 @@ func TestABoundHoldRegisteredAtRecoveryReachesTheDrain(t *testing.T) {
 	}
 	l.nextPass(t)
 	l.pass(t)
-	drained, err := l.service.drainBoth(ctx, 10, l.service.wakeHandout(ipc.Request{}, placedPeer{}))
+	drained, err := l.service.drainAll(ctx, 10, l.service.wakeHandout(ipc.Request{}, placedPeer{}))
 	if err != nil {
 		t.Fatal(err)
 	}
