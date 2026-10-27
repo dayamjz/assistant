@@ -397,12 +397,12 @@
 // kept_work_wake's columns with the entry replaced by the repository and the
 // pass it follows, plus the detail it names, stored redacted, under the
 // same seals, once per marker within the repository, which its unique key
-// holds. AppendHousekeepingWake is its one append; its drain, its
-// acknowledgement and what forgetting its repository does with it are the
-// link above this one.
+// holds. AppendHousekeepingWake is its one append. ForgetRepository refuses
+// a repository with one queued (ErrHousekeepingWakeQueued) and takes the
+// acknowledged rows after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the two shapes about no task, and
-// DrainAll and AcknowledgeAll take all three shapes in one transaction. A
+// count and the acknowledgement for the three shapes about no task, and
+// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).

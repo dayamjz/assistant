@@ -536,7 +536,7 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 	// The shapes are one batch, all or nothing: store.AcknowledgeAll
 	// checks every row of each before it writes any, in one transaction,
 	// so a refused row of one shape leaves every row named open too.
-	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, by); err != nil {
+	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, nil, by); err != nil {
 		return machine.Acknowledged{}, refusal(err)
 	}
 	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes, By: by.String()}, nil
