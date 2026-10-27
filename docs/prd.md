@@ -110,6 +110,7 @@ word appears in both the interface and the implementation, it means the same thi
 | **stage** | One of the nine steps of a run. The order is fixed. |
 | **finding** | One issue a stage reports, carrying a severity and an action. |
 | **action** | What a finding asks for: `fix`, `ask`, or `note`. This is the entire split between machine judgment and yours. |
+| **fix ladder** <kbd>proposed</kbd> | The order in which a stage's automatic fix rounds change how they are answered once the fixer's session is not converging: a fresh session, then a harder effort, then the fixer's next model, then a hold for you. Not a loop bound, and it never parks. Section 5's [fix ladder](#fix-ladder) owns the rule. |
 | **hold** | A run or task waiting on a decision from you. A hold is durable and survives a restart. It is not the lifecycle state Paused, which section 6 reserves for a worker's own declared external wait. |
 | **wake** | An event that might need attention. Most wakes are handled without involving a model. |
 | **home** | One instance's private state directory. Locks, queues, and records are all scoped to a home. |
@@ -626,6 +627,94 @@ flowchart TD
 | **Run-wide budget** | A total step budget across the whole run, independent of any stage's limit. | Several stages each staying under their own limit while the run as a whole never finishes. |
 | **Per-run usage budget** | The output tokens the run's own agent calls report, read from the agent invocation record before every step and compared against the budget the run recorded when it started. Reaching it, or a call that reported no count, parks the run. It changes on a live run only by adopting a new budget into the run's history. | A run whose stages each stay under their round limits, and whose steps stay under the run-wide budget, while its agent calls cost far more than intended. |
 | **Convergence** | A fix round that produces no change parks the loop. The measure is over the run's whole state, so the loop parks after its second round that changes nothing, not its first. The automatic loop and the rounds standing consent asks for both park this way; a round you ask for at a hold does not (section 14, decision 8), and neither does a retry at the usage ceiling's hold (decision 25). A retry also starts the measure of the stage's own fix rounds afresh, so the first such round after it is compared with nothing; a round that repeats one taken since the retry still parks. | An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself. |
+
+### <a id="fix-ladder"></a>The fix ladder <kbd>proposed</kbd>
+
+> This subsection, and every passage elsewhere marked *proposed* that points at it, is a draft
+> written for the owner's decision (AGE-491). Nothing it describes is built, and nothing here is
+> decided until the owner says so.
+
+With session reuse on, every automatic fix round of a run is answered inside the one fixer
+session the run's first round opened: the rounds after the first resume it. That is right while
+the session is converging and wrong once it is not, because a session that has failed to satisfy
+review several times carries its own wrong turns into every later round, and the remedy a person
+reaches for, a fresh start, a harder effort, or a stronger model, is not one the loop can take on
+its own. The **fix ladder** is that remedy, taken by the program in a fixed order, one lever at a
+time, and recorded. It changes how a stage's automatic rounds are answered. It adds no stage, no
+loop, and no round, and section 5's bounds above stay the outer limit.
+
+| Rung | What the round does | What it changes against the rung below |
+|---|---|---|
+| **Opening** | Rung zero, today's behavior. The stage's rounds resume the run's fixer session, the first one opening it. | Nothing. |
+| `fresh` | The round opens a new fixer session and gives it the handoff below. Later rounds at this rung resume that new session. | The conversation. The agent, the model, and the effort are the `fix` role's. |
+| `effort` | As `fresh`, at the `fix` role's effort one step up the closed set section 10 gives, `low` to `medium`, `medium` to `high`. | The effort. |
+| `model` | As `fresh`, on the next entry of section 10's `fix_ladder.models`, at the effort that entry names. Each entry is a rung of its own, in order. | The agent, the model, or both. The raised effort is not carried over, as a backup inherits nothing from its primary. |
+| **Spent** | No round is taken. The stage holds for you. | Not a rung: the ladder has nothing left to try. |
+
+- **Which rung a round is on.** A rung is a fact about one stage's automatic rounds in one
+  run, and it is derived, never stored on its own: from how many automatic fix rounds that stage
+  has taken in this run, a round standing consent asked for counted as one because nobody
+  attended it, `fix_ladder.climb_after`, `fix_ladder.rounds_per_rung`, and the rungs
+  `fix_ladder.order` names. The first `climb_after` rounds are on the opening rung, and each named
+  rung after it takes `rounds_per_rung` rounds. The count is the one the per-stage round limit
+  already reads, so the ladder adds no counter. A round you ask for at a hold is not on the
+  ladder and does not move it: it runs at the rung the stage last used, and decision 8's bound
+  is unchanged. A retry at the usage ceiling's hold retakes the round the ceiling refused at the
+  rung that round was on.
+- **A rung with nothing to change is skipped and says so.** `fresh` when session reuse is
+  off, since every round is already session-free; `effort` when the `fix` role names no effort
+  or names `high`; `model` when `fix_ladder.models` is empty. A skipped rung takes no round and
+  is recorded as skipped with its reason, so a ladder that climbed past a lever is never read as
+  one that tried it. With the default fixer, which names no effort and no model, the default
+  ladder is therefore the opening rung, `fresh`, and then the hold.
+- **The handoff is the program's, and it is P4's summary, not a memory.** A fresh session
+  is told what P4 already lets cross a round and nothing more: the run's intent and its source;
+  the findings the round answers, as the stage reported them; each earlier round of the run in
+  order, its selection, who selected it, the commits it made, and its one-line summary marked as
+  the fixer's own claim; and the findings a person left unselected. The program writes it from
+  section 8's round record and the run's commits, never from an agent's account of the session
+  it replaces, and never from that session's transcript. Nothing in it comes from a review's
+  session, and no review is given it: a re-review still receives the previous findings and the
+  fix summary as claims, as section 5 says, and never resumes or reads any fixer session, on any
+  rung (P4, P5).
+- **Past the last rung the stage holds, it never parks.** When the stage's next automatic
+  round would fall past the last rung while its round limit and the run's budgets still allow
+  it, no round is taken and the stage holds on an `ask` the program builds. It names every rung
+  the stage climbed or skipped, the session each round was answered in, and the findings still
+  open, so you decide with the ladder's evidence in front of you. The hold offers section 5's
+  actions as any hold before push does. Standing consent leaves it for you, because the one
+  answer it gives, another fix round, is exactly what the ladder has run out of. A spent ladder
+  is a hold and not a park: it waits on a person, it is not one of the three loop bounds, and
+  it is not a fifth park.
+- **The bounds above stay the outer limit.** The ladder never takes a round the per-stage
+  limit, the run-wide budget, or the per-run usage budget would not allow, and each still parks
+  on its own terms when it is reached first, whatever rung the stage is on. At the default
+  limits, three rounds for the test, lint, and checks stages and one for review, the default
+  ladder reaches `fresh` on a stage's second round and holds before a third, and review's one
+  round never climbs.
+- **Convergence is untouched.** The rung is not part of the run's state, so a round that
+  changes nothing on a new rung is measured exactly as on the old one, and the loop still parks
+  after its second round that changes nothing. A fresh session that changes nothing is a round
+  that changed nothing, not a reason to try another lever.
+- **The graph owns the accounting.** The ladder's shape, `climb_after`, `rounds_per_rung`,
+  and the rungs `order` names, is recorded when the run starts and carried in the checkpoint's
+  bound accounting beside the run budget, and a run is held to the ladder it started under. The
+  `fix` role and the entries of `fix_ladder.models` are read again at each round, as section
+  10 reads a role at every launch, so a change to which model an entry names applies from the
+  next round that reaches it. Which rung the next round is on, and whether the next round is
+  spent, are answered by the graph module, which owns every loop bound, from that accounting
+  and the stage's round count, so no second reader of that count decides either.
+- **Every round records its rung.** Section 6's [learning what converges](#round-records) owns what
+  is recorded; the rung, whether it was climbed or skipped, and the session the round was
+  answered in are part of it, so the order of the rungs can be changed later from what the
+  records show rather than from a guess.
+
+What the ladder does not establish: that a later rung converges where an earlier one did not.
+The order is a default chosen from the development fleet's evidence, recorded on this proposal's
+pull request, and that evidence measured a worker reworking a pull request across many pushes,
+not the gate's own rounds within one run. It is what the round records are for. Nor does it
+climb a task's worker: a worker that keeps failing review across runs is relaunched on section
+6's terms, and nothing here changes its session, effort, or model.
 
 ### What you do at a hold
 
@@ -1552,6 +1641,103 @@ file outside `housekeeping.paths` can drift unseen. The base is the commit the l
 pass saw, so a pass reads merges since then as its lead. Drift older than the first pass is found
 only as far as the worker reads whole files against the tree.
 
+### <a id="round-records"></a>Learning what converges <kbd>proposed</kbd>
+
+> This subsection, and every passage elsewhere marked *proposed* that points at it, is a draft
+> written for the owner's decision (AGE-491). Nothing it describes is built, and nothing here is
+> decided until the owner says so.
+
+The product should learn what makes review and rework converge, for all the work it does, in
+every repository this home serves. That needs one fact per round that a reader can join across
+runs, tasks, and repositories, and it needs the cost of the work that is not a stage call, which
+the agent invocation record does not hold today. Nothing here decides anything at run time:
+these are records to read, and the fix ladder's order is changed from them by a person, in
+configuration.
+
+**Every round is recorded, in every repository.** Section 8's round record already keeps one
+row per stage execution, with its findings, the selection and who made it, the payload sent to
+the fixer, and the summary. A review is a stage execution, so every review has a row, and the
+automatic or requested fix round that follows it is that row's. Each row gains what the ladder
+and a later reader need, and points at the record that owns everything else, so no fact gains a
+second owner (P14):
+
+| Fact | Owner | How a reader gets it |
+|---|---|---|
+| Repository | The run record | The row's run names it. |
+| Task | Section 6's attribution by branch | Resolved from the run's branch, as for every other read, never stored on the row. A run no task is attributed to reads as none. |
+| Agent, model, effort, context window | The agent invocation record | The row names, by sequence, every agent invocation it served: the review's call, and the fix round's. |
+| Fresh or resumed | The agent invocation record's session use | The fix round's invocation says whether it opened a session or resumed one. |
+| Rung, and each rung skipped on the way | The round record, new | Written once, when the fix round starts: the rung, what it changed, and each skipped rung with its reason. A row with no fix round has none. |
+| Review kind | The round record, new | `full` for a review of the whole change, which every execution of the review stage is, re-reviews among them; `delta` for section 14 decision 7's review of the commits after an approved commit. |
+| Verdict, and counts by action and severity | The round record's findings | Derived on read: the count of each action, `fix`, `ask`, and `note`, at each severity, and a refused report as refused. A verdict word is not stored beside the counts it would restate. |
+| Findings in the previous fix round's lines | The round record, new | Written once, when the review that follows a fix round is accepted: how many of its findings are located in lines that round's commits changed, and how many of those are `fix` or `ask`. |
+| Tokens by category | The agent invocation record | Read from the named invocations: input, output, cache read, and cache creation, each kept apart, and a count an agent did not report stays unreported, never a zero. |
+| Wall time | The round record, new | When the stage execution began and when its fix round ended, written once at the end. An agent's own duration stays the invocation's. |
+| Eventual outcome | The records section 6's resolver reads | Derived on read, never written to the row: the run's park, from the checkpoint history; an open hold, from the hold record; Landed, from the merge record, the local landing record, or the nothing-to-deliver record. A run still going reads as open. |
+
+- **The outcome is read, never copied.** A row written when a round ends cannot know how its
+  run ends, and a row revised later would be a second, staler owner of a fact the terminal
+  records already hold (P8, P14). A reader asking what became of a round reads the run's records
+  as of that read.
+- **The new-defect count is a measure, not a judgment.** It counts findings located in the
+  lines the previous round changed. It does not establish that the round caused them: a finding
+  there may name a defect the round left in place, and a defect the round caused elsewhere is not
+  counted. It is recorded because it can be computed once, from the commits, without asking any
+  agent, and because a fix that keeps producing findings in its own lines is the clearest sign a
+  round is not converging.
+- **Nothing here holds or parks.** The records add no bound, no hold, and no wake.
+
+**Worker turns join the record.** A task's worker is a long-lived session whose turns the agent
+invocation record does not hold today, so its cost is invisible beside the stage calls it
+dwarfs. Each turn a worker's adapter reports usage for is appended to that record as one row of
+purpose `worker`, naming the task and the attempt in place of a run and a stage, with the same
+facts a stage call's row carries: the agent, the model triple and the identifier started, the
+role, the effort, the context window, timing, failure category, and each token count, an
+unreported one kept apart from zero. Never the turn's prompt, its output, or anything it read. A
+fix round's call is already a stage call of purpose `fix` and is recorded today; this adds
+the worker's turns, a housekeeping pass's among them, and no other kind of call.
+
+- **What it covers, and what it does not.** With this built, the usage view and its protocol
+  read say they cover stage agent calls and worker turns, and exclude the coordinator's own turns
+  and any price. The coordinator you talk to runs in its host's session, which this program does
+  not start and cannot read; a subordinate coordinator's turns are not recorded either. Section
+  9's usage view owns the wording.
+- **What reads it.** The usage view totals worker rows by task where it totals stage rows by
+  run and stage. The per-run usage budget reads the run's own rows, which a worker row is not.
+  The usage ceiling sums stage calls only, as decision 17 has it, so a worker's turns are
+  recorded beside it and still not bounded by it: what the ceiling bounds is unchanged, and
+  whether it should count worker turns is a decision this proposal leaves to the owner.
+- **An adapter declares it.** Reporting worker turn usage is a capability of section 8's
+  adapter declaration. An adapter that does not declare it writes no worker row, and the usage
+  view says that task's turns are not recorded rather than totaling them as nothing.
+
+**Harvesting evaluation cases is opt-in, per repository, and local.** A review that finds what
+blocks a change is the best test of a reviewer and of a fixer there is, because it is real code
+with a real defect and, later, a fix somebody accepted. For each repository named in section
+10's `evaluation.harvest`, a review whose findings include a `fix` or an `ask` at
+severity `error` writes one **evaluation case**: the repository, the run, the round, the
+commit the review read, and that round's findings, read from the round record and not copied
+from an agent. When the run's task lands, the case gains, once, the accepted fix: the commits
+between the commit the review read and the head the landing record names. A case whose work never
+lands keeps no fix and says so.
+
+- **It stays in this home.** A case is written to the home's store, and the commits it names
+  are kept reachable by a reference the case owns in the gate's bare repository, in a
+  namespace of its own that no stage pushes and no pull request names, so a case's commits stay readable after the branch that held them is gone. No
+  path of the program sends a case anywhere: no adapter, no forge, no notify command, and no
+  decision-model check is given one. Reading cases is for a person's own tooling on this machine,
+  such as caliper's fourth question (AGE-492), which reads them where they are.
+- **It is off by default and off for a repository nobody named.** `evaluation.harvest` is
+  global-only: what this machine keeps of a repository's code is your decision, so a repository's
+  own file can neither turn it on nor off.
+- **It changes no run.** Writing a case adds no stage, no hold, and no finding, and a case that
+  cannot be written is reported in the service log and changes nothing about the run.
+
+What this does not establish: that a round's outcome was caused by its rung, its model, or its
+effort. The records make the comparison possible; they do not control for the change, the
+repository, or the reviewer. A worker turn its adapter does not report, and every coordinator
+turn, stay outside the totals, so a total is a floor of what the work spent and never the whole.
+
 <sub>Section 7</sub>
 
 ## <a id="execution"></a>Execution model
@@ -1874,7 +2060,7 @@ one place its fact is read from. Appended means rows are added and never edited.
 | **repository** | Authoritative | Working path, upstream and optional fork, default branch. URLs are stored with credentials removed; the credentialed URL is recovered from the gate at run time. |
 | **run** | Authoritative | Branch, submitted head, base, status, the commit a completed review approved, the push binding, pull request state, intent and its source, and the exact build that produced this run. |
 | **stage result** | Authoritative | Per stage: status, findings, duration, log path, last activity, and the effective fix limit. |
-| **round** | History | One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from. |
+| **round** | History | One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from. <kbd>proposed</kbd> Each row also names the agent invocations it served, by sequence; for its fix round, the fix ladder rung and each rung skipped on the way with its reason; for a review, its kind, `full` or `delta`; when the review followed a fix round, how many of its findings are located in lines that round's commits changed and how many of those are `fix` or `ask`; and when the execution began and its round ended. Each is written once. A row written before these reads each as unknown. The outcome of the run is never written here: it is read from the run's own records, on the terms of section 6's [learning what converges](#round-records). |
 | **checkpoint history** | Authoritative, appended | One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that. |
 | **task** | Authoritative | Shape, project, launch notation (how the worker was started), the role it runs under (the name only, recorded at intake and kept by promotion and relaunch), delivery posture (recorded at intake or promotion, in a field of its own), domain (written once at intake from the creator's placement, kept by promotion and relaunch; empty means the first coordinator's own, which is what every row written before the field reads as), isolated copy path, session reference, linked run, linked pull request. <kbd>proposed</kbd> Whether it is a housekeeping pass, written once at intake and kept by promotion and relaunch, a row written before the field reading as not one; it is the one place that fact is stored ([housekeeping](#housekeeping)). The machine it runs on, written once at dispatch and kept by promotion and relaunch, empty for this machine, which is what every row written before the field reads as; it is the one place a task's machine is stored ([workers on another machine](#remote-hosts)). For a worker on a remote host it also holds, written with the session reference, the identity of the herdr server hosting that worker, as the store holds a subordinate's tmux server beside its delegation attempt's reference. Each attempt also records, once at launch, the knowledge revision its worker was told: the default-branch commit and the digest of section 10's project knowledge document there, a known commit with no digest meaning the branch held none, and never the text. |
 | **task state** | Resolved on read | Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8. |
@@ -1894,7 +2080,8 @@ one place its fact is read from. Appended means rows are added and never edited.
 | **delegation attempt** | Authoritative, appended | One row per start of a domain's subordinate coordinator, with its session reference, sealed. A relaunch is a new row anchored to the attempt history it read, bounded by `relaunch_attempts` on section 11's terms. |
 | **escalation** | Authoritative, appended | One row per decision a subordinate coordinator hands up to the first coordinator, sealed. It is raised as a wake of its own kind, subordinate escalated, which section 6's flowchart surfaces always. |
 | **seen mark** | Authoritative, appended | One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. <kbd>proposed</kbd> A nothing-to-deliver record is shown and marked seen on the same terms. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it. |
-| **agent invocation** | History | Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role, the effort, and the context window of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, the effort, and the context window were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, an effort, or a context window that was not named is recorded as not named, and is never stored as one of the named values. |
+| **agent invocation** | History | Purpose, agent, the model provider, model type, and model version the launch was asked for, the model identifier the adapter started, the role, the effort, and the context window of the launch, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run, the stage, the role, the provider, the type, the version, the effort, and the context window were added later, so a row written before one of them reads that one as unknown, never as a guess. A provider, a type, a version, an effort, or a context window that was not named is recorded as not named, and is never stored as one of the named values. <kbd>proposed</kbd> A worker's turn whose adapter declares that it reports worker usage is a row too, of purpose `worker`, naming the task and the attempt in place of a run and a stage, on the terms of section 6's [learning what converges](#round-records). The usage ceiling and the per-run usage budget compare stage calls only, as before. |
+| **evaluation case** <kbd>proposed</kbd> | Authoritative, appended | Written once, for a repository `evaluation.harvest` names, by a review whose findings include a `fix` or an `ask` at severity `error`: the repository, the run, the round, the commit the review read, and the reference in the gate's bare repository that keeps that commit reachable. The findings are the round's, read from the round record and never copied. Its one revision is the accepted fix, written once when the run's task lands: the commits between the reviewed commit and the head the landing record names. It moves no branch and is never sent anywhere ([learning what converges](#round-records)). |
 
 > **A run's position has exactly one record, and it is appended**
 >
@@ -2228,7 +2415,12 @@ agent did not report is shown as unreported and never summed as a zero. A provid
 version, an effort, or a context window recorded as not named is totaled on its own and never as one of the named values,
 and one a row predates is totaled as unknown, apart from both.
 It covers the calls a
-stage makes and says so: a worker's turns and any price are not in it. The local protocol
+stage makes and says so: a worker's turns and any price are not in it.
+<kbd>proposed</kbd> Once worker turns are recorded on section 6's
+[learning what converges](#round-records) terms, it totals a worker's rows by task and attempt
+beside the run and stage totals, and says it covers stage agent calls and worker turns and
+excludes the coordinator's own turns and any price; a task whose agent does not declare that it
+reports worker usage is shown as not recorded, never as nothing. The local protocol
 carries the same read as one open method, so a driving agent gets the same model. It is a
 detailed evidence document in P13's sense, because its rows are agent names, model identifiers,
 and stage purposes; the line pointing at it is phrased. It also carries a ceiling line stating
@@ -2302,6 +2494,8 @@ usage and changes nothing. The program then answers the holds of the stages befo
 fix round over every finding that is not a note, and approval where only notes remain, within
 section 5's bounds. A hold carrying an `ask` whose action the stage never stated (P3),
 or one no fix round can resolve, such as a stage with no command configured, is left for you.
+<kbd>proposed</kbd> It leaves a stage held because section 5's [fix ladder](#fix-ladder) is
+spent for you, since the fix round it would give is what the ladder has run out of.
 It never answers the push, pull request, or checks holds, and never answers past a refusal P6 or
 P7 produces. Each answer is recorded as the program's, never as a person's, and status, the run
 listing, the run's record, and the pull request body say the run ran under it. No verb is added.
@@ -2550,9 +2744,9 @@ flowchart TB
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
   trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Housekeeping paths, proposed"]
-  trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection and roles"]
+  trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection and roles<br />Fix ladder, proposed"]
 
-  global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority<br />Housekeeping interval, proposed"]
+  global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority<br />Housekeeping interval, proposed<br />Case harvesting, proposed"]
   global -->|"loosened from here only"| E["Delivery posture"]
   trusted -.->|"may tighten, never loosen"| E
   push -.->|"may tighten, never loosen"| E
@@ -2615,6 +2809,10 @@ is its audit.
 | `commands.format` | empty | Run immediately before pushing. |
 | `fix_rounds.review` | `1` | One round, and only over `fix` findings. An `ask` finding is never eligible, so the presence of one holds the stage regardless of this value. Setting it to zero sends every review finding to you. |
 | `fix_rounds.{rebase,test,lint,checks}` | `3` | Per-stage attempt limits. |
+| `fix_ladder.order` <kbd>proposed</kbd> | `fresh`, `effort`, `model` | The rungs section 5's [fix ladder](#fix-ladder) climbs after its opening rung, in order, each named at most once from that closed set. The default order follows the development fleet's evidence, recorded on the proposal's pull request: a fresh session first, because it changes the least and every escalation in that evidence began with one, then effort, then model, the lever that cost the most per token there. That evidence changed more than one lever at a time, so the order is a default to be changed from the round records, not a measured ranking. An empty list is no ladder: every automatic round resumes the run's fixer session, as before this key, and nothing holds for the ladder. A name outside the set, or a name given twice, fails at parse time. It chooses which agent, model, and effort a fix round starts with your credentials, so it is in the trust class of `roles`, read from the pushed branch only under `allow_pushed_commands`. It is recorded when a run starts and carried in its checkpoint. |
+| `fix_ladder.climb_after` <kbd>proposed</kbd> | `1` | How many of one stage's automatic fix rounds in one run are taken on the opening rung before the ladder climbs. The default is chosen to fit the default round limits, not measured: the fleet's live ladder climbed after three failing reviews, which no default limit reaches within one run. It is in `fix_ladder.order`'s trust class and is recorded on the same terms. The limits table bounds it on both sides. |
+| `fix_ladder.rounds_per_rung` <kbd>proposed</kbd> | `1` | How many of one stage's automatic fix rounds in one run are taken on each rung after the opening one, a skipped rung taking none. The default is chosen to fit the default round limits, not measured; the fleet's live ladder took two per rung across pushes. It is in `fix_ladder.order`'s trust class and is recorded on the same terms. The limits table bounds it on both sides. |
+| `fix_ladder.models` <kbd>proposed</kbd> | empty | The `fix` role's next models, in order, each one rung of the ladder's `model` step. Each entry has the shape of a role's `fallback` object, an agent with an optional complete model triple, effort, and context window, and is validated as a role is, at parse time and again when the run starts, so an entry that cannot run fails the run before its first stage rather than at the round that reaches it. An entry names no backup, and inherits nothing from the `fix` role. Empty skips the `model` step, which is the default because the default fixer names no model to climb from. A list naming the same agent and triple twice fails at parse time. It is in `fix_ladder.order`'s trust class, and its entries are read again at every round, as a role is at every launch. The limits table bounds its length. |
 | `run_budget` | `40` | Total node executions per run. The second of the three loop bounds. |
 | `run_usage_budget.output_tokens` <kbd>global-only</kbd> | `0` | The per-run usage budget: output tokens one run's own agent calls may report generating before the run parks. Zero is no budget. A run-level bound held beside `run_budget`. It is recorded when the run starts and carried in its checkpoint. Before every step it is compared against the run's own rows of the agent invocation record, and it changes on a live run only by adopting a new budget into the run's history. A call that reported no output count leaves the run's spend unknown, which parks. It is not the usage ceiling, which is the home's and holds. |
 | `ignore_patterns` | empty | Paths excluded from review and documentation checks. |
@@ -2626,6 +2824,7 @@ is its audit.
 | `no_ci` | `false` | A positive declaration that this repository has no checks. Only this makes an empty check list count as green. |
 | `delivery` <kbd>global-only-to-loosen</kbd> | `gated` | The delivery posture of this repository's delivery tasks, section 6: `gated` or `local`, from strictest to loosest. Only your global settings may loosen it. A repository copy, trusted or pushed, may name the posture beneath it or a stricter one; a lighter one refuses the whole resolution, so the run, the intake, or the promotion does not proceed, and a branch cannot choose a lighter path for itself. A stricter posture in a pushed copy affects only that run. `direct` is deferred and is rejected at parse time. It never changes what a person's push to the gate does. |
 | `autonomy.merge` <kbd>global-only</kbd> | empty | The repositories, each named as the code host names it, `owner/name` on GitHub and `gitlab.com/group/project` on GitLab, where section 6's autonomy flag may merge a run that ended `checks-passed`, after the live read section 6 gives. Empty means the program merges nothing. |
+| `evaluation.harvest` <kbd>global-only</kbd> <kbd>proposed</kbd> | empty | The repositories, each named as `autonomy.merge` names one, whose reviews that find a `fix` or `ask` at severity `error` are kept as evaluation cases in this home, on section 6's [learning what converges](#round-records) terms. Empty keeps none. What this machine keeps of a repository's code is your decision rather than the repository's, so no repository copy, trusted or pushed, may set it, and a repository file naming it is refused at parse time. Nothing it keeps leaves this home. The limits table bounds its length. |
 | `allow_pushed_commands` | `false` | The opt-out that lets the pushed branch set commands, agent selection, and roles. It is itself readable only from the trusted copy, so a branch cannot enable it for itself. |
 | `allow_standing_consent` | `false` | Whether a run of this repository may be put under section 9's standing consent. It allows and does not turn on: only the per-run flag section 9 gives puts a run under it, and that flag is refused where this is false. Read only from the trusted copy, so a pushed branch cannot allow standing consent for itself; like every trusted-only key, the operator's own file may also set it, which allows it in every repository of the home. |
 | `checks_timeout` <kbd>global-only</kbd> | `168h` | Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to. |
@@ -2686,6 +2885,16 @@ resolves to the `fix` row, which stays the one owner of what that row says (P14)
 a worker role in every other respect: its session is the pass's worker session, never the fixer
 session of a run, and the run its push starts reviews with `review` and fixes with
 `fix` (P4).
+
+<kbd>proposed</kbd> The `fix` role also answers the first rungs of section 5's
+[fix ladder](#fix-ladder): its agent, triple, effort, and context window answer the opening,
+`fresh`, and `effort` rungs, `effort` one step up from the effort the role names, and the
+entries of `fix_ladder.models` answer the `model` rungs after it. Those entries are not roles,
+no task may name one, and none is a backup: an unavailable entry never selects the role's
+`fallback`, and the role's `fallback` never stands in for an entry. A fixer moving to a
+ladder entry starts a separate session in the same working copy and durably records which agent
+owns it, as a fixer switching to its backup does. Every review stays a fresh context on every
+rung (P4).
 
 A role names one primary agent, with no arguments, and may name one `fallback` object with its own agent, optional complete model triple, effort, and context window. A backup does not inherit any of them from its primary. A backup cannot contain another backup and must name a different agent. The agent is the process that
 starts. The model provider is who serves the model, the model type is which of that provider's
@@ -2785,6 +2994,11 @@ role resumes is resumed on the terms the role names at that launch.
 | Fix commit subject length | `72` | Runes of the template, and again of the rendered result. |
 | Run budget ceiling | `100000` | `run_budget`. The budget exists to bound a run, so it is itself bounded. |
 | Per-stage fix round ceiling | `100` | Any `fix_rounds.*` value. |
+| Fix ladder climb floor <kbd>proposed</kbd> | `1` | `fix_ladder.climb_after`. At zero the opening session would be replaced before it had answered anything. Chosen, not measured. |
+| Fix ladder climb ceiling <kbd>proposed</kbd> | `100` | `fix_ladder.climb_after` and `fix_ladder.rounds_per_rung`. The per-stage fix round ceiling, which no stage can take more rounds than. Chosen, not measured. |
+| Fix ladder rounds per rung floor <kbd>proposed</kbd> | `1` | `fix_ladder.rounds_per_rung`. At zero every named rung would be passed without a round, which is the empty `fix_ladder.order` by another name. Chosen, not measured. |
+| Fix ladder model entries <kbd>proposed</kbd> | `8` | Elements of `fix_ladder.models`. The agent fallback list's bound. Chosen, not measured. |
+| Harvested repository entries <kbd>proposed</kbd> | `64` | Elements of `evaluation.harvest`. The merge authority bound. Chosen, not measured. |
 | Checks idle timeout ceiling | `8760h` | `checks_timeout`. |
 | Escalation window floor | `1m` | `escalation_window`. Chosen, not measured. |
 | Escalation window ceiling | `24h` | `escalation_window`. Above this a stalled worker is invisible for a day. Chosen, not measured. |
@@ -2986,6 +3200,9 @@ Several of them are the only reason the corresponding rule stays true a year lat
 | **Roles** | A context window outside `standard` and `1m`, one on a role that names no agent, and one on a role that names no triple each fail at parse time and name the role; none is read as a window it did not name (P3's stance on an unrecognized value). A triple and window the adapter has not declared is refused before anything starts, and nothing is started at another window in its place. A branch that sets a role's context window in its own configuration has no effect (P7). The set of windows is spelled once, in the configuration's role table, and every adapter declaration is checked against it (P14). The invocation record keeps a named window, a window not named, and a row from before the column as three facts, and the usage view totals them apart. A relaunch reads the window from the role again. |
 | **Nothing to deliver** <kbd>proposed</kbd> | **(P6, P8, P15.)** Through the binary, a delivery task's worker pushes to the gate a branch the upstream does not hold, whose one commit makes an edit the default branch already carries under another commit, so the run's rebase really replays the commit and drops it. The review stage never runs and every stage after rebase is skipped, the upstream gains no branch, no pull request is opened, and exactly one nothing-to-deliver record names the run, the default-branch commit, the submitted commit, and the checkpoint entry. The task resolves Landed from that record in the terminal tier, its worker is ended with no hold registered, the cleanup decision removes the copy on the default-branch content proof, the task resolves Complete, and a task queued behind it dispatches. The positive control is the same task whose commit the default branch does not carry: no record is written, and the task resolves Ready from its run, as before. Each of these writes no record, and its task resolves from its run tier: the same branch already present on the upstream when the run's rebase observes it; a default branch that applied the same edit and then reverted it, so the replay drops the commit cleanly and leaves nothing to change while the default branch lacks the edit, which shows the content check can fail; a branch with no commit of its own; a commit together with its revert; and a rebase that conflicts and is resolved by a fix round that drops the change. With a commit made in the copy after the push, and separately with an uncommitted file, the task still resolves Landed, but the copy is kept with a kept-work entry naming what it holds, nothing is removed, and the project's next task waits on the entry. A person's push of a branch no task's attempt names writes the record and changes no task; a person's push of a task's own branch lands that task. A rebase after a push that leaves nothing to push holds and writes no record. Stopping the service around the run's end leaves the run ended with its record, or neither. A housekeeping pass whose run rebases to nothing resolves Landed, then Complete, and has no retirement record. |
 | **Housekeeping** <kbd>proposed</kbd> | With `housekeeping.interval` zero, no wake is raised however far the default branch moves. With it set, a wake is raised once the interval has passed and the default branch has moved past the last pass's base, and not when only one of the two holds. A fetch that fails raises the wake naming the failure (positive control: the same repository with a working fetch and no movement raises nothing). A marked create while a pass is open is refused, two concurrent marked creates leave exactly one task, and a wake raised while a pass is open names that pass. A trusted `housekeeping.paths` that is empty raises nothing, and a pushed one has no effect (P7). A repository file setting `housekeeping.interval` is refused at parse time. A promoted pass whose commits touch a path outside `housekeeping.paths` holds at review with an `ask` naming it, including when the worker's account says it touched nothing, and the same change inside the paths does not hold. A pass whose run rebased to nothing lands on section 6's [nothing left to deliver](#nothing-to-deliver), writes no retirement record, and a later pass can be created; a pass whose run was cancelled stays open until a retirement hold is answered `retire`, and `keep` leaves it open (positive control: a landed pass needs no retirement). A pass that something still moves after an interval raises the wake naming it, whether or not the default branch moved, and gets no retirement hold and no retirement record. A promoted pass with an open report decision and a run still advancing resolves Held and still gets no retirement hold (positive control: once that run ends and the worker reads dead, it gets one); an answer of `retire` after a run attributed to the pass has started is refused and the hold stays open. A `retire` answer closes the pass's stop hold as `stop` under the same resolver, and a `retry` on a relaunch hold, a coordinator's relaunch, or reconciliation of a retired pass whose terminal is gone is refused and starts no worker (positive control: the same relaunch of a pass not retired starts one). A pass whose worker screen stays unchanged while its run sits in a stage surfaces once `escalation_window` elapses, before `housekeeping.interval`, including a promoted pass that resolves Held from an open report decision with every wake acknowledged (positive control: a pass that nothing moves, resolving Held with no wake queued, has its terminal left unread, as any Held task does). Retiring a pass whose copy holds unlanded work writes a kept-work entry and removes nothing. A create naming the `housekeeping` role is refused, a pass resolves to the `fix` row when the table does not name its role, and every review invocation of its run is session-free (P4). |
+| **Fix ladder** <kbd>proposed</kbd> | **(P4, P5, P6.)** Through the binary, with the stand-in agent as the fixer and a stage whose review keeps reporting a `fix` finding after every round, a `fix` role naming `medium`, one entry in `fix_ladder.models`, `climb_after` and `rounds_per_rung` both one, and a round limit of five: round one opens a session, round two's invocation opens a new one rather than resuming and its prompt is the program's handoff, naming the earlier round's commits and marking its summary as the fixer's claim; round three opens another at `high`; round four opens another on the entry's agent and model at the entry's effort; and the next automatic round is not taken and the stage holds on an `ask` naming each rung. Every review invocation of the run is session-free, and none is given the handoff or a fixer session's reference. Standing consent leaves that hold open. A round you ask for at it runs at the last rung and moves nothing. With a round limit of two the run parks on that limit after round two, and nothing holds for the ladder (positive control: the limit is reached first). A round that changes nothing on a new rung still parks the loop at its second such round, so the rung is not part of what convergence measures (positive control: a run whose rounds change something is not parked). With session reuse off, `fresh` is recorded as skipped; with the `fix` role naming `high`, `effort` is; with no entries, `model` is; each skipped rung takes no round. An empty `fix_ladder.order` resumes the opening session on every round and never holds for the ladder. A name outside the set, a repeated name, and an entry outside section 10's table each fail at parse time naming the key; a pushed copy setting any `fix_ladder` key has no effect without `allow_pushed_commands` (P7); an entry whose agent cannot run fails the run before its first stage. A ladder changed in configuration between two segments of one run leaves the run on the ladder it started with. |
+| **Round records** <kbd>proposed</kbd> | **(P8, P14.)** Through the binary across two repositories, every review and every fix round has a round row naming the invocations it served, its rung, and its kind, and a report built from the rows reads each round's tokens only from those invocations: a count the stand-in did not report reads unreported, and is never summed as zero. A review after a fix round whose finding sits in a line that round changed counts it, and one whose finding sits elsewhere does not. A run that parks, one that holds, and one whose task later lands each read their outcome from the run's records, and no round row is revised when the task lands. A worker that reports usage on two turns writes two rows of purpose `worker` naming its task and attempt and no run; the usage view totals them by task and says it covers worker turns; the usage ceiling's figures and the per-run usage budget's spend are unchanged by them (positive control: a stage call in the same window does move the ceiling's figures). An adapter that does not declare worker usage writes no worker row, and the view says the task's turns are not recorded. No row holds a prompt, an output, a diff, or a credential. |
+| **Evaluation cases** <kbd>proposed</kbd> | **(P6, P7, P15.)** With `evaluation.harvest` empty, a review with an `error` `fix` finding writes no case. With the repository named, it writes exactly one case naming the reviewed commit, and a review of only notes or warnings writes none (positive control). When the task lands, the case gains the commits between the reviewed commit and the landed head, once; a case whose task never lands has none. The reviewed commit stays readable from the gate's bare repository after its branch is deleted and the gate's repository is garbage collected, and no branch the push stage pushes, and no pull request, carries the case's reference. A repository file, trusted or pushed, naming `evaluation.harvest` is refused at parse time. No adapter, forge, notify command, or decision-model request is given a case, which is a test of what each of them can reach and not of one call. A case that cannot be written leaves the run as it would have been. |
 | **Judge paths** | A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an `ask` naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a `note`. A branch whose own configuration sets `judge_paths` has no effect on either. |
 | **Graph** | A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision. |
 | **Decision model** | Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In `evaluate` no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode `off` or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time. |
@@ -3046,6 +3263,7 @@ answered.
 | 27 | <kbd>proposed, not decided</kbd> A stalled live worker **holds for you once its stall outlasts the coordinator's inspection**, and the stall itself never ends it. | Proposed 2026-10-24 (#531, AGE-439) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-22 on #430 that the bound P15 owes a stalled worker is designed here, and the owner's decision of 2026-10-24 (AGE-484, recorded on AGE-487) that long runs and hangs are detected by the coordinator and escalated to the owner, never retired on their own. The proposal recommends: (1) a stall is the count supervision already keeps, consecutive surfaces of one unchanged screen of a live worker whose task resolves Running, so a declared wait, a gate run being advanced, and an unobservable terminal are none; (2) past `stall_inspection_count` plus a new global-only `stall_hold_count`, default 3 within 1 to 100, the task holds for you, a hold and not a park, and nothing is ended; (3) the answers are approve, stop through section 6's Stop, and retry through the one anchored relaunch counted by `relaunch_attempts`, and any other answer is refused; (4) a task with an open stall hold stays in flight, so its terminal is read every pass, and the program closes the hold itself when the screen changes or the worker reads dead; (5) ending never discards work, the copy stays the task's, and every end section 8 lists still applies; (6) it agrees with decision 26's housekeeping proposal: for a pass the stall hold is the durable form of the hung-worker escalation that proposal names, it retires nothing, and the dead reading every retirement needs closes it first. Rejected: a maximum session lifetime, because it ends or asks about a worker on elapsed time alone and a worker waiting on its gate run or on a merge is old rather than stuck; ending after a number of unanswered escalations, because no record says a wake was answered, an acknowledgement records only that it was read, and the program ending a worker on its own is what the owner ruled out; and the program stopping the worker itself at the count and holding afterwards, which closes P15's bound more tightly but ends a worker nobody decided to end. P15 and section 8 keep their decided wording, and a proposed sentence beside each says which clause it would replace. |
 | 28 | <kbd>proposed, not decided</kbd> A kept-work claim nobody can carry out **is withdrawn by your answer**, given as a hold answer, refused while its outcome is mid-flight, and removing nothing. | Proposed 2026-10-25 (#530, AGE-438) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-22 on #475's design, recorded on #530, that kept-work answers follow the claim rule: an answer closes an entry only in the write that records its outcome, and an answer in progress is a claim that keeps the entry open, listed, holding dispatch, and refusing other answers. Section 6 now states that rule, which was decided and not yet written here. A claim the program can neither carry out nor take back on its own, a carry on whose task was created but whose copy cannot be adopted among them, leaves the entry stuck, and nothing unsticks it. The proposal recommends: (1) each answer's outcome is named: a landing's run, recorded when it starts, so the entry closes then and not when the work lands; a carry on's new task owning the copy; a discard's removal, which records no claim while it is deferred to AGE-486; (2) a withdraw answer for a claim, with no verb of its own, on the terms the entry's other answers are given; (3) mid-flight, when it is refused, is a claim a call is carrying out now, a landing whose unrecorded run, left by a stopped service, has not ended or has begun validation, a carry on whose task has begun an attempt, and a discard whose removal has begun; a landing whose run is recorded has already closed the entry; (4) a carry on that moved the copy is withdrawn by moving the copy back to the entry's path, only when it is the copy the claim read and the path is free; a claim whose copy is gone from every path it knows is withdrawn by closing the entry as gone, since an entry reopened over no copy would hold its project with nothing able to release it (P15); (5) a withdraw clears the claim and reopens the entry, removes nothing (P6), and ends a task the carry on created before it ever dispatches, which resolves Withdrawn, a terminal fact, is not in flight, and is refused by dispatch; (6) each withdrawal is one record, written once with the clearing, naming the claim as it stood, who withdrew it, when, any move back, any closure as gone, and the note, which is evidence and never read for whether an entry is claimed (P8); (7) an entry holding a claim is listed naming it, and a task it holds waits naming the claim and the withdraw. Residual gap: an entry with no claim whose copy is gone has no answer that closes it in this build; this proposal closes only a claimed one. Rejected: leaving a carry on's created task standing for a later carry on, since a later land answer would release it to dispatch a fresh clone and redo finished work; refusing a withdraw once the task exists, which leaves the stuck example stuck; and refusing a withdraw once the copy moved, for the same reason. Section 6's [kept work](#kept-work) owns the rule; section 6's lifecycle, resolver and in-flight list gain Withdrawn; section 8 gains the kept-work withdrawal record; section 9 gains `--answer withdraw`; and section 13 gains an acceptance row. |
 | 29 | <kbd>proposed, not decided</kbd> A delivery task whose rebase leaves **nothing to deliver lands**, from a nothing-to-deliver record its run writes, and every other end that does not land goes to you. | Proposed 2026-10-26 (AGE-487) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-24, recorded on AGE-487: only this end ends a task on its own, as a typed outcome the task records, and every other end that does not land, a long run or a hang among them, is detected by the coordinator and escalated to you. The proposal recommends: (1) the outcome is a record of the run, written once in the same write that ends a run on section 5's empty-diff short circuit, read from the run's recorded position and never from its report or status; (2) only a run whose submitted commits P12's content check finds present in the default-branch commit it read writes one, since an empty replay alone also follows a patch the default branch applied and later reverted, and only one whose push anchor found its branch absent where it would push, so a branch somebody already published, perhaps with a pull request, never lands this way; (3) the task the run is attributed to resolves Landed from it in the terminal tier, so everything that already waits on Landed proceeds as after a merge and no state or waiter is added; (4) the copy is removed only on P12's proof read against the copy as it stands, and kept as kept work otherwise (P6, P15); (5) it is not a pass, and the task's line never words it as validated or merged; (6) it replaces the on-proof retirement decision 26 proposed for a housekeeping pass as a stopgap: a pass whose run rebases to nothing lands like any delivery task, so housekeeping keeps only the retirement you answer (P14). Left open: the run's own outcome word, which section 9's set does not name for this end; how a task that does not land this way reaches you; and section 5's short circuit ending a run successfully whose change matched a reverted patch. Section 6's [nothing left to deliver](#nothing-to-deliver) owns the rule. Section 6's lifecycle, resolver, housekeeping and stalled worker, section 5's rebase row, section 8's process model and data model, section 9's catch-up read, section 13's rows, and decision 26 point at it. The alternatives weighed are on the proposal's pull request. No code implements it at this proposal. |
+| 30 | <kbd>proposed, not decided</kbd> The product **records every round, worker turns included, and climbs a fix ladder** when a stage's fixer session is not converging, a fresh session, then effort, then model, then a hold for you. | Proposed 2026-10-26 (AGE-491) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-26, recorded on AGE-491, that the product should learn what makes review and rework converge for all the work it does in every repository it serves. The proposal recommends: (1) every review and fix round keeps a round row that names the agent invocations it served, its rung, its review kind, a measure of findings in the previous round's own lines, and its wall time, and points at the records that own every other fact, the outcome among them, so nothing gains a second owner (P8, P14); (2) worker turns join the agent invocation record as rows of purpose `worker`, which extends what the usage view covers from stage agent calls to stage agent calls and worker turns, while the usage ceiling and the per-run usage budget keep comparing stage calls only; (3) section 5's fix ladder replaces resuming the run's fixer session on every automatic round, with its accounting in the graph module beside the run budget, its rungs skipped and recorded where they would change nothing, and a hold, never a park, past the last rung, inside the unchanged `fix_rounds` bounds and convergence check; (4) the handoff a fresh session gets is P4's explicit summary written by the program, and no review is given it or any fixer session (P4, P5); (5) evaluation cases are kept only for repositories the global-only `evaluation.harvest` names, in this home, and are sent nowhere. Left open: whether the usage ceiling should count worker turns; whether a task's worker should climb a ladder of its own across runs, which is what the evidence measured; whether the closed effort set should gain the efforts above `high` that evidence used; how harvested cases are removed; and whether the default ladder should be on before the replay benchmark reports. Section 5's [fix ladder](#fix-ladder) and section 6's [learning what converges](#round-records) own the rules. Section 2's vocabulary, section 8's data model, section 9's usage view and standing consent, section 10's schema, roles, and limits, and section 13's rows point at them. The evidence and the alternatives weighed are on the proposal's pull request. No code implements it at this proposal. |
 
 ### What to settle next
 
