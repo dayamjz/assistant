@@ -107,6 +107,13 @@ import (
 // be written. A reference that cannot be recorded leaves the session no
 // longer held and ended before the failure is reported, so no process this
 // service started stands behind an attempt whose row does not name it.
+// Within this service the task's slot, which the dispatch or relaunch
+// took, stays unsettled from its claim until the record here is settled
+// (dispatched.settle), across a worker fallback made here too, which is
+// handed the slot unsettled and settles it after the backup's launch
+// (dispatched.handSlot), so a stop or a relaunch asked meanwhile is
+// refused (errSteerInFlight, errRelaunchInFlight) rather than acting on a
+// worker created and not yet recorded.
 // Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
@@ -186,6 +193,11 @@ func (s *Service) settleRecording(id string, launched *session.Session, recorded
 // reference could not be recorded is no longer held and is ended before the
 // error is reported.
 func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Session, error) {
+	// The slot the dispatch or relaunch took is settled here, at every
+	// return but a worker fallback, which is handed it unsettled and
+	// settles it after the backup's launch; a caller that settles it
+	// itself, as switchWorker does, passes none.
+	defer d.settleSlot()
 	instructions, err := os.ReadFile(d.instructions)
 	if err != nil {
 		return nil, fmt.Errorf("service: reading the instructions of task %s: %w", d.id, err)
@@ -236,6 +248,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	// task's worker from starting; dispatch.go says what remains.
 	if err := s.store.ClaimAttemptLaunch(ctx, d.id, d.attempt); err != nil {
 		if errors.Is(err, store.ErrDispatchHeld) {
+			// Given back rather than settled: the slot this launch holds
+			// unsettled is dropped first, so the deferred settle does not
+			// take it again after the release.
+			d.handSlot()
 			s.releaseHeldSlot(ctx, d.id)
 		}
 		return nil, err
@@ -256,7 +272,10 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 			if errors.As(err, &protocol) {
 				failure = protocol.Failure
 			}
-			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure)
+			// The slot stays unsettled across the switch: handed over
+			// rather than settled, so no stop or relaunch takes it between
+			// this launch's end and the backup's claim.
+			return s.switchWorker(ctx, task, d.attempt, nil, nil, selection.Resolution.Name, role, failure, d.handSlot())
 		}
 		var undeclared *agents.CapabilityError
 		if errors.As(err, &undeclared) {

@@ -333,11 +333,20 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // residual gap.
 //
 // A dispatch that reaches proven is launched in the same pass, through
-// launch.go, and the slot covers the launch as well: a launch that failed is
+// launch.go, and the slot covers the launch as well, in both senses: the
+// slot stays taken for the service's lifetime, so a launch that failed is
 // not retried until the next open either, because the attempt it would be
 // launching was dispatch's and a second launch of one attempt would be a
-// second process against one record. What came of the launch is logged, and
-// a refusal of the launch's own assertion is recorded the way dispatch's is.
+// second process against one record; and it stays unsettled, which is what
+// claimSteer and claimRelaunch refuse on, from the claim until the launch
+// has settled the record of its session (dispatched.settle), a worker
+// fallback at the launch included, which is handed the slot unsettled and
+// settles it after the backup's launch (dispatched.handSlot), so nothing
+// that takes the task's slot, a stop or a relaunch, interleaves with a
+// worker being created and not yet recorded, and a reader of that state
+// (launching) can tell a launch in flight from a settled slot. What came of
+// the launch is logged, and a refusal of the launch's own assertion is
+// recorded the way dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	if !s.intake.TryRLock() {
 		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
@@ -418,6 +427,32 @@ type dispatched struct {
 	// section 11's note about what already happened; relaunch.go owns the
 	// text.
 	note string
+	// settle settles the task's slot the dispatch or relaunch took, once,
+	// with the proof it is given; nil when the caller settles it itself.
+	// launchTask calls it with proof at every return but a worker fallback,
+	// which it hands the slot to unsettled (handSlot) for switchWorker to
+	// settle once the backup's launch has settled its record, so the slot
+	// is unsettled from the claim until that record is settled, across a
+	// fallback too.
+	settle func(tasks.Isolation)
+}
+
+// settleSlot settles the slot once with the dispatch's proof, on settle's
+// terms, and is safe to call again or on a dispatch that carries none.
+func (d *dispatched) settleSlot() {
+	if settle := d.handSlot(); settle != nil {
+		settle(d.proof)
+	}
+}
+
+// handSlot gives the slot's settle to the caller, once, and leaves the
+// dispatch with none to settle, so a later settleSlot settles nothing: it
+// is how launchTask hands an unsettled slot to a worker fallback. It is nil
+// for a dispatch that carries none.
+func (d *dispatched) handSlot() func(tasks.Isolation) {
+	settle := d.settle
+	d.settle = nil
+	return settle
 }
 
 // dispatchTask dispatches one task, on the terms this file's opening comment
@@ -441,8 +476,7 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleDispatch(ctx, id, settle, d, err)
-	return d, err
+	return s.settleDispatch(ctx, id, settle, d, err), err
 }
 
 // settleOrRelease ends a dispatch's hold on its slot: a dispatch left queued
@@ -480,16 +514,19 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	s.settleDispatch(ctx, id, settle, d, err)
-	return d, err
+	return s.settleDispatch(ctx, id, settle, d, err), err
 }
 
-// settleDispatch ends a dispatch's hold on its slot: for a dispatch kept
-// work held it gives the slot back through releaseHeldSlot, for one that
-// ended before it could read the hold (*holdUnread) it gives the slot back
-// and asks nothing, this file's opening comment says why for both, and
-// every other outcome is settleOrRelease's.
-func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) {
+// settleDispatch ends a dispatch's hold on its slot, or hands it to the
+// launch: for a dispatch kept work held it gives the slot back through
+// releaseHeldSlot, for one that ended before it could read the hold
+// (*holdUnread) it gives the slot back and asks nothing, this file's
+// opening comment says why for both; every other failure is
+// settleOrRelease's; and a dispatch that proved its copy
+// keeps the slot unsettled and is returned with d.settle set, for
+// launchTask to settle with the proof once the launch's record is settled,
+// on the file comment's terms.
+func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) dispatched {
 	var unread *holdUnread
 	switch {
 	case errors.Is(err, store.ErrDispatchHeld):
@@ -499,9 +536,12 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 		s.releaseHeldSlot(ctx, id)
 	case errors.As(err, &unread):
 		s.giveBackSlot(id)
-	default:
+	case err != nil:
 		s.settleOrRelease(id, settle, d.proof, err)
+	default:
+		d.settle = settle
 	}
+	return d
 }
 
 // holdUnread is a dispatch's failure before it read whether kept work holds
@@ -581,6 +621,9 @@ func (s *Service) slotMaps() {
 	if s.claiming == nil {
 		s.claiming = make(map[string]bool)
 	}
+	if s.steering == nil {
+		s.steering = make(map[string]bool)
+	}
 }
 
 // takeSlot marks the task's slot taken and unsettled and returns the
@@ -594,6 +637,19 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 		s.isolated[id] = proof
 		delete(s.claiming, id)
 	}
+}
+
+// launching reports whether a dispatch or a relaunch holds the task's slot
+// unsettled, which it does through the launch that follows it: the slot is
+// claimed, and not by claimSteer, which marks what it holds in steering
+// and can hold nothing while a claim in flight does. A stop or a cleanup
+// ask holding the slot, and a dispatch that ended without a proof and
+// settled, do not read as a launch. It is for a reader that must not act
+// while a worker may be created and not yet recorded, and not otherwise.
+func (s *Service) launching(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.claiming[id] && !s.steering[id]
 }
 
 // isolationOf reports the proof this service holds for a task, and whether it
