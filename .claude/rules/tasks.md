@@ -17,7 +17,7 @@ paths: ["internal/tasks/**"]
   loosen it (`*PostureError`); a floor (`Request.DeliveryFloor`, a carry
   on's) records the stricter of itself and the project's, decided in the
   one read, and is never a refusal. A housekeeping pass is promoted gated whatever
-  the project declares, as a request for gated, because its scope is held at
+  the project declares, as a request for gated, because PRD section 6 holds its scope at
   the review of the run its push starts and a local task starts no run; the
   project's posture is read for it as for any task, so an unreadable copy
   refuses it too; a request for another posture on a pass is `ErrRequest`,

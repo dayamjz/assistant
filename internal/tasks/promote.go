@@ -107,7 +107,7 @@ import (
 //
 // A housekeeping pass is promoted as a request for gated, the strictest
 // posture, so it is recorded gated whatever its project declares (PRD
-// section 6's housekeeping: its scope is held at the review of the run its
+// section 6's housekeeping holds its scope at the review of the run its
 // push starts, and a local task starts no run), and its project's posture
 // is read all the same, so an unreadable trusted copy refuses a pass's
 // promotion as it refuses any (P7). A retired pass is refused in the flip
@@ -293,8 +293,8 @@ type Promotion struct {
 	// *PostureError.
 	// A housekeeping pass is recorded gated whatever the project declares,
 	// as a request for gated would be, and a request for another posture on
-	// a pass is refused as malformed (ErrRequest), since its scope is held
-	// at review and a local task starts no run. The project's posture is
+	// a pass is refused as malformed (ErrRequest), since PRD section 6
+	// holds its scope at review and a local task starts no run. The project's posture is
 	// read for a pass as for any task.
 	Delivery string
 	// By is who promotes, which the copy's open kept work entries, if any,
@@ -423,10 +423,10 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	}
 	if record.Housekeeping {
 		// A housekeeping pass is delivered through the gate whatever its
-		// project declares, PRD section 6's housekeeping: its scope is
-		// held at the review of the run its push starts, and a task under
-		// the local posture starts no run, so a pass under it would change
-		// files outside housekeeping.paths with no ask. So the pass is
+		// project declares: PRD section 6's housekeeping holds its scope
+		// at the review of the run its push starts, and a task under the
+		// local posture starts no run, so a pass under it would reach a
+		// shared branch with no review at all. So the pass is
 		// promoted as a request for gated, the strictest posture, which
 		// recordedPosture records over any posture the project declares;
 		// the project's is still read, because a trusted copy that cannot

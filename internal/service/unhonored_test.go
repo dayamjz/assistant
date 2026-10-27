@@ -28,7 +28,8 @@ import (
 // before it launches anything, rather than being run as something else). The
 // herdr provider matters most: the service would otherwise start every
 // worker on pipes. The same file without the key reads, so the refusal is
-// about the key and not about the file.
+// about the key and not about the file, and so does a housekeeping.interval,
+// which the due check reads.
 func TestTheServiceRefusesARemoteSettingThisBuildDoesNotActOn(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
@@ -57,7 +58,8 @@ func TestTheServiceRefusesARemoteSettingThisBuildDoesNotActOn(t *testing.T) {
 			t.Errorf("GlobalConfig(%q) = %v, want a refusal naming %s and saying this build does not act on it", c.doc, err, c.key)
 		}
 	}
-	for _, doc := range []string{"no_ci: true\n", "session_provider: tmux\n", "session_provider: pipe\n"} {
+	for _, doc := range []string{"no_ci: true\n", "session_provider: tmux\n", "session_provider: pipe\n", "housekeeping:\n  interval: 0s\n",
+		"housekeeping:\n  interval: 12h\n"} {
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 			t.Fatal(err)

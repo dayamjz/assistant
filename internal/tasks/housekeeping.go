@@ -26,7 +26,7 @@ import (
 // list cannot be read (ErrPassScopeUnreadable, never an assumed scope); and,
 // under the store's serialization, while a pass of the repository is open
 // (*store.PassOpenError naming it). Whether the coordinator was asked by a
-// person or answered the due wake is nothing this package can tell, so the
+// person or answered a wake is nothing this package can tell, so the
 // pass is held to the same scope either way.
 //
 // The program's part names the scope, the base of the newest earlier pass
