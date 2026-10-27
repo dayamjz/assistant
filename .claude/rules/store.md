@@ -51,7 +51,10 @@ paths: ["internal/store/**"]
   one transaction; `ForgetRepository` refuses a repository with one
   queued); housekeepingNotificationMigration (67) is its notification
   twin `housekeeping_notification`, one `notificationShape` with the
-  other three.
+  other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,
+  the due check's comparison base, written with a due check's wake or
+  alone only while the passes the check read are unmoved, re-read in the
+  writing transaction (`DueCheck`, `ErrDueCheckStale`).
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
