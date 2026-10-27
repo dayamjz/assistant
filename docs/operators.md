@@ -548,8 +548,9 @@ assistant --task ID --answer keep     # leave it open; asked again after another
 `retire` is refused, with the decision left open, if a run of the pass
 started or its worker was begun again since you were asked. It closes no pull
 request, moves no branch and discards nothing; it answers `stop` on the pass's
-decisions that would begin its worker again. The program retires no pass on
-its own. A pass whose run rebased to nothing,
+decisions that would begin its worker again, and its copy is asked the
+cleanup decision, so work not yet landed is kept for you (see Kept work).
+The program retires no pass on its own. A pass whose run rebased to nothing,
 because the default branch already holds the correction, lands from the
 run's nothing-to-deliver record as any delivery task does (see Nothing left
 to deliver above) and needs no retirement; one whose run left nothing to

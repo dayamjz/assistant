@@ -67,8 +67,10 @@ paths: ["internal/tasks/**"]
   marks, and `Queue.Promote` asks for
   each entry its flip answers (`*KeptWorkUnheldError`). And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
-  refusals are a copy kept for its work; `kept_test.go` places every reason.
-  refusals are a copy kept for its work; `kept_test.go` places every reason.
+  refusals are a copy kept for its work, and `KeptOnRetirement` the one
+  statement for a retired housekeeping pass's copy, which also keeps a copy
+  refused for a report or hold its retirement means will never come;
+  `kept_test.go` places every reason for both.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
   as this build takes it, the preview (removal on a confirmed discard is
   deferred to AGE-486, on the branch feat/age-407-discard), and `Loss` is
