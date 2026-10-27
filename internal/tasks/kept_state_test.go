@@ -64,7 +64,13 @@ func TestAnEntryIsSetAsideOnlyAsItWasRead(t *testing.T) {
 		{name: "a file rewritten with its bytes", make: file("work\n"), between: rewrite("work\n"), moved: true},
 		{name: "nothing read and nothing there", make: nil, moved: false},
 		{name: "a file whose bytes changed", make: file("work\n"), between: rewrite("other\n"), moved: true, changed: true},
-		{name: "a file whose mode changed", make: file("work\n"), between: chmod(0o700), moved: true, changed: true},
+		{name: "a file whose mode changed", make: file("work\n"), between: func(t *testing.T, at string) {
+			// From writeFile's 0o600 to a mode with no execute bit, so the
+			// test writes no program (procgroup/guard's LoadWrites).
+			if err := os.Chmod(at, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}, moved: true, changed: true},
 		{name: "a file added to a directory", make: tree, between: func(t *testing.T, at string) {
 			writeFile(t, filepath.Join(at, "sub", "new.txt"), "added\n")
 		}, moved: true, changed: true},
@@ -150,15 +156,6 @@ func file(content string) func(t *testing.T, at string) {
 // rewrite writes content over the file at at.
 func rewrite(content string) func(t *testing.T, at string) {
 	return file(content)
-}
-
-// chmod sets the mode of the entry at at.
-func chmod(mode os.FileMode) func(t *testing.T, at string) {
-	return func(t *testing.T, at string) {
-		if err := os.Chmod(at, mode); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 
 // tree makes a directory with a file and a subdirectory holding another.
