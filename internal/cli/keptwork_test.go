@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -145,11 +148,15 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // (docs/prd.md, sections 6 and 9): --answer discard alone answers with what
 // would be lost and the digest, in the structured answer, and reads out as
 // the shown row. Given again with --confirm and that digest under --json,
-// and from a process not at a terminal, it is refused before the service is
-// asked with the row saying a discard is confirmed only at a terminal; from
-// one at a terminal, in the foreground, it is refused with the row saying
-// removal is not in this build. Either way the copy and its entry are as
-// they were. The rows are held to the vocabulary.
+// and from a process read as off a terminal (Environment.OffTerminal), it
+// is refused before the service is asked with the row saying a discard is
+// confirmed only at a terminal. From a process in a terminal's foreground,
+// its streams terminals or not (the review of 1608c5e: a person who
+// redirects standard error is still at the terminal), it reaches the
+// service, which places this test's process in its terminal's foreground,
+// and is refused with the row saying removal is not in this build. Either
+// way the copy and its entry are as they were. The rows are held to the
+// vocabulary.
 // --confirm beside any other answer, or with no digest, is incorrect usage
 // before anything is asked.
 func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
@@ -236,8 +243,9 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 		row string
 	}{
 		{"under --json", run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
-		{"off a terminal", run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
+		{"off a terminal", offTerminal(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
 		{"at a terminal", atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), deferred},
+		{"in a terminal's foreground with its streams redirected", run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), deferred},
 	} {
 		if said := refused.got.stdout + refused.got.stderr; refused.got.code != machine.ExitFailure || !strings.Contains(said, refused.row) {
 			t.Fatalf("a discard confirmed %s exited %s:\n%s\nwant it refused with the row %q", refused.how, refused.got.code, said, refused.row)
@@ -248,5 +256,47 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	}
 	if still, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
 		t.Fatalf("after the refused confirmations the entry reads %+v, %v; want it open", still, err)
+	}
+}
+
+// offTerminal drives the surface as a process the boundary read as off a
+// terminal: cmd/assistant's cli.OffTerminal reported it so.
+func offTerminal(t *testing.T, h *home.Home, workingDir string, args ...string) invocation {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolving this binary: %v", err)
+	}
+	var out, errs bytes.Buffer
+	code := cli.Run(t.Context(), cli.Environment{
+		Args:        append([]string{"--home", h.Root()}, args...),
+		Stdout:      &out,
+		Stderr:      &errs,
+		Getenv:      func(string) string { return "" },
+		WorkingDir:  workingDir,
+		Executable:  executable,
+		Version:     "assistant (test)",
+		OffTerminal: true,
+	})
+	return invocation{code: code, stdout: out.String(), stderr: errs.String()}
+}
+
+// OffTerminal reads a process's own lineage, not its streams: this test's
+// process, which TestMain runs in the foreground of a terminal of its own,
+// is not off one, whatever its standard error is; process 1, the system's
+// first, which has no controlling terminal, is, the positive control; and
+// a process that is not running is not reported off a terminal, since
+// that was not established.
+func TestOffTerminalIsTheForegroundRelationReadOfTheProcess(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	if cli.OffTerminal(os.Getpid()) {
+		t.Fatal("this test's process, in its terminal's foreground, was read as off a terminal")
+	}
+	if !cli.OffTerminal(1) {
+		t.Fatal("process 1, which has no controlling terminal, was not read as off a terminal")
+	}
+	if cli.OffTerminal(1 << 30) {
+		t.Fatal("a process that is not running was read as off a terminal")
 	}
 }

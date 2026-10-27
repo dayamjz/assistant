@@ -895,10 +895,12 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	// A discard is confirmed only at a terminal, in the foreground, PRD
 	// section 6's "Removing a discarded copy": a confirmation under --json
 	// or off a terminal is refused here, before the service is asked, with
-	// the row that says so. This is the early refusal, not the mechanism:
+	// the row that says so. "Off a terminal" is Environment.OffTerminal, the
+	// service's own predicate read of this process, and never whether its
+	// streams are terminals. This is the early refusal, not the mechanism:
 	// internal/service decides it from the peer's lineage either way
 	// (keptdiscard.go, foreground.go).
-	if f.confirmSet && (in.json || !in.env.Interactive) {
+	if f.confirmSet && (in.json || in.env.OffTerminal) {
 		return nil, discardNeedsTerminal{}
 	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
