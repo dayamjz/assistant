@@ -272,6 +272,28 @@ the run on from the branch without the base's newest commits. Approving past
 `rebase-branch-overlap`, `rebase-branch-conflict` or
 `rebase-branch-replay-unverified` reaches the push stage's refusal below.
 
+Those holds are for a branch that already contained commits the run was not
+given. A conflict while rebasing onto the freshly fetched base is not a hold.
+The rebase stays in progress and the copy stands on that base with the
+conflicts in the working tree. The stage reports a fix finding,
+`rebase-conflict`, and a fix round resolves the conflicted files in place.
+The round commits a resolution that differs from the commit the rebase
+stopped on and continues, so that commit is not replayed again ahead of the
+fix. A resolution that matches the stopped commit skips the step and keeps a
+step already replayed. A round that leaves a conflicted file as the conflict
+left it commits nothing and leaves the rebase stopped. So does a round that
+leaves the file holding a line which starts with seven `<`, seven `|`, or
+seven `>` and which none of that conflict's sides held. A shorter run is not
+that line. A `conflict-marker-size` attribute can ask git to write one, and a
+round that changes the file while leaving that shorter marker in it can
+commit the file. `MarkerBaseline` names the other lines that reading does
+not tell apart from content. The round does not abort: an abort would
+discard a step an earlier round of this rebase had already committed. The
+stage's next execution reports that same conflict and does not start another
+rebase. A conflict the code host reports after the push is the other path,
+under Keep your CI required: that rebase is abandoned, the run holds, and no
+automatic fix round is offered.
+
 A push hold whose finding is `push-refused` with reason `would-discard` means
 the branch holds commits the run's commit does not contain and that the run
 would lose by pushing. Either the branch moved after the run observed it, or
