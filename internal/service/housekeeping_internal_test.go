@@ -45,9 +45,11 @@ type hkSubject struct {
 	upstream  string
 	checks    chan hkCheck
 	first     passReport
-	// offerMu guards onDueRead, which the loop's afterDueRead hook calls
-	// when a test set it.
+	// offerMu guards onOffer and onDueRead, which the loop's
+	// beforeRetirementOffer and afterDueRead hooks call when a test set
+	// them.
 	offerMu   sync.Mutex
+	onOffer   func(task string)
 	onDueRead func()
 }
 
@@ -57,6 +59,14 @@ func (s *hkSubject) afterDueRead(f func()) {
 	s.offerMu.Lock()
 	defer s.offerMu.Unlock()
 	s.onDueRead = f
+}
+
+// beforeOffer sets what the loop does between its read of a pass and its
+// registration of that pass's retirement hold.
+func (s *hkSubject) beforeOffer(f func(task string)) {
+	s.offerMu.Lock()
+	defer s.offerMu.Unlock()
+	s.onOffer = f
 }
 
 // hkPlant is what a test records before the service opens.
@@ -75,6 +85,14 @@ func openHousekeeping(t *testing.T, document string, plant hkPlant) *hkSubject {
 	clock := &fakeClock{now: time.Now()}
 	sub.loopSubject = openLoopHooked(t, h, records, sub.terminals, clock, nil, func(hooks *supervisionHooks) {
 		hooks.afterHousekeepingCheck = func(repository string, r taskReport) { sub.checks <- hkCheck{repository, r} }
+		hooks.beforeRetirementOffer = func(task string) {
+			sub.offerMu.Lock()
+			f := sub.onOffer
+			sub.offerMu.Unlock()
+			if f != nil {
+				f(task)
+			}
+		}
 		hooks.afterDueRead = func(string) {
 			sub.offerMu.Lock()
 			f := sub.onDueRead
@@ -538,5 +556,51 @@ func TestAWakeRaisedWhileAPassIsOpenNamesItEachInterval(t *testing.T) {
 			!strings.Contains(last.Detail, "nothing moves it") {
 			t.Fatalf("the wake is %+v, want it to name the open pass and what it waits on", last)
 		}
+	}
+	retireHolds := 0
+	snap, err := sub.records(t).TaskSnapshot(t.Context(), "taskhkopenaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range snap.Holds {
+		if _, ok := parseRetireHold(h.Key, "taskhkopenaa"); ok {
+			retireHolds++
+		}
+	}
+	if retireHolds != 1 {
+		t.Fatalf("the open pass carries %d retirement holds, want one, unanswered, for the first interval", retireHolds)
+	}
+}
+
+// PRD section 13: a pass that something still moves after an interval
+// raises the wake naming it, whether or not the default branch moved, and
+// gets no retirement hold and no retirement record. Here its worker reads
+// live.
+func TestAPassSomethingMovesIsNamedAndNeverRetired(t *testing.T) {
+	t.Parallel()
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		passTask(t, records, "taskhklivaaa")
+		launched(t, records, "taskhklivaaa", "", "pane-live")
+		sub.terminals.live("pane-live", "working\n")
+	})
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	sub.clock.Advance(time.Hour)
+	sub.pass(t)
+	wakes := sub.wakes(t)
+	if len(wakes) != 2 || !strings.Contains(wakes[1].Detail, "what still moves it") || !strings.Contains(wakes[1].Detail, "pane-live") {
+		t.Fatalf("the pass something moves raised %+v, want one wake per interval naming its worker", wakes)
+	}
+	snap, err := sub.records(t).TaskSnapshot(t.Context(), "taskhklivaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range snap.Holds {
+		if _, ok := parseRetireHold(h.Key, "taskhklivaaa"); ok {
+			t.Fatalf("a pass something moves was offered retirement: %+v", h)
+		}
+	}
+	if snap.Retirement.IsKnown() {
+		t.Fatalf("a pass something moves was retired: %+v", snap.Retirement)
 	}
 }

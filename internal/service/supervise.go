@@ -313,6 +313,11 @@ type supervisionHooks struct {
 	// check writes its wake or its marker, so a test can create a pass in
 	// between (housekeeping.go).
 	afterDueRead func(repository string)
+	// beforeRetirementOffer is called with a pass the loop read open and
+	// decided to offer the retirement hold, after that read and before the
+	// registration, so a test can move the pass in between
+	// (housekeeping.go).
+	beforeRetirementOffer func(task string)
 	// afterPass is called, after its writes, with the report of every pass
 	// the loop makes on its own: an incarnation's first pass and each
 	// pass at the interval. A kicked pass's report goes to its kick
