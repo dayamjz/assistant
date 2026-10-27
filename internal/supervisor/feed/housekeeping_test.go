@@ -81,7 +81,7 @@ func TestAPassSomethingMovesIsInFlightWhateverItResolves(t *testing.T) {
 			t.Fatal(err)
 		}
 		if _, _, err := s.TransitionTaskShape(ctx, pass, store.TaskInvestigation, store.TaskDelivery, "subject", "housekeeping/one",
-			config.DeliveryGated, "Correct the drift.", events[len(events)-1].Sequence, "promoted"); err != nil {
+			config.DeliveryGated, "Correct the drift.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.BeginFirstTaskAttempt(ctx, pass, store.OnThisMachine()); err != nil {

@@ -173,7 +173,7 @@ func promotedPassWithRun(t *testing.T, s *Store, id, branch string, status RunSt
 	mustPass(t, s, id)
 	history := historyOf(t, s, id)
 	if _, _, err := s.TransitionTaskShape(ctx, id, TaskInvestigation, TaskDelivery, "repo-1", branch,
-		config.DeliveryGated, "Correct the drift.", history[len(history)-1].Sequence, "promoted in the test"); err != nil {
+		config.DeliveryGated, "Correct the drift.", history[len(history)-1].Sequence, "promoted in the test", ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatalf("promoting %s: %v", id, err)
 	}
 	attempt := beginAttempt(t, s, id, 0)

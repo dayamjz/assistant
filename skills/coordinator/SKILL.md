@@ -356,14 +356,37 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under
   `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. Answering it is not in this build yet, and it does not
-  hold new tasks in the project from dispatching. A kept entry no task
-  names, such as the run of the person's own push, reaches you as a
-  `kept-work` wake about the entry instead, listed under `kept_work_wakes`
-  with the entry's id in `kept_work`, its `project` and its `branch`, with
-  numbers of its own, and acknowledged as `kNUMBER`. Acknowledging it
-  closes the wake and answers nothing: the entry stays listed until it is
-  answered or its work lands. The
+  theirs to decide. An answer is given like a hold's:
+  `assistant --task ID --answer land --hold kept-work/N`, or
+  `--run=RUN` in place of `--task` for a run's copy. Land validates the
+  copy's HEAD as a push would; `--answer carry-on` creates a new task of
+  the same project and branch in the kept copy, with a note, and names it
+  in the answer (`task`), so the old task stays as it ended; a run's copy
+  cannot be carried on; `--answer discard` shows what would be lost with a
+  digest, which you may read (each path and name also in `path_bytes` or
+  `name_bytes`, its exact bytes in base64, since a JSON string loses a byte
+  that is not UTF-8), and removes nothing: removing the copy on a
+  confirmation is not in this build, and `--confirm` is refused. To let
+  the project's new tasks go ahead, tell the person their answers are land
+  and carry-on, or committing or removing its uncommitted work and pushing
+  its commits, after which the program removes the copy on that proof when
+  it next looks at it, which is not immediate, and with it, unchecked,
+  files git ignores, commits only a reflog reaches and the copy's hooks,
+  which the discard preview lists, so they should copy out what they want
+  first; removing it by hand leaves the entry open. Promoting an investigation
+  whose copy has an entry answers that entry carry on by itself. While the
+  project has an open entry, a task you create in it is recorded and not
+  started: it reads `dispatched` and its answer (`task.get`) names the
+  entries holding it under `kept_work`; it starts on its own once they are
+  answered or closed. An answer carrying `kept_work_unread` could not read
+  whether kept work holds the task, so it names no entry either way: ask
+  again rather than telling the person it is starting. Tasks in other projects, work already running and a
+  person's own push are not held. A kept entry no task names, such as the
+  run of the person's own push, reaches you as a `kept-work` wake about the
+  entry instead, listed under `kept_work_wakes` with the entry's id in
+  `kept_work`, its `project` and its `branch`, with numbers of its own, and
+  acknowledged as `kNUMBER`. Acknowledging it closes the wake and answers
+  nothing: the entry stays listed until it is answered or its work lands. The
   program's own records of creating and dispatching a task wake nobody.
 - `acknowledge` also closes a wake `listen` printed that you dealt with
   without draining. Naming an id no wake has, or one already acknowledged,

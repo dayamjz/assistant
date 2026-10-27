@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -437,7 +438,10 @@ func (s *Service) launchInBackground(d dispatched) {
 		defer s.work.Done()
 		launched, err := s.launchTask(s.stopCtx, d)
 		if err != nil {
-			if _, selected, readErr := s.store.TaskFallback(s.stopCtx, d.id); readErr == nil && selected && s.stopCtx.Err() == nil {
+			// A launch kept work refused is held on the entry alone and
+			// dispatches once it is answered; it raises no fallback hold.
+			if _, selected, readErr := s.store.TaskFallback(s.stopCtx, d.id); readErr == nil && selected &&
+				s.stopCtx.Err() == nil && !errors.Is(err, store.ErrDispatchHeld) {
 				err = s.holdWorkerFallbackAttempt(s.stopCtx, d.id, d.attempt, err)
 			}
 			s.log.Printf("task %s attempt %d was not launched: %v", d.id, d.attempt, err)

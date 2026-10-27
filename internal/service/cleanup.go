@@ -92,10 +92,13 @@ import (
 // MarkRunCleanupRemoved close the owner's open entries in the transaction
 // that marks the removal, so a copy whose work later landed (recovery's
 // reclaim among the paths) leaves no entry listed for a copy that is gone.
-// This build records and surfaces kept work and does not yet hold
-// dispatch: an open entry does not stop a new task in its project from
-// dispatching, and nothing here acts on an answer. Both are #411's second
-// part.
+//
+// While an entry is open, a new task in its project is not dispatched, on
+// dispatch.go's terms. A removal is the one way an entry closes in this
+// build, so a cleanup that removed a copy asks dispatchDue again, through
+// redispatchAfterRemoval, and a task the closed entry held dispatches then
+// rather than at the next release. An answer is keptanswer.go's, and it asks
+// for a dispatch the same way.
 
 // keepWork records the kept work entry for a kept copy and logs what came of
 // it. It is the one call a site makes for a copy kept because its work has
@@ -261,6 +264,7 @@ func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	var refused *tasks.CleanupRefusal
 	switch {
 	case err == nil:
+		s.redispatchAfterRemoval()
 	case errors.As(err, &refused):
 		s.log.Printf("the isolated copy of run %s is left standing (%s): %s", record.ID, refused.Reason, refused.Detail)
 		if kept, ok := tasks.KeptOf(refused); ok {
@@ -269,6 +273,20 @@ func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	default:
 		s.log.Printf("the isolated copy of run %s was not reclaimed: %v", record.ID, err)
 	}
+}
+
+// redispatchAfterRemoval asks dispatchDue again on a goroutine of the
+// service's, through dispatchInBackground, after a cleanup that may have
+// closed kept work: the removal's transaction closes the owner's open
+// entries, and a task they held is dispatched from here. It asks whether or
+// not anything closed, since dispatchDue reads the hold afresh and a task it
+// still holds stays waiting. A service built by hand without a queue has no
+// task to dispatch and asks nothing.
+func (s *Service) redispatchAfterRemoval() {
+	if s.queue == nil {
+		return
+	}
+	s.dispatchInBackground()
 }
 
 // cleanUpLanded settles every delivery task the run's merge record or its
@@ -351,6 +369,7 @@ func (s *Service) logCleanup(ctx context.Context, done tasks.Cleanup, err error)
 	switch {
 	case err == nil:
 		s.log.Printf("the isolated copy of task %s: %s on %s", done.Task, done.Result, done.Proof)
+		s.redispatchAfterRemoval()
 	case errors.As(err, &refused):
 		s.log.Printf("the isolated copy of task %s is left standing (%s): %s", refused.Task, refused.Reason, refusalAccount(refused))
 		if kept, ok := tasks.KeptOf(refused); ok {

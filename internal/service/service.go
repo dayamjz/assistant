@@ -199,6 +199,28 @@ type Options struct {
 	// hands them to internal/tasks' InterruptBeforeMarkForTest.
 	cleanupTest          testing.TB
 	interruptCleanupMark func() error
+	// intakeTest and interruptIntake are intake's seam between a task's row
+	// and its instructions file, which export_test.go's
+	// WithIntakeInterruptForTest sets and the product never does; Open hands
+	// them to internal/tasks' InterruptAfterRecordForTest.
+	intakeTest      testing.TB
+	interruptIntake func() error
+	// landingTest and interruptLanding are a landing's seam between its run
+	// and the entry's record of it, which export_test.go's
+	// WithLandingInterruptForTest sets and the product never does.
+	landingTest      testing.TB
+	interruptLanding func(run string) error
+	// carryOnTest and interruptCarryOn are a carry on's seam between the
+	// copy's move to the new task and the entry's mark, which
+	// export_test.go's WithCarryOnInterruptForTest sets and the product
+	// never does.
+	carryOnTest      testing.TB
+	interruptCarryOn func() error
+	// interruptCarryOnClaim is a carry on's seam between the answer's read
+	// or write of the claim and its completion, which export_test.go's
+	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
+	// product never does.
+	interruptCarryOnClaim func() error
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -420,6 +442,44 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// betweenHeldAndRelease runs in a dispatch that kept work held, after
+	// the refusal and before the slot is given back. It is nil in
+	// production and set only by this package's tests, which use it to
+	// close the entry and run another dispatch pass inside that window.
+	betweenHeldAndRelease func()
+	// betweenLandingClaimAndStart runs in a landing of kept work after its
+	// claim and before it brings the commit into the gate and starts the
+	// run. It is nil in production and set only by this package's tests,
+	// which use it to make a second answer inside that window.
+	betweenLandingClaimAndStart func()
+	// betweenLandingStartAndRecord runs in a landing after its run was
+	// started and before the run is named on the entry, and an error it
+	// returns ends the landing there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithLandingInterruptForTest.
+	betweenLandingStartAndRecord func(run string) error
+	// betweenCarryOnMoveAndMark runs in a carry on after the copy was moved
+	// to the new task's path and before anything else, and an error it
+	// returns ends the carry on there, as a service that stopped there
+	// leaves it. It is nil in production and set only through
+	// WithCarryOnInterruptForTest.
+	betweenCarryOnMoveAndMark func() error
+	// betweenCarryOnClaimAndCompletion runs in a carry-on answer after it
+	// read or wrote the entry's claim and before the completion reads the
+	// entry, and an error it returns ends the answer there. It is nil in
+	// production and set only through WithCarryOnClaimInterruptForTest.
+	betweenCarryOnClaimAndCompletion func() error
+	// landings is the kept work entries a landing is carrying out in this
+	// service now, keyed by entry: the in-process half of the landing's
+	// exactly-once, on keptanswer.go's terms. It is read and written under
+	// mu.
+	landings map[int64]bool
+	// beforeHoldRead runs in a dispatch of the task it is given once the
+	// task's resolution is read and before the dispatch reads whether kept
+	// work holds it. It is nil in production and set only by this package's
+	// tests, which use it to end a pass's context at that read so the read
+	// alone fails.
+	beforeHoldRead func(id string)
 	// afterStallStopEnded runs in a stop or retry answered to a stall hold,
 	// after the stop ended the worker and proved it dead and before the
 	// answer is recorded on the stall hold. It is nil in production and set
@@ -827,6 +887,29 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
 		return err
+	}
+	if o.interruptLanding != nil {
+		if o.landingTest == nil {
+			return errors.New("service: the landing interrupt is a test's seam and takes the test")
+		}
+		s.betweenLandingStartAndRecord = o.interruptLanding
+	}
+	if o.interruptCarryOn != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnMoveAndMark = o.interruptCarryOn
+	}
+	if o.interruptCarryOnClaim != nil {
+		if o.carryOnTest == nil {
+			return errors.New("service: the carry-on claim interrupt is a test's seam and takes the test")
+		}
+		s.betweenCarryOnClaimAndCompletion = o.interruptCarryOnClaim
+	}
+	if o.interruptIntake != nil {
+		if err := s.queue.InterruptAfterRecordForTest(o.intakeTest, o.interruptIntake); err != nil {
+			return err
+		}
 	}
 	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge,
 		GitDeadline: s.cfg.GitDeadline}); err == nil && o.interruptCleanupMark != nil {

@@ -213,8 +213,10 @@
 // reports. The basis is the one thing an open unestablished entry may later
 // have filled in, once, through EstablishKeptWork, and the update trigger
 // holds it to that one direction and to an open row, so an answered or
-// closed row is sealed whole. Its one revision otherwise closes it, made once and only while
-// it is open: AnswerKeptWork with a person's answer and its Resolver, or the
+// closed row is sealed whole. A land or carry-on claim may be written on
+// an open row and withdrawn whole, which leaves it open. Its one revision
+// otherwise closes it, made once and only while it is open: a person's
+// answer and its Resolver, or the
 // program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof, so the program never closes an entry by
@@ -229,6 +231,19 @@
 // internal/cli's eject then refuses while any run copy stands on disk, so
 // the gate is never removed under a copy that depends on it. No reservation
 // refuses a kept work entry.
+//
+// An open entry also holds a new task's dispatch in its project, PRD
+// section 6's "kept work is answered before new task work starts".
+// keptworkhold.go is the one predicate (a task naming a project, with no
+// attempt whose worker started by a recorded session, whose project has an
+// open entry), read by KeptWorkHolding, and by BeginFirstTaskAttempt,
+// BeginDispatchAttempt and ClaimAttemptLaunch (attemptLaunchMigration's
+// launch_claimed_at, written once immediately before a worker's process
+// starts), each of the three refusing a held task with a
+// *DispatchHeldError in the transaction that would write. It is derived from
+// the records on every read and stored nowhere. BeginTaskAttempt, the
+// relaunch claim, is not held, and a launch claim alone does not exempt a
+// task: only a recorded session does.
 //
 // # The wake queue and the markers it is written with
 //

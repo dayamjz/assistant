@@ -38,7 +38,7 @@ func passOnBranch(t *testing.T, h *home.Home, branch string) {
 		t.Fatal(err)
 	}
 	if _, _, err := records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, "subject", branch,
-		config.DeliveryGated, "Correct the drift.", events[len(events)-1].Sequence, "promoted"); err != nil {
+		config.DeliveryGated, "Correct the drift.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -685,11 +685,14 @@ func (s *Service) intakeInstructionsOf(task store.Task) string {
 
 // intakeInstructions is the part of an instructions file the coordinator
 // wrote at intake: everything before the first section the program appended,
-// the isolation check dispatch appends (secondCheckHeading) or the
-// promotion section internal/tasks appends (tasks.PromotionHeading), each
-// recognized only at the start of a line. Those sections are the program's
-// words to the worker, and they carry a shell line naming paths under the
-// home, so they are not what the work is for and do not reach a code host.
+// the isolation check dispatch appends (secondCheckHeading), the
+// promotion section internal/tasks appends (tasks.PromotionHeading), or the
+// note a carry on appends (carryOnHeading), each recognized only at the
+// start of a line. Those sections are the program's words to the worker,
+// the first two carrying a shell line naming paths under the home and the
+// note naming the earlier task the copy came from, so they are not what the
+// work is for and do not reach a code host, and a task carried on from a
+// carried-on task is not created with the first note in its own text.
 //
 // A promoted task's delivery intent is in the promotion section and is not
 // read here: taskIntent reads it off the task record and does not call this
@@ -700,7 +703,7 @@ func (s *Service) intakeInstructionsOf(task store.Task) string {
 // instructions there, which can only shorten the intent and never add to it.
 func intakeInstructions(text string) string {
 	end := len(text)
-	for _, heading := range []string{secondCheckHeading, tasks.PromotionHeading} {
+	for _, heading := range []string{secondCheckHeading, tasks.PromotionHeading, carryOnHeading} {
 		for offset := 0; offset < end; {
 			i := strings.Index(text[offset:], heading)
 			if i < 0 {

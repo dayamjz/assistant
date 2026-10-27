@@ -3,6 +3,7 @@ package tasks
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,18 @@ import (
 // that cannot be resolved or stat'ed is a comparison that cannot be made, and
 // a comparison that cannot be made refuses (P6) rather than passing on an
 // absence.
+//
+// Identity has one blind spot, and the repository directory comparison asks
+// the entry itself about it: a .git under the copy that is a symbolic link
+// to another repository's directory is, by identity, that directory, so the
+// comparison alone takes it for the copy's own while every write git makes
+// through it lands in the other repository. So .git under the copy must
+// also be a directory and not a link, read without following one. What
+// that does not cover is a link inside the repository directory, a refs
+// directory or a config file pointing into another repository, which the
+// assertion does not walk, so a write under or to it lands there;
+// internal/safety's kept-copy verification does walk it, for a copy a
+// person answers.
 //
 // # Why the remote set is exact
 //
@@ -85,7 +98,8 @@ const (
 	// common directory, which is what a linked worktree looks like.
 	ComparisonCommonDir Comparison = "common-dir"
 	// ComparisonGitDir is the repository directory not being .git under the
-	// expected copy.
+	// expected copy, or .git under it being a symbolic link rather than a
+	// directory of the copy's own.
 	ComparisonGitDir Comparison = "git-dir"
 	// ComparisonPrimary is the copy being the primary checkout, inside it, or
 	// containing it.
@@ -279,8 +293,9 @@ func (i Isolation) Proven() bool { return i.proven }
 //   - the working copy's root is not want.Copy (ComparisonToplevel);
 //   - the repository directory is not the common directory, which is what a
 //     linked worktree of any repository looks like (ComparisonCommonDir);
-//   - the repository directory is not .git under want.Copy
-//     (ComparisonGitDir);
+//   - the repository directory is not .git under want.Copy, or .git under
+//     want.Copy is a symbolic link rather than a directory of the copy's
+//     own (ComparisonGitDir);
 //   - the copy is want.Primary, inside it, or contains it
 //     (ComparisonPrimary);
 //   - the copy is want.Gate or inside it (ComparisonGate);
@@ -324,9 +339,20 @@ func AssertIsolated(obs vcs.Observation, env []string, want Expectation) (Isolat
 			Detail: fmt.Sprintf("the repository directory %s is not the common directory %s, which is a linked worktree%s",
 				obs.GitDir, obs.CommonDir, because(err))}
 	}
-	if same, err := sameFile(obs.GitDir, filepath.Join(want.Copy, ".git")); err != nil || !same {
+	dotGit := filepath.Join(want.Copy, ".git")
+	if same, err := sameFile(obs.GitDir, dotGit); err != nil || !same {
 		return Isolation{}, &IsolationError{Comparison: ComparisonGitDir,
 			Detail: fmt.Sprintf("the repository directory is %s, want .git under %s%s", obs.GitDir, want.Copy, because(err))}
+	}
+	// Identity followed a link at .git itself, so the entry is read without
+	// following one: a link there reaches another repository's directory.
+	switch entry, err := os.Lstat(dotGit); {
+	case err != nil:
+		return Isolation{}, &IsolationError{Comparison: ComparisonGitDir,
+			Detail: fmt.Sprintf(".git under %s cannot be read: %v", want.Copy, err)}
+	case entry.Mode()&fs.ModeSymlink != 0:
+		return Isolation{}, &IsolationError{Comparison: ComparisonGitDir,
+			Detail: fmt.Sprintf(".git under %s is a symbolic link to %s, not a repository directory of the copy's own", want.Copy, obs.GitDir)}
 	}
 
 	primary, err := resolve(want.Primary)

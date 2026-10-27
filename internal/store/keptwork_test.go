@@ -95,23 +95,17 @@ func TestKeptWorkIsAnsweredOnceAndOtherwiseSealed(t *testing.T) {
 		t.Fatalf("surfacing an unknown entry = %v; want ErrNotFound", err)
 	}
 
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, "keep", ResolvedByMachineInterface()); !errors.Is(err, ErrUnknownKeptAnswer) {
-		t.Fatalf("an answer outside the set = %v; want ErrUnknownKeptAnswer", err)
-	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, Resolver{}); !errors.Is(err, ErrNoResolver) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, entry.ID, Resolver{}); !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("an answer from nobody = %v; want ErrNoResolver", err)
 	}
-	answered, err := s.AnswerKeptWork(ctx, entry.ID, KeptDiscard, ResolvedByMachineInterface())
-	if err != nil {
-		t.Fatalf("AnswerKeptWork: %v", err)
+	answered := landKept(t, s, entry.ID)
+	if answered.Answer.Or("") != KeptLand || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
+		t.Fatalf("answered = %+v; want land by the machine interface, timed", answered)
 	}
-	if answered.Answer.Or("") != KeptDiscard || answered.AnsweredBy.Or(Resolver{}) != ResolvedByMachineInterface() || !answered.AnsweredAt.IsKnown() {
-		t.Fatalf("answered = %+v; want discard by the machine interface, timed", answered)
-	}
-	if _, err := s.AnswerKeptWork(ctx, entry.ID, KeptLand, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, entry.ID, "taskcarrying", "a-copy", ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkAnswered) {
 		t.Fatalf("a second answer = %v; want ErrKeptWorkAnswered", err)
 	}
-	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptDiscard {
+	if got, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || got.Answer.Or("") != KeptLand {
 		t.Fatalf("after a refused second answer the entry reads %+v, %v; want the first answer", got, err)
 	}
 	if unanswered, err := s.OpenKeptWork(ctx); err != nil || len(unanswered) != 0 {
@@ -149,9 +143,7 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, answered.ID, KeptCarryOn, ResolvedByMachineInterface()); err != nil {
-		t.Fatal(err)
-	}
+	landKept(t, s, answered.ID)
 	if _, err := s.RecordRunCleanup(ctx, RunCleanup{Run: run.ID, Proof: Known(CleanupProofRemoteBranch), Examined: []string{"aaaa"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,13 +158,13 @@ func TestKeptWorkClosesOnlyWhenItsCopyIsRemovedOnAProof(t *testing.T) {
 		!closed.ClosedAt.IsKnown() || closed.Answered() || closed.Open() {
 		t.Fatalf("after the removal the entry reads %+v, %v; want it closed as removed on the remote-branch proof", closed, err)
 	}
-	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptCarryOn || kept.Closure.IsKnown() {
+	if kept, err := s.KeptWorkEntry(ctx, answered.ID); err != nil || kept.Answer.Or("") != KeptLand || kept.Closure.IsKnown() {
 		t.Fatalf("the answered entry reads %+v, %v; want its answer kept and no closure", kept, err)
 	}
 	if listed, err := s.OpenKeptWork(ctx); err != nil || len(listed) != 0 {
 		t.Fatalf("OpenKeptWork = %+v, %v; want none", listed, err)
 	}
-	if _, err := s.AnswerKeptWork(ctx, open.ID, KeptDiscard, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
+	if _, err := s.ClaimKeptWorkLanding(ctx, open.ID, ResolvedByMachineInterface()); !errors.Is(err, ErrKeptWorkClosed) {
 		t.Fatalf("answering a closed entry = %v; want ErrKeptWorkClosed", err)
 	}
 	for name, statement := range map[string]string{
@@ -220,7 +212,7 @@ func TestARepositoryWithOpenKeptWorkIsNotForgotten(t *testing.T) {
 		if !errors.As(err, &open) || !errors.Is(err, ErrKeptWorkOpen) || len(open.Entries) != 1 || open.Entries[0].ID != entry.ID {
 			t.Fatalf("%s = %v, want a KeptWorkOpenError naming entry %d", name, err, entry.ID)
 		}
-		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "#411 part 2", "discard"} {
+		for _, want := range []string{entry.CopyPath, "run " + run.ID, "aaaa", "kept-work/", "--answer land"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("%s's refusal %q does not name %q", name, err, want)
 			}
@@ -339,5 +331,83 @@ func TestARemovalReservationStopsNewRunsAndNeverRefusesKeptWork(t *testing.T) {
 	}
 	if _, _, err := removedFirst.RecordKeptWork(ctx, kept(run)); !errors.Is(err, ErrCleanupRemoved) {
 		t.Fatalf("kept work for a copy removed on a proof = %v, want ErrCleanupRemoved", err)
+	}
+}
+
+// OpenKeptWorkOfCopy lists the open entries of one copy, oldest first, and
+// exactly the entries a carry on of any one of them closes beside it: two
+// entries of a run's copy at two states and one of another copy are
+// recorded, one of the copy's is answered land and so left out, and the
+// listing is the copy's two open entries and never the other copy's.
+// Marking the older open entry carried on without naming the other as
+// verified is refused with nothing written (the carry-on audit of
+// b448115), and naming it closes the listed set and nothing else, the
+// positive control that the listing is the mark's.
+func TestOpenKeptWorkOfCopyListsWhatACarryOnCloses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	task, next := seedTask(t, s, "keptofcopyaa").ID, "keptofcopyab"
+	const copyPath, other = "/home/tasks/one/copy", "/home/tasks/two/copy"
+	record := func(path, hold string) KeptWork {
+		t.Helper()
+		k, wrote, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: task, CopyPath: path, Holds: []string{hold}, Reason: "unproven", Against: "dddd"})
+		if err != nil || !wrote {
+			t.Fatalf("RecordKeptWork(%s, %s) = %+v, wrote %v, %v", path, hold, k, wrote, err)
+		}
+		return k
+	}
+	landed := record(copyPath, "aaaa")
+	first := record(copyPath, "bbbb")
+	second := record(copyPath, "cccc")
+	elsewhere := record(other, "dddd")
+	if _, err := s.ClaimKeptWorkLanding(ctx, landed.ID, ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordKeptWorkLanding(ctx, landed.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(entries []KeptWork) []int64 {
+		out := make([]int64, len(entries))
+		for i, k := range entries {
+			out[i] = k.ID
+		}
+		return out
+	}
+	listed, err := s.OpenKeptWorkOfCopy(ctx, copyPath)
+	if err != nil || !slices.Equal(ids(listed), []int64{first.ID, second.ID}) {
+		t.Fatalf("OpenKeptWorkOfCopy = %v, %v; want the copy's two open entries, oldest first", ids(listed), err)
+	}
+	if none, err := s.OpenKeptWorkOfCopy(ctx, "/home/tasks/none/copy"); err != nil || len(none) != 0 {
+		t.Fatalf("OpenKeptWorkOfCopy of a path with no entry = %v, %v; want none", none, err)
+	}
+
+	if _, err := s.ClaimKeptWorkCarryOn(ctx, first.ID, next, "1:2:3:4", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateTask(ctx, Task{ID: next, Shape: TaskInvestigation, Project: "one", Mode: "interactive",
+		WorktreePath: "/home/tasks/next/copy"}, Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next, nil); !errors.Is(err, ErrKeptWorkUnverified) {
+		t.Fatalf("marking with the copy's other open entry unverified = %v, want ErrKeptWorkUnverified", err)
+	}
+	if got, err := s.KeptWorkEntry(ctx, first.ID); err != nil || got.CarriedOnAt.IsKnown() || !got.CarryOnClaimed() {
+		t.Fatalf("after the refused mark entry %d reads %+v, %v; want it claimed and not marked", first.ID, got, err)
+	}
+	if _, err := s.MarkKeptWorkCarriedOn(ctx, first.ID, next, []int64{second.ID}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{first.ID, second.ID} {
+		if got, err := s.KeptWorkEntry(ctx, id); err != nil || !got.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the mark entry %d reads %+v, %v; want it carried on, as the listing said", id, got, err)
+		}
+	}
+	if got, err := s.KeptWorkEntry(ctx, elsewhere.ID); err != nil || !got.Open() {
+		t.Fatalf("the other copy's entry reads %+v, %v after the mark; want it open", got, err)
+	}
+	if still, err := s.OpenKeptWorkOfCopy(ctx, copyPath); err != nil || len(still) != 0 {
+		t.Fatalf("after the mark OpenKeptWorkOfCopy = %v, %v; want none", ids(still), err)
 	}
 }

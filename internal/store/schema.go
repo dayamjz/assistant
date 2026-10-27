@@ -204,6 +204,20 @@ const captureSessionMigration = "capture session marker"
 // nothing-to-deliver record and the seen mark of one.
 const nothingToDeliverMigration = "nothing-to-deliver record"
 
+// attemptLaunchMigration names the migration that adds a task attempt's
+// launch claim, for the reason sealCheckpointTableMigration is a constant.
+const attemptLaunchMigration = "task attempt launch claim"
+
+// keptWorkLandingMigration names the migration that adds the run a land
+// answer to kept work started, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkLandingMigration = "kept work landing run"
+
+// keptWorkCarryOnMigration names the migration that adds the task a carry
+// on answer to kept work created, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkCarryOnMigration = "kept work carry-on task"
+
 // housekeepingMigration names the migration that adds PRD section 6's
 // housekeeping: the task row's housekeeping mark, the retirement record, the
 // housekeeping-due wake about a repository and its notification record, and
@@ -2566,6 +2580,132 @@ var schema = []migration{
 	},
 	{
 		version: 60,
+		name:    attemptLaunchMigration,
+		statements: []string{
+			// When the attempt's worker launch was claimed, written once by
+			// ClaimAttemptLaunch immediately before the process is started,
+			// in the transaction that found the task not held by kept work.
+			// The record precedes the process, on task_attempt's terms, and
+			// says a launch was begun, never that a worker started: the
+			// session reference is that fact, and the dispatch hold reads it
+			// alone. NULL is no launch claimed: a row written before this column,
+			// or an attempt whose launch never reached its claim.
+			`ALTER TABLE task_attempt ADD COLUMN launch_claimed_at TEXT`,
+			`CREATE TRIGGER task_attempt_launch_is_claimed_once
+				BEFORE UPDATE OF launch_claimed_at ON task_attempt
+				WHEN OLD.launch_claimed_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s launch is claimed once and the claim is not rewritten');
+				END`,
+		},
+	},
+	{
+		version: 61,
+		name:    keptWorkLandingMigration,
+		statements: []string{
+			// A land answer to a kept work entry, PRD section 6's "the
+			// program carries the work to the gate as a delivery", as two
+			// facts. The claim is landing_claimed_at and landing_by, who
+			// asked, written together by ClaimKeptWorkLanding on an entry
+			// neither answered nor closed, which stays open, before the run
+			// is started, so two answers landing one entry start one run
+			// between them; withdrawn together by WithdrawKeptWorkLanding,
+			// while it is unanswered, when the run could not be started. The
+			// answer is the landing's outcome: answer land, from the claim,
+			// with landed_run, the run it started, in one write by
+			// RecordKeptWorkLanding once the run is recorded, so no entry is
+			// ever answered land before its run exists. landed_run names a
+			// run by identifier and holds no foreign key, so forgetting a
+			// repository's runs is not refused by the entries that name
+			// them.
+			`ALTER TABLE kept_work ADD COLUMN landing_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN landing_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN landed_run TEXT`,
+			`CREATE TRIGGER kept_work_landing_is_claimed_whole
+				BEFORE UPDATE OF landing_claimed_at, landing_by ON kept_work
+				WHEN (NEW.landing_claimed_at IS NOT OLD.landing_claimed_at OR NEW.landing_by IS NOT OLD.landing_by)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND NEW.answer IS NULL AND (
+						(OLD.landing_claimed_at IS NULL AND OLD.landing_by IS NULL
+							AND NEW.landing_claimed_at IS NOT NULL AND NEW.landing_by IS NOT NULL)
+						OR (OLD.landing_claimed_at IS NOT NULL AND OLD.landing_by IS NOT NULL
+							AND NEW.landing_claimed_at IS NULL AND NEW.landing_by IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s landing is claimed whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_land_answer_is_its_run
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'land' AND (NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered land only with the run its landing started');
+				END`,
+			`CREATE TRIGGER kept_work_lands_once
+				BEFORE UPDATE OF landed_run ON kept_work
+				WHEN OLD.landed_run IS NOT NULL OR NEW.landed_run IS NULL OR NEW.landing_claimed_at IS NULL OR NEW.answer IS NOT 'land'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry records the run its landing started once, with its land answer, after its landing was claimed');
+				END`,
+		},
+	},
+	{
+		version: 62,
+		name:    keptWorkCarryOnMigration,
+		statements: []string{
+			// The task a carry on creates, PRD section 6's "a worker is
+			// relaunched in that same copy": a new task of the same project
+			// and branch whose copy is the kept copy, recorded as two facts.
+			// The claim is carried_on_task, the task's identifier, reserved
+			// before its row is written, carried_on_copy, what only the kept
+			// copy itself has (read by the caller and opaque here, so the
+			// task adopts that copy and no other), carry_on_by and
+			// carry_on_claimed_at, written together by ClaimKeptWorkCarryOn
+			// on an entry neither answered nor closed, which stays open, and
+			// withdrawn together by WithdrawKeptWorkCarryOn, while it is
+			// unanswered, when the task could not be created. The answer is
+			// the adoption's outcome: answer carry-on, from the claim, with
+			// carried_on_at, when the task came to own the copy, in one
+			// write by MarkKeptWorkCarriedOn, so no entry is ever answered
+			// carry-on before its task owns the copy. A promotion writes the
+			// claim, the answer and carried_on_at in its one write, naming
+			// the promoted task and no copy, since the copy never moves.
+			// Neither the task nor the copy holds a foreign key: the task
+			// row does not exist yet when the claim names it.
+			`ALTER TABLE kept_work ADD COLUMN carried_on_task TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_copy TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carry_on_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN carried_on_at TEXT`,
+			`CREATE TRIGGER kept_work_carry_on_is_claimed_whole
+				BEFORE UPDATE OF carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at ON kept_work
+				WHEN (NEW.carried_on_task IS NOT OLD.carried_on_task OR NEW.carried_on_copy IS NOT OLD.carried_on_copy
+						OR NEW.carry_on_by IS NOT OLD.carry_on_by OR NEW.carry_on_claimed_at IS NOT OLD.carry_on_claimed_at)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND (
+						(OLD.carried_on_task IS NULL AND OLD.carried_on_copy IS NULL AND OLD.carry_on_by IS NULL
+							AND OLD.carry_on_claimed_at IS NULL
+							AND NEW.carried_on_task IS NOT NULL AND NEW.carry_on_by IS NOT NULL AND NEW.carry_on_claimed_at IS NOT NULL
+							AND (NEW.carried_on_copy IS NOT NULL OR (NEW.answer = 'carry-on' AND NEW.carried_on_at IS NOT NULL)))
+						OR (NEW.answer IS NULL
+							AND OLD.carried_on_task IS NOT NULL AND OLD.carry_on_by IS NOT NULL AND OLD.carry_on_claimed_at IS NOT NULL
+							AND NEW.carried_on_task IS NULL AND NEW.carried_on_copy IS NULL AND NEW.carry_on_by IS NULL
+							AND NEW.carry_on_claimed_at IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s carry-on claim is written whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_carry_on_answer_is_its_adoption
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'carry-on' AND (NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered carry-on only once its task owns the copy');
+				END`,
+			`CREATE TRIGGER kept_work_carried_on_once
+				BEFORE UPDATE OF carried_on_at ON kept_work
+				WHEN OLD.carried_on_at IS NOT NULL OR NEW.carried_on_at IS NULL OR NEW.carried_on_task IS NULL OR NEW.answer IS NOT 'carry-on'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is carried on once, with its carry-on answer, by the task its claim names');
+				END`,
+		},
+	},
+	{
+		version: 63,
 		name:    housekeepingMigration,
 		statements: []string{
 			// PRD section 8's task record: whether the task is a

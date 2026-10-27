@@ -1572,6 +1572,11 @@ func (s *Service) recover(ctx context.Context) {
 	// rather than staying on disk unrecorded; cleanup.go owns what a refusal
 	// becomes.
 	s.reclaimAtRecovery(ctx, read)
+	// A land answer to kept work that a stopped service recorded and did
+	// not carry out is completed now, on keptanswer.go's terms, before the
+	// tasks its entry held are dispatched below.
+	s.completeLandingsAtOpen(ctx)
+	s.completeCarryOnsAtOpen(ctx)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a
@@ -2023,6 +2028,14 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// The proposal is read off the store as it stands now and never comes
 	// from graph state; decision.go says why.
 	answer.Proposals = s.proposals(ctx, record)
+	// The project's kept work, which holds new tasks and never a run, is
+	// named on every answer from the record as it stands now; a read that
+	// fails is logged and the answer names none.
+	if kept, err := s.store.OpenKeptWorkOf(ctx, record.RepositoryID); err != nil {
+		s.log.Printf("the kept work of run %s's project could not be read for its answer: %v", runID, err)
+	} else {
+		answer.KeptWork = kept
+	}
 	if result == nil {
 		latest, written, err := s.checkpoints.LatestWritten(ctx, runID)
 		if err != nil {

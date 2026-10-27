@@ -61,12 +61,15 @@ import (
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
 // store.BeginFirstTaskAttempt for a task with no attempt, and by
-// store.BeginTaskAttempt for a retry, each anchored to the highest attempt
-// this dispatcher read, and the loser is refused with ErrTaskMoved before it
+// store.BeginDispatchAttempt for a retry, which is store.BeginTaskAttempt's
+// anchored claim with the kept work hold asked in the same write (the
+// unheld BeginTaskAttempt is the relaunch's), each anchored to the highest
+// attempt this dispatcher read, and the loser is refused with ErrTaskMoved before it
 // reads the primary. Before a first claim nothing touches the path either:
 // no attempt has cut a copy, so a dispatch sweeps nothing then (#562), and
 // whatever it finds standing after it wins is refused rather than swept or
-// used, below. A retry sweeps before its claim, so that a sweep that does
+// used, below, but for the copy a carry on adopted for the task, which the
+// winner sweeps after its claim and then uses. A retry sweeps before its claim, so that a sweep that does
 // not clear records nothing; two retries anchored to the same attempt would
 // both sweep before the anchor decided between them, and it is the slot and
 // the home's lock below, not the anchor, that keep there from being two.
@@ -116,7 +119,16 @@ import (
 // neither cut nor asked the sweep of, at a first claim or appearing after a
 // retry's check, is asserted the same way and then refused as not isolated
 // even when the assertion passes, because nothing proves it unowned, and it
-// too is left as it stands. The one directory this file does remove is a
+// too is left as it stands. The one copy a first claim finds standing and
+// owns is the one a carry on adopted for the task (keptcarryon.go): an
+// entry answered carry-on naming the task records that directory's file
+// identity, and adoptedCopyStands holds what stands to it, so a clone of
+// the same history is not taken for it. The winner sweeps that copy after
+// its claim, on sweep.go's terms, since the previous owner's processes may
+// still be in it, and a sweep that does not clear leaves the attempt
+// claimed with no worker, which the next dispatch retries over its standing
+// copy as above; with no sweep on the platform it raises the no-sweep hold
+// keyed by the attempt it claimed, which that retry reads. The one directory this file does remove is a
 // clone this same call just made and could not shape - the task
 // branch could not be created in it, or HEAD could not be detached - which
 // holds no work and is the program's own; it is removed so that the next
@@ -145,6 +157,57 @@ import (
 // launch.go's second assertion builds it the same way, and the worker is
 // started by a WorkerRunner that builds it the same way again; no second
 // strip list exists, and none should.
+//
+// # Kept work holds a new task's dispatch
+//
+// PRD section 6's "kept work is answered before new task work starts": while
+// the task's project has an open kept work entry, a task whose worker launch
+// was never claimed is not dispatched or launched. internal/store owns which
+// entries hold which task (keptworkhold.go), and three places ask it: this
+// file through KeptWorkHolding right after the task's resolution is read,
+// before any sweep, clone or claim; inside the attempt claim
+// (store.BeginFirstTaskAttempt, or store.BeginDispatchAttempt for a retry);
+// and store.ClaimAttemptLaunch inside the launch claim
+// launch.go makes as its last write before the worker's process starts. The
+// last is what binds the hold to the launch itself: an entry recorded while
+// the copy is cut or asserted is read by that claim, and the worker is not
+// started. Each refusal is a *store.DispatchHeldError, and nothing is written
+// for it. The one window left is between the launch claim's commit and the
+// process start, where an entry recorded does not stop that launch. Only a
+// recorded session, written after the process started, makes the task work
+// under way for later reads of the hold; a launch whose process never
+// started leaves the task held like a fresh one at its next dispatch. The task keeps resolving Dispatched from its history, because nothing
+// here appends an entry for the wait: the wait is read off the kept work
+// record every time (P8), which taskView composes into the task's answer as
+// machine.Task.KeptWork.
+//
+// A held dispatch or launch gives its slot back, through releaseHeldSlot,
+// rather than settling it, because the slot is otherwise kept for the
+// service's lifetime and a held task has to dispatch as soon as its
+// project's entries are answered or closed. What asks again is every call of
+// dispatchDue: at open, after every release, after every answer that closes
+// an entry (keptanswer.go, keptcarryon.go), and after a
+// cleanup that removed a copy, which is the one way an entry closes without
+// an answer (cleanup.go). A pass that runs while the slot is still taken
+// passes the task over, so releaseHeldSlot reads the hold again after the
+// slot is gone and asks for another pass when it no longer holds: an entry
+// closed before that read is seen by it, and one closed after it is closed
+// after the slot was free, so the pass its closure asks for finds the task.
+// A read that fails asks for that pass too, since it cannot tell which.
+//
+// A dispatch that ends before it has read the hold, because the task's
+// resolution or the hold could not be read (holdUnread), gives its slot
+// back as well and asks for nothing: it claimed nothing, so the rule that
+// keeps a slot after a failed claim has nothing to keep from repeating,
+// and a slot kept here would pass the task over at the pass a closure asks
+// for. It asks for no pass of its own because a read that keeps failing
+// would then ask without end. What remains is the case where every read
+// fails: an entry closed while the slot was taken, whose release's read
+// and whose following pass's read both fail, is dispatched at the next
+// pass anything asks for (a release, an answer, a removal, or the next
+// open), and not before.
+// A relaunch is not new work and claims through store.BeginTaskAttempt, so
+// it is never held.
 //
 // # The second check
 //
@@ -250,9 +313,11 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // assertion, is retried at the next open and not at the next release, which
 // is what keeps a failure that repeats from adding an attempt per run that
 // settles. A task refused resolves Failed from the entry the refusal appended
-// and is kept out by the resolver as well as by the slot. The one exception
-// is a task placeable left queued: it claimed nothing, so its slot is given
-// back and the next pass reads its repository's trusted copy again.
+// and is kept out by the resolver as well as by the slot. The exceptions
+// are dispatches that claimed nothing, whose slot is given back: a task
+// placeable left queued, so the next pass reads its repository's trusted
+// copy again, and one kept work held or whose hold could not be read, on
+// this file's opening terms.
 //
 // The tasks are read under the read side of the intake exclusion
 // createTask holds across an intake, so a pass never reads a task whose
@@ -329,6 +394,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		switch {
 		case err == nil:
 			s.log.Printf("task %s was dispatched: its copy at %s is proven isolated", r.Record.ID, d.proof.Copy)
+		case errors.Is(err, store.ErrDispatchHeld):
+			s.log.Printf("task %s waits: %v", r.Record.ID, err)
+			continue
 		case errors.Is(err, store.ErrTaskMoved):
 			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, err)
 			continue
@@ -411,6 +479,8 @@ func (d *dispatched) handSlot() func(tasks.Isolation) {
 // cannot be dispatched as written is errTaskRecord; a dispatch another caller
 // claimed first is store.ErrTaskMoved; a standing copy the platform cannot
 // sweep is a *dispatchUnswept, held for a person and otherwise unrecorded,
+// a task kept work in its project holds is a *store.DispatchHeldError, with
+// nothing recorded and the slot given back,
 // unless that hold was answered retry; a sweep that ran and did not clear
 // the copy is a *copyUnswept; a copy that fails the assertion is an
 // *isolationRefused, recorded. Every other error is a failure of a read or a
@@ -421,32 +491,28 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	return s.settleOrRelease(id, settle, d, err)
+	return s.settleDispatch(ctx, id, settle, d, err), err
 }
 
-// settleOrRelease ends a dispatch's hold on its slot, or hands it to the
-// launch: a dispatch left queued by placeable, or refused at its claim
-// because the pass's retirement hold is open (store.ErrPassHeld), claimed
-// nothing, so its slot is given back and the next dispatch reads the task
-// again, which for the pass is the dispatch the keep answer runs; a
-// dispatch that failed settles the slot now, with no proof, for the
-// service's lifetime; and a dispatch that proved its copy keeps the slot
-// unsettled and returns it with d.settle set, for launchTask to settle with
-// the proof once the launch's record is settled, on the file comment's
-// terms.
-func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), d dispatched, err error) (dispatched, error) {
-	switch {
-	case errors.Is(err, errTaskUnplaced), errors.Is(err, store.ErrPassHeld):
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		delete(s.isolated, id)
-		delete(s.claiming, id)
-	case err != nil:
-		settle(d.proof)
-	default:
-		d.settle = settle
+// settleOrRelease ends a dispatch's hold on its slot: a dispatch left queued
+// by placeable claimed nothing, so its slot is given back and the next pass
+// reads the trusted copy again, and every other outcome settles the slot
+// with the proof, or none, for the service's lifetime.
+func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), proof tasks.Isolation, err error) {
+	if errors.Is(err, errTaskUnplaced) {
+		s.giveBackSlot(id)
+		return
 	}
-	return d, err
+	settle(proof)
+}
+
+// giveBackSlot frees the task's slot, so the next pass dispatches it, for a
+// dispatch that claimed nothing.
+func (s *Service) giveBackSlot(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.isolated, id)
+	delete(s.claiming, id)
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -463,7 +529,64 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 		return dispatched{}, err
 	}
 	d, err := s.dispatchClaimed(ctx, id)
-	return s.settleOrRelease(id, settle, d, err)
+	return s.settleDispatch(ctx, id, settle, d, err), err
+}
+
+// settleDispatch ends a dispatch's hold on its slot, or hands it to the
+// launch: for a dispatch kept work held it gives the slot back through
+// releaseHeldSlot, for one that ended before it could read the hold
+// (*holdUnread) it gives the slot back and asks nothing, this file's
+// opening comment says why for both; a dispatch refused at its claim
+// because the pass's retirement hold is open (store.ErrPassHeld) claimed
+// nothing, so its slot is given back and the next dispatch reads the task
+// again, which for the pass is the dispatch the keep answer runs; every
+// other failure is settleOrRelease's; and a dispatch that proved its copy
+// keeps the slot unsettled and is returned with d.settle set, for
+// launchTask to settle with the proof once the launch's record is settled,
+// on the file comment's terms.
+func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tasks.Isolation), d dispatched, err error) dispatched {
+	var unread *holdUnread
+	switch {
+	case errors.Is(err, store.ErrDispatchHeld):
+		if s.betweenHeldAndRelease != nil {
+			s.betweenHeldAndRelease()
+		}
+		s.releaseHeldSlot(ctx, id)
+	case errors.As(err, &unread), errors.Is(err, store.ErrPassHeld):
+		s.giveBackSlot(id)
+	case err != nil:
+		s.settleOrRelease(id, settle, d.proof, err)
+	default:
+		d.settle = settle
+	}
+	return d
+}
+
+// holdUnread is a dispatch's failure before it read whether kept work holds
+// the task: the task's resolution or the hold itself could not be read.
+// Nothing was claimed, so the slot is given back rather than kept for the
+// service's lifetime (settleDispatch). It unwraps to the read's own error.
+type holdUnread struct{ err error }
+
+// Error is the read's own error.
+func (e *holdUnread) Error() string { return e.err.Error() }
+
+// Unwrap is the read's own error.
+func (e *holdUnread) Unwrap() error { return e.err }
+
+// releaseHeldSlot gives back the slot of a task kept work held at its
+// dispatch or its launch, and then reads the hold again: when nothing holds
+// the task any more, or the read fails, it asks dispatchDue again through
+// dispatchInBackground, so an entry that closed while the slot was taken is
+// never a dispatch nobody asks for. A pass that cannot read the hold either
+// gives the slot back again (holdUnread). This file's opening comment says
+// why that order loses no closure, and what remains.
+func (s *Service) releaseHeldSlot(ctx context.Context, id string) {
+	s.giveBackSlot(id)
+	holding, err := s.store.KeptWorkHolding(ctx, id)
+	if err != nil || len(holding) == 0 {
+		s.dispatchInBackground()
+	}
 }
 
 // claimDispatch takes the task's slot, so a second pass over the tasks does
@@ -565,13 +688,25 @@ func (s *Service) isolationOf(id string) (tasks.Isolation, bool) {
 func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, error) {
 	resolved, err := s.tasks().Resolved(ctx, id)
 	if err != nil {
-		return dispatched{}, err
+		return dispatched{}, &holdUnread{err: err}
 	}
 	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
 		return dispatched{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
 			resolved.State.State, resolved.State.Source)
 	}
 	record := resolved.Record
+	// Kept work in the task's project holds it before anything is swept,
+	// cut or claimed; the claim below asks again in its own transaction.
+	if s.beforeHoldRead != nil {
+		s.beforeHoldRead(id)
+	}
+	holding, err := s.store.KeptWorkHolding(ctx, id)
+	if err != nil {
+		return dispatched{}, &holdUnread{err: err}
+	}
+	if len(holding) > 0 {
+		return dispatched{}, &store.DispatchHeldError{Task: id, Repository: record.RepositoryID.Or(""), Entries: holding}
+	}
 	e, err := s.expectationOf(ctx, record)
 	if err != nil {
 		return dispatched{}, err
@@ -595,7 +730,8 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	}
 	// The first claim places the task, so it is made only once the
 	// repository's trusted copy allows this machine; a later attempt stays
-	// where the first claim put it (store.BeginTaskAttempt places nothing).
+	// where the first claim put it (store.BeginDispatchAttempt places
+	// nothing).
 	if latest == 0 {
 		if err := s.placeable(ctx, repository, id); err != nil {
 			return dispatched{}, err
@@ -604,9 +740,10 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	// A copy already standing at a retry is the earlier attempt's, swept
 	// before the claim on sweep.go's terms; a copy about to be cut has
 	// nothing in it to sweep. A first claim sweeps nothing: no attempt has
-	// cut a copy, so whatever stands at the path is either a concurrent
-	// winner's, which only the winner may touch (#562), or nobody's
-	// attempt's, which the check after the claim refuses.
+	// cut a copy, so whatever stands at the path is a concurrent winner's,
+	// which only the winner may touch (#562), the copy a carry on adopted,
+	// which the winner sweeps after its claim, or nobody's attempt's, which
+	// the check after the claim refuses.
 	var swept copySwept
 	var stood bool
 	if latest > 0 {
@@ -646,7 +783,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if latest == 0 {
 		attempt, err = s.store.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine())
 	} else {
-		attempt, err = s.store.BeginTaskAttempt(ctx, id, latest)
+		attempt, err = s.store.BeginDispatchAttempt(ctx, id, latest)
 	}
 	if err != nil {
 		return dispatched{}, err
@@ -659,11 +796,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, err
 	}
 
-	// The copy: a fresh clone when nothing stands at the path, or what the
-	// sweep before the claim was asked of. A path standing now that this
-	// dispatch neither cut nor asked the sweep of, at a first claim or one
-	// that appeared after the check before a retry's claim, is asserted and
-	// then refused as not isolated, never given a worker unswept.
+	// The copy: a fresh clone when nothing stands at the path, what the
+	// sweep before the claim was asked of, or at a first claim the copy a
+	// carry on adopted, swept now. A path standing now that this dispatch
+	// neither cut nor asked the sweep of, at a first claim or one that
+	// appeared after the check before a retry's claim, is asserted and then
+	// refused as not isolated, never given a worker unswept.
 	if _, err := os.Lstat(copyPath); errors.Is(err, os.ErrNotExist) {
 		if err := s.cutTaskCopy(ctx, record, repository.WorkingPath, copyPath, gatePath, base); err != nil {
 			return dispatched{}, err
@@ -671,8 +809,34 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	} else if err != nil {
 		return dispatched{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
 	} else if !stood {
-		swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
-			copyPath, attempt.Sequence, id)
+		adopted := false
+		if latest == 0 {
+			if adopted, err = s.adoptedCopyStands(ctx, id, copyPath); err != nil {
+				return dispatched{}, err
+			}
+		}
+		if !adopted {
+			swept.unswept = fmt.Errorf("%s stands, and attempt %d of task %s neither cut it nor swept it before its claim",
+				copyPath, attempt.Sequence, id)
+		} else {
+			// The copy a carry on adopted for this task, swept now that this
+			// dispatch won the first claim, so only the winner touches it
+			// (#562), on sweep.go's terms as a retry's is before its claim.
+			if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
+				return dispatched{}, err
+			}
+			if swept.unsupported {
+				h, err := s.holdDispatchUnswept(ctx, id, attempt.Sequence, swept.words)
+				if err != nil {
+					return dispatched{}, fmt.Errorf("service: task %s is not dispatched with no process sweep, "+
+						"and its hold could not be registered: %w", id, err)
+				}
+				return dispatched{}, &dispatchUnswept{Task: id, Hold: h}
+			}
+			if swept.words != "" {
+				s.log.Printf("task %s is dispatched over the copy it carried on: %s", id, swept.words)
+			}
+		}
 	}
 
 	// The observation and the proof.
@@ -713,6 +877,25 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		id: id, proof: proof, attempt: attempt.Sequence, want: want, instructions: instructions,
 		anchor: resolved.State.Basis.EventSequence,
 	}, nil
+}
+
+// adoptedCopyStands reports whether what stands at copyPath is the copy a
+// carry on adopted for task id: an entry answered carry-on naming the task
+// records that copy's file identity (store.KeptWorkCarriedOnBy), and what
+// stands is that directory (isCarriedOnCopy, keptcarryon.go's own check).
+// Anything else standing there, a clone of the same history among it, is
+// not, and a task no carry on created has no such entry.
+func (s *Service) adoptedCopyStands(ctx context.Context, id, copyPath string) (bool, error) {
+	entries, err := s.store.KeptWorkCarriedOnBy(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if s.isCarriedOnCopy(entry, copyPath) == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // expectation is what a task's copy is asserted against and launched with,

@@ -31,7 +31,7 @@ func TestAPromotedPassesRunIntentCarriesBothPartsOfItsInstructions(t *testing.T)
 		t.Fatal(err)
 	}
 	promoted, _, err := records.TransitionTaskShape(ctx, created.Task.ID, store.TaskInvestigation, store.TaskDelivery, hkRepository,
-		hkBranch, config.DeliveryGated, "Correct the README command.", events[len(events)-1].Sequence, "promoted")
+		hkBranch, config.DeliveryGated, "Correct the README command.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil)
 	if err != nil {
 		t.Fatalf("promoting the pass: %v", err)
 	}

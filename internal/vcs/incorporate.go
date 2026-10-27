@@ -155,6 +155,21 @@ func (r *Repository) requireGitFloor(ctx context.Context, floor [2]int) error {
 	return nil
 }
 
+// gitAtLeast reports whether the git binary this handle runs reports a
+// version at floor or later. A version this package cannot read is an error,
+// never assumed one side or the other of the floor.
+func (r *Repository) gitAtLeast(ctx context.Context, floor [2]int) (bool, error) {
+	out, err := r.run(ctx, "version", "--version")
+	if err != nil {
+		return false, err
+	}
+	major, minor, ok := parseGitVersion(string(out))
+	if !ok {
+		return false, &floorError{reported: strings.TrimSpace(string(out)), floor: floor}
+	}
+	return major > floor[0] || (major == floor[0] && minor >= floor[1]), nil
+}
+
 // parseGitVersion reads the major and minor numbers out of a "git version
 // X.Y.Z" line. Anything after the minor number is ignored, so a suffix a
 // distribution appends does not make a version unreadable. ok is false when

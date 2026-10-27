@@ -152,7 +152,10 @@ func TestAnAnsweredEntryIsNotEstablishedLater(t *testing.T) {
 	if err != nil || !got.Recorded || got.Entry.Established() {
 		t.Fatalf("Keep = %+v, %v; want a new unestablished entry", got, err)
 	}
-	if _, err := s.store.AnswerKeptWork(ctx, got.Entry.ID, store.KeptCarryOn, store.ResolvedByMachineInterface()); err != nil {
+	if _, err := s.store.ClaimKeptWorkLanding(ctx, got.Entry.ID, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.RecordKeptWorkLanding(ctx, got.Entry.ID, "run-landing"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(s.upstream+".gone", s.upstream); err != nil {
@@ -162,7 +165,7 @@ func TestAnAnsweredEntryIsNotEstablishedLater(t *testing.T) {
 	if err != nil || again.Recorded || again.Established || again.NothingKept || again.Entry.ID != got.Entry.ID {
 		t.Fatalf("Keep after the answer = %+v, %v; want the answered entry as it stands", again, err)
 	}
-	if again.Entry.Established() || again.Entry.Answer.Or("") != store.KeptCarryOn {
+	if again.Entry.Established() || again.Entry.Answer.Or("") != store.KeptLand {
 		t.Fatalf("the answered entry reads %+v, want it unestablished with its answer", again.Entry)
 	}
 	if open, err := s.store.OpenKeptWork(ctx); err != nil || len(open) != 0 {

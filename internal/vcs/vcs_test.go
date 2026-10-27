@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -434,6 +435,196 @@ func TestWorktreeRemovalRefusesWhenItWouldDiscardWork(t *testing.T) {
 	}
 	if _, err := os.Stat(wtPath); !os.IsNotExist(err) {
 		t.Fatalf("worktree directory still present: %v", err)
+	}
+}
+
+// WorktreeRecordPointsAt reads the .git file a linked worktree's record
+// names as its own: for a worktree git added, the positive control, the
+// worktree's own .git file, and each of two worktrees' records names its
+// own and not the other's; a relative path is read against the record; and
+// a record with no gitdir file, an empty one, or one of two lines is an
+// error rather than a guess.
+func TestAWorktreeRecordNamesTheWorktreeItBelongsTo(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, second := sourceRepo(t)
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	paths := []string{filepath.Join(t.TempDir(), "one"), filepath.Join(t.TempDir(), "two")}
+	var records []string
+	for _, p := range paths {
+		wt, err := repo.AddWorktree(c, vcs.WorktreeSpec{Path: p, Commit: second})
+		if err != nil {
+			t.Fatalf("AddWorktree: %v", err)
+		}
+		obs, err := vcs.Observe(c, wt.Path())
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, obs.GitDir)
+	}
+	for i, record := range records {
+		got, err := vcs.WorktreeRecordPointsAt(record)
+		if err != nil {
+			t.Fatalf("WorktreeRecordPointsAt(%s): %v", record, err)
+		}
+		want, err := filepath.EvalSymlinks(filepath.Join(paths[i], ".git"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolved, err := filepath.EvalSymlinks(got); err != nil || resolved != want {
+			t.Fatalf("the record %s names %s (%v); want worktree %d's .git file, %s", record, got, err, i, want)
+		}
+	}
+	dir := t.TempDir()
+	relative := filepath.Join(dir, "relative")
+	writeFile(t, filepath.Join(relative, "gitdir"), "../../wt/.git\n")
+	if got, err := vcs.WorktreeRecordPointsAt(relative); err != nil || got != filepath.Clean(filepath.Join(relative, "../../wt/.git")) {
+		t.Fatalf("the relative record names %s, %v; want it read against the record", got, err)
+	}
+	for name, content := range map[string]string{"empty": "", "two lines": "/a/.git\n/b/.git\n"} {
+		bad := filepath.Join(dir, strings.ReplaceAll(name, " ", "-"))
+		writeFile(t, filepath.Join(bad, "gitdir"), content)
+		if got, err := vcs.WorktreeRecordPointsAt(bad); err == nil {
+			t.Errorf("a record whose gitdir file is %s names %s; want an error", name, got)
+		}
+	}
+	if got, err := vcs.WorktreeRecordPointsAt(filepath.Join(dir, "none")); err == nil {
+		t.Errorf("a record with no gitdir file names %s; want an error", got)
+	}
+}
+
+// WorktreeRecords reads a repository's linked worktrees from its own side:
+// for two worktrees git added, the positive control, each worktree's path
+// with the record git reads it through; and the read is an error, never a
+// guess, when an entry of the worktrees directory is not a directory, when
+// a record names no worktree's .git file, and when two records name one
+// worktree.
+func TestTheRepositoryRecordsEachWorktreeOnce(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	setup := func(t *testing.T) (*vcs.Repository, string, []string, []string) {
+		t.Helper()
+		source, _, second := sourceRepo(t)
+		repo, err := vcs.OpenWorktree(c, source)
+		if err != nil {
+			t.Fatalf("OpenWorktree: %v", err)
+		}
+		root, err := filepath.EvalSymlinks(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var paths, records []string
+		for _, name := range []string{"one", "two"} {
+			p := filepath.Join(root, name)
+			wt, err := repo.AddWorktree(c, vcs.WorktreeSpec{Path: p, Commit: second})
+			if err != nil {
+				t.Fatalf("AddWorktree: %v", err)
+			}
+			obs, err := vcs.Observe(c, wt.Path())
+			if err != nil {
+				t.Fatal(err)
+			}
+			paths, records = append(paths, p), append(records, obs.GitDir)
+		}
+		obs, err := vcs.Observe(c, source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return repo, obs.CommonDir, paths, records
+	}
+	repo, _, paths, records := setup(t)
+	got, err := repo.WorktreeRecords(c)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("WorktreeRecords = %+v, %v; want the two worktrees", got, err)
+	}
+	for i, p := range paths {
+		if !slices.Contains(got, vcs.WorktreeRecord{Worktree: p, Record: records[i]}) {
+			t.Errorf("WorktreeRecords = %+v; want %s with its record %s", got, p, records[i])
+		}
+	}
+	for name, spoil := range map[string]func(t *testing.T, common string, records []string){
+		"a file among the records": func(t *testing.T, common string, _ []string) {
+			writeFile(t, filepath.Join(common, "worktrees", "stray"), "not a record\n")
+		},
+		"a record naming no .git file": func(t *testing.T, _ string, records []string) {
+			writeFile(t, filepath.Join(records[1], "gitdir"), "/somewhere/else\n")
+		},
+		"two records naming one worktree": func(t *testing.T, common string, records []string) {
+			raw, err := os.ReadFile(filepath.Join(records[0], "gitdir"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			twin := filepath.Join(common, "worktrees", "twin")
+			for _, f := range []string{"HEAD", "commondir"} {
+				body, err := os.ReadFile(filepath.Join(records[0], f))
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(twin, f), string(body))
+			}
+			writeFile(t, filepath.Join(twin, "gitdir"), string(raw))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo, common, _, records := setup(t)
+			spoil(t, common, records)
+			if got, err := repo.WorktreeRecords(c); err == nil {
+				t.Fatalf("WorktreeRecords with %s = %+v; want an error", name, got)
+			}
+		})
+	}
+}
+
+// WithoutReplaceObjects reads the object graph as the objects record it:
+// in a repository where M <- B <- U and either a replacement reference or
+// a graft file (info/grafts) sets M as U's parent, B is not U's ancestor
+// read through either, the positive control, which is what makes a walk
+// that honours them miss B; under the option B is U's ancestor, for the
+// handle and for one opened from it.
+func TestAHandleWithoutReplaceObjectsReadsTheGraphAsRecorded(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	for _, how := range []string{"a replacement reference", "a graft file"} {
+		t.Run(how, func(t *testing.T) {
+			source, base, _ := sourceRepo(t)
+			writeFile(t, filepath.Join(source, "b.txt"), "what only B holds\n")
+			rawGit(t, source, "add", "b.txt")
+			rawGit(t, source, "commit", "-q", "-m", "B")
+			b := strings.TrimSpace(rawGit(t, source, "rev-parse", "HEAD"))
+			rawGit(t, source, "rm", "-q", "b.txt")
+			rawGit(t, source, "commit", "-q", "-m", "U")
+			u := strings.TrimSpace(rawGit(t, source, "rev-parse", "HEAD"))
+			if how == "a graft file" {
+				writeFile(t, filepath.Join(source, ".git", "info", "grafts"), u+" "+strings.TrimSpace(base)+"\n")
+			} else {
+				rawGit(t, source, "replace", "--graft", u, strings.TrimSpace(base))
+			}
+
+			plain, err := vcs.OpenWorktree(c, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := plain.IsAncestor(c, b, u); err != nil || reaches {
+				t.Fatalf("without the option B reads as U's ancestor (%v, %v); want %s to hide it, or the test reads nothing", reaches, err, how)
+			}
+			real, err := vcs.OpenWorktree(c, source, vcs.WithoutReplaceObjects())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := real.IsAncestor(c, b, u); err != nil || !reaches {
+				t.Fatalf("under WithoutReplaceObjects B reads as U's ancestor %v, %v; want true", reaches, err)
+			}
+			wt, err := real.AddWorktree(c, vcs.WorktreeSpec{Path: filepath.Join(t.TempDir(), "wt"), Commit: u})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reaches, err := wt.IsAncestor(c, b, u); err != nil || !reaches {
+				t.Fatalf("a handle opened from one without replace objects reads B as U's ancestor %v, %v; want true", reaches, err)
+			}
+		})
 	}
 }
 

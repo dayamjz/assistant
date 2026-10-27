@@ -652,11 +652,11 @@ stays open.
 
 `assistant eject --confirm` is refused while the repository has an open
 kept-work entry, before the gate is touched, and the refusal names each
-entry's copy, whose it was and the commits it holds. Until answering kept
-work ships (#411 part 2), the way past it is the work landing: once its
-commits are on the upstream branch or in the default branch, the next
-service start removes the copy on that proof and closes the entry. Part 2's
-discard will be your other way.
+entry's copy, whose it was and the commits it holds. The ways past it are
+an answer that closes the entry (land or carry on, below) or the work
+landing: once its commits are on the upstream branch or in the default
+branch, the next service start removes the copy on that proof and closes
+the entry. Removal on a discard is not in this build.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
@@ -676,10 +676,174 @@ reserves the removal, and no new run of the repository starts until the
 eject finishes; a service that starts after an eject died releases that
 reservation.
 
-This build records and surfaces kept work and does not yet hold dispatch:
-a new task in a project with an open entry still dispatches. Answering an
-entry (land, carry on or discard) and holding new task work until its
-entries are answered are #411 part 2.
+While a project has an open kept-work entry, no new task in that project
+starts: the task is recorded, `assistant --json tasks` shows it waiting and
+names the entries under `kept_work`, and it starts on its own once every
+entry is answered or closed. When whether kept work holds the task could not
+be read for an answer, the answer says so (`kept_work_unread`) and names no
+entry, rather than reading as a worker being launched. Kept work in one project never holds another,
+a task whose worker was already launched is not held (its relaunch goes
+ahead), and your own push always starts its run, whose answer names the
+project's open entries.
+
+An entry is answered the way a hold is: `assistant --task ID --answer land
+--hold kept-work/N` for a task's copy, or `assistant --run=RUN --answer land
+--hold kept-work/N` for a run's, where `kept-work/N` is the entry's key and
+`assistant --json status` shows the entry's number and owner. This build
+takes land: the copy's commit is brought into the gate and a run of the
+entry's branch starts at it, as a push to the gate would start one, and the
+entry's tasks start. A landing decides from the copy as it stands when you
+answer, by the same reading a discard shows you, never from what the entry
+recorded when the copy was kept. It carries the copy's HEAD and commits
+only, so it is refused, recording nothing, when the copy holds a path no
+commit records (a changed, new, staged or deleted file, one git ignores
+included, each named), a stash, or anything HEAD does not carry that the
+default branch lacks: a commit on another branch, one only a reflog
+records (an amended or rebased-away commit among them), or a tag the
+upstream does not have. What the upstream already holds (its tags and
+branches, cloned or fetched into the copy) is not refused, and neither is
+a file git reports clean because only its line endings or filters differ.
+Put that work on the branch, or remove it (`git reflog expire` for a
+reflog's record), and answer again. It is refused for an investigation's copy too,
+whose delivery is a promotion. The entry stays open and listed until the
+run has started, and only then is it answered land; if the run cannot be
+started, the answer is refused naming why and the entry stays open for
+another answer. A land answer a stopped service recorded and did not carry
+out is carried out at the next start, checked again the same way.
+
+Carry on, `--answer carry-on` with the same flags, creates a new task of
+the same project, shape and branch whose copy is the kept copy, moved to
+the new task's own place and asserted the way every task's copy is before
+anything is written into it; a delivery task's successor is recorded under
+the outlived task's delivery posture when that is stricter than the
+project's now, and under the project's otherwise, so continued work is
+never held to less than the task it continues was; the task the copy outlived keeps its record,
+the new task's instructions are the old intake text, or for a promoted
+task the intent it was promoted with, with a note saying what is already
+there, and the task dispatches into the copy as any task
+does. The entry stays open and listed until the new task owns the copy,
+and only then is it answered carry on; if the new task cannot be created
+(its role is no longer configured, say), nothing is moved, the answer is
+refused naming why, and the entry stays open for another answer.
+Carrying on points the gate's remote at the gate and puts HEAD where
+the task's shape has it, and removes no remote and moves or renames no
+branch, since any of that can leave a commit with nothing naming it: a
+copy with any other remote (any remote at all, for an investigation's
+copy), or a delivery copy whose task branch stands somewhere other than
+HEAD, or whose task branch cannot be created at HEAD because a branch of
+the copy's is in the way of its name (a branch `topic/side` beside the
+task branch `topic`, or `topic` beside `topic/x`), is refused with
+nothing recorded and the refusal says what to change. So is a copy git
+reads a `core.worktree` for, since the move would leave it naming the old
+path: unset it in the copy and answer again. So is a copy with a linked
+worktree (`git worktree list` in the copy shows it), since the move would
+leave the worktree naming the old path and the program writes into no
+worktree it did not make: remove it (`git worktree remove`) and answer
+again. A copy that no
+longer holds a commit or object it was kept on, nothing it names reaching
+it, neither HEAD, a reference, a root reference such as `ORIG_HEAD` nor a
+reflog entry (amended away and then expired and pruned, say), is refused
+the same way, naming what is missing and the entry that recorded it,
+every entry of the copy being read; a copy whose reflog or `ORIG_HEAD`
+still records it, or a commit of which records the object in its tree,
+is carried on, the copy read last right before it is answered, where it
+stands. An entry kept after the copy was last read, in the moment
+before it is answered, refuses the answer rather than being closed unread:
+answer again. A run's copy is not
+carried on in this build (it is a worktree of the gate on a branch of
+yours, which a task's copy cannot be): land it, or push its commit
+yourself.
+
+Discard, `--answer discard` with the same flags, shows exactly what
+removing the copy would lose, read out after its line with each commit,
+object and file on a line of its own after a label and the digest last
+(a value holding a backslash, a quote, a space at either end, or anything
+that does not print is written quoted and escaped, as a Go string literal,
+so no two values read the same), and in the structured answer (`--json`,
+where each path and name also carries its exact bytes, base64, in
+`path_bytes` and `name_bytes`, since a JSON string cannot carry a byte that
+is not UTF-8): what neither the default branch nor the upstream holds,
+the only two places counted as keeping work. That is the
+commits anything in the copy names that neither the default branch nor
+the upstream holds, a commit reset away, one only `ORIG_HEAD` or an old
+reflog entry still records, and every stash included, and any tag, tree
+or blob a reference or a reflog entry points at directly that the
+upstream does not have; what the upstream holds now is held and not
+listed, a commit one of the copy's remote-tracking branches names
+included while the upstream's branch of that name still reaches it, so
+one whose branch the upstream has since deleted or rewound is listed (for a run's copy,
+only what its worktree names counts: a commit only the gate's own branches
+or their reflogs record is not listed, since removing the worktree leaves
+them, but they keep nothing either, so a commit the worktree's own HEAD,
+references or their reflogs record is listed even when a gate branch has
+it too, and so are the stash entries made in that worktree); every file
+removing the copy destroys whose content or deletion nothing else holds,
+as git would store it, so a file git reports clean is not listed though
+its line endings differ, and files git ignores included, each with why (`changed`, `new`, `staged`, `deleted` for
+a file the copy deleted, staged or not, or `repository` for a
+file of the copy's repository directory, a hook or its configuration
+among them, that differs from what git writes into every new repository),
+a directory lost whole named once with a trailing slash; whether git
+reports a change, a file or a stash; and a digest of exactly what is
+shown, each file by what it holds. It records and removes nothing.
+Removing the copy on that answer is not in this build: given again with
+`--confirm DIGEST` it is refused, with nothing read or changed, the copy
+and its entry exactly as they were, and new tasks in the project still
+wait on it. To let them go ahead, answer land or carry-on, or commit or
+remove what is uncommitted, untracked or stashed, and push its commits
+where one of the cleanup proofs above finds them. That proof reads only
+the commits the copy's HEAD and its branches, tags and stash reach, and
+what git reports uncommitted, untracked (and not ignored) or stashed: a
+file git ignores, a commit or object only a reflog or another reference
+reaches, and the copy's repository directory (its hooks and
+configuration) are removed with the copy unchecked, though the discard's
+preview lists them, so copy out anything of those you want first. The
+program removes the copy on that proof, which closes the entry, only when it next asks the cleanup decision
+of the copy (when the run finishes or a landed task's worker is observed
+gone, and again at each start for a finished run's copy), so it is not
+immediate. Removing the copy by hand does not close the entry: one whose
+copy is gone with no proof that its work landed stays open. A copy is shown
+or landed only in the one repository layout this supports, and
+anything else is refused naming why, with nothing of it read or changed:
+a task's copy needs a `.git` directory of its own (not a link or a file
+pointing elsewhere) with no `commondir` file and no linked worktree, a
+run's copy the `.git` file git writes for a worktree, and either needs no
+symbolic link anywhere in its repository directory, `core.symlinks` not
+false, no `core.worktree`, no sparse checkout, its references in files
+rather than a reftable, and its whole history: not shallow, no graft file
+(`info/grafts`), no replacement references (`refs/replace/`), and not a
+partial clone (no `extensions.partialClone`, no remote with `promisor`
+set, no promisor pack), since in each the commits a preview is read from
+are not all the copy holds. Land reads the copy the same way and is refused
+the same; put the copy back in that layout to see it or land it. A copy
+kept again at another state has an entry for each state; carrying it on
+answers and closes all of them, since the whole copy moves to the new
+task, and so is refused unless the copy still holds what every one of
+them recorded. A successor carries the posture the outlived task's own
+push is held to as its floor, gated for a task recorded before a posture
+was, so continued work is never held to less. While one entry of a copy has an answer still being
+carried out (a landing whose run is not started yet, or a carry on not
+finished), the copy's other entries are not answered, and the
+task is not promoted; the answer under way finishes on its own or at the
+next start. An entry whose "what the default branch lacks" is
+not established (the upstream could not be read when the copy was kept) is
+refused rather than shown a list that may be wrong; the next cleanup of the
+unchanged copy establishes it.
+
+A promotion of an investigation whose copy has a kept-work entry (its
+worker ended with its copy kept) answers that entry carry on itself, in the
+promotion's own write, since the promoted worker continues in that copy;
+the entry closes with the promotion and never without it, and the
+promotion is refused, naming what is missing, when the copy no longer
+holds what the entry recorded when the promotion reads it, as a carry on
+of it would be; work lost in the moment between that reading and the
+promotion's write is answered with the write, and the promotion then
+reports the copy refused.
+
+Nothing in the program discards a copy, on its own or on an answer: the
+preview is open to any caller that may answer kept work, and a
+confirmation is refused for everyone in this build. Removal on a confirmed
+discard is deferred (docs/prd.md, sections 6 and 9).
 
 ## Waiting on a fleet
 

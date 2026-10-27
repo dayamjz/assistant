@@ -26,6 +26,51 @@ import (
 //
 // # The flip comes first, and it is one anchored write
 //
+// The flip also answers the copy's open kept work entries, if any, as
+// carry on, naming the promoted task as the task carrying them on: PRD
+// section 6 has a later promotion relaunch a worker in the kept copy with
+// the entry's answer recorded as carry on, and the one transaction is what
+// keeps the entry from closing without the promotion or the promotion from
+// leaving it open. store.TransitionTaskShape owns the write.
+//
+// Those entries are answered only for a copy the kept-copy verification
+// takes, the check every answer to a kept copy asks (verifyKeptCopy,
+// Cleaner.VerifyKeptCopy's body), and that still holds what each entry
+// recorded it standing on (unheld, Cleaner.Unheld's body, the reading a
+// carry on makes), so no entry is closed over work the copy had lost when
+// it was read: before
+// the flip, Promote reads the task's
+// open entries (keptOfCopy, which refuses one recorded for another path)
+// and verifies the copy for each, refusing with ErrLayoutUnsupported, or
+// with a *KeptWorkUnheldError naming what is missing,
+// before anything is written; the flip is given those entries and refuses
+// any other open entry of the task (store.ErrKeptWorkUnverified), so one
+// recorded in between is not answered for a copy nothing verified; and
+// after the flip the copy is verified again before it is read or written,
+// a refusal there being a *PromotionRefusal as not isolated with nothing
+// written, the flip and its answers standing as after any refusal past the
+// flip. Both verifications are a check at one moment, on
+// safety.VerifyKeptCopy's and Cleaner.Unheld's terms, and the flip is
+// the answer: work the copy loses between the reading before the flip and
+// the flip is answered carry on in the flip, and the reading after it then
+// refuses the promotion with that answer standing, as it does a copy whose
+// identity moved in the same window (the full review of 04c4696); a carry
+// on reads last right before its mark, with the entry open until then and
+// every step of its own behind that reading, so what it closes was read
+// holding its work after all of them (round 47), and the moment between
+// that reading and the mark is what stands, as between the reading before
+// the flip and the flip here; a promotion's flip, being the answer and
+// the shape in one write, cannot be ordered the same way. A copy with no open entry is not asked
+// it: what stands between such a copy and the writes is the assertion
+// before shaping, which refuses a .git under the copy that is a symbolic
+// link (ComparisonGitDir, round 37) before anything is written through it,
+// and which does not walk the inside of the repository directory, so a
+// refs directory or a config file in it that is itself a link into another
+// repository has what the shaping writes through it, the branch or the
+// remote, written there (round 38, each shown through Promote); the
+// verification walks it, so a copy with an open entry is refused for that
+// and one with none is not.
+//
 // store.TransitionTaskShape writes the shape, the repository, the branch,
 // the delivery posture and the delivery intent on the task row together with
 // the "promoted" entry, in one transaction,
@@ -252,6 +297,11 @@ type Promotion struct {
 	// at review and a local task starts no run. The project's posture is
 	// read for a pass as for any task.
 	Delivery string
+	// By is who promotes, which the copy's open kept work entries, if any,
+	// are answered carry-on as in the flip, on store.TransitionTaskShape's
+	// terms: internal/service passes what internal/ipc derives from the
+	// surface. The zero Resolver is refused.
+	By store.Resolver
 	// Environment is the environment the worker runs under, as
 	// agents.WorkerEnvironment computes it for a launch; the assertion
 	// refuses one vcs.StripRedirecting would change. The worker was
@@ -315,7 +365,18 @@ type Promoted struct {
 // delivery could never begin, store.ErrPassRetired, come back as they are.
 // The exclusion is given back after the flip, before the copy is touched.
 //
-// After the flip the copy is asserted, shaped, asserted again, and the
+// Before the flip, the copy is verified for each of the task's open kept
+// work entries, which the flip answers carry on, and a copy the
+// verification refuses is refused with ErrLayoutUnsupported, or with a
+// *KeptWorkUnheldError when it no longer holds what an entry recorded,
+// with nothing written; an open entry not verified, recorded after that
+// read, refuses the flip with store.ErrKeptWorkUnverified, and nothing is
+// written.
+//
+// After the flip the copy is verified again for those entries, a refusal
+// there leaving the flip's answers standing (this file's opening comment
+// owns that window), then
+// asserted, shaped, asserted again, and the
 // intent and the delivery second check are appended to the instructions
 // file; a copy that fails either assertion is a *PromotionRefusal with the
 // refusal in the task's history, and a copy that cannot be opened as a
@@ -341,6 +402,9 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	}
 	if strings.TrimSpace(req.Intent) == "" {
 		return Promoted{}, fmt.Errorf("%w: no intent", ErrRequest)
+	}
+	if req.By == (store.Resolver{}) {
+		return Promoted{}, fmt.Errorf("%w: a promotion names who promotes", ErrRequest)
 	}
 	var requested config.Delivery
 	if text := strings.TrimSpace(req.Delivery); text != "" {
@@ -373,7 +437,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 		}
 		requested = config.DeliveryGated
 	}
-	posture, err := q.recordedPosture(ctx, repository, req.Task, requested)
+	posture, err := q.recordedPosture(ctx, repository, req.Task, requested, "")
 	if err != nil {
 		return Promoted{}, err
 	}
@@ -388,6 +452,17 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	instructions, err := q.home.TaskInstructions(req.Task)
 	if err != nil {
 		return Promoted{}, err
+	}
+	kept, err := q.keptOfCopy(ctx, req.Task, copyPath)
+	if err != nil {
+		return Promoted{}, err
+	}
+	if err := q.verifyKept(ctx, req.Task, kept); err != nil {
+		return Promoted{}, err
+	}
+	verified := make([]int64, len(kept))
+	for i, entry := range kept {
+		verified[i] = entry.ID
 	}
 
 	var out Promoted
@@ -414,7 +489,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			q.betweenReadAndWrite()
 		}
 		out.Task, out.Event, err = q.store.TransitionTaskShape(ctx, req.Task, store.TaskInvestigation, store.TaskDelivery,
-			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail)
+			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail, req.By, verified)
 		return err
 	}
 	release, err := q.hold(ctx, repository.ID, branch)
@@ -440,6 +515,12 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			return Promoted{}, err
 		}
 		return Promoted{}, &PromotionRefusal{Task: req.Task, Reason: reason, Event: event, Written: written, Cause: cause}
+	}
+	// The copy is verified again for the entries the flip answered, just
+	// before anything of it is read or written, which narrows the check's
+	// one-moment gap to the instant between this and the writes below.
+	if err := q.verifyKept(ctx, req.Task, kept); err != nil {
+		return refuse(taskstate.RefusedNotIsolated, false, err)
 	}
 	obs, err := vcs.Observe(ctx, copyPath, q.git...)
 	if err != nil {
@@ -602,18 +683,60 @@ func PromotionBrief(branch, intent, line string) string {
 		"one remote a delivery copy has.\n\n    " + line + "\n"
 }
 
-// appendPromotion appends the brief to the instructions file. The file is
-// the one thing the worker was started with, and a worker told to re-read
-// it, or a worker begun on the task later, is told there what the contract
-// now is.
+// appendPromotion appends the brief to the instructions file, once and
+// whole (AppendNote). The file is the one thing the worker was started
+// with, and a worker told to re-read it, or a worker begun on the task
+// later, is told there what the contract now is.
 func appendPromotion(path, brief string) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	return AppendNote(path, PromotionHeading, brief)
+}
+
+// keptOfCopy is the open kept work entries of the task, the ones the flip
+// answers carry on, each held to the copy the promotion writes into: an
+// entry recorded for another path is refused, since verifying it would say
+// nothing of this copy.
+func (q *Queue) keptOfCopy(ctx context.Context, task, copyPath string) ([]store.KeptWork, error) {
+	open, err := q.store.OpenKeptWork(ctx)
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("tasks: reading the kept work of task %s: %w", task, err)
 	}
-	defer func() { _ = f.Close() }()
-	if _, err := f.WriteString("\n\n" + brief); err != nil {
-		return err
+	var kept []store.KeptWork
+	for _, entry := range open {
+		if entry.TaskID.Or("") != task {
+			continue
+		}
+		if entry.CopyPath != copyPath {
+			return nil, fmt.Errorf("%w: task %s is not promoted: kept work entry %d was recorded for the copy at %s, and the task's copy is at %s",
+				ErrLayoutUnsupported, task, entry.ID, entry.CopyPath, copyPath)
+		}
+		kept = append(kept, entry)
 	}
-	return f.Sync()
+	return kept, nil
+}
+
+// verifyKept asks, of the copy for each entry the flip answers, what every
+// answer that closes an entry asks, with this Queue's git options and
+// replacement references off, as a Cleaner's are: the kept-copy
+// verification (verifyKeptCopy, Cleaner.VerifyKeptCopy's body), whose
+// refusal matches ErrLayoutUnsupported and safety.ErrCopyNotVerified; and
+// then the reading of what the entry recorded the copy standing on that
+// the copy no longer holds (unheld, Cleaner.Unheld's body), anything
+// missing being a *KeptWorkUnheldError, so the flip never answers an
+// entry carry on over work the copy has lost, which a carry on of the
+// same copy refuses too (the carry-on audit of b448115, P15).
+func (q *Queue) verifyKept(ctx context.Context, task string, kept []store.KeptWork) error {
+	git := append(slices.Clone(q.git), vcs.WithoutReplaceObjects())
+	for _, entry := range kept {
+		if err := verifyKeptCopy(ctx, git, entry, ""); err != nil {
+			return fmt.Errorf("tasks: the copy of task %s, which kept work entry %d records: %w", task, entry.ID, err)
+		}
+		missing, err := unheld(ctx, git, entry)
+		if err != nil {
+			return fmt.Errorf("tasks: the copy of task %s, which kept work entry %d records: %w", task, entry.ID, err)
+		}
+		if len(missing) > 0 {
+			return &KeptWorkUnheldError{Task: task, Entry: entry.ID, Unheld: missing}
+		}
+	}
+	return nil
 }

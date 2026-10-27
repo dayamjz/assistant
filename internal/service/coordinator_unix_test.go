@@ -144,15 +144,19 @@ func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 }
 
 // A dispatch pass that runs while task.create is between the task's record
-// and its instructions file, as a release or a second task.create can, does
-// not take the task: the record already reads Dispatched, but the file
-// dispatch appends to and the worker reads is not written yet, and a pass
-// that took the task then would refuse it and keep its slot, so nothing in
-// this service would dispatch it again. The pass is run at that moment
-// through the seam after intake gives back the branch exclusion, and the
-// test reads the records and the file there to confirm it is that moment.
-// The task is then dispatched and launched by the pass task.create runs once
-// its intake has returned, with its instructions final (#460).
+// and its instructions file, as a release or a second task.create can, is
+// kept off the task by exclusion: task.create holds the write side of the
+// service's intake exclusion across the intake, and dispatchDue takes the
+// read side with TryRLock and skips its pass while the write side is held,
+// so a pass at that moment reads nothing. Without that, the record already
+// reads Dispatched while the file dispatch appends to and the worker reads
+// is not written yet, and a pass that took the task then would refuse it and
+// keep its slot, so nothing in this service would dispatch it again. The
+// pass is run at that moment through the seam after intake gives back the
+// branch exclusion, and the test reads the records and the file there to
+// confirm it is that moment and that the pass left the task. The task is
+// then dispatched and launched by the makeup pass task.create runs once its
+// intake has returned, with its instructions final (#460).
 func TestADispatchPassDuringAnIntakeLeavesTheTaskToTheIntakesOwn(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

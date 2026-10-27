@@ -62,10 +62,12 @@ func OnRemoteHost(name string) Placement { return Placement{kind: placedOnRemote
 // every kept work entry, and an entry naming none is refused, since nothing
 // then shows that the task is of its project; Task.Project, what the task
 // is for, is not compared. An entry naming no branch matches only a task
-// naming none. That is as far as the store can tie the task to the entry:
-// no record here says which task a carry on created, so two tasks of that
-// project and branch could both name one entry, and each would get its
-// machine.
+// naming none. An entry whose carry on names the task it created
+// (carried_on_task, keptWorkCarryOnMigration) is refused for any other
+// task. One answered carry on before that column existed names none, and
+// for it this is as far as the store can tie the task to the entry: two
+// tasks of that project and branch could both name it, and each would get
+// its machine.
 func CarriedOnFrom(entry int64) Placement {
 	return Placement{kind: placedWithKeptCopy, keptWork: entry}
 }
@@ -105,6 +107,10 @@ func validRemoteHost(name string) error {
 // exist is ErrNotFound, wrapped. The zero Placement, and a remote host name
 // OnRemoteHost says is refused, are refused before anything is read. A task
 // that does not exist is ErrNotFound, wrapped.
+//
+// A dispatch is new task work, so a task kept work holds is refused with a
+// *DispatchHeldError in the same transaction and nothing is written, on
+// keptworkhold.go's terms, once the placement itself is found valid.
 func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Placement) (TaskAttempt, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return TaskAttempt{}, fmt.Errorf("store: no task named")
@@ -130,6 +136,9 @@ func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Pla
 				return err
 			}
 		}
+		if err := refuseHeldDispatchTx(ctx, tx, taskID); err != nil {
+			return err
+		}
 		// Before the attempt: the trigger seals the column from the first
 		// attempt on.
 		if machine != "" {
@@ -141,7 +150,8 @@ func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Pla
 	})
 	if err != nil {
 		var moved *TaskMovedError
-		if errors.As(err, &moved) {
+		var held *DispatchHeldError
+		if errors.As(err, &moved) || errors.As(err, &held) {
 			return TaskAttempt{}, err
 		}
 		return TaskAttempt{}, fmt.Errorf("store: dispatching task %s: %w", taskID, err)
@@ -153,11 +163,11 @@ func (s *Store) BeginFirstTaskAttempt(ctx context.Context, taskID string, at Pla
 // as the owner it outlived records it, for task taskID carrying it on, on
 // CarriedOnFrom's terms.
 func keptCopyMachineTx(ctx context.Context, tx *sql.Tx, taskID string, entry int64) (string, error) {
-	var owner, run, repository, branch, answer, machine Optional[string]
+	var owner, run, repository, branch, answer, carrier, machine Optional[string]
 	err := tx.QueryRowContext(ctx, `
-		SELECT k.task_id, k.run_id, k.repository_id, k.branch, k.answer, t.machine
+		SELECT k.task_id, k.run_id, k.repository_id, k.branch, k.answer, k.carried_on_task, t.machine
 		FROM kept_work k LEFT JOIN task t ON t.id = k.task_id
-		WHERE k.id = ?`, entry).Scan(&owner, &run, &repository, &branch, &answer, &machine)
+		WHERE k.id = ?`, entry).Scan(&owner, &run, &repository, &branch, &answer, &carrier, &machine)
 	if err != nil {
 		return "", fmt.Errorf("kept work entry %d: %w", entry, errNoRows(err))
 	}
@@ -178,6 +188,9 @@ func keptCopyMachineTx(ctx context.Context, tx *sql.Tx, taskID string, entry int
 	if !sameOptional(ownRepository, repository) || !sameOptional(ownBranch, branch) {
 		return "", fmt.Errorf("%w: kept work entry %d is of project %q branch %q, and the task of project %q branch %q",
 			ErrNotCarriedOn, entry, repository.Or(""), branch.Or(""), ownRepository.Or(""), ownBranch.Or(""))
+	}
+	if name, known := carrier.Get(); known && name != taskID {
+		return "", fmt.Errorf("%w: kept work entry %d was carried on by task %s", ErrNotCarriedOn, entry, name)
 	}
 	name, ok := machine.Get()
 	if !ok {

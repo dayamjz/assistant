@@ -36,7 +36,7 @@ func promotePass(t *testing.T, records *store.Store, id string) {
 		t.Fatal(err)
 	}
 	if _, _, err := records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, hkRepository, hkBranch,
-		config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted"); err != nil {
+		config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil); err != nil {
 		t.Fatalf("promoting pass %s: %v", id, err)
 	}
 }
@@ -644,7 +644,7 @@ func TestARetirementHoldIsOfferedOnlyToAPassStillOpenAndStillWhenItIsRegistered(
 			events, err := records.TaskEvents(ctx, id, 0, 0)
 			if err == nil {
 				_, _, err = records.TransitionTaskShape(ctx, id, store.TaskInvestigation, store.TaskDelivery, hkRepository, hkBranch,
-					config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted")
+					config.DeliveryGated, "Correct the drift the report found.", events[len(events)-1].Sequence, "promoted", store.ResolvedByMachineInterface(), nil)
 			}
 			var build store.Build
 			if err == nil {

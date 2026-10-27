@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -219,7 +220,7 @@ func (s *promotionSubject) workerSays(t *testing.T, id, kind, detail string) {
 
 // request is a well-formed promotion of the task onto topic.
 func request(id string) Promotion {
-	return Promotion{Task: id, Repository: cleanupRepository, Branch: "topic", Intent: "make the change the report found",
+	return Promotion{By: store.ResolvedByMachineInterface(), Task: id, Repository: cleanupRepository, Branch: "topic", Intent: "make the change the report found",
 		Environment: cleanEnv()}
 }
 
@@ -356,7 +357,7 @@ func TestPromoteFlipsTheTaskInPlaceAndShapesItsCopy(t *testing.T) {
 		}
 
 		// A second promotion refuses on the shape, and writes nothing.
-		_, err = s.queue.Promote(ctx, Promotion{Task: tk.id, Repository: cleanupRepository, Branch: "other",
+		_, err = s.queue.Promote(ctx, Promotion{By: store.ResolvedByMachineInterface(), Task: tk.id, Repository: cleanupRepository, Branch: "other",
 			Intent: "again", Environment: cleanEnv()})
 		var notPromotable *NotPromotableError
 		if !errors.As(err, &notPromotable) || !errors.Is(err, ErrNotPromotable) || notPromotable.Shape != store.TaskDelivery {
@@ -779,7 +780,7 @@ func TestPromoteHoldsTheBranchToIntakesRules(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.queue.Promote(ctx, Promotion{Task: absent, Repository: cleanupRepository, Branch: "b", Intent: "i"}); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.queue.Promote(ctx, Promotion{By: store.ResolvedByMachineInterface(), Task: absent, Repository: cleanupRepository, Branch: "b", Intent: "i"}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("a task that does not exist = %v, want store.ErrNotFound", err)
 		}
 		s.untouched(t, tk, n)
@@ -815,5 +816,158 @@ func TestPromoteRefusesARetiredPass(t *testing.T) {
 	ctk := control.pass(t)
 	if got := control.promote(t, request(ctk.id)); got.Task.Delivery != store.Known(config.DeliveryGated) {
 		t.Fatalf("the control, a pass not retired, was recorded under %v, want gated", got.Task.Delivery)
+	}
+}
+
+// A promotion over kept work verifies the copy again after its flip, just
+// before it reads or writes the copy: the copy has an open kept work entry
+// and verifies at the start, and between the flip and the copy its .git is
+// made a link to another clone's .git. The promotion is refused as not
+// isolated with nothing written, the other clone's remotes and branches are
+// as they were, and the flip stands, the entry answered carry on, as a
+// refusal after the flip leaves it. Without the second verification the
+// promotion writes the gate's remote and the branch into the other clone.
+func TestPromoteVerifiesTheKeptCopyAgainBeforeWritingIt(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P1)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	entry, _, err := s.store.RecordKeptWork(ctx, store.KeptCopy{TaskID: tk.id, CopyPath: tk.copy,
+		Holds: []string{rawGit(t, tk.copy, "rev-parse", "HEAD")}, Reason: string(ReasonUnproven), Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", s.primary, other)
+	remotes, branches := rawGit(t, other, "remote"), rawGit(t, other, "branch", "--list")
+	own := filepath.Join(tk.copy, ".git")
+	s.queue.betweenFlipAndCopy = func() {
+		if err := os.Rename(own, own+".own"); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+			t.Error(err)
+		}
+	}
+
+	_, err = s.queue.Promote(ctx, request(tk.id))
+	var refusal *PromotionRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != taskstate.RefusedNotIsolated || refusal.Written ||
+		!errors.Is(err, ErrLayoutUnsupported) {
+		t.Fatalf("promoting a kept copy whose .git became a link after the flip = %v; want refused as not isolated, nothing written", err)
+	}
+	if got := rawGit(t, other, "remote"); got != remotes {
+		t.Errorf("the other clone's remotes became %q, were %q", got, remotes)
+	}
+	if got := rawGit(t, other, "branch", "--list"); got != branches {
+		t.Errorf("the other clone's branches became %q, were %q", got, branches)
+	}
+	if closed, err := s.store.KeptWorkEntry(ctx, entry.ID); err != nil || closed.Answer.Or("") != store.KeptCarryOn {
+		t.Fatalf("after the refusal the entry reads %+v, %v; want the flip's carry-on answer standing", closed, err)
+	}
+}
+
+// A copy whose .git is a symbolic link to another clone's .git is refused
+// before anything is written into that clone, whether or not the copy has
+// an open kept work entry (round 37). The clone linked to has no remote and
+// stands on its own branch, which is the case that escaped: with no entry
+// nothing asked the kept-copy verification, every identity comparison of
+// the assertion followed the link, and once the shaping had written the
+// gate's remote and the task's branch into that clone, it was exactly the
+// delivery shape, so the assertion after shaping passed it and the
+// promotion succeeded. Now the assertion before shaping refuses the link
+// as the repository directory comparison, with the refusal recorded and
+// the clone linked to unchanged.
+func TestPromoteRefusesACopyWhoseRepositoryDirectoryIsALink(t *testing.T) {
+	principles.Cite(t, principles.P11)
+	principles.Cite(t, principles.P1)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", s.primary, other)
+	rawGit(t, other, "remote", "remove", "origin")
+	if remotes := rawGit(t, other, "remote"); remotes != "" {
+		t.Fatalf("the other clone has remotes %q, want none", remotes)
+	}
+	head, branches := rawGit(t, other, "symbolic-ref", "HEAD"), rawGit(t, other, "branch", "--list")
+	own := filepath.Join(tk.copy, ".git")
+	if err := os.RemoveAll(own); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+		t.Skipf("cannot make a symbolic link here: %v", err)
+	}
+
+	_, err := s.queue.Promote(ctx, request(tk.id))
+	var refusal *PromotionRefusal
+	if !errors.As(err, &refusal) || refusal.Reason != taskstate.RefusedNotIsolated || refusal.Written ||
+		!errors.Is(err, ErrNotIsolated) {
+		t.Fatalf("promoting a copy whose .git links to another clone = %v; want refused as not isolated, nothing written", err)
+	}
+	var ie *IsolationError
+	if !errors.As(err, &ie) || ie.Comparison != ComparisonGitDir {
+		t.Errorf("refused on %v, want the repository directory comparison", err)
+	}
+	if got := rawGit(t, other, "remote"); got != "" {
+		t.Errorf("the other clone's remotes became %q, were none", got)
+	}
+	if got := rawGit(t, other, "symbolic-ref", "HEAD"); got != head {
+		t.Errorf("the other clone's HEAD became %s, was %s", got, head)
+	}
+	if got := rawGit(t, other, "branch", "--list"); got != branches {
+		t.Errorf("the other clone's branches became %q, were %q", got, branches)
+	}
+	if record := s.record(t, tk.id); record.Shape != store.TaskDelivery {
+		t.Fatalf("after the refusal the task is %+v, want a delivery task whose history says its copy was refused", record)
+	}
+	history := s.history(t, tk.id)
+	if last := history[len(history)-1]; last.Kind != isolationRefusedKind || last.Detail != string(taskstate.RefusedNotIsolated) ||
+		history[len(history)-2].Kind != store.PromotedEventKind {
+		t.Fatalf("the history ends %+v, want the refusal right after the promoted entry", history[len(history)-2:])
+	}
+}
+
+// A promotion refuses, before its flip and with nothing written, a copy
+// that no longer holds what an open kept work entry recorded it standing
+// on (the carry-on audit of b448115, P15): the entry records the copy at
+// C, the copy is detached at C's parent with the reflogs expired and C
+// pruned, so nothing the copy names reaches C. The flip would answer the
+// entry carry on and close it out of the open listing while the work is
+// gone, which a carry on of the same copy refuses, so the promotion refuses
+// the same: the task stays an investigation, nothing is appended, the
+// entry stays open. The control is the copy before the prune, which a
+// promotion takes.
+func TestPromoteRefusesACopyThatNoLongerHoldsItsKeptWork(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := newPromotionSubject(t)
+	tk := s.investigation(t)
+	if err := os.WriteFile(filepath.Join(tk.copy, "finding.txt"), []byte("what the worker found\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, tk.copy, "add", "finding.txt")
+	rawGit(t, tk.copy, "commit", "-q", "-m", "the worker's own commit")
+	kept := rawGit(t, tk.copy, "rev-parse", "HEAD")
+	entry, _, err := s.store.RecordKeptWork(ctx, store.KeptCopy{TaskID: tk.id, CopyPath: tk.copy,
+		Holds: []string{kept}, Lacks: []string{kept}, Reason: string(ReasonUnproven), Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	rawGit(t, tk.copy, "checkout", "-q", "--detach", "HEAD~1")
+	rawGit(t, tk.copy, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+	rawGit(t, tk.copy, "prune", "--expire=now")
+	n := len(s.history(t, tk.id))
+
+	_, err = s.queue.Promote(ctx, request(tk.id))
+	var unheld *KeptWorkUnheldError
+	if !errors.As(err, &unheld) || !errors.Is(err, ErrKeptWorkUnheld) || unheld.Entry != entry.ID || !slices.Equal(unheld.Unheld, []string{kept}) {
+		t.Fatalf("promoting a copy that no longer holds %s = %v; want a *KeptWorkUnheldError naming entry %d and the commit", kept, err, entry.ID)
+	}
+	s.untouched(t, tk, n)
+	if still, err := s.store.KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+		t.Fatalf("after the refusal the entry reads %+v, %v; want it open", still, err)
 	}
 }

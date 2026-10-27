@@ -67,7 +67,8 @@ paths: ["internal/store/**"]
   (`ErrKeptWorkAnswered`, `ErrKeptWorkClosed`), as the trigger does;
   `KeptWorkOf` is the read of the entry standing for a copy state. It is
   otherwise written once;
-  its one revision closes it, once: a person's answer (`AnswerKeptWork`) or
+  its one revision closes it, once: a person's answer, written only with
+  its outcome after a claim on the open entry, or
   the program's `KeptRemovedOnProof`, written only by `MarkCleanupRemoved`
   and `MarkRunCleanupRemoved` in the removal's transaction, never a discard.
   `surfaced_at` is the one other column that moves, only forward. `ForgetRepository` and
@@ -80,7 +81,51 @@ paths: ["internal/store/**"]
   transaction that found the repository forgettable; `CreateRun` refuses a
   run of a reserved repository (`ErrRepositoryBeingRemoved`), and nothing
   refuses a kept work entry over a reservation. internal/service releases a
-  reservation whose owner is gone when it opens.
+  reservation whose owner is gone when it opens. `keptworkhold.go` is the
+  dispatch hold's one predicate: a task naming a project, none of whose
+  attempts recorded a session (a claim alone proves no worker started),
+  whose project has an open entry; the dispatch claims
+  (`BeginFirstTaskAttempt`, and `BeginDispatchAttempt` for a retried
+  dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts)
+  refuse it with `*DispatchHeldError` in their own transactions, and
+  `BeginTaskAttempt`, the relaunch claim, is never held. Every answer is
+  two facts, so an entry closes only in the write that records its
+  outcome and an answer under way leaves it open and listed. keptWorkLandingMigration
+  records a landing so: the claim (`landing_claimed_at`, who and when),
+  written whole on an open entry by `ClaimKeptWorkLanding`, once, so two
+  landings of an entry claim once between them, and withdrawn whole by
+  `WithdrawKeptWorkLanding` when no run could be started; and the answer,
+  written only with `landed_run` by `RecordKeptWorkLanding`, which the
+  triggers enforce. `KeptWork.Key` and `ParseKeptWorkKey` are the one
+  spelling of `--hold kept-work/N`. keptWorkCarryOnMigration records a carry on as two
+  facts: the claim (`carried_on_task`, the task's reserved identifier, with
+  the copy's identity, who and when), written whole on an open entry by
+  `ClaimKeptWorkCarryOn`, which leaves it open and listed, and withdrawn
+  whole by `WithdrawKeptWorkCarryOn` only while the task's row does not
+  exist; and the answer, written only with `carried_on_at` by
+  `MarkKeptWorkCarriedOn`, given the task the claim names, once that task
+  exists and owns the copy, which the triggers enforce, and
+  `KeptWorkCarriedOnBy` reads the answered entries back for that task, the
+  copy identity dispatch holds the adopted copy to. A carry on moves the
+  whole copy, so its mark answers and marks every other open entry of the
+  copy, whenever it was kept, since its state moved with the copy, the set
+  `OpenKeptWorkOfCopy` lists for the caller to hold the copy to first and
+  name to the mark, which refuses an open entry it was not given
+  (`ErrKeptWorkUnverified`) and writes nothing; and no
+  answer or claim is written while an entry of the copy holds one not yet
+  carried out, a claim on the entry itself included
+  (`ErrKeptWorkCopyOwed`, the one condition `owedOnCopy`), and
+  `TransitionTaskShape` refuses a promotion over one by that same
+  condition, a landing claim as a carry-on claim. Each
+  answer's claim and outcome are its own accessors, and there is no
+  generic answer write, so nothing writes an answer of discard: its
+  removal and record are deferred to AGE-486. `TransitionTaskShape` answers the promoted task's own copy's open
+  entries carry-on, naming that task, claim, answer and adoption in one
+  write in the flip's transaction, as PRD
+  section 6's promotion paragraph says; it takes the promoter's `Resolver`
+  for that, and the entries the caller verified the copy for, refusing
+  any other open entry of the task with `ErrKeptWorkUnverified` and
+  writing nothing.
 - taskMachineMigration's `task.machine` is PRD section 8's machine a task
   runs on, the one place it is stored: written once, for a remote host, by
   `BeginFirstTaskAttempt` (the dispatch, the only first attempt; a carry on
