@@ -1,0 +1,160 @@
+package tasks
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
+)
+
+// pass is a well-formed marked request for repo's housekeeping pass, with
+// notes as the coordinator's part.
+func pass(notes string) Request {
+	return Request{Project: "one", Instructions: notes, Repository: repo, Housekeeping: true}
+}
+
+// A marked create records an investigation of the repository under the
+// housekeeping role, marked, dispatched as independent, with the program's
+// part of its instructions before the coordinator's notes: the trusted scope,
+// the rules, and the notes framed as claims to check.
+func TestAMarkedCreateRecordsAHousekeepingInvestigation(t *testing.T) {
+	f := newFixture(t)
+	created := f.create(t, pass("The person decided on 2026-10-24 that the fixer is Cursor."))
+	task := created.Task
+	if !task.Housekeeping || task.Shape != store.TaskInvestigation || task.Role != config.RoleHousekeeping ||
+		task.RepositoryID.Or("") != repo || task.Branch.IsKnown() {
+		t.Fatalf("the pass was recorded as %+v", task)
+	}
+	if created.Cause != CauseIndependent {
+		t.Fatalf("the pass was recorded %s, want independent", created.Cause)
+	}
+	if got := f.resolve(t, task.ID); got.State != taskstate.Dispatched {
+		t.Fatalf("the pass resolves %s, want dispatched", got.State)
+	}
+	text := f.instructionsOf(t, task.ID)
+	program, notes, ok := strings.Cut(text, "## The coordinator's notes")
+	if !ok {
+		t.Fatalf("the instructions carry no notes heading:\n%s", text)
+	}
+	for _, want := range []string{"`AGENTS.md`", "`.claude/rules/**`", "`assistant-knowledge.md`",
+		"factual drift", "Never add, remove or reword a rule"} {
+		if !strings.Contains(program, want) {
+			t.Errorf("the program's part does not say %q:\n%s", want, program)
+		}
+	}
+	if !strings.Contains(notes, "claims to check, not facts") || !strings.Contains(notes, "fixer is Cursor") {
+		t.Errorf("the notes are not after the program's part as claims:\n%s", notes)
+	}
+	if strings.Contains(program, "fixer is Cursor") {
+		t.Errorf("the coordinator's notes reached the program's part:\n%s", program)
+	}
+}
+
+// Every refusal of a marked create is typed and records nothing: a role, a
+// delivery shape, a branch, a posture, an overlap or no repository is
+// incorrect usage; a repository whose trusted housekeeping.paths is empty is
+// a *PassRefusal; one whose scope cannot be read is ErrPassScopeUnreadable;
+// and any create that names the housekeeping role is refused, marked or not.
+func TestAMarkedCreateIsRefusedWithATypedRefusal(t *testing.T) {
+	f := newFixture(t)
+	for name, mutate := range map[string]func(*Request){
+		"names a role":        func(r *Request) { r.Role = "worker" },
+		"names the role":      func(r *Request) { r.Role = config.RoleHousekeeping },
+		"is a delivery":       func(r *Request) { r.Shape = string(store.TaskDelivery) },
+		"names a branch":      func(r *Request) { r.Branch = "b" },
+		"names a posture":     func(r *Request) { r.Delivery = "gated" },
+		"claims an overlap":   func(r *Request) { r.Overlaps = "taskaaaaaaaa" },
+		"names no repository": func(r *Request) { r.Repository = "" },
+	} {
+		req := pass("")
+		mutate(&req)
+		if _, err := f.queue.Create(context.Background(), req); !errors.Is(err, ErrRequest) || !IsRefusal(err) {
+			t.Errorf("a marked create that %s = %v, want ErrRequest", name, err)
+		}
+	}
+	unmarked := delivery("")
+	unmarked.Role = config.RoleHousekeeping
+	if _, err := f.queue.Create(context.Background(), unmarked); !errors.Is(err, ErrRequest) || !errors.Is(err, config.ErrTaskRole) {
+		t.Errorf("an ordinary create naming the housekeeping role = %v, want it refused", err)
+	}
+
+	f.scope = config.PatternSet{}
+	_, err := f.queue.Create(context.Background(), pass(""))
+	var refused *PassRefusal
+	if !errors.As(err, &refused) || refused.Repository != repo || !IsRefusal(err) {
+		t.Errorf("a pass of a repository whose trusted scope is empty = %v, want a *PassRefusal", err)
+	}
+	f.scope, f.scopeErr = nil, errors.New("the default branch could not be fetched")
+	if _, err := f.queue.Create(context.Background(), pass("")); !errors.Is(err, ErrPassScopeUnreadable) {
+		t.Errorf("a pass whose scope could not be read = %v, want ErrPassScopeUnreadable", err)
+	}
+	tasks, err := f.store.Tasks(context.Background())
+	if err != nil || len(tasks) != 0 {
+		t.Fatalf("the refusals recorded %d tasks (%v), want none", len(tasks), err)
+	}
+	// The positive control: the same request with the scope readable is
+	// recorded.
+	f.scope, f.scopeErr = config.Defaults().HousekeepingPaths, nil
+	f.create(t, pass(""))
+}
+
+// PRD section 6's one-at-a-time rule at intake: a marked create while a pass
+// of the repository is open is refused naming it, and two marked creates at
+// once, both held between their reads and their writes, leave exactly one
+// task, because the store decides under its serialization (P6's anchoring
+// of a write to what was read).
+func TestTwoMarkedCreatesAtOnceLeaveOnePass(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	f := newFixture(t)
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	release := make(chan struct{})
+	f.queue.betweenReadAndWrite = func() {
+		arrived.Done()
+		<-release
+	}
+	results := make([]error, 2)
+	var done sync.WaitGroup
+	for i := range results {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			_, results[i] = f.queue.Create(context.Background(), pass(""))
+		}()
+	}
+	arrived.Wait()
+	close(release)
+	done.Wait()
+	f.queue.betweenReadAndWrite = nil
+	var created, refused int
+	for _, err := range results {
+		var open *store.PassOpenError
+		switch {
+		case err == nil:
+			created++
+		case errors.As(err, &open) && IsRefusal(err):
+			refused++
+		default:
+			t.Fatalf("a concurrent create failed for another reason: %v", err)
+		}
+	}
+	all, err := f.store.Tasks(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created != 1 || refused != 1 || len(all) != 1 {
+		t.Fatalf("two concurrent marked creates created %d, refused %d and recorded %d tasks, want one of each and one task",
+			created, refused, len(all))
+	}
+	_, err = f.queue.Create(context.Background(), pass(""))
+	var open *store.PassOpenError
+	if !errors.As(err, &open) || open.Pass != all[0].ID {
+		t.Fatalf("a later create while %s is open = %v, want it refused naming that pass", all[0].ID, err)
+	}
+}

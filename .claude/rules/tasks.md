@@ -17,6 +17,12 @@ paths: ["internal/tasks/**"]
   loosen it (`*PostureError`); a floor (`Request.DeliveryFloor`, a carry
   on's) records the stricter of itself and the project's, decided in the
   one read, and is never a refusal.
+- A housekeeping pass's intake is `housekeeping.go`: a marked create
+  records an investigation of the repository under the housekeeping role
+  with the program's part of the instructions (the trusted scope read
+  through `Deps.Housekeeping`, and the rules) before the coordinator's
+  notes, refused with nothing recorded on an empty or unreadable scope
+  and, in the store's transaction, while a pass of the repository is open.
 - A local task's cleanup proof is the content check against the working
   copy's default branch and nothing else.
 - The remote-branch and merged-pull-request proofs follow a commit the gate
