@@ -365,20 +365,20 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 	return closed, nil
 }
 
-// RetirementOffer is the retirement hold the supervisor loop offers a
-// housekeeping pass, with what the loop read when it decided the pass open
-// and that nothing moves it: the pass's latest attempt and newest
+// RetirementOffer is a retirement hold offered to a housekeeping pass, with
+// what its caller read when it decided the pass open and that nothing moves
+// it: the pass's latest attempt and newest
 // attributed run, as RetireHousekeepingPass's Retirement carries them.
 type RetirementOffer struct {
 	// Hold is the hold to register. It names the pass and no run.
 	Hold Hold
-	// Attempt is the pass's latest attempt sequence as the loop read it,
+	// Attempt is the pass's latest attempt sequence as the caller read it,
 	// and zero for a pass never dispatched.
 	Attempt int64
-	// Session is that attempt's session reference as the loop read it, on
+	// Session is that attempt's session reference as the caller read it, on
 	// Retirement's terms: empty for none.
 	Session string
-	// Run is the newest run attributed to the pass as the loop read it,
+	// Run is the newest run attributed to the pass as the caller read it,
 	// and empty for none.
 	Run string
 	// Ended and Delivered are Retirement's.
@@ -389,13 +389,13 @@ type RetirementOffer struct {
 // OfferRetirementHold registers a housekeeping pass's retirement hold, on
 // RegisterHold's terms, fenced by the supervisor loop's incarnation, in one
 // transaction that reads the pass again first, so the hold is registered
-// only while what the loop decided it on still holds: PRD section 6's "an
+// only while what the caller decided it on still holds: PRD section 6's "an
 // open pass ... that nothing moves gets a hold". It refuses, writing
 // nothing:
 //
 //   - ErrStaleIncarnation, wrapped, for a loop the watchdog replaced;
 //   - a *TaskMovedError for a pass whose latest attempt is not Attempt,
-//     begun again since the loop read it;
+//     begun again since the caller read it;
 //   - ErrPassRetired, wrapped, for a pass already retired, whose claim is
 //     released;
 //   - ErrPassClosed, wrapped, for a pass whose records put it in the
