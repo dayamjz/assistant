@@ -100,8 +100,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"(the hold's key, or a finding id under that task); without it the only open one is answered, and more than one open is refused; "+
 			"a kept work entry's key, kept-work/N, answers that entry, with --task or --run=RUN naming whose copy it is")
 		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
-			"without it the discard shows what would be lost and removes nothing, and with it the answer is refused: "+
-			"removal on a confirmed discard is not in this build")
+			"without it the discard shows what would be lost and removes nothing; with it the answer is accepted only at a terminal, "+
+			"in the foreground and without --json, and is then refused: removal on a confirmed discard is not in this build")
 		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
@@ -892,6 +892,17 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	case len(f.others) > 0:
 		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
 	}
+	// A discard is confirmed only at a terminal, in the foreground, PRD
+	// section 6's "Removing a discarded copy": a confirmation under --json
+	// or off a terminal is refused here, before the service is asked, with
+	// the row that says so. "Off a terminal" is Environment.OffTerminal, the
+	// service's own predicate read of this process, and never whether its
+	// streams are terminals. This is the early refusal, not the mechanism:
+	// internal/service decides it from the peer's lineage either way
+	// (keptdiscard.go, foreground.go).
+	if f.confirmSet && (in.json || in.env.OffTerminal) {
+		return nil, discardNeedsTerminal{}
+	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
 	var answered machine.KeptWorkAnswered
 	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
@@ -899,6 +910,14 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	}, &answered)
 	return answered, err
 }
+
+// discardNeedsTerminal is the command line's refusal of a discard
+// confirmation given under --json or off a terminal. Its text is the row a
+// person reads.
+type discardNeedsTerminal struct{}
+
+// Error is the row, which says all there is.
+func (discardNeedsTerminal) Error() string { return machine.PhraseDiscardNeedsTerminal.String() }
 
 // flagsBeside names the flags given to the command with no verb other than
 // the four an answer to kept work reads and the two every command takes, in
