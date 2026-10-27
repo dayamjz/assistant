@@ -174,8 +174,10 @@ func coordinatorCommand(action string) string {
 // and which combinations it refuses are intake's too, answered as
 // ipc.ErrInvalidRequest and so as incorrect usage. The one thing decided
 // here is where the instructions come from: --instructions or
-// --instructions-file, exactly one, because a command line that gave both
+// --instructions-file, at most one, because a command line that gave both
 // would leave which one the worker reads to an order nobody wrote down.
+// --housekeeping is the housekeeping mark, and its instructions are the
+// coordinator's notes, which intake puts after the program's part.
 func coordinatorCreate(ctx context.Context, in *invocation) (any, error) {
 	var request machine.TaskCreateRequest
 	var instructions, instructionsFile string
@@ -190,6 +192,8 @@ func coordinatorCreate(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&request.Overlaps, "overlaps", "", "a task this one overlaps, or empty for a claim of independence")
 		set.StringVar(&request.Delivery, "delivery", "", `"gated" or "local" in place of the project's posture, never lighter than it`)
 		set.StringVar(&request.Role, "role", "", "the configured role the worker runs under; empty means worker")
+		set.BoolVar(&request.Housekeeping, "housekeeping", false,
+			"create the repository's housekeeping pass; the instructions are your notes after the program's part")
 	})
 	if err != nil {
 		return nil, err

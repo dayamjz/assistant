@@ -16,7 +16,12 @@ paths: ["internal/tasks/**"]
   read fails rather than assuming one, and let a request tighten it and never
   loosen it (`*PostureError`); a floor (`Request.DeliveryFloor`, a carry
   on's) records the stricter of itself and the project's, decided in the
-  one read, and is never a refusal.
+  one read, and is never a refusal. A housekeeping pass is promoted gated whatever
+  the project declares, as a request for gated, because its scope is held at
+  the review of the run its push starts and a local task starts no run; the
+  project's posture is read for it as for any task, so an unreadable copy
+  refuses it too; a request for another posture on a pass is `ErrRequest`,
+  and a retired pass is refused in the flip (`store.ErrPassRetired`).
 - A housekeeping pass's intake is `housekeeping.go`: a marked create
   records an investigation of the repository under the housekeeping role
   with the program's part of the instructions (the trusted scope read
