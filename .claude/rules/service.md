@@ -134,6 +134,10 @@ paths: ["internal/service/**"]
   recorded, which `launching` reads. A path already
   standing at the copy's path is asserted and never removed, and `Close`
   ends only the sessions this service created.
+- Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
+  program's part of it (it creates no pass): the trusted scope a pass's
+  intake reads, and `passRun`, which marks a run the records attribute to
+  a pass (`store.TasksOfRun`) for the review's scope ask.
 - Terminals: every task reader is built through `reader`, probing through
   the service's `Terminals`, the one seam a terminal is observed through;
   liveness has one producer, the provider's probe, and nothing writes an

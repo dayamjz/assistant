@@ -125,7 +125,10 @@ func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, erro
 // a person's run of their own branch among them, and it can name more than
 // one task, as the snapshots can: a task naming the run and another reading
 // it by the branch, or two tasks whose latest attempts began at the same
-// instant.
+// instant. internal/service reads it to decide whether a run is a
+// housekeeping pass's (PRD section 6), so a run of a branch a retired pass
+// used, started after another task's attempt took the branch, is that
+// task's and not the pass's.
 func (s *Store) TasksOfRun(ctx context.Context, run Run) ([]Task, error) {
 	var out []Task
 	err := s.snapshotTx(ctx, func(q querier) error {
