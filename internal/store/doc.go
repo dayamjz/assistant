@@ -411,7 +411,11 @@
 // at the record of an attempt's session and at the shape transition that
 // would promote the pass (ErrPassRetired), which with the retirement's
 // session anchor records no session for an attempt of a retired pass after
-// its retirement.
+// its retirement. Migration 65 marks the retirement hold on the hold row:
+// OfferRetirementHold registers it, fenced by the loop's incarnation, in
+// the transaction that reads the pass again and finds it open and still,
+// and every attempt claim refuses a pass with one open (ErrPassHeld), so
+// the offer and a claim have exactly one loser in either order.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain
