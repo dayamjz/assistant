@@ -615,3 +615,26 @@ func (e *SeenRecordError) Error() string {
 
 // Unwrap makes the error match its Reason.
 func (e *SeenRecordError) Unwrap() error { return e.Reason }
+
+// ErrPassOpen is the class every *PassOpenError belongs to: PRD section 6's
+// "a repository has at most one open pass", refused by CreateTask for a
+// housekeeping pass of a repository that already has one open.
+var ErrPassOpen = errors.New("store: the repository already has an open housekeeping pass")
+
+// PassOpenError is CreateTask's refusal of a second open housekeeping pass,
+// decided in the transaction that would have inserted it, and it names the
+// pass that is open.
+type PassOpenError struct {
+	// Repository is the repository both passes are of.
+	Repository string
+	// Pass is the open pass.
+	Pass string
+}
+
+// Error names the repository and its open pass.
+func (e *PassOpenError) Error() string {
+	return fmt.Sprintf("store: housekeeping pass %s of repository %s is still open, so no second pass is created", e.Pass, e.Repository)
+}
+
+// Unwrap makes every *PassOpenError match ErrPassOpen.
+func (e *PassOpenError) Unwrap() error { return ErrPassOpen }

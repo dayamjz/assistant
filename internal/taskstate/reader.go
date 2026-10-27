@@ -148,3 +148,13 @@ func InputsOf(snap store.TaskSnapshot) Inputs {
 		LocalLanding: snap.LocalLanding, ReportStoredAt: snap.ReportStoredAt, Relay: snap.Relay, Process: Unobserved,
 	}
 }
+
+// Delivered reports whether a snapshot's records put the task in the
+// terminal tier, Landed or Complete. That tier is decided from records alone
+// and outranks every live input, so it is answered here without a probe: it
+// is what internal/store's one-open-pass rule and a pass's retirement are
+// handed, so neither states the tier a second time (P14).
+func Delivered(snap store.TaskSnapshot) bool {
+	r := Resolve(InputsOf(snap))
+	return r.Source == SourceRecord && (r.State == Landed || r.State == Complete)
+}

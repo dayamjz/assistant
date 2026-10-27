@@ -25,6 +25,12 @@ paths: ["internal/store/**"]
   `surfaced_at` in the same transaction. `untaskedShape` serves the second
   and third shapes' offer, handout and acknowledgement; `DrainAll` and
   `AcknowledgeAll` take every shape in one transaction.
+- housekeepingMigration (63) is PRD section 6's housekeeping mark: the task
+  row's `housekeeping` mark (written once at intake; only a marked
+  investigation of a repository carries the `housekeeping` role).
+  `CreateTask` decides one open pass per repository in its own transaction
+  with the record tier passed in as `Disposition.Delivered`; `PassOpen` is
+  the one statement of "open".
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
