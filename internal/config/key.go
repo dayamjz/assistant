@@ -443,6 +443,24 @@ const (
 	// Nothing in this build reads it, and internal/service refuses a home
 	// whose file sets it (its unhonored.go).
 	KeyRemoteDisconnectGrace Key = "remote_disconnect_grace"
+	// KeyHousekeepingPaths is "housekeeping.paths": the path patterns naming
+	// a repository's agent context, the files a housekeeping pass keeps true
+	// and the only ones it may change, PRD section 6's housekeeping. It is
+	// trusted-only, because a branch that could widen the list could let a
+	// pass edit anything. A repository's value replaces the default list, and
+	// an empty list turns housekeeping off for that repository.
+	KeyHousekeepingPaths Key = "housekeeping.paths"
+	// KeyHousekeepingInterval is "housekeeping.interval": how long after one
+	// housekeeping pass of a repository was created the next may fall due,
+	// on the terms PRD section 6's housekeeping gives. Zero, the default,
+	// makes no pass due anywhere, and does not stop the coordinator creating
+	// a pass when asked for one. It is global-only, because it decides when
+	// the program asks for agent work to start with the operator's
+	// credentials, so a repository file naming it is refused at parse time
+	// (P7). A value that is not zero lies between MinHousekeepingInterval and
+	// MaxHousekeepingInterval, refused rather than clamped outside them. It
+	// is not a loop bound: it stops nothing and parks nothing.
+	KeyHousekeepingInterval Key = "housekeeping.interval"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -593,6 +611,10 @@ var specs = []spec{
 		func(c *Config, v any) { c.PlacementArch = cloneSlice(v.([]string)) }},
 	{KeyRemoteDisconnectGrace, TrustGlobal, DefaultRemoteDisconnectGrace, decodeRemoteDisconnectGrace,
 		func(c *Config, v any) { c.RemoteDisconnectGrace = v.(time.Duration) }},
+	{KeyHousekeepingPaths, TrustTrusted, defaultHousekeepingPaths, decodeHousekeepingPaths,
+		func(c *Config, v any) { c.HousekeepingPaths = cloneSlice(v.(PatternSet)) }},
+	{KeyHousekeepingInterval, TrustGlobal, DefaultHousekeepingInterval, decodeHousekeepingInterval,
+		func(c *Config, v any) { c.HousekeepingInterval = v.(time.Duration) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key
