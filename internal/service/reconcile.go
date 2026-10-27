@@ -429,6 +429,7 @@ func (s *Service) relaunchAtStart(ctx context.Context, id string) {
 // the launch. The outcome goes to the log on dispatchDue's terms.
 func (s *Service) launchInBackground(d dispatched) {
 	if !s.startWork() {
+		d.settleSlot()
 		s.log.Printf("task %s attempt %d was claimed and not launched because this service is giving up the home; "+
 			"the next start finds the attempt with no session and relaunches", d.id, d.attempt)
 		return

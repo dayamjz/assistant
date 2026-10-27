@@ -42,6 +42,19 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 // with role, so a launch resolves that role rather than the worker role.
 func newDispatchSubjectAs(t *testing.T, role string) *dispatchSubject {
 	t.Helper()
+	return newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Branch: store.Known("task/one"), Role: role,
+		}, store.Disposition{}
+	})
+}
+
+// newDispatchSubjectOf is newDispatchSubject over the task record recorded
+// returns for the identifier and copy path it is handed, with the
+// disposition it returns, in place of the delivery task.
+func newDispatchSubjectOf(t *testing.T, recorded func(id, copyPath string) (store.Task, store.Disposition)) *dispatchSubject {
+	t.Helper()
 	ctx := t.Context()
 	h, err := home.Open(t.TempDir())
 	if err != nil {
@@ -56,7 +69,7 @@ func newDispatchSubjectAs(t *testing.T, role string) *dispatchSubject {
 		t.Fatalf("opening the store: %v", err)
 	}
 	t.Cleanup(func() { _ = records.Close() })
-	id, copyPath := plantLaunchableAs(t, h, records, role)
+	id, copyPath := plantLaunchableOf(t, h, records, recorded)
 	log, err := h.OpenLog(0)
 	if err != nil {
 		t.Fatalf("opening the log: %v", err)
@@ -81,13 +94,27 @@ func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copy
 // plantLaunchableAs is plantLaunchable with the task recorded under role.
 func plantLaunchableAs(t *testing.T, h *home.Home, records *store.Store, role string) (id, copyPath string) {
 	t.Helper()
+	return plantLaunchableOf(t, h, records, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Branch: store.Known("task/one"), Role: role,
+		}, store.Disposition{}
+	})
+}
+
+// plantLaunchableOf is plantLaunchable with the task record recorded
+// returns for the identifier and copy path it is handed, recorded with the
+// disposition it returns.
+func plantLaunchableOf(t *testing.T, h *home.Home, records *store.Store,
+	recorded func(id, copyPath string) (store.Task, store.Disposition)) (id, copyPath string) {
+	t.Helper()
 	ctx := t.Context()
 	primary, upstream, _ := heldSubject(t)
 	for _, dir := range []string{primary, upstream} {
 		heldGit(t, dir, "config", "gc.auto", "0")
 		heldGit(t, dir, "config", "maintenance.auto", "false")
 	}
-	repository, err := records.UpsertRepository(ctx, store.Repository{
+	_, err := records.UpsertRepository(ctx, store.Repository{
 		ID: "subject", WorkingPath: primary, UpstreamURL: upstream, DefaultBranch: "main",
 	})
 	if err != nil {
@@ -109,10 +136,8 @@ func plantLaunchableAs(t *testing.T, h *home.Home, records *store.Store, role st
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.CreateTask(ctx, store.Task{
-		ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: copyPath,
-		RepositoryID: store.Known(repository.ID), Branch: store.Known("task/one"), Role: role,
-	}, store.Disposition{}); err != nil {
+	task, disposition := recorded(id, copyPath)
+	if _, err := records.CreateTask(ctx, task, disposition); err != nil {
 		t.Fatalf("recording the task: %v", err)
 	}
 	instructions, err := h.TaskInstructions(id)
@@ -577,9 +602,12 @@ func dispatchReadRefs(t *testing.T, subject *dispatchSubject) []vcs.Ref {
 	return refs
 }
 
-// A dispatch that reaches proven ends with the proof in the service's slot
-// for the task and nowhere else, and the dispatch itself launches nothing:
-// the launch is dispatchDue's next step over what the dispatch returned, and
+// A dispatch that reaches proven ends with the service's slot for the task
+// taken and still unsettled, and the proof in that slot and nowhere else
+// once the launch settles it (dispatched.settle), so the slot is held
+// against a stop, a relaunch or a retirement from the claim until the
+// launch's record is settled; the dispatch itself launches nothing: the
+// launch is dispatchDue's next step over what the dispatch returned, and
 // launch_internal_test.go drives it. A second dispatch of the same task
 // through the slot is refused there, so one service begins one attempt per
 // task it proved, and the slot is this service's memory: a service that
@@ -601,9 +629,24 @@ func TestADispatchEndsWithTheProofInTheServicesSlot(t *testing.T) {
 	if d.id != subject.task || d.attempt != 1 || d.anchor == 0 || d.instructions == "" {
 		t.Fatalf("the dispatch returned %+v, want the task, attempt 1, the anchor and the instructions file", d)
 	}
+	if held, ok := subject.service.isolationOf(subject.task); !ok || held.Proven() {
+		t.Fatalf("after the dispatch the slot holds %+v, %v; want it taken and not yet settled with the proof", held, ok)
+	}
+	if _, err := subject.service.claimSteer(subject.task); !errors.Is(err, errSteerInFlight) {
+		t.Fatalf("a stop's claim on the slot before the launch settled it = %v, want %v", err, errSteerInFlight)
+	}
+	if d.settle == nil {
+		t.Fatal("the dispatch returned no way for the launch to settle the slot")
+	}
+	d.settleSlot()
 	held, ok := subject.service.isolationOf(subject.task)
 	if !ok || !held.Proven() || held.Copy != d.proof.Copy || held.Branch != "task/one" {
-		t.Fatalf("the slot holds %+v, %v; want the proof the dispatch returned", held, ok)
+		t.Fatalf("the settled slot holds %+v, %v; want the proof the dispatch returned", held, ok)
+	}
+	if release, err := subject.service.claimSteer(subject.task); err != nil {
+		t.Fatalf("a stop's claim on the settled slot = %v, want it taken", err)
+	} else {
+		release()
 	}
 	if _, err := subject.service.dispatchTask(ctx, subject.task); err == nil {
 		t.Fatal("a second dispatch of a task this service proved began another attempt")

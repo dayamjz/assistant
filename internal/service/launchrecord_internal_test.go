@@ -35,7 +35,13 @@ type recordWindow struct {
 // the test's cleanup also calls, ends whatever hold a seam is in.
 func newRecordWindow(t *testing.T) *recordWindow {
 	t.Helper()
-	sub := newLaunchSubject(t, workerStandIn(t))
+	return recordWindowOver(t, newLaunchSubject(t, workerStandIn(t)))
+}
+
+// recordWindowOver is newRecordWindow over a launch subject the caller
+// built, whose task it dispatches.
+func recordWindowOver(t *testing.T, sub *launchSubject) *recordWindow {
+	t.Helper()
 	w := &recordWindow{
 		launchSubject: sub,
 		terminals:     heldTerminals{sub.service},
