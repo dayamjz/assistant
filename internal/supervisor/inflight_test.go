@@ -68,7 +68,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	cases := map[string]struct {
 		states         map[string]taskstate.State
 		unacknowledged map[string]int
-		stallHeld      map[string]bool
+		regard         map[string]supervisor.Regard
 		domainWakes    int
 		want           supervisor.InFlight
 	}{
@@ -85,11 +85,11 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		},
 		"a held task with an open stall hold and no queued wake": {
 			states: map[string]taskstate.State{"a": taskstate.Held}, unacknowledged: map[string]int{"a": 0},
-			stallHeld: map[string]bool{"a": true}, want: supervisor.InFlightSome,
+			regard: map[string]supervisor.Regard{"a": supervisor.Regardless}, want: supervisor.InFlightSome,
 		},
 		"a stall hold on another task leaves a held one out": {
-			states:    map[string]taskstate.State{"a": taskstate.Held, "b": taskstate.Landed},
-			stallHeld: map[string]bool{"b": false}, want: supervisor.InFlightNone,
+			states: map[string]taskstate.State{"a": taskstate.Held, "b": taskstate.Landed},
+			regard: map[string]supervisor.Regard{"b": supervisor.ByState}, want: supervisor.InFlightNone,
 		},
 		"a failed task whose wake was acknowledged": {
 			states: map[string]taskstate.State{"a": taskstate.Failed}, unacknowledged: map[string]int{"a": 0},
@@ -110,6 +110,18 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		"an unknown state": {
 			states: map[string]taskstate.State{"a": taskstate.Unknown}, want: supervisor.InFlightSome,
 		},
+		"an unknown state whose state does not count": {
+			states: map[string]taskstate.State{"a": taskstate.Unknown}, regard: map[string]supervisor.Regard{"a": supervisor.QueueOnly},
+			want: supervisor.InFlightNone,
+		},
+		"an unknown state whose state does not count, with a queued wake": {
+			states: map[string]taskstate.State{"a": taskstate.Unknown}, unacknowledged: map[string]int{"a": 1},
+			regard: map[string]supervisor.Regard{"a": supervisor.QueueOnly}, want: supervisor.InFlightSome,
+		},
+		"a regard outside the three beside a running task": {
+			states: map[string]taskstate.State{"a": taskstate.Running, "b": taskstate.Held},
+			regard: map[string]supervisor.Regard{"b": 9}, want: supervisor.InFlightUnknown,
+		},
 		"a state outside the table beside a running one": {
 			states: map[string]taskstate.State{"a": taskstate.Running, "b": "merged"}, want: supervisor.InFlightUnknown,
 		},
@@ -117,7 +129,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := supervisor.InFlightOf(c.states, c.unacknowledged, c.stallHeld, c.domainWakes); got != c.want {
+			if got := supervisor.InFlightOf(c.states, c.unacknowledged, c.regard, c.domainWakes); got != c.want {
 				t.Fatalf("InFlightOf = %s, want %s", got, c.want)
 			}
 		})
@@ -125,33 +137,38 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 }
 
 // TaskInFlight is the per-task rule InFlightOf applies over a fleet: for
-// every state the table decides, a task is in flight on its state alone,
-// with a queued wake, or with an open stall hold, and a lone task's fleet
-// reading agrees with it in every case, so the catch-up read and the guard
-// cannot count different work. A state the table does not decide is
-// undecided either way.
+// every state the table decides, a task is in flight with a queued wake, or
+// on its state as its regard says the state counts: ByState as the table
+// decides, Regardless always, QueueOnly never. A lone task's fleet reading
+// agrees with it in every case, so the catch-up read and the guard cannot
+// count different work. A state the table does not decide, and a regard
+// outside the three, are undecided either way.
 func TestTaskInFlightIsTheRuleInFlightOfApplies(t *testing.T) {
 	for _, state := range taskstate.States() {
 		for _, queued := range []int{0, 1} {
-			for _, stallHeld := range []bool{false, true} {
-				inFlight, decided := supervisor.TaskInFlight(state, queued, stallHeld)
+			for _, regard := range []supervisor.Regard{supervisor.ByState, supervisor.Regardless, supervisor.QueueOnly} {
+				inFlight, decided := supervisor.TaskInFlight(state, queued, regard)
 				alone, _ := supervisor.StateInFlight(state)
 				if !decided {
-					t.Fatalf("%s is not decided", state)
+					t.Fatalf("%s regarded %d is not decided", state, regard)
 				}
-				if want := alone || queued > 0 || stallHeld; inFlight != want {
-					t.Errorf("%s with %d queued, stall held %v: in flight %v, want %v", state, queued, stallHeld, inFlight, want)
+				byState := map[supervisor.Regard]bool{supervisor.ByState: alone, supervisor.Regardless: true, supervisor.QueueOnly: false}[regard]
+				if want := byState || queued > 0; inFlight != want {
+					t.Errorf("%s with %d queued, regarded %d: in flight %v, want %v", state, queued, regard, inFlight, want)
 				}
 				fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued},
-					map[string]bool{"t": stallHeld}, 0)
+					map[string]supervisor.Regard{"t": regard}, 0)
 				if (fleet == supervisor.InFlightSome) != inFlight {
-					t.Errorf("%s with %d queued, stall held %v: the fleet reads %v and the task in flight %v",
-						state, queued, stallHeld, fleet, inFlight)
+					t.Errorf("%s with %d queued, regarded %d: the fleet reads %v and the task in flight %v",
+						state, queued, regard, fleet, inFlight)
 				}
 			}
 		}
+		if _, decided := supervisor.TaskInFlight(state, 1, supervisor.QueueOnly+1); decided {
+			t.Errorf("%s with a regard outside the three is decided", state)
+		}
 	}
-	if _, decided := supervisor.TaskInFlight("undecided", 1, false); decided {
+	if _, decided := supervisor.TaskInFlight("undecided", 1, supervisor.ByState); decided {
 		t.Error("a state the table has no row for is decided")
 	}
 }

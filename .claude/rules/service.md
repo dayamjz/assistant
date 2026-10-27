@@ -137,7 +137,9 @@ paths: ["internal/service/**"]
 - Housekeeping: `housekeeping.go` is PRD section 6's housekeeping as the
   program's part of it (it creates no pass): the trusted scope a pass's
   intake reads, the due check off the loop's goroutine, once per interval
-  per repository, which raises the housekeeping-due wake, and `passRun`,
+  per repository, which raises the housekeeping-due wake, the open pass's
+  wake each interval it stays open (a pass something moves is in flight
+  whatever it resolves, `supervisor.PassMoves`), and `passRun`,
   which marks a run the records attribute to a pass (`store.TaskOfRun`)
   for the review's scope ask. Its header owns the residual gaps.
 - Terminals: every task reader is built through `reader`, probing through
