@@ -452,16 +452,20 @@ func (s *Service) releaseLanding(id int64) {
 
 // landedRunSince finds the run a claimed landing of the entry already
 // started: a run of the landing's branch at its commit recorded at or after
-// the claim that carries its submitted reference in the gate at that commit
-// and has started validation, a checkpoint recorded, which is how a landing
-// stopped between its run and its record is completed without a second
-// run. A run with no reference or no checkpoint, a create stopped before
-// its reference was written or a run ended before it executed, is not that
-// run: nothing of the work reached validation through it, so the retry
-// starts another, which supersedes it. A reference or a checkpoint that
-// cannot be read is an error and not that absence (the final full review
-// of feddd14): the completion fails, the claim stands, and the next call
-// or start looks again.
+// the claim that carries its submitted reference in the gate at that commit,
+// has started validation, a checkpoint recorded, and is live (pending,
+// running or held) or passed, which is how a landing stopped between its
+// run and its record is completed without a second run. A run with no
+// reference or no checkpoint, a create stopped before its reference was
+// written or a run ended before it executed, is not that run, and neither
+// is one that failed or was terminated after it checkpointed (round 45:
+// naming it closed the entry and lifted the dispatch hold with nothing
+// validating the work, against P15): nothing of the work reaches the gate
+// through it, so the retry starts another, which supersedes it. A
+// reference or a checkpoint that cannot be read is an error and not that
+// absence (the final full review of feddd14), and so is a run status this
+// build does not recognize: the completion fails, the claim stands, and
+// the next call or start looks again.
 func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan landing, bare *vcs.Repository) (string, error) {
 	claimed, ok := entry.LandingClaimedAt.Get()
 	if !ok {
@@ -491,7 +495,14 @@ func (s *Service) landedRunSince(ctx context.Context, entry store.KeptWork, plan
 		} else if err != nil {
 			return "", err
 		}
-		return r.ID, nil
+		switch r.Status {
+		case store.RunPending, store.RunRunning, store.RunHeld, store.RunPassed:
+			return r.ID, nil
+		case store.RunFailed, store.RunTerminated:
+			continue
+		default:
+			return "", fmt.Errorf("service: run %s of %s is %q, a status this build does not recognize, so the landing of kept work entry %d is not completed by it", r.ID, plan.repository.ID, r.Status, entry.ID)
+		}
 	}
 	return "", nil
 }

@@ -342,6 +342,102 @@ func TestALandingWhoseRunEndedBeforeItExecutedIsStartedAgain(t *testing.T) {
 	})
 }
 
+// A landing whose run checkpointed and was then terminated is started
+// again, not named: the entry is claimed for a landing, its run starts and
+// records a checkpoint, the service stops between the run and the record,
+// and the run is terminated before the next start, with its submitted
+// reference still naming the copy's commit. The next start names a run
+// that is live or passed, never one that ended without passing, so it
+// starts another, which executes, and names it (round 45: the completion
+// named any run with a checkpoint and the reference, so a cancelled run
+// lifted the dispatch hold with nothing validating the work, P15).
+func TestALandingWhoseRunWasTerminatedAfterItCheckpointedIsStartedAgain(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	submitted := git(t, subject, "rev-parse", "HEAD")
+	entry := keptEntryOf(t, h, subject)
+
+	stopped := errors.New("the service stopped between the landing's run and its record")
+	var mu sync.Mutex
+	var started string
+	seam := func(run string) error {
+		mu.Lock()
+		started = run
+		mu.Unlock()
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := recordsOf(t, h).LatestGraphCheckpoint(t.Context(), run); err == nil {
+				return stopped
+			}
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("run %s recorded no checkpoint: %w", run, stopped)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	withServiceOptions(t, service.WithLandingInterruptForTest(t, options(t, h), seam), func(under serviceUnderTest) {
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptLand)}, &out)
+		if err == nil || !strings.Contains(err.Error(), "stopped between") || strings.Contains(err.Error(), "no checkpoint") {
+			t.Fatalf("the landing past the stopped seam = %+v, %v; want the stop, with its run started", out, err)
+		}
+	})
+	mu.Lock()
+	terminated := started
+	mu.Unlock()
+	if terminated == "" {
+		t.Fatal("the landing reached no seam")
+	}
+
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := records.Run(t.Context(), terminated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := records.TransitionRun(t.Context(), terminated, []store.RunStatus{run.Status}, store.RunTerminated); err != nil {
+		t.Fatalf("terminating run %s from %s: %v", terminated, run.Status, err)
+	}
+	if _, err := records.LatestGraphCheckpoint(t.Context(), terminated); err != nil {
+		t.Fatalf("the terminated run keeps no checkpoint: %v", err)
+	}
+	_ = records.Close()
+	gate := gateRepositoryOf(t, h, repository.WorkingPath)
+	if at := git(t, gate, "rev-parse", "refs/assistant/runs/"+terminated); at != submitted {
+		t.Fatalf("the terminated run's reference names %s, want the copy's commit %s", at, submitted)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			got, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+			if run, ok := got.LandedRun.Get(); err == nil && ok {
+				if run == terminated {
+					t.Fatalf("the completed landing names %s, the run terminated after it checkpointed", run)
+				}
+				landed, err := recordsOf(t, h).Run(t.Context(), run)
+				if err != nil || landed.Branch != "work" || landed.SubmittedHead != submitted ||
+					landed.Status == store.RunTerminated || landed.Status == store.RunFailed {
+					t.Fatalf("the completed landing names run %+v, %v; want a run of work at %s that is live or passed", landed, err, submitted)
+				}
+				return
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the next start did not complete the landing; the log reads:\n%s", readServiceLog(t, h))
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+}
+
 // keepTaskCopy asks the real cleanup decision of the task's copy, with its
 // terminal dead, and records what it refuses as kept work through the real
 // Keep, returning the entry Keep wrote or found for the copy as it stands.
