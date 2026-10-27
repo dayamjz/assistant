@@ -125,23 +125,25 @@ func TestAListedNoticeReadsAsItsKindsRow(t *testing.T) {
 // A drain's phrase gives the acknowledge command for exactly the rows it
 // handed out, each shape named as the acknowledge command line reads it: a
 // task wake by its number alone, whatever its kind, a domain wake with
-// DomainWakePrefix and a kept-work wake with KeptWorkWakePrefix. Three rows
-// numbered alike in the three shapes are three names, so a person running
+// DomainWakePrefix, a kept-work wake with KeptWorkWakePrefix and a
+// housekeeping wake with HousekeepingWakePrefix. Rows numbered alike in the
+// four shapes are four names, so a person running
 // the command closes each row and no other, and a drain of other rows names
 // other rows.
 func TestADrainsPhraseNamesEachRowAsTheAcknowledgeCommandTakesIt(t *testing.T) {
 	drain := machine.Wakes{
-		Wakes:         []store.Wake{{ID: 4, Kind: string(supervisor.KindKeptWork)}, {ID: 9}},
-		DomainWakes:   []store.DomainWake{{ID: 4}},
-		KeptWorkWakes: []store.KeptWorkWake{{ID: 4}},
+		Wakes:             []store.Wake{{ID: 4, Kind: string(supervisor.KindKeptWork)}, {ID: 9}},
+		DomainWakes:       []store.DomainWake{{ID: 4}},
+		KeptWorkWakes:     []store.KeptWorkWake{{ID: 4}},
+		HousekeepingWakes: []store.HousekeepingWake{{ID: 4}},
 	}
-	want := []string{"4", "9", machine.DomainWakePrefix + "4", machine.KeptWorkWakePrefix + "4"}
+	want := []string{"4", "9", machine.DomainWakePrefix + "4", machine.KeptWorkWakePrefix + "4", machine.HousekeepingWakePrefix + "4"}
 	if got := machine.AcknowledgeNames(drain); !slices.Equal(got, want) {
 		t.Fatalf("the drain is named %v, want %v", got, want)
 	}
 	phrase := machine.WakesPhrase(drain)
 	vocabtest.Assert(t, phrase.String())
-	if command := "assistant coordinator acknowledge 4 9 d4 k4,"; !strings.Contains(phrase.Decision, command) {
+	if command := "assistant coordinator acknowledge 4 9 d4 k4 h4,"; !strings.Contains(phrase.Decision, command) {
 		t.Fatalf("the drain's phrase reads %q, which does not give %q", phrase.Decision, command)
 	}
 	other := machine.WakesPhrase(machine.Wakes{KeptWorkWakes: []store.KeptWorkWake{{ID: 5}}})

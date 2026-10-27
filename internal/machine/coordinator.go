@@ -183,7 +183,7 @@ func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnde
 // it is are the structured rendering's, because a kind is a word the
 // derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
-	n := len(w.Wakes) + len(w.DomainWakes) + len(w.KeptWorkWakes)
+	n := len(w.Wakes) + len(w.DomainWakes) + len(w.KeptWorkWakes) + len(w.HousekeepingWakes)
 	if n == 0 {
 		return phraseNoNotices
 	}
@@ -199,7 +199,7 @@ func WakesPhrase(w Wakes) Phrase {
 // the phrase says so, because the drain it replaced for a person took what
 // it showed.
 func QueuedWakesPhrase(q QueuedWakes) Phrase {
-	n := len(q.Wakes) + len(q.DomainWakes) + len(q.KeptWorkWakes)
+	n := len(q.Wakes) + len(q.DomainWakes) + len(q.KeptWorkWakes) + len(q.HousekeepingWakes)
 	if n == 0 {
 		return phraseNoNotices
 	}
@@ -365,7 +365,7 @@ func standingOf(handedOut bool) string {
 // answered, so every answer names at least one.
 func AcknowledgedPhrase(a Acknowledged) Phrase {
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are recorded as handled.", len(a.Wakes)+len(a.DomainWakes)+len(a.KeptWorkWakes)),
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are recorded as handled.", len(a.Wakes)+len(a.DomainWakes)+len(a.KeptWorkWakes)+len(a.HousekeepingWakes)),
 		Consequence: "They are not handed out again.",
 		Decision:    "Nothing to decide.",
 	}

@@ -641,6 +641,11 @@ type AcknowledgeRequest struct {
 	// its. Acknowledging one closes the wake and answers nothing about the
 	// entry.
 	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the identifiers of the queued rows about a
+	// repository's housekeeping the caller acted on, numbered apart from
+	// every other shape, on the same terms. A subordinate coordinator may
+	// name none. Acknowledging one creates nothing and answers nothing.
+	HousekeepingWakes []int64 `json:"housekeeping_wakes,omitempty"`
 }
 
 // The prefixes a wake of the queue's second and third shapes is named with
@@ -648,21 +653,25 @@ type AcknowledgeRequest struct {
 // rows apart from the others, so a task wake, a domain wake and a kept-work
 // wake can share a number: a bare number is always a task wake, one with
 // DomainWakePrefix always a domain wake, and one with KeptWorkWakePrefix
-// always a wake about a kept work entry no task names. A task's own wake
-// about work kept in its copy is a task wake and takes no prefix.
+// always a wake about a kept work entry no task names, and one with
+// HousekeepingWakePrefix always a housekeeping wake about a repository. A
+// task's own wake about work kept in its copy is a task wake and takes no
+// prefix.
 // AcknowledgeNames writes them and internal/cli's acknowledge command reads
 // them, so the two cannot drift.
 const (
-	DomainWakePrefix   = "d"
-	KeptWorkWakePrefix = "k"
+	DomainWakePrefix       = "d"
+	KeptWorkWakePrefix     = "k"
+	HousekeepingWakePrefix = "h"
 )
 
 // AcknowledgeNames is every row of the drain w, named as the acknowledge
 // command line takes it: the task wakes by their numbers, then the domain
-// wakes and the kept-work wakes with their shape's prefix, each shape
+// wakes, the kept-work wakes and the housekeeping wakes with their shape's
+// prefix, each shape
 // oldest first, as w holds them.
 func AcknowledgeNames(w Wakes) []string {
-	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes))
+	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes)+len(w.HousekeepingWakes))
 	for _, row := range w.Wakes {
 		names = append(names, strconv.FormatInt(row.ID, 10))
 	}
@@ -671,6 +680,9 @@ func AcknowledgeNames(w Wakes) []string {
 	}
 	for _, row := range w.KeptWorkWakes {
 		names = append(names, KeptWorkWakePrefix+strconv.FormatInt(row.ID, 10))
+	}
+	for _, row := range w.HousekeepingWakes {
+		names = append(names, HousekeepingWakePrefix+strconv.FormatInt(row.ID, 10))
 	}
 	return names
 }
