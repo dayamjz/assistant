@@ -502,8 +502,18 @@ type TaskCreateRequest struct {
 	Delivery string `json:"delivery,omitempty"`
 	// Role is the configured role the worker runs under. Empty means the
 	// worker role. An unknown role, and review or fix, are refused and no
-	// task is created.
+	// task is created. The housekeeping role is the program's, and so
+	// refused here too.
 	Role string `json:"role,omitempty"`
+	// Housekeeping is PRD section 9's housekeeping mark: the request is
+	// for a housekeeping pass of Repository, an investigation under the
+	// housekeeping role, with Instructions as the coordinator's notes after
+	// the program's part, which may then be empty. A marked request naming
+	// a role, a shape other than investigation, a branch or a posture is
+	// refused, and so is one for a repository whose trusted
+	// housekeeping.paths is empty or that has a pass open. A subordinate
+	// coordinator is refused the mark.
+	Housekeeping bool `json:"housekeeping,omitempty"`
 }
 
 // TaskPromoteRequest promotes an investigation task to delivery in place.

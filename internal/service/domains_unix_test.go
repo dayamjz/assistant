@@ -327,6 +327,9 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 			{ipc.MethodDomainDelegate, machine.DomainDelegateRequest{Domain: "beta", Delivery: "gated", Instructions: "x"}},
 			{ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: "alpha"}},
 			{ipc.MethodTaskInterrupt, machine.TaskRequest{Task: own}},
+			// Creating a housekeeping pass, which the housekeeping-due wake
+			// in no domain asks the first coordinator for.
+			{ipc.MethodTaskCreate, machine.TaskCreateRequest{Project: "alpha", Repository: w.repository.ID, Housekeeping: true}},
 		}
 		for _, r := range refusals {
 			if _, code := callAs(t, d.as, r.method, r.params); code != ipc.CodeSubordinate {

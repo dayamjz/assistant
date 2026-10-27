@@ -595,8 +595,9 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // Residual gaps: for a task with no recorded delivery intent, the
 // instructions file is a file under the home that the worker's own user can
 // write, so what it holds when the push arrives is as trustworthy as that
-// directory is against the worker. A promoted task's intent is read from the
-// task record instead, which no surface a worker is admitted to writes; the
+// directory is against the worker; a promoted housekeeping pass reads that
+// file too, for its instructions, so the same is true of that part of its
+// intent. Any other promoted task's intent is read from the task record instead, which no surface a worker is admitted to writes; the
 // database is still a file under the same home, so that is not a boundary
 // against a worker that writes the home's files directly. The text is the
 // acceptance criteria of the run the push starts. A task's intent names what
@@ -625,7 +626,11 @@ func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subjec
 // task's body is the delivery intent its promotion recorded on the task row,
 // store.Task.DeliveryIntent, and the instructions file is not read: what the
 // delivery is to do is that record, not the investigation the coordinator
-// wrote at intake. Every other task's body is its instructions as
+// wrote at intake. A promoted housekeeping pass is the exception: PRD section
+// 6 makes both parts of its instructions the intent of the run its push
+// starts, so its body is the delivery intent followed by its instructions as
+// intakeInstructions reads them, the program's part and the coordinator's
+// notes. Every other task's body is its instructions as
 // intakeInstructions reads them, which is also what a task promoted before
 // the store recorded a delivery intent gets, since it has none to read.
 // Instructions that cannot be read leave the project alone, which is logged;
@@ -634,25 +639,36 @@ func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subjec
 func (s *Service) taskIntent(task store.Task) string {
 	project := strings.TrimSpace(task.Project)
 	if delivery, ok := task.DeliveryIntent.Get(); ok {
-		return redact.New().Redact(strings.TrimSpace(project + "\n\n" + strings.TrimSpace(delivery)))
+		text := project + "\n\n" + strings.TrimSpace(delivery)
+		if task.Housekeeping {
+			// PRD section 6's housekeeping: both parts of a pass's
+			// instructions, the program's and the coordinator's notes,
+			// stay the intent after promotion, beside its delivery intent.
+			if instructions := s.intakeInstructionsOf(task); instructions != "" {
+				text += "\n\n" + instructions
+			}
+		}
+		return redact.New().Redact(strings.TrimSpace(text))
 	}
-	body := ""
+	text := project
+	if body := s.intakeInstructionsOf(task); body != "" {
+		text = project + "\n\n" + body
+	}
+	return redact.New().Redact(strings.TrimSpace(text))
+}
+
+// intakeInstructionsOf is intakeInstructions of the task's instructions
+// file, or empty, logged, when the file cannot be read.
+func (s *Service) intakeInstructionsOf(task store.Task) string {
 	path, err := s.home.TaskInstructions(task.ID)
 	if err == nil {
 		var raw []byte
 		if raw, err = os.ReadFile(path); err == nil {
-			body = intakeInstructions(string(raw))
+			return intakeInstructions(string(raw))
 		}
 	}
-	if err != nil {
-		s.log.Printf("the instructions of task %s could not be read, so its run's intent is its project alone: %v",
-			task.ID, err)
-	}
-	text := project
-	if body != "" {
-		text = project + "\n\n" + body
-	}
-	return redact.New().Redact(strings.TrimSpace(text))
+	s.log.Printf("the instructions of task %s could not be read, so its run's intent carries none of them: %v", task.ID, err)
+	return ""
 }
 
 // intakeInstructions is the part of an instructions file the coordinator
