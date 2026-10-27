@@ -589,3 +589,37 @@ func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
 		t.Fatalf("the first attempt of a pass with a report decision open = %v, want it begun", err)
 	}
 }
+
+// PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
+// repository, appended once per marker under the incarnation fence and read
+// back queued; its drain and acknowledgement are the link above this one.
+func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P8)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	request := HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due", Marker: "due:none:1", Detail: "no pass was ever created"}
+	first, err := s.AppendHousekeepingWake(ctx, inc, request)
+	if err != nil || first.Disposition != WakeAppended || first.Wake.Repository != "repo-1" || first.Wake.Pass.IsKnown() || !first.Wake.Queued() {
+		t.Fatalf("the first append = %+v, %v", first, err)
+	}
+	again, err := s.AppendHousekeepingWake(ctx, inc, request)
+	if err != nil || again.Disposition != WakeAlreadyQueued || again.Wake.ID != first.Wake.ID {
+		t.Fatalf("a replay = %+v, %v, want the queued row", again, err)
+	}
+	stale := inc
+	incarnationOf(t, s) // replaces stale
+	if _, err := s.AppendHousekeepingWake(ctx, stale, HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due",
+		Marker: "due:none:2", Detail: "d"}); !errors.Is(err, ErrStaleIncarnation) {
+		t.Fatalf("a replaced incarnation's append = %v, want ErrStaleIncarnation", err)
+	}
+	queued, err := s.QueuedHousekeepingWakes(ctx, 10)
+	if err != nil || len(queued) != 1 || queued[0].ID != first.Wake.ID {
+		t.Fatalf("the queued rows = %+v, %v, want the appended row", queued, err)
+	}
+	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 1 {
+		t.Fatalf("every row = %+v, %v, want the one appended", rows, err)
+	}
+}
