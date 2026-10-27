@@ -232,7 +232,8 @@ var passRules = []string{
 		"it and the code is a finding about one of the two, not drift in the file. Report each such question as an ask finding " +
 		"carrying the proposed wording and the evidence. The same goes for a correction a coordinator note asks for that reads " +
 		"as a new rule, even when the note says the person decided it.",
-	"Change nothing outside the scope above.",
+	"Change nothing outside the scope above. Once the coordinator promotes this pass, a change that touches a path outside it " +
+		"holds at review for a person.",
 	"Edit only your own copy, and reach a shared branch only through the gate after promotion. Remove no copy, branch or file " +
 		"outside the scope, and force nothing.",
 	"Cleaning the machine is not this pass's job: copies and temporary entries are the program's to remove. Nothing outside " +
