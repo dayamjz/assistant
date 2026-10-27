@@ -16,7 +16,20 @@ paths: ["internal/tasks/**"]
   read fails rather than assuming one, and let a request tighten it and never
   loosen it (`*PostureError`); a floor (`Request.DeliveryFloor`, a carry
   on's) records the stricter of itself and the project's, decided in the
-  one read, and is never a refusal.
+  one read, and is never a refusal. A housekeeping pass is promoted gated whatever
+  the project declares, as a request for gated, because its scope is held at
+  the review of the run its push starts and a local task starts no run; the
+  project's posture is read for it as for any task, so an unreadable copy
+  refuses it too; a request for another posture on a pass is `ErrRequest`,
+  and a retired pass is refused in the flip (`store.ErrPassRetired`).
+- A housekeeping pass's intake is `housekeeping.go`: a marked create
+  records an investigation of the repository under the housekeeping role
+  with the program's part of the instructions (the trusted scope read
+  through `Deps.Housekeeping`, the base of the newest earlier pass,
+  `PassBase`, the open decisions earlier passes raised, and the rules)
+  before the coordinator's notes, refused with nothing recorded on an
+  empty or unreadable scope and, in the store's transaction, while a pass
+  of the repository is open.
 - A local task's cleanup proof is the content check against the working
   copy's default branch and nothing else.
 - The remote-branch and merged-pull-request proofs follow a commit the gate
@@ -54,6 +67,7 @@ paths: ["internal/tasks/**"]
   marks, and `Queue.Promote` asks for
   each entry its flip answers (`*KeptWorkUnheldError`). And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
+  refusals are a copy kept for its work; `kept_test.go` places every reason.
   refusals are a copy kept for its work; `kept_test.go` places every reason.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
   as this build takes it, the preview (removal on a confirmed discard is
