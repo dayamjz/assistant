@@ -435,3 +435,66 @@ func TestAListingSettlesBesideAnUnreadableProcessThatIsExiting(t *testing.T) {
 		t.Fatalf("process %d was not running once the listings returned (%v), so this shows nothing", sleeper.Process.Pid, err)
 	}
 }
+
+// argumentsEmptyOnce is a processTable that names one real running process,
+// pid, and passes every read of it through to the kernel but one: in the
+// first reading its command line reads as its executable with an empty
+// argument list and no error, which is what Linux's /proc read for a shell
+// in the window between its exec and the loader placing its arguments
+// (CI's ubuntu runner, run 40492934694, job 122151106251: the listing of
+// TestProcessesMatchingListsAProcessByItsArguments settled without the
+// shell it had just started). Every later reading is the kernel's.
+type argumentsEmptyOnce struct {
+	kernel
+	pid      int
+	readings int
+}
+
+// ids names pid alone, so how many readings the listing takes is decided
+// by that process and nothing else running beside the test.
+func (a *argumentsEmptyOnce) ids() ([]int, error) {
+	a.readings++
+	return []int{a.pid}, nil
+}
+
+func (a *argumentsEmptyOnce) commandLine(pid int) (string, []string, error) {
+	if pid == a.pid && a.readings == 1 {
+		executable, _, err := a.kernel.commandLine(pid)
+		return executable, []string{""}, err
+	}
+	return a.kernel.commandLine(pid)
+}
+
+// An argument list that reads empty is not a read made whole (P15): a real
+// running shell whose arguments read as an empty list in the first reading,
+// as /proc gives them between a process's exec and the loader placing them,
+// is read again and listed from the next reading with the arguments it was
+// started with. Before, the match refused the empty list, the shell was
+// read whole as refused, which no later reading revisits, and the listing
+// settled without it (#549's listing, found empty again on CI's ubuntu
+// runner, run 40492934694).
+func TestAProcessWhoseArgumentsReadEmptyIsReadAgain(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	token := fmt.Sprintf("empty once %d %d", os.Getpid(), time.Now().UnixNano())
+	shell := exec.Command("/bin/sh", "-c", "read line; exit 0", "sh", token)
+	in, err := shell.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shell.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = in.Close(); _ = shell.Process.Kill(); _ = shell.Wait() })
+	table := &argumentsEmptyOnce{pid: shell.Process.Pid}
+	listed, err := processesWhere(table, matching(func(args []string) bool { return slices.Contains(args, token) }))
+	if err != nil {
+		t.Fatalf("the listing beside the shell whose arguments read empty once: %v", err)
+	}
+	if len(listed) != 1 || listed[0].PID != shell.Process.Pid || !slices.Equal(listed[0].Args, shell.Args) {
+		t.Fatalf("the listing is %v after %d reading(s), want only process %d with arguments %q", listed, table.readings, shell.Process.Pid, shell.Args)
+	}
+	if table.readings < 2 {
+		t.Fatalf("the listing read the table %d time(s); want the reading that met the empty argument list unsettled", table.readings)
+	}
+}
