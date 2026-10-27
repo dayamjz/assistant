@@ -187,6 +187,7 @@ func Review(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyHead,
 			pipeline.KeyIntent,
 			pipeline.KeyIntentSupplied,
+			pipeline.KeyHousekeepingPass,
 			// The two a re-review is held to. PRD section 5 gives the round's
 			// verifier the previous findings and the fix summary as claims,
 			// and the schema admits a stage reading its own keys: it bounds
@@ -235,6 +236,17 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	// review nothing: a change the ignore patterns exclude whole is exactly
 	// the change that must not delete a judge file unseen.
 	judged := judgeEdits(deps.Config.JudgePaths, change.changes)
+	// A housekeeping pass's asks are read off the same unfiltered change
+	// and off what each of its commits touched, on housekeeping.go's terms,
+	// and added to every report too.
+	changes := change.changes
+	if facts.housekeeping && change.from != "" {
+		var listErr error
+		if changes, listErr = commitsChanges(ctx, repo, change.from, facts.head, change.changes); listErr != nil {
+			return pipeline.Output{}, listErr
+		}
+	}
+	outside := outsideHousekeeping(facts.housekeeping, deps.Config.HousekeepingPaths, changes)
 	// What the decision-model checks did is written on every report from here
 	// on too, as not having run until they do.
 	mode := deps.Config.DecisionModel
@@ -243,12 +255,12 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	if err != nil {
 		if errors.Is(err, vcs.ErrOutputTooLarge) {
 			return finish(tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
-				"from git in one piece: "+err.Error()+"."), judged, tooLarge), nil
+				"from git in one piece: "+err.Error()+"."), judged, outside, tooLarge), nil
 		}
 		return pipeline.Output{}, err
 	}
 	if len(change.touched) == 0 {
-		return finish(nothingToReview(change), judged, decisionChecks{Mode: string(mode),
+		return finish(nothingToReview(change), judged, outside, decisionChecks{Mode: string(mode),
 			Why: "the change left nothing to review, so the review did not reach the checks"}), nil
 	}
 
@@ -269,7 +281,7 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	if len(prompt) > agents.MaxPromptBytes {
 		return finish(tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
 			strconv.Itoa(len(prompt))+" bytes, and one invocation may carry "+
-			strconv.Itoa(agents.MaxPromptBytes)+"."), judged, tooLarge), nil
+			strconv.Itoa(agents.MaxPromptBytes)+"."), judged, outside, tooLarge), nil
 	}
 
 	result, err := deps.Agent.Run(ctx, agents.PurposeReview, agents.Invocation{
@@ -283,7 +295,7 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 		if err != nil {
 			return out, err
 		}
-		return finish(out, judged, decisionChecks{Mode: string(mode), Why: "the reviewer returned " +
+		return finish(out, judged, outside, decisionChecks{Mode: string(mode), Why: "the reviewer returned " +
 			"no review this build could use, so the review did not reach the checks"}), nil
 	}
 
@@ -326,15 +338,18 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 		checks.Why = "the decision-model mode is " + string(mode) + ", so nothing was sent"
 	}
 	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
-	return finish(pipeline.Output{Report: report}, judged, checks), nil
+	return finish(pipeline.Output{Report: report}, judged, outside, checks), nil
 }
 
-// finish adds the judge lens's findings to a report this stage built and
+// finish adds the judge lens's findings and a housekeeping pass's asks
+// about paths outside its scope (housekeeping.go) to a report this stage
+// built and
 // writes the record of what the decision-model checks did. It is one function
 // so that every report the body returns after reading the change goes through
 // it, whichever path produced the report.
-func finish(out pipeline.Output, judged []judgeEdit, checks decisionChecks) pipeline.Output {
+func finish(out pipeline.Output, judged []judgeEdit, outside []string, checks decisionChecks) pipeline.Output {
 	out.Report.Findings = append(out.Report.Findings, judgeReviewFindings(judged)...)
+	out.Report.Findings = append(out.Report.Findings, housekeepingFindings(outside)...)
 	return withDecisionChecks(out, checks)
 }
 
@@ -349,6 +364,9 @@ type reviewFacts struct {
 	head       string
 	intent     string
 	supplied   bool
+	// housekeeping is whether the run is a housekeeping pass's,
+	// pipeline.KeyHousekeepingPass.
+	housekeeping bool
 	// previous is the report this stage recorded last time it ran, which is
 	// empty on the first round. Its findings are the claims a re-review checks.
 	previous findings.Report
@@ -412,6 +430,11 @@ func readReviewState(state pipeline.Reader) (reviewFacts, error) {
 		return reviewFacts{}, err
 	}
 	f.supplied, _ = supplied.Bool()
+	pass, err := state.Get(pipeline.KeyHousekeepingPass)
+	if err != nil {
+		return reviewFacts{}, err
+	}
+	f.housekeeping, _ = pass.Bool()
 	f.previous, err = pipeline.ReadStageReport(state, pipeline.StageReview)
 	if err != nil {
 		return reviewFacts{}, err

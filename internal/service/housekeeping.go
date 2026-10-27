@@ -9,9 +9,11 @@ import (
 )
 
 // PRD section 6's housekeeping, the program's part of it as this service
-// carries it: the trusted scope a pass's intake reads. The service creates
-// no pass; the coordinator does, through task.create with the housekeeping
-// mark, and internal/tasks' housekeeping.go is the intake.
+// carries it: the trusted scope a pass's intake reads, and passRun, which
+// marks a run the records attribute to a pass for the review's scope ask.
+// The service creates no pass; the coordinator does, through task.create
+// with the housekeeping mark, and internal/tasks' housekeeping.go is the
+// intake.
 
 // housekeepingScope is internal/tasks' HousekeepingScope: the repository's
 // housekeeping.paths read from its trusted copy at a fresh fetch of the
@@ -26,4 +28,25 @@ func (s *Service) housekeepingScope(ctx context.Context, repository store.Reposi
 		return nil, fmt.Errorf("%w: resolving the configuration of housekeeping pass %s: %w", resolutionRefusal(err), taskID, err)
 	}
 	return resolution.Config.HousekeepingPaths, nil
+}
+
+// passRun reports whether a run is a housekeeping pass's, which begin
+// records as pipeline.Start.HousekeepingPass so the review stage holds the
+// change to the pass's scope (internal/stages' housekeeping.go). It is
+// decided from the task records and never from the push: the run's task is
+// the task the run is attributed to (store.TaskOfRun, the same reading the
+// task's snapshot makes of its runs), so a pass's own push, a rerun of its
+// run, and a person's push of its branch while the pass holds the branch
+// are all the pass's and held to the scope, which is wider than PRD
+// section 6's "the run that a pass's push starts" and never narrower; a run
+// of the branch after another task's attempt took it, as an ordinary
+// delivery may once the pass is retired, is that task's and not held. A
+// read that fails refuses the begin rather than starting a pass's run
+// without the rule.
+func (s *Service) passRun(ctx context.Context, record store.Run) (bool, error) {
+	t, ok, err := s.store.TaskOfRun(ctx, record)
+	if err != nil {
+		return false, fmt.Errorf("service: whether run %s is a housekeeping pass's could not be read: %w", record.ID, err)
+	}
+	return ok && t.Housekeeping, nil
 }

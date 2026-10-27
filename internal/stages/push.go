@@ -175,6 +175,7 @@ func Push(deps StageDeps) pipeline.Implementation {
 		pipeline.KeyPushed,
 		pipeline.KeyIntent,
 		pipeline.KeyIntentSupplied,
+		pipeline.KeyHousekeepingPass,
 		pipeline.KeyForkRepository,
 	}, pipeline.StageResultKeys(pipeline.StageReview)...)
 	for _, stage := range fixingAfterReview() {
@@ -347,15 +348,16 @@ func fixingAfterReview() []pipeline.Stage {
 // so the change measured here is exactly the commits no review has read.
 func reviewLaterCommits(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts pushState) (pipeline.Output, error) {
 	review := reviewFacts{
-		repository:  facts.repository,
-		run:         facts.run,
-		branch:      facts.branch,
-		base:        facts.base,
-		head:        facts.head,
-		intent:      facts.intent,
-		supplied:    facts.supplied,
-		since:       facts.reviewedCommit,
-		laterRounds: facts.laterRounds,
+		repository:   facts.repository,
+		run:          facts.run,
+		branch:       facts.branch,
+		base:         facts.base,
+		head:         facts.head,
+		intent:       facts.intent,
+		supplied:     facts.supplied,
+		housekeeping: facts.housekeeping,
+		since:        facts.reviewedCommit,
+		laterRounds:  facts.laterRounds,
 	}
 	change, err := readChange(ctx, repo, review, deps.Config.IgnorePatterns)
 	return reviewRead(ctx, deps, repo, review, change, err)
@@ -720,6 +722,9 @@ type pushState struct {
 	// change with, on the same terms the review stage does.
 	intent   string
 	supplied bool
+	// housekeeping is whether the run is a housekeeping pass's, which the
+	// review of later commits holds to housekeeping.go's asks too.
+	housekeeping bool
 	// laterRounds is what the last fix round of each stage between review and
 	// push said it changed, for the stages whose round left an account.
 	laterRounds []laterRound
@@ -771,6 +776,11 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		return pushState{}, err
 	}
 	facts.supplied, _ = supplied.Bool()
+	pass, err := state.Get(pipeline.KeyHousekeepingPass)
+	if err != nil {
+		return pushState{}, err
+	}
+	facts.housekeeping, _ = pass.Bool()
 	for _, stage := range fixingAfterReview() {
 		v, err := state.Get(stage.FixKey())
 		if err != nil {
