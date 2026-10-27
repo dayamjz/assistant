@@ -55,8 +55,11 @@ import (
 // the flip is answered carry on in the flip, and the reading after it then
 // refuses the promotion with that answer standing, as it does a copy whose
 // identity moved in the same window (the full review of 04c4696); a carry
-// on, which marks only after its last reading with the entry open until
-// then, has no such window, and a promotion's flip, being the answer and
+// on reads last right before its mark, with the entry open until then and
+// every step of its own behind that reading, so what it closes was read
+// holding its work after all of them (round 47), and the moment between
+// that reading and the mark is what stands, as between the reading before
+// the flip and the flip here; a promotion's flip, being the answer and
 // the shape in one write, cannot be ordered the same way. A copy with no open entry is not asked
 // it: what stands between such a copy and the writes is the assertion
 // before shaping, which refuses a .git under the copy that is a symbolic

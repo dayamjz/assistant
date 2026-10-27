@@ -78,14 +78,15 @@ paths: ["internal/service/**"]
   `DeliveryIntent` as its instructions and the outlived task's posture as
   intake's floor (`carriedPosture`, `tasks.Request.DeliveryFloor`, so the
   stricter of it and the project's is decided in intake's one read), and
-  adopts the kept copy, which the answer, the completion before the move
-  and the completion after it each hold to what every open entry of the
-  copy recorded, the set the mark closes (`store.OpenKeptWorkOfCopy`),
-  through `internal/tasks`' one reading of it (`holdsKeptWork`,
-  `tasks.Cleaner.Unheld`), the last reading's set given to the mark, which
-  closes no entry kept after it; a copy git reads a `core.worktree` for is
-  refused before the claim, since the move would leave it naming the old
-  path; the successor's posture floor is what the outlived task's push is
+  adopts the kept copy, which the answer, the completion before the move,
+  the completion after it and the completion right before its mark each
+  hold to what every open entry of the copy recorded, the set the mark
+  closes (`store.OpenKeptWorkOfCopy`), through `internal/tasks`' one
+  reading of it (`holdsKeptWork`, `tasks.Cleaner.Unheld`), the last
+  reading made right before the mark and its set given to the mark, which
+  closes no entry kept after it; a copy git reads a `core.worktree` for,
+  or one with a linked worktree, is refused before the claim, since the
+  move would leave either naming the old path; the successor's posture floor is what the outlived task's push is
   held to (`carriedPosture` through `localPosture`, gated for a row with
   none recorded); the answer
   written only with the adoption and the claim withdrawn when intake

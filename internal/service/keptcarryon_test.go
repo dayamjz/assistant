@@ -2220,3 +2220,120 @@ func TestAKeptCopyWithACoreWorktreeIsNotCarriedOn(t *testing.T) {
 		waitLaunched(t, h, out.Task)
 	})
 }
+
+// A carry on closes no entry over work the copy lost after the move: the
+// copy is read last right before the mark, where it stands, so every step
+// of the completion between the move and the mark, the reshape, the
+// assertion and the note, is behind that reading (round 47, P6). The kept
+// commit C is checked out from under, expired and pruned in the seam after
+// the move; the answer is refused naming C, with the copy at the task's
+// path and the claim standing owed, and the same answer again is refused
+// the same way. Before, the mark closed the entry with the set the reading
+// before the move had verified, and the successor owned a copy without C.
+func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	var moved string
+	lose := func() error {
+		records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = records.Close() }()
+		owed, err := records.KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		if moved, err = h.TaskCopy(owed.CarriedOnTask.Or("")); err != nil {
+			return err
+		}
+		git(t, moved, "checkout", "--quiet", "--detach", "HEAD~1")
+		git(t, moved, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+		git(t, moved, "prune", "--expire=now")
+		if _, err := vcsResolve(t, moved, kept); err == nil {
+			return errors.New("the kept commit is still in the moved copy after the prune")
+		}
+		return nil
+	}
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, lose), func(under serviceUnderTest) {
+		ctx := t.Context()
+		for _, when := range []string{"the answer", "the same answer again"} {
+			var out machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+				t.Fatalf("%s, with %s lost after the move = %+v, %v; want it refused naming the commit", when, kept, out, err)
+			}
+			owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+			if err != nil || !owed.Open() || !owed.CarryOnClaimed() {
+				t.Fatalf("after %s the entry reads %+v, %v; want it open with its claim owed", when, owed, err)
+			}
+			if _, err := os.Stat(moved + "/.git"); err != nil {
+				t.Fatalf("after %s the copy does not stand at the task's path: %v", when, err)
+			}
+			if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("after %s something stands at the kept path: %v", when, err)
+			}
+		}
+	})
+}
+
+// A kept copy with a linked worktree is not carried on (round 47): a
+// linked worktree names the copy's repository by the path it stands at,
+// so the move would leave the worktree unable to read it, and the program
+// writes into no worktree it did not make. The answer is refused before
+// anything is claimed, naming the worktree, with the copy where it was;
+// with the worktree removed the same answer carries the copy on and its
+// worker starts.
+func TestAKeptCopyWithALinkedWorktreeIsNotCarriedOn(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	// The worker starts in the kept copy, which stands, so it is swept first.
+	service.RequireSweepClearsHere(t, "the carried-on task launching once the worktree is removed")
+	principles.Cite(t, principles.P15)
+	principles.Cite(t, principles.P6)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	linked := t.TempDir() + "/linked"
+	git(t, entry.CopyPath, "worktree", "add", "--quiet", "--detach", linked)
+	before := taskCount(t, h)
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "worktree") || !strings.Contains(err.Error(), "linked") {
+			t.Fatalf("carrying on a copy with a linked worktree = %+v, %v; want it refused naming the worktree", out, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() || still.CarryOnClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open and unclaimed", still, err)
+		}
+		if _, err := os.Stat(entry.CopyPath + "/finding.txt"); err != nil {
+			t.Fatalf("the refusal moved the copy: %v", err)
+		}
+		if n := taskCount(t, h); n != before {
+			t.Fatalf("the refusal created %d task(s)", n-before)
+		}
+		if head := git(t, linked, "rev-parse", "HEAD"); head == "" {
+			t.Fatal("the linked worktree no longer reads its HEAD after the refusal")
+		}
+		git(t, entry.CopyPath, "worktree", "remove", "--force", linked)
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err != nil {
+			t.Fatalf("carrying the copy on with the worktree removed: %v", err)
+		}
+		waitLaunched(t, h, out.Task)
+	})
+}

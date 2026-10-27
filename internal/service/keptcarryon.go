@@ -38,10 +38,11 @@ import (
 // recorded it standing on (holdsKeptWork, tasks.Cleaner.Unheld: each a
 // value HEAD, a reference, a root reference or a reflog entry records, or
 // a commit one reaches), the one reading of what the copy holds that the
-// answer, the completion before the move and the completion after it all
-// make, so a copy whose kept commit was amended away but stands in its
-// reflog or in ORIG_HEAD is carried on by each, and one that has lost it
-// altogether is refused by each. A refusal on the remote set or HEAD is tolerated
+// answer, the completion before the move, the completion after it and
+// the completion right before its mark all make, so a copy whose kept
+// commit was amended away but stands in its reflog or in ORIG_HEAD is
+// carried on by each, and one that has lost it altogether is refused by
+// each. A refusal on the remote set or HEAD is tolerated
 // only as far as the reshape below repairs it, each read on its own: for a
 // delivery copy, a missing gate remote or one whose one URL is elsewhere,
 // which it points at the gate, and HEAD off the task's branch while no
@@ -55,7 +56,11 @@ import (
 // no branch, since any of that can leave a commit with no name, and P6 has
 // the program refuse rather than risk that, so the person repairs the copy
 // or answers otherwise. So does a core.worktree git reads for the copy,
-// which the move would leave naming the old path. So does any other refusal, a copy that is not a
+// which the move would leave naming the old path, and so does a linked
+// worktree of the copy, which names the copy's repository by the path it
+// stands at and which the move would leave unable to read it: the program
+// writes into no worktree it did not make, so the person removes it (git
+// worktree remove) or lands the copy (round 47). So does any other refusal, a copy that is not a
 // clone of its own, one that is the primary or inside it, among them. A
 // copy that is gone refuses it too. After the reshape the copy is asserted
 // again at its new path on the new task's expectation, as dispatch will
@@ -89,9 +94,15 @@ import (
 // moved with the copy; and the copy is held to what every one of those
 // entries recorded, not the answered one alone, by each reading of it
 // (holdsKeptWork over store.OpenKeptWorkOfCopy), so no entry is closed
-// over work the copy has since lost. The mark is given the entries the
-// last reading held the copy to and closes those and no other: an entry
-// kept after that reading refuses the mark (store.ErrKeptWorkUnverified),
+// over work the copy has since lost. The last reading is made right
+// before the mark, where the copy stands, with the reshape, the assertion
+// and the note behind it, so an entry is closed only over a copy read
+// holding its work after every step of the completion (round 47: before,
+// the mark took the set read before the move, and work pruned from the
+// moved copy in between was closed over). What stands between that
+// reading and the write is the moment itself. The mark is given the
+// entries that reading held the copy to and closes those and no other: an
+// entry kept after that reading refuses the mark (store.ErrKeptWorkUnverified),
 // the answer is refused with the copy at the task's path and the claim
 // standing, and the next answer or start reads that entry too and marks
 // then, so nothing closes an entry nothing verified (the carry-on audit of
@@ -319,6 +330,29 @@ func (s *Service) assertKeptCopy(ctx context.Context, entry store.KeptWork, plan
 		return refuse(fmt.Sprintf("git reads core.worktree as %q for its copy, and carrying on moves the copy, which git would then "+
 			"read at that path; unset it (git config --unset core.worktree in the copy) and answer again, or land the copy", worktree))
 	}
+	// A linked worktree of the copy names the copy's repository by the
+	// path it stands at, so the move would leave the worktree unable to
+	// read it (round 47). The program writes into no worktree it did not
+	// make, so it is refused here, before anything is claimed or moved, as
+	// git lists it (vcs.ListWorktrees), the copy's own entry aside.
+	worktrees, err := copied.ListWorktrees(ctx)
+	if err != nil {
+		return fmt.Errorf("service: listing the worktrees of the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	own, err := filepath.EvalSymlinks(entry.CopyPath)
+	if err != nil {
+		return fmt.Errorf("service: resolving the kept copy at %s: %w", entry.CopyPath, err)
+	}
+	for _, w := range worktrees {
+		at, err := filepath.EvalSymlinks(w.Path)
+		if err != nil {
+			return refuse(fmt.Sprintf("it has a linked worktree git lists at %s that could not be read: %v; remove it (git worktree remove) and answer again, or land the copy", w.Path, err))
+		}
+		if at != own {
+			return refuse(fmt.Sprintf("it has a linked worktree at %s, which names the copy by the path it stands at and which carrying on would move "+
+				"out from under it; remove the worktree (git worktree remove in the copy) and answer again, or land the copy", w.Path))
+		}
+	}
 	if _, err := tasks.AssertIsolated(obs, agents.WorkerEnvironment(os.Environ(), nil), want); err != nil {
 		var refused *tasks.IsolationError
 		if !errors.As(err, &refused) {
@@ -540,9 +574,6 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	if err := s.verifyCarriedCopy(ctx, entry, standing, plan); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	// verified is the entries of the copy the last reading of it held it
-	// to, which the mark closes and no other.
-	var verified []int64
 	if moved != nil {
 		if err := s.assertKeptCopy(ctx, entry, plan); err != nil {
 			return machine.KeptWorkAnswered{}, err
@@ -550,7 +581,10 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		if err := s.isCarriedOnCopy(entry, entry.CopyPath); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
-		if verified, err = s.holdsKeptWork(ctx, entry, entry.CopyPath); err != nil {
+		// Read before the move, so a copy that has lost what it was kept
+		// on is refused with nothing moved; the mark's set is the last
+		// reading's, below, not this one's.
+		if _, err := s.holdsKeptWork(ctx, entry, entry.CopyPath); err != nil {
 			return machine.KeptWorkAnswered{}, err
 		}
 		if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
@@ -564,7 +598,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 				return machine.KeptWorkAnswered{}, err
 			}
 		}
-	} else if verified, err = s.verifyAdopted(ctx, entry, newPath); err != nil {
+	} else if err := s.verifyAdopted(ctx, entry, newPath); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
 	if err := s.reshapeAdoptedCopy(ctx, newPath, plan); err != nil {
@@ -579,6 +613,21 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	}
 	if err := tasks.AppendNote(instructions, carryOnHeading, carryOnNote(entry, plan.old)); err != nil {
 		return machine.KeptWorkAnswered{}, fmt.Errorf("service: writing the carry-on note into the instructions of task %s: %w", id, err)
+	}
+	// The last reading, of what the successor holds where it stands, is
+	// made right before the write that closes the entries, so every step
+	// between the move and the mark, the reshape, the assertion and the
+	// note, is behind it, and the mark closes only entries a copy read
+	// after all of them still held (round 47, P6: before, the set was the
+	// reading's before the move, and work pruned from the moved copy in
+	// between was closed over). A refusal leaves the copy at the task's
+	// path and the claim standing owed, as verifyAdopted's does, and the
+	// next answer or start reads again. What stands between this reading
+	// and the write is the moment itself, as between the flip's reading
+	// and the flip in a promotion.
+	verified, err := s.holdsKeptWork(ctx, entry, newPath)
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
 	}
 	marked, err := s.store.MarkKeptWorkCarriedOn(ctx, entry.ID, id, verified)
 	if errors.Is(err, store.ErrKeptWorkUnverified) {
@@ -629,22 +678,23 @@ func (s *Service) isCarriedOnCopy(entry store.KeptWork, path string) error {
 // has since received those commits holds them all and still lacks the kept
 // copy's own work, which is why identity is checked first. Any of the three
 // failing is refused with ipc.ErrRefused, the entry stays owed and the task
-// stays held on it. It returns the entries it held the copy to, for the
-// mark.
-func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) ([]int64, error) {
+// stays held on it. The mark's set is the completion's last reading's,
+// made right before the mark, not this one's.
+func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPath string) error {
 	refuse := func(why string) error {
 		return fmt.Errorf("%w: kept work entry %d was not carried on: %s", ipc.ErrRefused, entry.ID, why)
 	}
 	if err := s.isCarriedOnCopy(entry, newPath); err != nil {
-		return nil, err
+		return err
 	}
 	if _, err := os.Lstat(entry.CopyPath); err == nil {
-		return nil, refuse(fmt.Sprintf("the kept copy still stands at %s and something else stands at %s, so which is the kept work cannot be told by path",
+		return refuse(fmt.Sprintf("the kept copy still stands at %s and something else stands at %s, so which is the kept work cannot be told by path",
 			entry.CopyPath, newPath))
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
+		return fmt.Errorf("service: reading the kept copy at %s: %w", entry.CopyPath, err)
 	}
-	return s.holdsKeptWork(ctx, entry, newPath)
+	_, err := s.holdsKeptWork(ctx, entry, newPath)
+	return err
 }
 
 // holdsKeptWork refuses the copy at path, with ipc.ErrRefused naming the
@@ -664,14 +714,15 @@ func (s *Service) verifyAdopted(ctx context.Context, entry store.KeptWork, newPa
 // task and a copy that has lost what a later entry recorded would
 // otherwise be carried on as if the successor received it (the final
 // full review of ff040fc, P15). It is asked by the answer before its
-// claim, by the completion before the move and by verifyAdopted after it,
-// so the three accept and refuse the same copies (the final full review
-// of feddd14, and the delta review of 9ef7722 for the names a reading of
-// the copy's own left out). A copy that cannot be read is an error, never
-// a refusal. It returns the entries it held the copy to, by identifier,
-// which the mark is given (store.MarkKeptWorkCarriedOn): an entry kept
-// after the reading is not among them, so the mark refuses to close it and
-// the next answer reads it (the carry-on audit of b448115).
+// claim, by the completion before the move, by verifyAdopted after it,
+// and last by the completion right before the mark, so every reading
+// accepts and refuses the same copies (the final full review of feddd14,
+// and the delta review of 9ef7722 for the names a reading of the copy's
+// own left out). A copy that cannot be read is an error, never a
+// refusal. It returns the entries it held the copy to, by identifier,
+// which the last reading hands the mark (store.MarkKeptWorkCarriedOn): an
+// entry kept after that reading is not among them, so the mark refuses to
+// close it and the next answer reads it (the carry-on audit of b448115).
 func (s *Service) holdsKeptWork(ctx context.Context, entry store.KeptWork, path string) ([]int64, error) {
 	entries, err := s.store.OpenKeptWorkOfCopy(ctx, entry.CopyPath)
 	if err != nil {

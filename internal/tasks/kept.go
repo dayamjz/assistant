@@ -234,7 +234,8 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 // read in the Cleaner's layout, without replacement references or a graft
 // file, as Keep reads. internal/service's carry on asks it of the kept
 // copy wherever it stands, by the entry with CopyPath set there, before it
-// claims, before it moves and after it has moved the copy, and a promotion
+// claims, before it moves, after it has moved the copy and last right
+// before it marks, and a promotion
 // asks it of its copy for each entry its flip answers (Queue.Promote,
 // through unheld), so every answer that would close an entry accepts and
 // refuses the same copies: a copy whose kept commit was amended away is

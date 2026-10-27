@@ -50,7 +50,8 @@ paths: ["internal/tasks/**"]
   no longer holds, by what the copy names now (`copyNames`, HEAD, root
   references and reflog values included, and the trees and blobs a named
   commit's history records), which `internal/service`'s carry on asks
-  before it claims, moves or adopts the copy, and `Queue.Promote` asks for
+  before it claims, moves or adopts the copy and last right before it
+  marks, and `Queue.Promote` asks for
   each entry its flip answers (`*KeptWorkUnheldError`). And
   `CleanupRefusal.Unlanded` (with `KeptOf`) is the one statement of which
   refusals are a copy kept for its work; `kept_test.go` places every reason.

@@ -655,14 +655,19 @@ the copy's is in the way of its name (a branch `topic/side` beside the
 task branch `topic`, or `topic` beside `topic/x`), is refused with
 nothing recorded and the refusal says what to change. So is a copy git
 reads a `core.worktree` for, since the move would leave it naming the old
-path: unset it in the copy and answer again. A copy that no
+path: unset it in the copy and answer again. So is a copy with a linked
+worktree (`git worktree list` in the copy shows it), since the move would
+leave the worktree naming the old path and the program writes into no
+worktree it did not make: remove it (`git worktree remove`) and answer
+again. A copy that no
 longer holds a commit or object it was kept on, nothing it names reaching
 it, neither HEAD, a reference, a root reference such as `ORIG_HEAD` nor a
 reflog entry (amended away and then expired and pruned, say), is refused
 the same way, naming what is missing and the entry that recorded it,
 every entry of the copy being read; a copy whose reflog or `ORIG_HEAD`
 still records it, or a commit of which records the object in its tree,
-is carried on. An entry kept after the copy was last read, in the moment
+is carried on, the copy read last right before it is answered, where it
+stands. An entry kept after the copy was last read, in the moment
 before it is answered, refuses the answer rather than being closed unread:
 answer again. A run's copy is not
 carried on in this build (it is a worktree of the gate on a branch of
