@@ -166,6 +166,38 @@ func (s *Store) QueuedHousekeepingWakes(ctx context.Context, limit int) ([]House
 		housekeepingWakeColumns+` WHERE handled_at IS NULL ORDER BY id LIMIT ?`, limit)
 }
 
+// OfferedHousekeepingWakes reports how many queued housekeeping wakes a
+// drain made now with held and route would offer, on the kept-work wake's
+// terms.
+func (s *Store) OfferedHousekeepingWakes(ctx context.Context, held []string, route WakeRoute) (int, error) {
+	return housekeepingWakeShape.offered(ctx, s, held, route)
+}
+
+// drainHousekeepingWakesTx hands out the housekeeping wakes on offer inside
+// a transaction.
+func drainHousekeepingWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]HousekeepingWake, error) {
+	ids, err := housekeepingWakeShape.handOutTx(ctx, tx, limit, h)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HousekeepingWake, 0, len(ids))
+	for _, id := range ids {
+		w, err := scanHousekeepingWake(tx.QueryRowContext(ctx, housekeepingWakeColumns+` WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// UnacknowledgedHousekeepingWakes returns how many housekeeping wakes are
+// queued, handed out or not, the count the in-flight table reads beside the
+// other shapes.
+func (s *Store) UnacknowledgedHousekeepingWakes(ctx context.Context) (int, error) {
+	return housekeepingWakeShape.unacknowledged(ctx, s)
+}
+
 const housekeepingWakeColumns = `SELECT id, repository_id, pass, kind, marker, detail, created_at, handled_at,
 	acknowledged_by, handed_out_at, handed_out_to, handed_out_under, handouts FROM housekeeping_wake`
 

@@ -675,3 +675,8 @@ var ErrPassMoves = errors.New("store: something still moves the housekeeping pas
 // second record of one end. OfferRetirementHold returns it for a pass in the
 // terminal tier, whose retire answer could only be refused.
 var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")
+
+// ErrHousekeepingWakeQueued is returned by ForgetRepository and
+// RepositoryRemovable for a repository with an unacknowledged housekeeping
+// wake about it.
+var ErrHousekeepingWakeQueued = errors.New("store: a housekeeping wake about the repository is unacknowledged")

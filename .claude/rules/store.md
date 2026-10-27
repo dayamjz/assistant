@@ -46,8 +46,10 @@ paths: ["internal/store/**"]
   one open, `ErrPassHeld`, so the offer and a claim have one loser in
   either order). housekeepingWakesMigration (66) is the queue's fourth
   shape `housekeeping_wake` about a repository (`AppendHousekeepingWake`
-  is its one append, `HousekeepingWakes` and `QueuedHousekeepingWakes` its
-  reads).
+  is its one append; `untaskedShape` serves its offer, handout and
+  acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in
+  one transaction; `ForgetRepository` refuses a repository with one
+  queued).
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
