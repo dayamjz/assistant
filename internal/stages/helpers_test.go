@@ -79,6 +79,17 @@ func write(t *testing.T, dir, rel, content string) {
 	}
 }
 
+// read returns a file's content in a working copy.
+func read(t *testing.T, dir, rel string) string {
+	t.Helper()
+	full := filepath.Join(dir, filepath.FromSlash(rel))
+	content, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatalf("reading %s: %v", full, err)
+	}
+	return string(content)
+}
+
 // stateReader is the pipeline.Reader a stage body is given: it answers the
 // keys the implementation declared and refuses the rest, so a test cannot read
 // a key the real stage node would not have handed over. What it reads from is

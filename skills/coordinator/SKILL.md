@@ -277,8 +277,16 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   ("You approve", PRD section 6). The service takes an answer to it only
   from a command in the foreground of a terminal, and a command you run is
   refused with code `not-at-terminal`, recording nothing. Tell the person
-  the task waits on their approval and leave the hold open. For
-  `message-unacknowledged`, the
+  the task waits on their approval and leave the hold open. A stall hold,
+  keyed `task/ID/stalled/...`, is a worker still running whose screen has
+  not changed through repeated inspections: nothing was ended. Relay it to
+  the person as a blocker. Its answers are `approve` (let it run and start
+  the count again), `stop` (end it and keep its copy; the stop's own hold
+  then asks whether to begin the work again) and `retry` (end it and begin
+  it again once in the same copy); any other word is refused. For
+  `stall-closed`, the program closed a stall hold itself because the
+  worker's screen changed: tell the person that decision is no longer
+  needed. For `message-unacknowledged`, the
   worker has not acknowledged a message. For `kept-work`, the task's copy,
   or the copy of a run attributed to it, was kept because its work is not
   anywhere safe; the entry is in `assistant --json status` under

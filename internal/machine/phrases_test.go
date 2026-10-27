@@ -448,6 +448,7 @@ func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
 		machine.AnswerRetryRefused:        true,
 		machine.AnswerRetryUndispatchable: true,
 		machine.AnswerStopped:             false,
+		machine.AnswerWorkerStopped:       false,
 		machine.AnswerLanded:              false,
 	}
 	effects := machine.AnswerEffects()

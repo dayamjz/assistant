@@ -119,6 +119,18 @@ const (
 	// section 10's keys table has its row and the limits table its floor and
 	// ceiling, and section 11's repeated-stall row names it.
 	KeyStallInspectionCount Key = "stall_inspection_count"
+	// KeyStallHoldCount is "stall_hold_count": how many surfaces of the same
+	// unchanged screen past stall_inspection_count demand a deeper
+	// inspection before the next one also holds the task for a person, PRD
+	// section 6's "a stalled worker holds for you". Counting past the
+	// inspection keeps the coordinator's inspection ahead of the person's
+	// decision at every value. It is global-only on
+	// KeyStallInspectionCount's terms. It ends nothing: the hold it raises
+	// waits on a person, so it is not a loop bound, parks nothing, and is not
+	// relaunch_attempts. The default and both limits are chosen, not
+	// measured; PRD section 10's keys table has its row and the limits table
+	// its floor and ceiling.
+	KeyStallHoldCount Key = "stall_hold_count"
 	// KeyRelaunchAttempts is "relaunch_attempts": how many times
 	// reconciliation at service start relaunches a task that resolves
 	// Failed with its terminal gone, counted from the task's attempt rows,
@@ -535,6 +547,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.RecheckWindow = v.(time.Duration) }},
 	{KeyStallInspectionCount, TrustGlobal, DefaultStallInspectionCount, decodeStallInspectionCount,
 		func(c *Config, v any) { c.StallInspectionCount = v.(int) }},
+	{KeyStallHoldCount, TrustGlobal, DefaultStallHoldCount, decodeStallHoldCount,
+		func(c *Config, v any) { c.StallHoldCount = v.(int) }},
 	{KeyRelaunchAttempts, TrustGlobal, DefaultRelaunchAttempts, decodeRelaunchAttempts,
 		func(c *Config, v any) { c.RelaunchAttempts = v.(int) }},
 	{KeyStopGrace, TrustGlobal, DefaultStopGrace, decodeStopGrace,

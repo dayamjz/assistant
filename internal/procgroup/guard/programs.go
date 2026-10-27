@@ -315,6 +315,10 @@ var WriteExceptions = []WriteException{
 		Why: "Takes the write permission off the kept copy's parent directory, so its rename fails, and puts it back; the modes are a directory's.",
 	},
 	{
+		File: "internal/stages/rebase_conflict_test.go", Function: "(modeFixer).Apply",
+		Why: "Sets the executable bit on the conflicted file the fixer resolves. The test does not run that file.",
+	},
+	{
 		File: "internal/store/storetest/storetest.go", Function: "Seed",
 		Why: "Copies a database template, an SQLite file, with the template's own mode.",
 	},
@@ -337,5 +341,9 @@ var WriteExceptions = []WriteException{
 	{
 		File: "internal/vcs/objects_test.go", Function: "TestBlobObjectIsGitsIdentityOfTheEntry",
 		Why: "Gives a committed file an execute bit so its tree entry is an executable's; nothing runs the file.",
+	},
+	{
+		File: "internal/vcs/rebase_test.go", Function: "TestUncommittedDigestSeesAModeOnlyChangeOnAConflictedPath",
+		Why: "Sets the executable bit on a conflicted file so the digest sees a mode-only change. The test does not run that file.",
 	},
 }

@@ -51,20 +51,47 @@ const (
 
 // Stall is the repeated-stall input PRD section 11 names: how many times the
 // terminal's current unchanged screen has already surfaced, consecutively,
-// and the count at which the next surface demands a deeper inspection.
+// and the count at which the next surface demands a deeper inspection; and
+// the inputs PRD section 6's "a stalled worker holds for you" adds, the
+// count past that at which the next surface also holds the task for a
+// person, and whether the task is one a stall can hold at all.
 //
-// Both are values the loop computed. Repetitions is a marker written in the
-// same transaction as the wake row (#99), counting surfaces and not passes:
-// an absorbed pass on the same digest neither adds to it nor resets it, and
-// a surface on a different digest resets it. InspectAt is the
-// stall_inspection_count key, read by #100; its floor and ceiling are that
-// key's, and a value of zero or less here reads as zero, so every surface
-// inspects. The count raises a verdict's level and nothing else: it stops
-// nothing and parks nothing, so it is not one of internal/graph's three
-// bounds.
+// Every field is a value the loop computed. Repetitions is a marker written
+// in the same transaction as the wake row (#99), counting surfaces and not
+// passes: an absorbed pass on the same digest neither adds to it nor resets
+// it, a surface on a different digest resets it, and so does an approve
+// answered to a stall hold on the same screen, which the loop reads off the
+// hold record. InspectAt is the stall_inspection_count key, read by #100;
+// its floor and ceiling are that key's, and a value of zero or less here
+// reads as zero, so every surface inspects. HoldAt is the stall_hold_count
+// key, counted past InspectAt, and a value of zero or less here reads as
+// zero, so the hold falls on the first inspecting surface: toward the
+// person, which is the direction a wrong value must fail in.
+//
+// State and Captured are what PRD section 6 says a stall is: a task that
+// resolves Running whose terminal was captured live this pass, so a declared
+// wait (Paused), a gate run being advanced (Validating), a task already held
+// (Held), and a terminal that read gone or Unobserved never hold, whatever
+// the count says.
+//
+// The count raises a verdict's level and nothing else: it stops nothing and
+// parks nothing, so it is not one of internal/graph's bounds, and the hold
+// the top level asks for waits on a person and ends nothing.
 type Stall struct {
 	Repetitions int
 	InspectAt   int
+	HoldAt      int
+	State       taskstate.State
+	Captured    bool
+}
+
+// holds reports whether a surface at this count of a task in this state is
+// the one PRD section 6 has hold the task: the task resolves Running, its
+// terminal was captured live, and the screen has surfaced InspectAt plus
+// HoldAt times already.
+func (s Stall) holds() bool {
+	return s.State == taskstate.Running && s.Captured &&
+		s.Repetitions >= max(s.InspectAt, 0)+max(s.HoldAt, 0)
 }
 
 // Level is what the verdict asks of the caller.
@@ -81,6 +108,12 @@ const (
 	// enough repetitions: a deeper inspection rather than another surface
 	// look. It is one level above Surface and stops nothing.
 	SurfaceAndInspect Level = "surface-and-inspect"
+	// SurfaceInspectAndHold is SurfaceAndInspect, with the hold PRD section
+	// 6's "a stalled worker holds for you" adds once the inspection has been
+	// asked for stall_hold_count times and the screen has still not changed:
+	// the caller registers a hold naming the task. It is one level above
+	// SurfaceAndInspect, and it ends nothing: the hold waits on a person.
+	SurfaceInspectAndHold Level = "surface-inspect-and-hold"
 )
 
 // Reason is why a verdict is what it is. It is a closed set, so a queue row
@@ -171,9 +204,12 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 //     and the caller restarts the window at that surface, so the
 //     post-surface absorb lasts one window at a time and not for good.
 //   - A surface of KindTerminalUnchanged is raised to SurfaceAndInspect when
-//     stall.Repetitions is at or above stall.InspectAt. No other kind reads
-//     the count: the repetition PRD section 11 names is of a stall on the
-//     same unchanged screen, and only this kind has one.
+//     stall.Repetitions is at or above stall.InspectAt, and on to
+//     SurfaceInspectAndHold when it is at or above stall.InspectAt plus
+//     stall.HoldAt and the task resolves Running with its terminal captured,
+//     PRD section 6's stalled worker. No other kind reads the count: the
+//     repetition PRD section 11 names is of a stall on the same unchanged
+//     screen, and only this kind has one.
 //
 // surfaced is read for KindTerminalUnchanged and ClassResurface alone.
 // Every other kind with surfaced=true decides exactly as with it false. For
@@ -236,6 +272,9 @@ func Classify(wake Wake, evidence Evidence, window WindowState, surfaced bool, s
 	}
 	if v.Level == Surface && stall.Repetitions >= max(stall.InspectAt, 0) {
 		v.Level = SurfaceAndInspect
+	}
+	if v.Level == SurfaceAndInspect && stall.holds() {
+		v.Level = SurfaceInspectAndHold
 	}
 	return v
 }

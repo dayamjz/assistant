@@ -1,6 +1,7 @@
 package guard_test
 
 import (
+	"go/types"
 	"os"
 	"path"
 	"path/filepath"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup/guard"
@@ -103,9 +106,20 @@ func TestTheGuardFindsEveryShapeOfStartInTheControl(t *testing.T) {
 		row("raw/raw.go", "Expression", "(*os/exec.Cmd).Run", all),
 		row("raw/raw.go", "Promoted", "(*os/exec.Cmd).Start", all),
 		row("raw/raw.go", "Process", "os.StartProcess", all),
+		row("raw/raw.go", "Combined", "(*os/exec.Cmd).CombinedOutput", all),
 		row("raw/raw.go", "(*wrapped).Method", "(*os/exec.Cmd).Run", all),
 		row("raw/raw.go", "", "os/exec.CommandContext", all),
+		row("raw/raw_unix.go", "Unix", "syscall.ForkExec", []string{"darwin", "linux"}),
+		row("raw/raw_unix.go", "Unix", "syscall.StartProcess", []string{"darwin", "linux"}),
+		row("raw/raw_unix.go", "Unix", "syscall.Exec", []string{"darwin", "linux"}),
+		row("raw/raw_unix.go", "Unix", "golang.org/x/sys/unix.Exec", []string{"darwin", "linux"}),
 		row("raw/raw_windows.go", "Windows", "os/exec.Command", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "syscall.StartProcess", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "syscall.Exec", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "syscall.CreateProcess", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "syscall.CreateProcessAsUser", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "golang.org/x/sys/windows.CreateProcess", []string{"windows"}),
+		row("raw/raw_windows.go", "Syscalls", "golang.org/x/sys/windows.CreateProcessAsUser", []string{"windows"}),
 	}
 	var got []string
 	for _, u := range v.Unexcepted {
@@ -118,6 +132,18 @@ func TestTheGuardFindsEveryShapeOfStartInTheControl(t *testing.T) {
 	}
 	if len(v.Stale) != 1 || v.Stale[0] != gone {
 		t.Errorf("stale = %+v, want only the row with no use", v.Stale)
+	}
+	// Every name in Starters has to be one the type checker resolved in this
+	// fixture. A string that matches no function is a starter the module-wide
+	// test cannot see, so a use of the real function would pass.
+	seen := map[string]bool{}
+	for _, u := range uses {
+		seen[u.Starter] = true
+	}
+	for _, name := range guard.Starters {
+		if !seen[name] {
+			t.Errorf("Starters lists %s, which the control never names", name)
+		}
 	}
 }
 
@@ -132,6 +158,44 @@ func TestAPackageThatDoesNotTypeCheckIsAnError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "example.com/broken") {
 		t.Errorf("Load's error %q does not name the package it could not read", err)
+	}
+}
+
+// TestForkExecIsListedWhenThePackageHasIt is the x/sys name Starters does
+// not carry today. golang.org/x/sys/unix has Exec and no ForkExec in the
+// version this module requires, so a call to ForkExec does not type-check
+// and cannot start a child. When a later version adds the function, this
+// test fails until Starters names it, and the control fixture then has to
+// name it too or TestTheGuardFindsEveryShapeOfStartInTheControl fails.
+func TestForkExecIsListedWhenThePackageHasIt(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes,
+		Dir:  moduleRoot(t),
+		Env:  append(os.Environ(), "GOOS=linux", "GOWORK=off"),
+	}
+	pkgs, err := packages.Load(cfg, "golang.org/x/sys/unix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pkgs) != 1 || pkgs[0].Types == nil {
+		t.Fatalf("loading golang.org/x/sys/unix: %+v", pkgs)
+	}
+	for _, e := range pkgs[0].Errors {
+		t.Fatal(e)
+	}
+	// The package's own Exec is the positive control: a load that yielded
+	// an empty scope and no errors would otherwise pass as "no ForkExec".
+	if pkgs[0].Types.Scope().Lookup("Exec") == nil {
+		t.Fatalf("golang.org/x/sys/unix loaded with no Exec in its scope, so the lookup below checks nothing")
+	}
+	obj := pkgs[0].Types.Scope().Lookup("ForkExec")
+	if obj == nil {
+		return
+	}
+	fn, ok := obj.(*types.Func)
+	if !ok || !slices.Contains(guard.Starters, fn.FullName()) {
+		t.Fatalf("%s starts a program and is not in Starters", obj)
 	}
 }
 

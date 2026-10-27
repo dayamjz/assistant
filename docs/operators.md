@@ -187,6 +187,20 @@ environment doctor runs in, so an identity set only in variables such as
 `GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
 make it disagree with what a run meets.
 
+When the rebase leaves nothing to change, because the default branch already
+carries the same change under another commit, the run ends there with every
+later stage skipped and nothing pushed. If the branch was not on the upstream
+when the run looked, and every commit of the run's own is present by content
+in the default branch it read, the run also records that nothing was left to
+deliver, and the task it belongs to lands: its worker is ended, its copy is
+removed once the cleanup proves the work is on the default branch (or kept as
+kept work when it holds anything more), and a task queued behind it goes on.
+`assistant tasks` and the catch-up say the change was already on the shared
+branch and nothing was delivered, never that it merged. Any other run that
+ends this way, such as one whose branch was already published or whose change
+the default branch applied and then reverted, lands nothing, and its task
+stays where its run leaves it.
+
 ## Answering a hold
 
 `assistant --answer approved`, `skipped`, or `cancelled` answers the decision a
@@ -271,6 +285,28 @@ base, and bringing the base in would rewrite their commits: approving carries
 the run on from the branch without the base's newest commits. Approving past
 `rebase-branch-overlap`, `rebase-branch-conflict` or
 `rebase-branch-replay-unverified` reaches the push stage's refusal below.
+
+Those holds are for a branch that already contained commits the run was not
+given. A conflict while rebasing onto the freshly fetched base is not a hold.
+The rebase stays in progress and the copy stands on that base with the
+conflicts in the working tree. The stage reports a fix finding,
+`rebase-conflict`, and a fix round resolves the conflicted files in place.
+The round commits a resolution that differs from the commit the rebase
+stopped on and continues, so that commit is not replayed again ahead of the
+fix. A resolution that matches the stopped commit skips the step and keeps a
+step already replayed. A round that leaves a conflicted file as the conflict
+left it commits nothing and leaves the rebase stopped. So does a round that
+leaves the file holding a line which starts with seven `<`, seven `|`, or
+seven `>` and which none of that conflict's sides held. A shorter run is not
+that line. A `conflict-marker-size` attribute can ask git to write one, and a
+round that changes the file while leaving that shorter marker in it can
+commit the file. `MarkerBaseline` names the other lines that reading does
+not tell apart from content. The round does not abort: an abort would
+discard a step an earlier round of this rebase had already committed. The
+stage's next execution reports that same conflict and does not start another
+rebase. A conflict the code host reports after the push is the other path,
+under Keep your CI required: that rebase is abandoned, the run holds, and no
+automatic fix round is offered.
 
 A push hold whose finding is `push-refused` with reason `would-discard` means
 the branch holds commits the run's commit does not contain and that the run
@@ -460,7 +496,7 @@ otherwise the read opens with a digest. That digest is one line counting what fo
 
 - the decisions waiting on you, every open hold and every run held at a
   decision;
-- what was merged or cleared away since you last marked what you had seen;
+- what was merged, found already on the shared branch, or cleared away since you last marked what you had seen;
 - the work under way, and the changes being validated right now;
 - the work that stopped without asking you anything.
 
@@ -474,8 +510,8 @@ tasks there are, and the task's own line says the worker was not seen at it.
 That line is the same in `assistant tasks`. Only a worker whose terminal was
 observed live reads as a worker on the work.
 
-`assistant watch --once --mark-seen` marks as seen exactly the merged and
-cleared-away work that read showed, so the next read, and every read after
+`assistant watch --once --mark-seen` marks as seen exactly the merged,
+already-shared and cleared-away work that read showed, so the next read, and every read after
 it, counts only what landed since. Nothing else is filtered: a decision is
 counted until it is answered, and what is under way or stopped is counted for
 as long as it is true.
@@ -968,10 +1004,11 @@ wrong.
 |---|---|---|---|
 | Active execution | Terminal Live, or a validation run the service is advancing | Absorbs; no wake | Nothing |
 | Declared wait | Worker's most recent word is a declared wait, its terminal is Live or Unobserved, and its recheck window is open; the task resolves Paused | Absorbs until the recheck window elapses, then surfaces `declared-external-wait` once per window; an unchanged screen is not read as a stall | Nothing until a wake surfaces |
-| Stalled screen | Terminal Live, no declared wait, and the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once, then absorbs redraws until the next window | Inspect; do not treat as a crash |
+| Stalled screen | Terminal Live, no declared wait, and the capture is unchanged past the escalation window | Surfaces `terminal-unchanged` once per window; past `stall_inspection_count` surfaces each one demands a deeper inspection | Inspect; do not treat as a crash |
+| Stalled worker held | The same unchanged screen of a task resolving Running has surfaced `stall_inspection_count` plus `stall_hold_count` times (3 and 3 unless configured, so the seventh surface) | Registers a stall hold naming the task and ends nothing: the worker keeps running, its copy is untouched, and the task stays in flight, so its screen is still read every pass. The program closes the hold itself, recorded as the program's resolution, when a pass reads the screen changed (surfacing `stall-closed` once) or a probe reads the worker dead (surfacing `terminal-gone`) | `assistant --task ID --answer approve` to let it run and restart the count, `stop` to end it and keep its copy (its stop's hold then asks about a relaunch), or `retry` to end it and relaunch once in the same copy, counted by `relaunch_attempts` |
 | Dead process | Probe answers Dead; work not landed; no stored report | Queues `terminal-gone` with case `dead`; on restart (or `task.relaunch`) sweeps the standing copy and relaunches in place up to `relaunch_attempts`, acknowledging that session's queued `terminal-gone` wakes as the program | After a restart, read `assistant tasks` before acting on a re-handed wake |
 | Ambiguous / unobserved | Probe answers Unobserved (unheld survivor, unreadable, foreign home, and the like) | Surfaces `terminal-gone` with case `unobservable`; never relaunches; never deletes the standing copy | Probe or wait; never `task.relaunch` |
-| Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
+| Blocked decision | Open hold naming the task (relaunch bound, no-sweep, stop, stall, report decision, …) | Resolves Held; leaves alone until answered | `assistant --task ID --answer …` |
 | Failed recovery | Relaunch or sweep refused, or past `relaunch_attempts` | Holds or surfaces; does not destroy the copy | Read the hold or service log; answer retry/stop or fix the host |
 
 A legitimate declared wait is never classified as a dead worker. A dead worker
@@ -1124,10 +1161,12 @@ if you want Cursor for runs and Claude for attachable workers. See
 
 `session_provider: herdr` and the keys for workers on another machine
 (`remote_hosts`, `placement.local`, `placement.arch` and
-`remote_disconnect_grace`, PRD section 8) are parsed and validated, but this
-build does not act on them yet. The service refuses to start on a
-`config.yaml` that sets any of them, naming the key, rather than running
-workers some other way. A repository whose default branch's `assistant.json`
+`remote_disconnect_grace`, PRD section 8) are parsed and validated. This
+build has no herdr provider and does not act on those keys. The service
+refuses to start on a `config.yaml` that sets any of them, naming the key.
+`sessionHost` starts every provider but tmux on pipes, so a home that named
+`herdr` would have its workers started on pipes; the refusal is what stops
+that. A repository whose default branch's `assistant.json`
 sets `placement.arch` is refused the same way, naming the key, wherever the
 service reads that copy: a run, a delivery task's intake or promotion, and
 standing consent. A task of such a repository that reaches dispatch, an
@@ -1553,3 +1592,10 @@ Nothing in this build reads or answers those bots' comments, so treat them as
 input for the human who reviews the pull request. The tests for P4, P7 and the
 judge-path rule show the machinery behaves as specified, not that every review
 is good; `internal/journey/README.md` says what a green run there establishes.
+
+## This repository's own checks
+
+The checks in [Keep your CI required](#keep-your-ci-required) are the ones on
+a repository this gate validates. The checks on this repository are a
+different set. [AGENTS.md](../AGENTS.md) names the ones branch protection
+requires on `main` and points at the workflows that own their settings.

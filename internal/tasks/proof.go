@@ -131,8 +131,7 @@ func (c *Cleaner) taskLanding(ctx context.Context, task store.Task, copied *vcs.
 		}
 		l.carried = append(l.carried, rebases...)
 	}
-	resolved := taskstate.Resolve(taskstate.Inputs{Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds,
-		Events: snap.Events, MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding})
+	resolved := taskstate.Resolve(taskstate.InputsOf(snap))
 	if landed := resolved.Basis.LandedRun; landed != "" {
 		for _, rec := range snap.MergeRecords {
 			if rec.Run == landed && rec.End == store.PullRequestMerged {

@@ -32,6 +32,9 @@ type move struct {
 	// park is whether this move records a store.RunPark with the status,
 	// which is movePark and no other row.
 	park bool
+	// nothing is whether this move records a store.NothingToDeliver with
+	// the status, which is movePassNothingToDeliver and no other row.
+	nothing bool
 }
 
 // The legal moves. A run is created pending, runs, and ends in exactly one of
@@ -75,12 +78,23 @@ var (
 		to:   store.RunFailed,
 		end:  store.PullRequestClosed,
 	}
+	// movePassNothingToDeliver is pass with PRD section 8's
+	// nothing-to-deliver record written beside the status, in one
+	// transaction: a run that ended on section 5's empty-diff short circuit
+	// with its work proven present on the default branch. It is legal from
+	// running, as pass is, because the short circuit ends a run that is
+	// executing.
+	movePassNothingToDeliver = move{
+		from:    []store.RunStatus{store.RunRunning},
+		to:      store.RunPassed,
+		nothing: true,
+	}
 
 	// moves is every row above. It exists so that "no move leads out of a
 	// terminal status" is read off the table rather than restated as a second
 	// list that could disagree with it.
 	moves = []move{moveStart, moveHold, moveRelease, movePass, moveFail, moveTerminate, movePark,
-		movePassOnMerge, moveFailOnClose}
+		movePassOnMerge, moveFailOnClose, movePassNothingToDeliver}
 )
 
 // Start records that a pending run has begun.
@@ -111,6 +125,26 @@ func (s *Service) Release(ctx context.Context, id string) (store.Run, error) {
 // Pass records that a running run finished and the change was validated.
 func (s *Service) Pass(ctx context.Context, id string) (store.Run, error) {
 	return s.apply(ctx, id, movePass)
+}
+
+// PassNothingToDeliver records that a running run ended on PRD section 5's
+// empty-diff short circuit with nothing left to deliver, and writes the
+// run's nothing-to-deliver record from record in the same transaction as the
+// passed status, so a run never reads as ended this way without its record
+// or the reverse; the store owns the record's own refusals. The status is
+// passed because the short circuit ends a run successfully; what the record
+// adds is what PRD section 6's resolver derives the task's Landed from. It
+// ends the run on apply's terms, fixer role and OnFinish included.
+func (s *Service) PassNothingToDeliver(ctx context.Context, id string, record store.NothingToDeliver) (store.Run, error) {
+	m := movePassNothingToDeliver
+	r, err := s.locked(func() (store.Run, error) {
+		return s.store.TransitionRunOnNothingToDeliver(ctx, id, m.from, m.to, record)
+	})
+	if err != nil {
+		return store.Run{}, err
+	}
+	s.finish(ctx, r)
+	return r, nil
 }
 
 // Fail records that a running run finished and the change was not validated.

@@ -65,7 +65,18 @@
 // The attributes-location variables GIT_ATTR_SOURCE, GIT_ATTR_GLOBAL, and
 // GIT_ATTR_SYSTEM are kept for the same reason; what keeps attributes from
 // selecting a program during a comparison is --no-ext-diff and --no-textconv
-// on the diff command lines in diff.go, not this filter.
+// on the diff command lines in diff.go and on the name listing
+// UncommittedDigest uses. That digest reads a regular file's worktree bytes
+// itself and does not ask git for a patch. A path that is not a regular
+// file, a symlink, or a directory is not opened. A path classified as a
+// regular file is opened without waiting for a writer where the platform
+// can ask for that, and a descriptor that is not a regular file is not
+// read. On a platform whose open cannot ask not to wait, a path replaced
+// by a blocking special file after the stat can still wait. The filter is
+// not what enforces either. A
+// submodule checkout contributes the commit rev-parse HEAD prints in that
+// checkout, so a ref is followed to a commit and the ref storage is that
+// invocation's to read.
 //
 // GIT_PAGER and PAGER are kept because --no-pager on every command line is the
 // single mechanism this package uses against a pager, and a second one would

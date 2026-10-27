@@ -42,8 +42,10 @@
 // its own, with the state it read, and ends the run as PRD section 5's
 // "Waiting on checks" says. The same re-read precedes an answer to that
 // hold. checkshold.go owns which hold that is, read off the recorded report
-// through stages.ChecksTimeoutHeld, and it is the one producer of
-// store.ResolvedByProgram; a hold on a person's decision about a finding is
+// through stages.ChecksTimeoutHeld, and it is one of the two producers of
+// store.ResolvedByProgram, stallhold.go's closure of a stall hold whose
+// stall ended by itself being the other; a hold on a person's decision about
+// a finding is
 // never re-read, because the pull request's state must not answer a question
 // a person was asked. A run that was waiting on checks when the service
 // stopped is continued rather than re-read here: the first read of the
@@ -746,7 +748,8 @@
 // store.AcknowledgedByCoordinator. taskholds.go records the resolver
 // Request.HoldResolver returns and names none of its own. The resolutions it
 // names itself are the ones it makes itself: store.ResolvedByProgram at the
-// checks hold above, and store.ResolvedByStandingConsent for each answer
+// checks hold above and at a stall hold whose stall ended by itself, which
+// stallhold.go records, and store.ResolvedByStandingConsent for each answer
 // standing consent gives, which consent.go records.
 //
 // # Standing consent answers inside the segment, and consent.go owns it

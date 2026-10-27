@@ -94,6 +94,21 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 // who decided: that remains by. Non-empty text passes through the redactor
 // Open was given before it is stored.
 func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note string, by Resolver) (Hold, error) {
+	return s.resolveHold(ctx, nil, key, resolution, note, by)
+}
+
+// ResolveHoldUnder is ResolveHoldNoted fenced by the supervisor loop's
+// incarnation, on AppendWakeWithMarkers's terms: the resolution is refused
+// with ErrStaleIncarnation, nothing written, when inc is not the current
+// incarnation, decided inside the same transaction. It is for a resolution
+// the loop makes on what a pass read, so a loop the watchdog replaced cannot
+// close a hold on a reading it took before it was replaced.
+func (s *Store) ResolveHoldUnder(ctx context.Context, inc Incarnation, key, resolution, note string, by Resolver) (Hold, error) {
+	return s.resolveHold(ctx, &inc, key, resolution, note, by)
+}
+
+// resolveHold is the one resolution write, fenced when inc is not nil.
+func (s *Store) resolveHold(ctx context.Context, inc *Incarnation, key, resolution, note string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
 	}
@@ -106,6 +121,11 @@ func (s *Store) ResolveHoldNoted(ctx context.Context, key, resolution, note stri
 		noteCol = s.redact.Redact(note)
 	}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		if inc != nil {
+			if err := fenceIncarnation(ctx, tx, *inc); err != nil {
+				return err
+			}
+		}
 		result, err := tx.ExecContext(ctx,
 			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ?, resolution_note = ? WHERE key = ? AND resolution IS NULL`,
 			resolution, encodeTime(nowUTC()), resolver, noteCol, key)

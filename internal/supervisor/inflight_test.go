@@ -68,6 +68,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	cases := map[string]struct {
 		states         map[string]taskstate.State
 		unacknowledged map[string]int
+		stallHeld      map[string]bool
 		domainWakes    int
 		want           supervisor.InFlight
 	}{
@@ -81,6 +82,14 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		"a held task with a queued wake": {
 			states: map[string]taskstate.State{"a": taskstate.Held}, unacknowledged: map[string]int{"a": 1},
 			want: supervisor.InFlightSome,
+		},
+		"a held task with an open stall hold and no queued wake": {
+			states: map[string]taskstate.State{"a": taskstate.Held}, unacknowledged: map[string]int{"a": 0},
+			stallHeld: map[string]bool{"a": true}, want: supervisor.InFlightSome,
+		},
+		"a stall hold on another task leaves a held one out": {
+			states:    map[string]taskstate.State{"a": taskstate.Held, "b": taskstate.Landed},
+			stallHeld: map[string]bool{"b": false}, want: supervisor.InFlightNone,
 		},
 		"a failed task whose wake was acknowledged": {
 			states: map[string]taskstate.State{"a": taskstate.Failed}, unacknowledged: map[string]int{"a": 0},
@@ -108,7 +117,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := supervisor.InFlightOf(c.states, c.unacknowledged, c.domainWakes); got != c.want {
+			if got := supervisor.InFlightOf(c.states, c.unacknowledged, c.stallHeld, c.domainWakes); got != c.want {
 				t.Fatalf("InFlightOf = %s, want %s", got, c.want)
 			}
 		})
@@ -116,28 +125,33 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 }
 
 // TaskInFlight is the per-task rule InFlightOf applies over a fleet: for
-// every state the table decides, a task is in flight on its state alone or
-// with a queued wake, and a lone task's fleet reading agrees with it in
-// every case, so the catch-up read and the guard cannot count different
-// work. A state the table does not decide is undecided either way.
+// every state the table decides, a task is in flight on its state alone,
+// with a queued wake, or with an open stall hold, and a lone task's fleet
+// reading agrees with it in every case, so the catch-up read and the guard
+// cannot count different work. A state the table does not decide is
+// undecided either way.
 func TestTaskInFlightIsTheRuleInFlightOfApplies(t *testing.T) {
 	for _, state := range taskstate.States() {
 		for _, queued := range []int{0, 1} {
-			inFlight, decided := supervisor.TaskInFlight(state, queued)
-			alone, _ := supervisor.StateInFlight(state)
-			if !decided {
-				t.Fatalf("%s is not decided", state)
-			}
-			if want := alone || queued > 0; inFlight != want {
-				t.Errorf("%s with %d queued: in flight %v, want %v", state, queued, inFlight, want)
-			}
-			fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued}, 0)
-			if (fleet == supervisor.InFlightSome) != inFlight {
-				t.Errorf("%s with %d queued: the fleet reads %v and the task in flight %v", state, queued, fleet, inFlight)
+			for _, stallHeld := range []bool{false, true} {
+				inFlight, decided := supervisor.TaskInFlight(state, queued, stallHeld)
+				alone, _ := supervisor.StateInFlight(state)
+				if !decided {
+					t.Fatalf("%s is not decided", state)
+				}
+				if want := alone || queued > 0 || stallHeld; inFlight != want {
+					t.Errorf("%s with %d queued, stall held %v: in flight %v, want %v", state, queued, stallHeld, inFlight, want)
+				}
+				fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued},
+					map[string]bool{"t": stallHeld}, 0)
+				if (fleet == supervisor.InFlightSome) != inFlight {
+					t.Errorf("%s with %d queued, stall held %v: the fleet reads %v and the task in flight %v",
+						state, queued, stallHeld, fleet, inFlight)
+				}
 			}
 		}
 	}
-	if _, decided := supervisor.TaskInFlight("undecided", 1); decided {
+	if _, decided := supervisor.TaskInFlight("undecided", 1, false); decided {
 		t.Error("a state the table has no row for is decided")
 	}
 }
