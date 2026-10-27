@@ -10,7 +10,9 @@ paths: ["internal/stages/**"]
 - The one owner of which stages have a body is the `written` table: `All`
   places implementations from it and `Implemented` reports it, so adding a
   body is adding an entry.
-- PRD section 5's judge rule lives in `judge.go`.
+- PRD section 5's judge rule lives in `judge.go`, and section 6's
+  housekeeping ask on paths outside `housekeeping.paths` beside it in
+  `housekeeping.go`, read off the same unfiltered change.
 - A body is handed a `StageDeps` at construction, carrying the adapters that
   do not vary with the run; a fact that does vary is a declared state key in
   `internal/pipeline` instead. Lifetime decides which, and `deps.go` has that
