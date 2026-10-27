@@ -53,21 +53,28 @@ func TestADiscardsDirectoryIsMadeBesideItsCopyWithAJournalNamingIt(t *testing.T)
 	}
 }
 
-// A discard that stopped during its first journal write leaves its
-// directory holding a partial file of the journal and nothing else, the
-// state writeWhole leaves between its write and its rename. Nothing was set
-// aside then, so standingDiscard clears the partial file and the
-// directory, and the next discard begins: the open finding a690cc38 began
-// on feat/age-407-discard. With the clearing removed the leftover refuses
-// every later discard of the copy for good.
-func TestAPartialFirstJournalIsClearedAndTheNextDiscardBegins(t *testing.T) {
+// A discard that stopped during its first journal write leaves only its
+// staging directory (home's DiscardingStage) holding a partial file of the
+// journal, the state writeWhole leaves between its write and its rename,
+// and nothing at the discard's directory's name, since that is made only
+// by renaming a staging directory with a whole journal in it. So the copy
+// is not blocked: standingDiscard finds nothing standing and the next
+// discard begins, in a staging directory of its own. The stopped one's is
+// left exactly as it was, since nothing in it proves it this program's:
+// the open finding a690cc38 began on feat/age-407-discard, where the
+// leftover refused every later discard of the copy for good.
+func TestADiscardStoppedInItsFirstJournalWriteBlocksNoLaterDiscard(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	s, tk, _, _ := keptWithWork(t)
-	dir, _ := s.home.Discarding(tk.copy)
-	if err := os.Mkdir(dir, 0o700); err != nil {
+	parent, pattern, err := s.home.DiscardingStage(tk.copy)
+	if err != nil {
 		t.Fatal(err)
 	}
-	partial, err := os.CreateTemp(dir, partialPrefix(filepath.Join(dir, journalName))+"*")
+	stage, err := os.MkdirTemp(parent, pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial, err := os.CreateTemp(stage, partialPrefix(filepath.Join(stage, journalName))+"*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,26 +84,36 @@ func TestAPartialFirstJournalIsClearedAndTheNextDiscardBegins(t *testing.T) {
 	if err := partial.Close(); err != nil {
 		t.Fatal(err)
 	}
+	stopped := treeAndGitState(t, stage)
 
 	if _, found, err := s.cleaner.standingDiscard(tk.copy); err != nil || found {
-		t.Fatalf("standingDiscard over a partial first journal = %v, %v; want it cleared", found, err)
+		t.Fatalf("standingDiscard beside a stopped first write = %v, %v; want nothing standing", found, err)
 	}
-	if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the discard's directory still stands after it was cleared: %v", err)
-	}
-	if _, err := s.cleaner.beginDiscard(tk.copy); err != nil {
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
 		t.Fatalf("the next discard could not begin: %v", err)
+	}
+	if j, found, err := s.cleaner.standingDiscard(tk.copy); err != nil || !found || j.Copy == "" {
+		t.Fatalf("after the next discard began, standingDiscard = %+v, %v, %v; want its journal", j, found, err)
+	}
+	if dir == stage {
+		t.Fatalf("the next discard took the stopped one's staging directory %s", stage)
+	}
+	if now := treeAndGitState(t, stage); now != stopped {
+		t.Fatalf("the stopped discard's staging directory changed:\n%s\nwant\n%s", now, stopped)
 	}
 }
 
-// What a discard's directory holds that no discard writes there is never
-// removed: a directory with no journal holding any other file (one whose
-// name only begins like a partial journal's among them, the review of
-// d279357), a journal that cannot be read, one that is null, names
-// nothing or names no copy's identity (the same review), a journal that is
-// a symbolic link, and a file where the directory goes are each refused
-// with ErrAsideStands and left exactly as they were. A partial file beside a whole journal is no reason to
-// refuse: the journal is the last one written whole, and it is read.
+// Nothing at the discard's directory's name that a journal does not prove
+// a discard's is ever removed (the reviews of d279357 and 3d8cac1): a
+// directory with no journal, whatever it holds (a foreign file; a file or
+// an empty directory named exactly as writeWhole names a partial journal),
+// a journal that cannot be read, one that is null, names nothing or names
+// no copy's identity, a journal that is a symbolic link, and a file where
+// the directory goes are each refused with ErrAsideStands and left exactly
+// as they were; and a discard does not begin over any of them. A partial
+// file beside a whole journal is no reason to refuse: the journal is the
+// last one written whole, and it is read.
 func TestADiscardsDirectoryItCannotTakeUpIsLeftAndRefused(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	cases := []struct {
@@ -110,6 +127,13 @@ func TestADiscardsDirectoryItCannotTakeUpIsLeftAndRefused(t *testing.T) {
 		{"a file named like a partial journal and no journal", func(t *testing.T, dir string) {
 			mkdirAll(t, dir)
 			writeFile(t, filepath.Join(dir, partialPrefix(filepath.Join(dir, journalName))+"-notes"), "someone's notes\n")
+		}},
+		{"a file named exactly like a partial journal and no journal", func(t *testing.T, dir string) {
+			mkdirAll(t, dir)
+			writeFile(t, filepath.Join(dir, partialPrefix(filepath.Join(dir, journalName))+"20261027150000"), "recovery notes\n")
+		}},
+		{"an empty directory named like a partial journal and no journal", func(t *testing.T, dir string) {
+			mkdirAll(t, filepath.Join(dir, partialPrefix(filepath.Join(dir, journalName))+"123"))
 		}},
 		{"a journal that cannot be read", func(t *testing.T, dir string) {
 			mkdirAll(t, dir)
@@ -147,11 +171,14 @@ func TestADiscardsDirectoryItCannotTakeUpIsLeftAndRefused(t *testing.T) {
 			s, tk, _, _ := keptWithWork(t)
 			dir, _ := s.home.Discarding(tk.copy)
 			c.make(t, dir)
-			before := treeAndGitState(t, filepath.Dir(dir))
+			before := treeAndGitState(t, dir)
 			if _, found, err := s.cleaner.standingDiscard(tk.copy); !errors.Is(err, ErrAsideStands) || found {
 				t.Fatalf("standingDiscard = %v, %v; want ErrAsideStands", found, err)
 			}
-			if now := treeAndGitState(t, filepath.Dir(dir)); now != before {
+			if _, err := s.cleaner.beginDiscard(tk.copy); !errors.Is(err, ErrAsideStands) {
+				t.Fatalf("beginDiscard over it = %v; want ErrAsideStands", err)
+			}
+			if now := treeAndGitState(t, dir); now != before {
 				t.Fatalf("the refusal changed what stands:\n%s\nwant\n%s", now, before)
 			}
 		})
@@ -183,36 +210,5 @@ func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// A partial file is recognized by exactly the name writeWhole's
-// os.CreateTemp call gives it, partialPrefix and the random part, and by
-// nothing looser: a name that only begins with the prefix, the prefix
-// alone, or another file's prefix is not one. The first case is made by
-// the same os.CreateTemp call writeWhole makes, so if os.CreateTemp ever
-// names its files otherwise this fails rather than leaving partial files
-// unrecognized.
-func TestAPartialFileIsRecognizedByTheNameWriteWholeGivesIt(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, journalName)
-	f, err := os.CreateTemp(dir, partialPrefix(path)+"*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if name := filepath.Base(f.Name()); !isPartial(path, name) {
-		t.Fatalf("%s, made as writeWhole makes a partial file, is not recognized as one", name)
-	}
-	for _, name := range []string{
-		partialPrefix(path) + "-notes", partialPrefix(path), partialPrefix(path) + "12a",
-		partialPrefix(filepath.Join(dir, "other.json")) + "12", journalName,
-	} {
-		if isPartial(path, name) {
-			t.Fatalf("%s was recognized as a partial file of %s", name, path)
-		}
 	}
 }

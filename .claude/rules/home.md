@@ -11,6 +11,7 @@ paths: ["internal/home/**"]
   package and composed here.
 - `Discarding` names a confirmed discard's directory beside a copy from the
   copy's path alone (`copyPlace`, `CopyAt`'s layout half), since the copy
-  may already have moved away.
+  may already have moved away; `DiscardingStage` is where its first
+  journal is written before it is renamed into place.
 
 Read `doc.go` for the residual gaps.

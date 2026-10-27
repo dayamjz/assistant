@@ -96,13 +96,17 @@ paths: ["internal/tasks/**"]
   copy's entries and again before it writes into the copy.
 - `kept_journal.go` is a confirmed discard's own directory beside its copy
   (`home.Home.Discarding`) and its journal, written through `writeWhole`
-  before anything is set aside: `beginDiscard` makes it, refusing one that
-  stands (`ErrAsideStands`), and `standingDiscard` reads one a discard
-  left, clearing a directory that holds only partial first journals, each
-  by exactly the name `writeWhole` gives it (`isPartial`), and refusing,
-  never removing, anything else, a journal naming no copy's identity
-  among it. No discard answer calls it
-  yet; the set-aside that does follows in AGE-486's stack.
+  before anything is set aside. Only a whole journal naming the copy proves
+  the directory a discard's, and nothing is recognized by its name:
+  `beginDiscard` writes the first journal into a staging directory
+  (`home.Home.DiscardingStage`) and renames it into place whole, never
+  over anything (`renameNoReplace`, `rename_*.go`; refused where the
+  platform has no such rename), so the directory never stands without a
+  journal; `standingDiscard` reads one a discard left and refuses, never
+  removing, anything else at its name, a directory with no journal or a
+  journal naming no copy's identity among it. A staging directory a
+  stopped first write left blocks nothing and is left. No discard answer
+  calls it yet; the set-aside that does follows in AGE-486's stack.
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (an exclusively created partial of a fresh name, then a
   rename; a path standing as a link is `*InstructionsLinkError`), so a file

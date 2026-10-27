@@ -126,3 +126,26 @@ func TestDiscardingStandsBesideACopyByItsPathAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestDiscardingStageIsBesideTheDiscardsDirectory holds where a discard
+// writes its first journal before its directory exists: os.MkdirTemp's
+// parent and pattern beside the copy, a name of the discard's directory's
+// own, so a staging directory is never the discard's directory itself.
+func TestDiscardingStageIsBesideTheDiscardsDirectory(t *testing.T) {
+	h, err := home.Open(filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskCopy, _ := h.TaskCopy(id)
+	parent, pattern, err := h.DiscardingStage(taskCopy)
+	if err != nil || parent != filepath.Dir(taskCopy) || pattern != ".copy.discarding.begin*" {
+		t.Fatalf("DiscardingStage(%s) = %q, %q, %v", taskCopy, parent, pattern, err)
+	}
+	if _, _, err := h.DiscardingStage(h.Root()); !errors.Is(err, home.ErrNotACopy) {
+		t.Fatalf("DiscardingStage of the root = %v, want ErrNotACopy", err)
+	}
+}
