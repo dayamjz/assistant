@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,14 +69,26 @@ import (
 // (store.DueCheck, store.ErrDueCheckStale); a check that finds its reading
 // moved writes nothing, and the next supervision pass reads the new pass.
 //
+// # An open pass
+//
+// Once the newest pass has been open for a whole interval, the wake names it
+// and what it waits on, keyed by the interval it reached, so it is raised
+// once per interval while the pass stays open, whether or not the default
+// branch moved, and whether or not something moves it: that is the long-run
+// escalation the coordinator relays. A pass something moves
+// (supervisor.PassMoves) is in flight whatever it resolves (supervise.go's
+// watched set, the stop guard through feed, the catch-up read), so its
+// terminal is read on every pass. With housekeeping.interval zero, no wake
+// is ever raised about a pass, open or not.
+//
 // # Residual gaps
 //
 //   - The due check runs off the loop's goroutine, so a pass report does not
 //     carry it, and a check that is slower than the interval is not begun a
 //     second time until it returns.
-//   - A repository whose newest pass is open gets no due check and, as yet,
-//     nothing else from the loop: the wake naming an open pass and the
-//     retirement hold are the links above this one.
+//   - A repository whose newest pass is open gets no due check, and nothing
+//     here ends such a pass: the retirement hold is the link above this
+//     one.
 //   - The program cannot tell a rule from a fact; what a pass may change
 //     rests on the worker's instructions and the run's review, and the
 //     review's ask on paths outside housekeeping.paths (internal/stages).
@@ -121,9 +134,9 @@ func passesByRepository(observed []taskstate.Observed) map[string][]taskstate.Ob
 }
 
 // superviseHousekeeping is the pass's part over housekeeping, on the file
-// comment's terms, keyed by repository: a repository whose due check this
-// pass started is reported Watched, with the detections it wrote. It
-// returns nil when there was none.
+// comment's terms, keyed by repository: a repository whose open pass was
+// read, or whose due check this pass started, is reported Watched, with the
+// detections it wrote. It returns nil when there was neither.
 func (s *Service) superviseHousekeeping(c *incarnation, observed []taskstate.Observed, now time.Time) map[string]taskReport {
 	byRepository := passesByRepository(observed)
 	interval := s.cfg.HousekeepingInterval
@@ -149,8 +162,7 @@ func (s *Service) superviseHousekeeping(c *incarnation, observed []taskstate.Obs
 	for _, r := range repositories {
 		passes := byRepository[r.ID]
 		if len(passes) > 0 && passOpen(passes[0]) {
-			// While a pass is open no second one is created, so nothing
-			// is checked for the repository.
+			report(r.ID, s.superviseOpenPass(c, r, passes[0], interval, now))
 			continue
 		}
 		var last *taskstate.Observed
@@ -169,6 +181,54 @@ func intervalsOpen(created, now time.Time, interval time.Duration) int64 {
 		return 0
 	}
 	return int64(now.Sub(created) / interval)
+}
+
+// superviseOpenPass is an open pass's part: the wake naming it once per
+// interval it stays open.
+func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskstate.Observed, interval time.Duration, now time.Time) taskReport {
+	epoch := intervalsOpen(o.Snapshot.Task.CreatedAt, now, interval)
+	if epoch < 1 {
+		return taskReport{Watched: true}
+	}
+	id := o.Snapshot.Task.ID
+	moves := supervisor.PassMoves(o)
+	detail := fmt.Sprintf("housekeeping pass %s of repository %s has been open since %s, %d interval(s) of %s, so no later pass is created; it waits on %s",
+		id, r.ID, o.Snapshot.Task.CreatedAt.UTC().Format(time.RFC3339), epoch, interval, passWaitsOn(o, moves))
+	out := s.raiseHousekeeping(c, store.HousekeepingWakeRequest{Repository: r.ID, Pass: id,
+		Marker: fmt.Sprintf("open:%s:%d", id, epoch), Detail: detail}, nil)
+	return out
+}
+
+// passWaitsOn says what an open pass waits on, for the wake and the hold:
+// what moves it, when something does, and otherwise what its resolution
+// says.
+func passWaitsOn(o taskstate.Observed, moves bool) string {
+	if moves {
+		var what []string
+		for _, run := range o.Snapshot.Runs {
+			if !taskstate.RunSettled(run.Status) {
+				what = append(what, fmt.Sprintf("run %s, which is %s", run.ID, run.Status))
+			}
+		}
+		if ref := latestRef(o.Snapshot.Attempts); ref != "" && o.State.Basis.Process != taskstate.Dead {
+			reading := "reads live"
+			if o.State.Basis.Process != taskstate.Live {
+				reading = "cannot be read"
+			}
+			what = append(what, fmt.Sprintf("its worker, whose terminal (session %s) %s", ref, reading))
+		}
+		return "what still moves it: " + strings.Join(what, ", and ")
+	}
+	said := fmt.Sprintf("nothing moves it, and it resolves %s", o.State.State)
+	if detail, ok := o.State.Detail.Get(); ok {
+		said += ": " + detail
+	}
+	if len(o.Snapshot.Runs) > 0 {
+		if pr, ok := o.Snapshot.Runs[0].PullRequest.Get(); ok {
+			said += fmt.Sprintf("; its run %s opened pull request %s", o.Snapshot.Runs[0].ID, pr)
+		}
+	}
+	return said
 }
 
 // raiseHousekeeping appends one housekeeping-due detection, classified on
