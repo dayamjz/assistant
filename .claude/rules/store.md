@@ -40,6 +40,11 @@ paths: ["internal/store/**"]
   `ErrPassRetired`, and anchored to the latest attempt's session so the
   two writes have exactly one loser and no session is recorded for an
   attempt of a retired pass after its retirement.
+  housekeepingHoldMigration (65) is the retirement hold's mark on the
+  `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
+  to a pass still open and still; every attempt claim refuses a pass with
+  one open, `ErrPassHeld`, so the offer and a claim have one loser in
+  either order).
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'
