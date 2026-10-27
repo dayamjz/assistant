@@ -22,7 +22,8 @@ func pass(notes string) Request {
 // A marked create records an investigation of the repository under the
 // housekeeping role, marked, dispatched as independent, with the program's
 // part of its instructions before the coordinator's notes: the trusted scope,
-// the rules, and the notes framed as claims to check.
+// that this is the first pass, the rules, and the notes framed as claims to
+// check.
 func TestAMarkedCreateRecordsAHousekeepingInvestigation(t *testing.T) {
 	f := newFixture(t)
 	created := f.create(t, pass("The person decided on 2026-10-24 that the fixer is Cursor."))
@@ -42,7 +43,7 @@ func TestAMarkedCreateRecordsAHousekeepingInvestigation(t *testing.T) {
 	if !ok {
 		t.Fatalf("the instructions carry no notes heading:\n%s", text)
 	}
-	for _, want := range []string{"`AGENTS.md`", "`.claude/rules/**`", "`assistant-knowledge.md`",
+	for _, want := range []string{"`AGENTS.md`", "`.claude/rules/**`", "`assistant-knowledge.md`", "first pass",
 		"factual drift", "Never add, remove or reword a rule"} {
 		if !strings.Contains(program, want) {
 			t.Errorf("the program's part does not say %q:\n%s", want, program)
@@ -53,6 +54,52 @@ func TestAMarkedCreateRecordsAHousekeepingInvestigation(t *testing.T) {
 	}
 	if strings.Contains(program, "fixer is Cursor") {
 		t.Errorf("the coordinator's notes reached the program's part:\n%s", program)
+	}
+}
+
+// The program's part of a later pass names the base of the newest earlier
+// pass, the default-branch commit its copy was cut at (PassBase) and not
+// the knowledge revision its launch recorded, and when it was created, and
+// the holds earlier passes raised that are still open, and an empty set of
+// notes is said to be none rather than refused.
+func TestALaterPassIsToldTheLastBaseAndTheOpenQuestions(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	first := f.create(t, pass("")).Task
+	f.beginAttempt(t, first.ID)
+	if err := f.store.SetAttemptKnowledge(ctx, first.ID, 1, store.AttemptKnowledge{Commit: "deadbeef"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.store.SetTaskStartSnapshot(ctx, first.ID, store.CopySnapshot{Head: "c0ffee"}); err != nil {
+		t.Fatal(err)
+	}
+	hold := store.Hold{Key: HoldKey(first.ID, "f1"), TaskID: store.Known(first.ID), Subject: "whether the rule on P14 should read otherwise",
+		Detail: "the proposed wording"}
+	if _, _, err := f.store.StoreTaskReport(ctx, store.TaskReport{TaskID: first.ID, Body: "b", Report: []byte(`{"summary":"s"}`)},
+		[]store.Hold{hold}); err != nil {
+		t.Fatal(err)
+	}
+	// A pass whose report decision is open cannot be relayed, so it ends
+	// by retirement, which leaves the decision open for the next pass.
+	retire := store.Hold{Key: "task/" + first.ID + "/housekeeping-retire/1/1/-", TaskID: store.Known(first.ID), Subject: "retire?", Detail: "d"}
+	if _, err := f.store.RegisterHold(ctx, retire); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.RetireHousekeepingPass(ctx, store.Retirement{Task: first.ID, Attempt: 1, Hold: retire.Key,
+		By: store.ResolvedByMachineInterface(), Relaunches: func(string) bool { return false },
+		Ended: func(store.RunStatus) bool { return true }, Delivered: taskstate.Delivered}); err != nil {
+		t.Fatalf("retiring the first pass: %v", err)
+	}
+	second := f.create(t, pass(""))
+	text := f.instructionsOf(t, second.Task.ID)
+	for _, want := range []string{"The last pass was task " + first.ID, "c0ffee", "git log c0ffee..HEAD", hold.Key,
+		"whether the rule on P14", "The coordinator added none."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the second pass's instructions do not say %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "deadbeef") {
+		t.Errorf("the second pass's instructions name the knowledge revision as the base:\n%s", text)
 	}
 }
 

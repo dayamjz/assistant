@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/store"
@@ -28,8 +29,11 @@ import (
 // person or answered the due wake is nothing this package can tell, so the
 // pass is held to the same scope either way.
 //
-// The program's part names the scope and the rules of section 6's table;
-// what it says of earlier passes is the link above this one.
+// The program's part names the scope, the base of the newest earlier pass
+// and when it was created, the holds earlier passes raised that are still
+// open, and the rules of section 6's table. It is composed from records read
+// before the creating transaction, so a pass created between that read and
+// the write is the refusal's to catch, never the brief's to describe.
 
 // HousekeepingScope answers a repository's trusted housekeeping.paths, read
 // from the default branch as internal/service reads every trusted key: a
@@ -93,6 +97,35 @@ func validPass(req Request) error {
 type passFacts struct {
 	repository string
 	scope      config.PatternSet
+	// last is the newest earlier pass, and unknown before the first.
+	last store.Optional[earlierPass]
+	// holds are the open holds earlier passes raised.
+	holds []store.Hold
+}
+
+// earlierPass is what the brief says of the newest earlier pass.
+type earlierPass struct {
+	id      string
+	created time.Time
+	// base is PassBase's, and unknown for a pass never dispatched.
+	base store.Optional[string]
+}
+
+// PassBase is the base of a housekeeping pass, PRD section 6's: the
+// default-branch commit its copy was cut at, which is what its worker read,
+// as the copy's start snapshot records it at the pass's latest dispatch,
+// and unknown for a pass never dispatched. It is not the knowledge revision
+// the launch recorded: that is read at a fresh fetch of the upstream, which
+// can stand past the primary checkout the copy was cut from, and a pass
+// that found nothing at the older tree has not checked the newer commit.
+// It is the one reading of the base: the next pass's instructions and the
+// due check (internal/service) both take it from here.
+func PassBase(task store.Task) store.Optional[string] {
+	snap, ok := task.StartSnapshot.Get()
+	if !ok || snap.Head == "" {
+		return store.Unknown[string]()
+	}
+	return store.Known(snap.Head)
 }
 
 // readPassFacts reads the repository's scope and its earlier passes.
@@ -107,7 +140,21 @@ func (q *Queue) readPassFacts(ctx context.Context, repository store.Repository, 
 	if len(scope) == 0 {
 		return passFacts{}, &PassRefusal{Repository: repository.ID, Reason: passScopeOff}
 	}
+	passes, err := q.store.HousekeepingPasses(ctx, repository.ID)
+	if err != nil {
+		return passFacts{}, err
+	}
 	facts := passFacts{repository: repository.ID, scope: scope}
+	for i, p := range passes {
+		if i == 0 {
+			facts.last = store.Known(earlierPass{id: p.Task.ID, created: p.Task.CreatedAt, base: PassBase(p.Task)})
+		}
+		for _, h := range p.Holds {
+			if h.Open() && h.TaskID.Or("") == p.Task.ID {
+				facts.holds = append(facts.holds, h)
+			}
+		}
+	}
 	return facts, nil
 }
 
@@ -134,6 +181,30 @@ func passInstructions(f passFacts, notes string) string {
 		b.WriteString("- `" + p + "`\n")
 	}
 	b.WriteString("\nA pattern with no slash names that file at any depth.\n\n")
+
+	b.WriteString("## Since the last pass\n\n")
+	if last, ok := f.last.Get(); ok {
+		fmt.Fprintf(&b, "The last pass was task %s, created at %s.", last.id, last.created.UTC().Format(time.RFC3339))
+		if base, ok := last.base.Get(); ok {
+			fmt.Fprintf(&b, " Its base, the default-branch commit its copy was cut at, is %s. Read what merged since then from "+
+				"the repository, starting with git log %s..HEAD on the default branch, rather than from anyone's memory.\n\n", base, base)
+		} else {
+			b.WriteString(" It recorded no base, because it was never dispatched, so read the scoped files whole against the tree.\n\n")
+		}
+	} else {
+		b.WriteString("This is the repository's first pass. There is no earlier base, so read the scoped files whole against the tree.\n\n")
+	}
+
+	b.WriteString("## Questions earlier passes already raised\n\n")
+	if len(f.holds) == 0 {
+		b.WriteString("None is open.\n\n")
+	} else {
+		b.WriteString("These decisions are still open. Do not raise them again; a finding that would repeat one is left out.\n\n")
+		for _, h := range f.holds {
+			fmt.Fprintf(&b, "- %s: %s\n", h.Key, h.Subject)
+		}
+		b.WriteString("\n")
+	}
 
 	b.WriteString("## Rules\n\n")
 	for _, rule := range passRules {
