@@ -1,0 +1,177 @@
+package tasks
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/dayamjz/assistant/internal/principles"
+)
+
+// renameNoReplace moves a file to a free name and refuses, moving nothing,
+// to land on a name that stands, which is what lets a discard set an entry
+// aside, or put one back, without overwriting one made under its name
+// since. The positive control is the move to a free name.
+func TestARenameThatMustNotReplaceRefusesToLandOnAName(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("this build has a rename that refuses to replace only on Linux and macOS")
+	}
+	dir := t.TempDir()
+	from, taken, free := filepath.Join(dir, "from"), filepath.Join(dir, "taken"), filepath.Join(dir, "free")
+	writeFile(t, from, "moved\n")
+	writeFile(t, taken, "made under the name\n")
+	if err := renameNoReplace(from, taken); err == nil {
+		t.Fatal("the rename replaced the file standing under the name")
+	}
+	if raw, err := os.ReadFile(taken); err != nil || string(raw) != "made under the name\n" {
+		t.Fatalf("the name's file reads %q, %v; want it as it was made", raw, err)
+	}
+	if err := renameNoReplace(from, free); err != nil {
+		t.Fatalf("renaming to a free name: %v", err)
+	}
+	if raw, err := os.ReadFile(free); err != nil || string(raw) != "moved\n" {
+		t.Fatalf("the moved file reads %q, %v", raw, err)
+	}
+}
+
+// moveAsRead sets an entry aside only as it was read (PRD section 6,
+// "Removing a discarded copy", step 2): a file, a directory and a symbolic
+// link read beforehand move whole and unchanged, a file rewritten with the
+// bytes it held is no change, and nothing at a path nothing was read at
+// moves nothing. Changed bytes, a changed mode, an entry added to or
+// removed from a directory, and an entry read but gone each refuse with
+// ErrLossChanged. A name already standing where the entry goes refuses
+// without moving anything or touching what stands there.
+func TestAnEntryIsSetAsideOnlyAsItWasRead(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("this build has a rename that refuses to replace only on Linux and macOS")
+	}
+	cases := []struct {
+		name    string
+		make    func(t *testing.T, at string)
+		between func(t *testing.T, at string)
+		moved   bool
+		changed bool
+	}{
+		{name: "a file as read", make: file("work\n"), moved: true},
+		{name: "a directory as read", make: tree, moved: true},
+		{name: "a symbolic link as read", make: link, moved: true},
+		{name: "a file rewritten with its bytes", make: file("work\n"), between: rewrite("work\n"), moved: true},
+		{name: "nothing read and nothing there", make: nil, moved: false},
+		{name: "a file whose bytes changed", make: file("work\n"), between: rewrite("other\n"), moved: true, changed: true},
+		{name: "a file whose mode changed", make: file("work\n"), between: chmod(0o700), moved: true, changed: true},
+		{name: "a file added to a directory", make: tree, between: func(t *testing.T, at string) {
+			writeFile(t, filepath.Join(at, "sub", "new.txt"), "added\n")
+		}, moved: true, changed: true},
+		{name: "a file gone from a directory", make: tree, between: func(t *testing.T, at string) {
+			if err := os.Remove(filepath.Join(at, "sub", "b.txt")); err != nil {
+				t.Fatal(err)
+			}
+		}, moved: true, changed: true},
+		{name: "a file read and gone", make: file("work\n"), between: func(t *testing.T, at string) {
+			if err := os.Remove(at); err != nil {
+				t.Fatal(err)
+			}
+		}, moved: false, changed: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			copyPath, aside := t.TempDir(), t.TempDir()
+			at := filepath.Join(copyPath, "entry")
+			if c.make != nil {
+				c.make(t, at)
+			}
+			before, err := readCopyState(copyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.between != nil {
+				c.between(t, at)
+			}
+			want, err := readCopyState(copyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			to := filepath.Join(aside, "tree", "entry")
+			moved, err := moveAsRead(at, to, before, "entry")
+			if moved != c.moved || errors.Is(err, ErrLossChanged) != c.changed || (!c.changed && err != nil) {
+				t.Fatalf("moveAsRead = %v, %v; want moved %v, ErrLossChanged %v", moved, err, c.moved, c.changed)
+			}
+			if !moved {
+				return
+			}
+			if _, err := os.Lstat(at); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the entry still stands in the copy after it moved: %v", err)
+			}
+			got, err := readCopyState(to)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for p, s := range got {
+				if w, ok := want[filepath.Join(at, p[len(to):])]; !ok || w != s {
+					t.Fatalf("%s moved as %+v, but the copy held %+v there", p, s, w)
+				}
+			}
+		})
+	}
+
+	t.Run("a name standing where it goes", func(t *testing.T) {
+		t.Parallel()
+		copyPath, aside := t.TempDir(), t.TempDir()
+		at, to := filepath.Join(copyPath, "entry"), filepath.Join(aside, "entry")
+		writeFile(t, at, "work\n")
+		writeFile(t, to, "made there\n")
+		before, err := readCopyState(copyPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if moved, err := moveAsRead(at, to, before, "entry"); moved || err == nil || errors.Is(err, ErrLossChanged) {
+			t.Fatalf("moveAsRead onto a standing name = %v, %v; want it refused, nothing moved", moved, err)
+		}
+		for p, content := range map[string]string{at: "work\n", to: "made there\n"} {
+			if raw, err := os.ReadFile(p); err != nil || string(raw) != content {
+				t.Fatalf("%s reads %q, %v; want %q", p, raw, err, content)
+			}
+		}
+	})
+}
+
+// file makes a regular file holding content.
+func file(content string) func(t *testing.T, at string) {
+	return func(t *testing.T, at string) { writeFile(t, at, content) }
+}
+
+// rewrite writes content over the file at at.
+func rewrite(content string) func(t *testing.T, at string) {
+	return file(content)
+}
+
+// chmod sets the mode of the entry at at.
+func chmod(mode os.FileMode) func(t *testing.T, at string) {
+	return func(t *testing.T, at string) {
+		if err := os.Chmod(at, mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// tree makes a directory with a file and a subdirectory holding another.
+func tree(t *testing.T, at string) {
+	mkdirAll(t, filepath.Join(at, "sub"))
+	writeFile(t, filepath.Join(at, "a.txt"), "a\n")
+	writeFile(t, filepath.Join(at, "sub", "b.txt"), "b\n")
+}
+
+// link makes a symbolic link at at to a path that does not exist, which is
+// moved as the link and never followed.
+func link(t *testing.T, at string) {
+	if err := os.Symlink(filepath.Join(t.TempDir(), "nowhere"), at); err != nil {
+		t.Fatal(err)
+	}
+}
