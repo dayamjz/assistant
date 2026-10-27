@@ -399,9 +399,14 @@
 // same seals, once per marker within the repository, which its unique key
 // holds. AppendHousekeepingWake is its one append, and migration 67's
 // housekeeping_notification is its notification record, claimed and settled
-// for the private channel on the other shapes' terms. ForgetRepository
-// refuses a repository with one queued (ErrHousekeepingWakeQueued) and takes
-// the acknowledged rows and their notifications after the repository row.
+// for the private channel on the other shapes' terms. Migration 68's
+// housekeeping_marker is the due check's comparison base, which the append
+// advances in the wake's own transaction when the wake is a due check's, or
+// AdvanceHousekeepingMarker alone when nothing was due, both only while the
+// passes the check read are unmoved, re-read in the writing transaction
+// (DueCheck, ErrDueCheckStale). ForgetRepository refuses a repository with a
+// wake queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows,
+// their notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
 // count and the acknowledgement for the three shapes about no task, and
 // DrainAll and AcknowledgeAll take all four shapes in one transaction. A

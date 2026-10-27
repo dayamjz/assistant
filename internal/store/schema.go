@@ -243,6 +243,11 @@ const housekeepingWakesMigration = "housekeeping wakes"
 // sealCheckpointTableMigration is a constant.
 const housekeepingNotificationMigration = "housekeeping notifications"
 
+// housekeepingMarkerMigration names the migration that adds the due
+// check's marker, for the reason sealCheckpointTableMigration is a
+// constant.
+const housekeepingMarkerMigration = "housekeeping marker"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -2896,6 +2901,22 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a notification is kept and is not deleted while its housekeeping wake stands');
 				END`,
+		},
+	},
+	{
+		version: 68,
+		name:    housekeepingMarkerMigration,
+		statements: []string{
+			// The marker the due check advances, one row per repository: the
+			// pass the check followed, or none before the first pass, and
+			// when it last fetched the default branch for it. Like every
+			// marker it is the comparison base for the next check and not
+			// the repository's state. It goes with its repository.
+			`CREATE TABLE housekeeping_marker (
+				repository_id TEXT PRIMARY KEY REFERENCES repository(id),
+				pass          TEXT REFERENCES task(id),
+				checked_at    TEXT NOT NULL
+			) STRICT`,
 		},
 	},
 }

@@ -680,3 +680,14 @@ var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")
 // RepositoryRemovable for a repository with an unacknowledged housekeeping
 // wake about it.
 var ErrHousekeepingWakeQueued = errors.New("store: a housekeeping wake about the repository is unacknowledged")
+
+// ErrDueCheckStale is returned, wrapped, by AppendHousekeepingWake for a
+// due check's wake and by AdvanceHousekeepingMarker when the repository's
+// passes moved since the check read them: the pass the check followed is no
+// longer the repository's newest, or a pass is open. A due check reads its
+// facts before it fetches, so a wake raised from them would say no pass was
+// ever created of a repository with one open, or name a base a newer pass
+// has replaced, and the coordinator acting on it would create a pass the
+// newest has already made redundant. Neither the wake nor the marker is
+// written, and the next supervision pass reads the passes afresh.
+var ErrDueCheckStale = errors.New("store: the repository's housekeeping passes moved since the due check read them")
