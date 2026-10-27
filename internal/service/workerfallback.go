@@ -329,8 +329,16 @@ func (s *Service) answerWorkerFallbackRetry(ctx context.Context, r machine.TaskR
 		refuse(err)
 		return
 	}
+	if s.afterBackupRedispatch != nil {
+		s.afterBackupRedispatch(r.Task)
+	}
 	pending, err := s.unacknowledgedOf(ctx, r.Task, latest.Sequence)
 	if err != nil {
+		// The redispatch claimed its attempt and nothing launches it, so
+		// the slot it took is settled here, with no session recorded: a
+		// stop or a relaunch asked next must find the slot free rather
+		// than a launch in flight until the service restarts.
+		d.settleSlot()
 		_ = s.holdWorkerFallback(ctx, r.Task, err)
 		refuse(err)
 		return

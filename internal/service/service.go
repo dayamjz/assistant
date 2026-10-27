@@ -404,6 +404,12 @@ type Service struct {
 	// why the skip loses nothing. It is not mu, because an intake reads the
 	// gate and the project's configuration while it holds it.
 	intake sync.RWMutex
+	// afterBackupRedispatch runs in a retry answered on a worker fallback
+	// hold once the redispatch has claimed its attempt and before the
+	// stopped attempt's messages are read, with the task. It is nil in
+	// production and set only by this package's tests, which use it to end
+	// the request there, as a client that disconnected does.
+	afterBackupRedispatch func(task string)
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two

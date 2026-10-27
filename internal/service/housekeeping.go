@@ -282,8 +282,12 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	// registering a hold that would take a launching pass out of flight.
 	// It reads the slot rather than taking it, so a stop or the cleanup
 	// ask holding the slot, which exclude nothing here, do not put the
-	// offer off; a launch that begins after this read claims a new attempt,
-	// which the offer's anchors refuse.
+	// offer off. The read decides nothing by itself: the store orders the
+	// offer against every attempt claim, refusing the offer once an
+	// attempt was claimed (its anchor) and refusing a claim once the hold
+	// is open (store.ErrPassHeld), so a dispatcher that read the pass
+	// before this offer and claims after it begins nothing and gives its
+	// slot back. The read only spares a launch in flight that refusal.
 	if s.launching(id) {
 		return out
 	}

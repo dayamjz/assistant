@@ -2537,15 +2537,20 @@ var schema = []migration{
 				END`,
 			// PRD section 8's housekeeping retirement record: written once
 			// per pass that ends without a terminal record, naming how it
-			// was retired, either the run whose recorded position found
-			// nothing left to change or the retirement hold an answer
-			// closed, and when. Exactly one of the two is named. It is
-			// appended and sealed, and kept while its task stands.
+			// was retired, the retirement hold a person's answer closed,
+			// and when. It is appended and sealed, and kept while its task
+			// stands.
 			`CREATE TABLE housekeeping_retirement (
 				task_id     TEXT PRIMARY KEY REFERENCES task(id),
 				hold_key    TEXT NOT NULL REFERENCES hold(key),
 				recorded_at TEXT NOT NULL
 			) STRICT`,
+			// The retirement hold is the one hold the store registers
+			// itself (OfferRetirementHold), and the one hold an attempt
+			// claim reads: no attempt of a pass begins while one is open
+			// (ErrPassHeld). The mark says which holds those are; every
+			// other hold reads back unknown.
+			`ALTER TABLE hold ADD COLUMN housekeeping_retirement INTEGER`,
 			`CREATE TRIGGER housekeeping_retirement_is_a_passes
 				BEFORE INSERT ON housekeeping_retirement
 				WHEN NOT EXISTS (SELECT 1 FROM task WHERE task.id = NEW.task_id AND task.housekeeping = 1)

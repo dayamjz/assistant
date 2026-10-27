@@ -410,6 +410,11 @@ type RetirementOffer struct {
 // dead is the probe's, which no transaction can take; the attempt and
 // session anchors are what keep a relaunch, or a launch under way, since the
 // loop's probe from slipping past, as they are for the retirement itself.
+// The hold is marked as the retirement hold in the same transaction, and
+// every attempt claim refuses a pass with one open (ErrPassHeld), so an
+// attempt claimed after the offer begins nothing and an offer after the
+// claim is refused on its anchor: no worker runs in a pass that resolves
+// Held from this hold, which is not in flight (P10).
 func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o RetirementOffer) (Hold, error) {
 	h := o.Hold
 	if err := validateHold(h); err != nil {
@@ -457,7 +462,14 @@ func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o Reti
 		if err := passStillTx(snap, Retirement{Task: task, Attempt: o.Attempt, Session: o.Session, Run: o.Run, Ended: o.Ended}); err != nil {
 			return err
 		}
-		return insertHold(ctx, tx, h)
+		if err := insertHold(ctx, tx, h); err != nil {
+			return err
+		}
+		// The mark every attempt claim reads (anchorTaskAttemptTx), written
+		// in the registering transaction, so the offer and a claim have
+		// exactly one loser in either order.
+		_, err = tx.ExecContext(ctx, `UPDATE hold SET housekeeping_retirement = 1 WHERE key = ?`, h.Key)
+		return err
 	})
 	if err != nil {
 		var moved *TaskMovedError

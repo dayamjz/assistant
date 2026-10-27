@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
@@ -236,4 +237,73 @@ func TestALaunchOfAPassRetiredBeforeItTookTheSlotCreatesNoWorker(t *testing.T) {
 	close(w.launched)
 	w.launched = make(chan launchOutcome, 1)
 	w.launched <- launchOutcome{}
+}
+
+// offerRetirementHoldOf registers the pass's retirement hold through the
+// store as the loop's offer does, against the attempts as recorded, under
+// a fresh incarnation.
+func offerRetirementHoldOf(t *testing.T, records *store.Store, task string) store.Hold {
+	t.Helper()
+	ctx := t.Context()
+	inc, err := records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := recordedAttempts(t, records, task)
+	rh := retireHold{Task: task, Epoch: 1, Attempt: latestSequence(attempts)}
+	hold, err := records.OfferRetirementHold(ctx, inc, store.RetirementOffer{
+		Hold:    store.Hold{Key: rh.key(), TaskID: store.Known(task), Subject: "retire?", Detail: "d"},
+		Attempt: rh.Attempt, Session: latestRef(attempts), Ended: runs.Finished, Delivered: taskstate.Delivered,
+	})
+	if err != nil {
+		t.Fatalf("offering the retirement hold: %v", err)
+	}
+	return hold
+}
+
+// The window the launch's slot does not cover, P10: the loop reads no
+// launch in flight and offers the retirement hold after a dispatcher has
+// read the pass as Dispatched and before it claims its attempt. The claim
+// is decided in the store against the hold, so the dispatch is refused
+// (store.ErrPassHeld), claims no attempt, creates no worker and gives the
+// slot back; a pass that resolves Held from that hold has nothing running
+// in it, which is what its not being in flight says. Once the hold is
+// answered keep the next dispatch begins the pass, the control that the
+// refusal is the hold's. Before the claim read the hold, the dispatch went
+// on to claim its attempt and launch, and the worker then ran in a pass
+// the hook read as nothing in flight, the shape the review at 3ebce63
+// reproduced.
+func TestADispatchThatReadAPassBeforeItsRetirementHoldWasOfferedClaimsNoAttempt(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	sub := newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}
+	})
+	s := sub.service
+	var hold store.Hold
+	s.betweenAttemptReadAndClaim = func() { hold = offerRetirementHoldOf(t, sub.records, sub.task) }
+	d, err := s.dispatchTask(ctx, sub.task)
+	attempts := recordedAttempts(t, sub.records, sub.task)
+	if !errors.Is(err, store.ErrPassHeld) {
+		t.Fatalf("the dispatch of a pass whose retirement hold was offered before its claim = %+v, %v, with attempts %d; "+
+			"want it refused with ErrPassHeld", d.attempt, err, len(attempts))
+	}
+	if len(attempts) != 0 {
+		t.Fatalf("the refused dispatch claimed attempts %+v, want none", attempts)
+	}
+	if _, held := s.isolationOf(sub.task); held {
+		t.Fatal("the refused dispatch kept the pass's slot, so the next pass could not dispatch it")
+	}
+	if _, err := sub.records.ResolveHold(ctx, hold.Key, machine.AnswerKeep, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	s.betweenAttemptReadAndClaim = nil
+	d, err = s.dispatchTask(ctx, sub.task)
+	if err != nil || d.attempt != 1 {
+		t.Fatalf("the dispatch once the hold was answered keep = %+v, %v; want attempt 1", d, err)
+	}
+	d.settleSlot()
 }

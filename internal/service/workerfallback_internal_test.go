@@ -375,3 +375,45 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 		t.Fatalf("work lost on retry: %q %v", bytes, err)
 	}
 }
+
+// A retry answered on a worker fallback hold that is cut short after its
+// redispatch claimed the new attempt, as a client that disconnected before
+// the stopped attempt's messages were read cuts it, settles the slot the
+// redispatch took: the attempt has no session, so the next stop or relaunch
+// must be able to take the slot rather than read a launch in flight until
+// the service restarts. Before, this path returned with the slot unsettled.
+func TestARetryCutShortAfterItsRedispatchSettlesTheSlot(t *testing.T) {
+	const unestablished = "that a backup retry reclaims the standing copy"
+	requireSweepClearsHere(t, unestablished)
+	sub := newLaunchSubject(t, workerStandIn(t))
+	s := sub.service
+	s.terminals = heldTerminals{s}
+	ctx := t.Context()
+	d, err := s.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The launch did not record a session: the attempt stands with none and
+	// the fallback hold is raised on it, as holdWorkerFallbackAttempt does.
+	d.settleSlot()
+	if err := s.holdWorkerFallbackAttempt(ctx, sub.task, d.attempt, errors.New("the backup could not start")); err == nil {
+		t.Fatal("holdWorkerFallbackAttempt returned nil, want the cause")
+	}
+	key := workerFallbackHoldKey(sub.task, d.attempt)
+	requestCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.afterBackupRedispatch = func(string) { cancel() }
+	answered, err := s.respondTask(requestCtx, ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
+	if err == nil && answered.Effect == machine.AnswerRedispatched {
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the cut-short retry reports %+v, want it not begun", answered)
+	}
+	attempts, err := s.store.TaskAttempts(ctx, sub.task)
+	if err != nil || len(attempts) != 2 || attempts[1].SessionRef.IsKnown() {
+		t.Fatalf("after the cut-short retry the attempts are %+v (%v), want the redispatched second with no session", attempts, err)
+	}
+	release, err := s.claimSteer(sub.task)
+	if err != nil {
+		t.Fatalf("a stop's claim after the cut-short retry = %v, want the slot settled", err)
+	}
+	release()
+}

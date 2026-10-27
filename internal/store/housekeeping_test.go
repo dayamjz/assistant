@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -586,5 +587,80 @@ func TestARetirementAndTheSessionRecordOfALaunchUnderWayHaveOneLoser(t *testing.
 	launched := answerOf("taskhkaaaaec", retire, attempt.Sequence, "pane-early")
 	if _, err := s.RetireHousekeepingPass(ctx, launched); err != nil {
 		t.Fatalf("a retirement decided against the session as recorded = %v, want it written", err)
+	}
+}
+
+// PRD section 6's "a retire ... is refused ... if ... its worker has been
+// relaunched since the hold was registered" has a converse the store
+// decides too: no attempt of a pass begins while its retirement hold is
+// open, since a worker begun under that hold would run in a pass that
+// resolves Held, which is not in flight (P10). The offer and the claim have
+// exactly one loser in either order: a claim after the offer is refused
+// (ErrPassHeld) and begins nothing, and an offer after the claim is refused
+// on its attempt anchor (ErrTaskMoved). A keep answer closes the hold and
+// the next claim begins; a hold that is not the retirement hold refuses no
+// claim, which is the control that the rule reads the hold the offer wrote.
+func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	offerOf := func(task string, epoch, attempt int64) RetirementOffer {
+		return RetirementOffer{Hold: Hold{Key: fmt.Sprintf("task/%s/housekeeping-retire/%d/%d/-", task, epoch, attempt),
+			TaskID: Known(task), Subject: "retire?", Detail: "d"}, Attempt: attempt, Ended: ended, Delivered: relayed}
+	}
+
+	// The offer first: the dispatch's claim is refused and begins nothing.
+	mustPass(t, s, "taskhkaaaaia")
+	first, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhkaaaaia", 1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskhkaaaaia", OnThisMachine()); !errors.Is(err, ErrPassHeld) {
+		t.Fatalf("the first attempt of a pass whose retirement hold is open = %v, want ErrPassHeld", err)
+	}
+	if attempts, err := s.TaskAttempts(ctx, "taskhkaaaaia"); err != nil || len(attempts) != 0 {
+		t.Fatalf("the refused claim left attempts %+v (%v), want none", attempts, err)
+	}
+	if _, err := s.ResolveHold(ctx, first.Key, "keep", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskhkaaaaia", OnThisMachine()); err != nil {
+		t.Fatalf("the first attempt once the hold was answered keep = %v, want it begun", err)
+	}
+	// The same for a relaunch's claim, against a hold on the dispatched
+	// attempt.
+	second, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhkaaaaia", 2, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginTaskAttempt(ctx, "taskhkaaaaia", 1); !errors.Is(err, ErrPassHeld) {
+		t.Fatalf("a relaunch's attempt of a pass whose retirement hold is open = %v, want ErrPassHeld", err)
+	}
+	if _, err := s.ResolveHold(ctx, second.Key, "keep", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginTaskAttempt(ctx, "taskhkaaaaia", 1); err != nil {
+		t.Fatalf("a relaunch's attempt once the hold was answered keep = %v, want it begun", err)
+	}
+
+	// The claim first: the offer decided against no attempt is refused.
+	relay(t, s, "taskhkaaaaia")
+	mustPass(t, s, "taskhkaaaaib")
+	beginAttempt(t, s, "taskhkaaaaib", 0)
+	if _, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhkaaaaib", 1, 0)); !errors.Is(err, ErrTaskMoved) {
+		t.Fatalf("an offer decided before the pass was begun = %v, want ErrTaskMoved", err)
+	}
+
+	// The control: a hold that is not the retirement hold refuses no claim.
+	relay(t, s, "taskhkaaaaib")
+	mustPass(t, s, "taskhkaaaaic")
+	if _, err := s.RegisterHold(ctx, Hold{Key: "task/taskhkaaaaic/finding/1", TaskID: Known("taskhkaaaaic"), Subject: "s", Detail: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskhkaaaaic", OnThisMachine()); err != nil {
+		t.Fatalf("the first attempt of a pass with a report decision open = %v, want it begun", err)
 	}
 }

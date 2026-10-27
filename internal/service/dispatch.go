@@ -333,6 +333,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		case errors.Is(err, errTaskUnplaced):
 			s.log.Printf("task %s stays queued: %v", r.Record.ID, err)
 			continue
+		case errors.Is(err, store.ErrPassHeld):
+			s.log.Printf("housekeeping pass %s was not dispatched, and is once its retirement hold is answered keep: %v", r.Record.ID, err)
+			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
 			continue
@@ -410,15 +413,18 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 }
 
 // settleOrRelease ends a dispatch's hold on its slot, or hands it to the
-// launch: a dispatch left queued by placeable claimed nothing, so its slot
-// is given back and the next pass reads the trusted copy again; a dispatch
-// that failed settles the slot now, with no proof, for the service's
-// lifetime; and a dispatch that proved its copy keeps the slot unsettled
-// and returns it with d.settle set, for launchTask to settle with the proof
-// once the launch's record is settled, on the file comment's terms.
+// launch: a dispatch left queued by placeable, or refused at its claim
+// because the pass's retirement hold is open (store.ErrPassHeld), claimed
+// nothing, so its slot is given back and the next pass reads the task
+// again, which for the pass is the pass after the hold is answered keep; a
+// dispatch that failed settles the slot now, with no proof, for the
+// service's lifetime; and a dispatch that proved its copy keeps the slot
+// unsettled and returns it with d.settle set, for launchTask to settle with
+// the proof once the launch's record is settled, on the file comment's
+// terms.
 func (s *Service) settleOrRelease(id string, settle func(tasks.Isolation), d dispatched, err error) (dispatched, error) {
 	switch {
-	case errors.Is(err, errTaskUnplaced):
+	case errors.Is(err, errTaskUnplaced), errors.Is(err, store.ErrPassHeld):
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.isolated, id)

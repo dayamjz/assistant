@@ -649,6 +649,17 @@ func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 // for a pass whose claim is already released.
 var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
 
+// ErrPassHeld is returned, wrapped, by BeginTaskAttempt and
+// BeginFirstTaskAttempt for a housekeeping pass with an open retirement
+// hold, the one OfferRetirementHold registered: the hold waits on a person
+// about whether the pass ends, and an attempt begun under it would run a
+// worker in a pass that resolves Held, which is not in flight, out of
+// supervision (P10). A keep answer closes the hold, and the next claim
+// begins. The claim and the offer are decided in the store with exactly
+// one loser in either order: the offer refuses a pass whose attempt moved
+// (ErrTaskMoved), and the claim refuses a pass whose hold is open.
+var ErrPassHeld = errors.New("store: the housekeeping pass holds on its retirement decision and is not begun until it is answered")
+
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
 // still moves the pass as its transaction reads it: a run attributed to it
 // that has not ended, a run or an attempt newer than the retirement was
