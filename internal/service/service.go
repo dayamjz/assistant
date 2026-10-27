@@ -348,6 +348,9 @@ type Service struct {
 	// home and code host; cleanup.go says which of its entries this service
 	// calls and from where.
 	cleaner *tasks.Cleaner
+	// housekeeping is what housekeeping.go remembers between passes, none
+	// of it a record's fact.
+	housekeeping housekeepingState
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
 	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
