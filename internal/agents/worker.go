@@ -178,9 +178,10 @@ type Worker interface {
 	// process is no longer running, so nothing is reported delivered to a
 	// process that is gone. A process that ends with a send's write in
 	// flight does not by itself make that send ErrWorkerEnded: a write
-	// that completed was taken before the end and the send returns nil,
-	// with Done saying the rest, and only a write the process never took
-	// is refused. A Codex turn returns when turn/start is
+	// that completed put its bytes in the pipe before the end and the
+	// send returns nil, with Done saying the rest, and only a write that
+	// failed is refused. What the process read of the pipe before it
+	// ended is its own, here as for any send. A Codex turn returns when turn/start is
 	// accepted, not when that turn goes idle; the next Send waits for the
 	// idle, or for the failed turn/completed that ends a turn with none,
 	// before it writes, and an app-server that exited mid-turn makes it
@@ -483,8 +484,10 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 		// knows whether the bytes reached it first, so its answer is waited
 		// for, under ctx as every wait here is. done closes once the leader
 		// is reaped and its group terminated, so a write nothing took fails
-		// as soon as the pipe has no reader, and one that completed was
-		// taken before the end and is delivered (round 44: a worker ending
+		// as soon as the pipe has no reader, and one that completed put its
+		// bytes in the pipe before the end and is delivered on the terms
+		// every send is, the write's and not the process's reading of it
+		// (round 44: a worker ending
 		// on the line it was sent, as stream mode does on a line that is
 		// not JSON, had its send refused whenever the end was seen first,
 		// which a select between two ready cases does at random). A reader

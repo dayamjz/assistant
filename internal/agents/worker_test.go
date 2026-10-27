@@ -483,7 +483,7 @@ func TestEveryQueuedSendHonoursItsOwnContext(t *testing.T) {
 }
 
 // A send the worker reads and ends on is delivered, not refused: its bytes
-// were written and taken before the process ended, so the send returns nil
+// were in the pipe before the process ended, so the send returns nil
 // and Done reports the end (round 44: whenever the end was seen before the
 // write's completion, the send answered ErrWorkerEnded, which is how the
 // stream mode's test of a line that is not JSON failed one run in three on
