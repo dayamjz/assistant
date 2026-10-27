@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // relayed is the record tier these tests stand in for: an investigation is
@@ -49,8 +50,8 @@ func relay(t *testing.T, s *Store, id string) {
 }
 
 // PRD section 6's one-at-a-time rule: a repository has at most one open
-// pass, the refusal names it, and a pass in the terminal tier no longer
-// counts. Two creations at once leave exactly one task, because the
+// pass, the refusal names it, and a pass in the terminal tier or retired no
+// longer counts. Two creations at once leave exactly one task, because the
 // check and the insert are one immediate transaction on the one writer.
 func TestARepositoryHasAtMostOneOpenHousekeepingPass(t *testing.T) {
 	t.Parallel()
@@ -71,7 +72,11 @@ func TestARepositoryHasAtMostOneOpenHousekeepingPass(t *testing.T) {
 	relay(t, s, first.ID)
 	second := mustPass(t, s, "taskhkaaaaac")
 
-	relay(t, s, second.ID)
+	// A retired pass releases the claim too, though it resolves nothing.
+	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: second.ID, Hold: registerRetireHold(t, s, second.ID),
+		By: ResolvedByMachineInterface(), Delivered: relayed}); err != nil {
+		t.Fatalf("retiring %s: %v", second.ID, err)
+	}
 
 	var wg sync.WaitGroup
 	results := make([]error, 2)
@@ -143,5 +148,77 @@ func TestTheHousekeepingMarkIsWrittenOnceAtIntake(t *testing.T) {
 	// The positive control: the mark is read back as written.
 	if got, err := s.Task(ctx, plain.ID); err != nil || got.Housekeeping {
 		t.Fatalf("an ordinary investigation reads %+v, %v, want no mark", got, err)
+	}
+}
+
+// registerRetireHold registers a stand-in for the retirement hold on a task.
+func registerRetireHold(t *testing.T, s *Store, task string) string {
+	t.Helper()
+	key := "task/" + task + "/housekeeping-retire/1"
+	if _, err := s.RegisterHold(context.Background(), Hold{Key: key, TaskID: Known(task), Subject: "retire it?", Detail: "d"}); err != nil {
+		t.Fatalf("RegisterHold: %v", err)
+	}
+	return key
+}
+
+// promotedPassWithRun promotes a pass of repo-1 onto branch, begins its
+// first attempt and creates a run on the branch with the given status.
+func promotedPassWithRun(t *testing.T, s *Store, id, branch string, status RunStatus) (TaskAttempt, Run) {
+	t.Helper()
+	ctx := context.Background()
+	mustPass(t, s, id)
+	history := historyOf(t, s, id)
+	if _, _, err := s.TransitionTaskShape(ctx, id, TaskInvestigation, TaskDelivery, "repo-1", branch,
+		config.DeliveryGated, "Correct the drift.", history[len(history)-1].Sequence, "promoted in the test", ResolvedByMachineInterface(), nil); err != nil {
+		t.Fatalf("promoting %s: %v", id, err)
+	}
+	attempt := beginAttempt(t, s, id, 0)
+	tick()
+	run, err := s.CreateRun(ctx, Run{ID: "run-" + id, RepositoryID: "repo-1", Branch: branch, SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "task", Build: testBuild(), ConfigDigest: "cfg-1"})
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if status != RunPending {
+		if run, err = s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunRunning); err != nil {
+			t.Fatal(err)
+		}
+		if status != RunRunning {
+			if run, err = s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, status); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return attempt, run
+}
+
+// PRD section 6's retirement is one record, written once in its own
+// transaction, naming the hold the answer closed, never rewritten, and a
+// second retirement of the pass is refused as closed (P6).
+func TestARetirementIsWrittenOnce(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	_, run := promotedPassWithRun(t, s, "taskhkaaaaca", "housekeeping/one", RunRunning)
+	retire := registerRetireHold(t, s, "taskhkaaaaca")
+	answer := Retirement{Task: "taskhkaaaaca", Hold: retire, By: ResolvedByMachineInterface(), Delivered: relayed}
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunPassed); err != nil {
+		t.Fatal(err)
+	}
+	retired, err := s.RetireHousekeepingPass(ctx, answer)
+	if err != nil || retired.Record.Hold != retire || len(retired.Closed) != 1 || retired.Closed[0].Key != retire {
+		t.Fatalf("the retirement = %+v, %v, want the record naming hold %s and that hold closed", retired, err, retire)
+	}
+	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassClosed) {
+		t.Fatalf("a second retirement = %v, want ErrPassClosed", err)
+	}
+	if err := rawWrite(ctx, s, `UPDATE housekeeping_retirement SET recorded_at = '2000-01-01T00:00:00Z' WHERE task_id = 'taskhkaaaaca'`); err == nil {
+		t.Fatal("the schema let a retirement be rewritten")
+	}
+	snap, err := s.TaskSnapshot(ctx, "taskhkaaaaca")
+	if err != nil || snap.Retirement != Known(retired.Record) {
+		t.Fatalf("the snapshot carries %+v, %v, want the record", snap.Retirement, err)
 	}
 }

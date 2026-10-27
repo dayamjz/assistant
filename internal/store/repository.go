@@ -395,6 +395,10 @@ var runRecords = []runRecord{
 var refusedRunRecords = map[string]error{
 	"task":        ErrRepositoryInUse,
 	"run_process": ErrRunProcessRecorded,
+	// A retirement names the run its pass was retired on, and is a pass's,
+	// so a repository with one has a task working on it, which the task row
+	// already refuses over.
+	"housekeeping_retirement": ErrRepositoryInUse,
 }
 
 // RepositoryRemovable reports what would stop ForgetRepository, and removes

@@ -73,6 +73,12 @@ type TaskSnapshot struct {
 	// the row and never the FindingsRelayedEventKind entry appended beside
 	// it (P8).
 	Relay Optional[TaskRelay]
+	// Retirement is the task's housekeeping retirement record, and unknown
+	// for a pass not retired and for every task that is not a pass. It is
+	// carried for the readers of whether a pass is open and for the attempt
+	// anchor; internal/taskstate's resolver does not read it, so a retired
+	// pass resolves what its own records give (PRD section 8).
+	Retirement Optional[HousekeepingRetirement]
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
@@ -266,6 +272,13 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		snap.Relay = Known(relay)
 	case !isNoRows(err):
 		return TaskSnapshot{}, fmt.Errorf("reading the findings relayed record of task %s: %w", task.ID, err)
+	}
+
+	switch retirement, retired, err := retirementOf(ctx, q, task.ID); {
+	case err != nil:
+		return TaskSnapshot{}, err
+	case retired:
+		snap.Retirement = Known(retirement)
 	}
 
 	query = holdColumns + ` FROM hold WHERE task_id = ?`
