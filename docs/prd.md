@@ -111,6 +111,8 @@ word appears in both the interface and the implementation, it means the same thi
 | **finding** | One issue a stage reports, carrying a severity and an action. |
 | **action** | What a finding asks for: `fix`, `ask`, or `note`. This is the entire split between machine judgment and yours. |
 | **fix ladder** <kbd>proposed</kbd> | The order in which a stage's automatic fix rounds change how they are answered once the fixer's session is not converging: a fresh session, then a harder effort, then the fixer's next model, then a hold for you. Not a loop bound, and it never parks. Section 5's [fix ladder](#fix-ladder) owns the rule. |
+| **slice budget** <kbd>proposed</kbd> | The number of changed code lines, tests and documentation not counted, past which the change a review is about to read holds for a decision on splitting it, checked before every review. A soft bound that holds, never a cap, and not a loop bound. Section 6's [work in small slices](#slices) owns the rule. |
+| **stack** <kbd>proposed</kbd> | Delivery tasks of one repository each created after the one before, so each is reviewed on its own against the branch of the one it follows and they land in order. Section 6's [work in small slices](#slices) owns the rule. |
 | **hold** | A run or task waiting on a decision from you. A hold is durable and survives a restart. It is not the lifecycle state Paused, which section 6 reserves for a worker's own declared external wait. |
 | **wake** | An event that might need attention. Most wakes are handled without involving a model. |
 | **home** | One instance's private state directory. Locks, queues, and records are all scoped to a home. |
@@ -704,7 +706,10 @@ loop, and no round, and section 5's bounds above stay the outer limit.
   actions as any hold before push does. Standing consent leaves it for you, because the one
   answer it gives, another fix round, is exactly what the ladder has run out of. A spent ladder
   is a hold and not a park: it waits on a person, it is not one of the three loop bounds, and
-  it is not a fifth park.
+  it is not a fifth park. <kbd>proposed</kbd> That `ask` also names the change's size against
+  the slice budget, and whether the change can be split is the first question asked about it;
+  and a round that would climb a rung on a change past that budget holds on splitting first. Both
+  are on the terms of section 6's [work in small slices](#slices).
 - **The bounds above stay the outer limit.** The ladder never takes a round the per-stage
   limit, the run-wide budget, or the per-run usage budget would not allow, and each still parks
   on its own terms when it is reached first, whatever rung the stage is on. At the default
@@ -997,6 +1002,8 @@ starts are the `review` and `fix` roles, not the task's role.
 
 A launched worker's first turn is the task's instructions, then any relaunch note, then section
 10's project knowledge, read afresh for every attempt.
+<kbd>proposed</kbd> A delivery task's worker is also told the slice budget, after the relaunch
+note, on the terms of [work in small slices](#slices).
 
 > **A report is evidence, not authorization**
 >
@@ -1292,6 +1299,7 @@ flowchart TD
   kind -->|"subordinate gone"| esc
   kind -->|"subordinate escalated"| esc
   kind -->|"housekeeping due, proposed"| esc
+  kind -->|"base landed, proposed"| esc
   kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
   kind -->|"the program's own entry: queued, dispatched"| abs
   ev -->|yes| abs
@@ -1772,6 +1780,200 @@ What this does not establish: that a round's outcome was caused by its rung, its
 effort. The records make the comparison possible; they do not control for the change, the
 repository, or the reviewer. A worker turn its adapter does not report, and every coordinator
 turn, stay outside the totals, so a total is a floor of what the work spent and never the whole.
+
+### <a id="slices"></a>Work in small slices <kbd>proposed</kbd>
+
+> This subsection, and every passage elsewhere marked *proposed* that points at it, is a draft
+> written for the owner's decision (AGE-493). Nothing it describes is built, and nothing here is
+> decided until the owner says so.
+
+A change is reviewed as a whole, and a large one rarely passes a full review. In the development
+fleet's evidence, recorded on this proposal's pull request, a full review requested changes,
+counting one review per pull request at each size, 39% of the time at 1 to 100 changed code lines,
+56% at 101 to 300, and 83% at 301 to 700, and every pull request reviewed past 2,000 failed. Pull requests also grew
+while they were reviewed: one went from 23 code lines at its first review to 1,749 at its merge,
+failing review twenty times on the way. So a change is measured before every review it gets, not
+only once when its work is dispatched. This subsection is that rule: a budget on the change about
+to be reviewed, a split into slices by behavior, slices stacked and landed in order, and a record
+per review from which the budget is revisited. It adds no stage, no loop, and no verb.
+
+**The measure.** The program measures the change a review is about to read from its commits,
+never from anyone's account of them: the changed lines, added and deleted, and the changed files,
+between the commit where the change left its base and the head under review, the base read at a
+fresh fetch. Every changed path has one kind: a test where `slice_budget.test_paths` matches it,
+otherwise documentation where `slice_budget.doc_paths` matches it, otherwise code. A file whose
+lines cannot be counted, a binary among them, counts toward its kind's files and is reported as
+uncounted, never as zero lines. The budget reads one number, the changed code lines. Every other
+count is recorded beside it to explain a hold and to revisit the budget, and none of them is
+compared with anything, because in the evidence none added anything distinguishable from noise
+once the code lines were known.
+
+**The budget.** Section 10's `slice_budget.code_lines`, 300 by default; zero is no budget. The
+default is the largest value at which, in the evidence, the pull requests at or under it stayed
+hard to pass at most one time in ten, hard meaning three or more failing reviews: of 105 pull
+requests with code, the 33 above it were hard 45% of the time and the 72 at or under it 10%, and
+it would have held 15 of the 22 hard ones at their first review. It is chosen from that evidence,
+not measured as a cutoff, and its cost is holds: a third of those pull requests would have held,
+two of them changes that passed their first review. A change with no code lines never holds, since
+the evidence held too few hard documentation changes to set a measure for them.
+
+**Told at dispatch.** A delivery task's worker is told the budget when it launches, after the
+task's instructions and any relaunch note: the value, the measure, and the rule that a change past
+the budget is not pushed, and the worker proposes a split instead, naming the behaviors the change
+holds and the order to land them in. The proposal is the worker's claim. It records it as an event
+about how its work stands, and the coordinator reads it as evidence (P13). Nothing exists to
+measure at dispatch, so this half rests on the worker listening; the check below does not.
+
+**Checked before every review.** Each review a run makes, the review stage's at every execution,
+re-reviews among them, and section 14 decision 7's review of the commits after an approved one, is
+preceded by the measure of the change that review is about to read. Past the budget, or past what
+a keep allowed (below), the reviewer is not called: the stage holds on an `ask` the program builds,
+"split this change?", naming each kind's counts and the budget, and marked as standing for a
+review that never started, a mark no agent's report can carry. A measure that cannot be made,
+because the base cannot be fetched or a commit cannot be read, holds the same way and names what
+could not be read: missing information is never read as a small change. The remedy lies outside
+the change, so no fix round can answer it and standing consent leaves it for a person. It holds
+every run, a person's push included, because a hold is part of the validation a push consents to
+(P1); it skips, adds, and weakens no stage (P2).
+
+**Who decides, and how a keep is recorded.** The hold offers section 5's actions, and one of its
+own:
+
+| Answer | What it does |
+|---|---|
+| **Keep** | The change is reviewed whole. Offered only at a hold this check raised, on the terms section 5 gives Retry at the usage ceiling's hold: the stage runs again from the top, in the same run, and this time the review is made. Its measure becomes the branch's allowance: a later review of the same repository and branch, in this run or a later one, holds again only when its code lines pass the largest count a keep on that branch accepted, so a change that keeps growing is asked about again. Each keep leaves the hold back into the stage and counts toward that exit's bound, three per stage per run, a fixed number with no key in section 10, and the run-wide budget counts every one. |
+| **Cancel** | The change is to be split. The run ends with the work recoverable, as cancel always does, and the slices are tasks the coordinator creates, on the terms below. |
+| **Approve, skip** | Offered as at every hold, and each advances past a review that did not happen, which the record and the pull request body say. Neither is a keep. |
+| **Fix** | Offered where section 5 offers it, for a round you write the findings of yourself, such as cutting the change down; the review that follows it is measured again first, as every review is. |
+
+- **The coordinator decides, or you do.** Splitting work is part of dispatching it, so the
+  coordinator may answer the hold through the machine interface, as it may any hold, or relay it to
+  you. A subordinate coordinator's answer is refused and handed up, as at every hold.
+- **A keep is recorded once, as the hold's resolution.** Who gave it is recorded from section 8's
+  closed set of resolvers, and the note says why. That resolution is the one record of the
+  override, and the allowance is read from those resolutions and from nothing else (P14); it is
+  the largest count any of them accepted, never the latest one's. A record says a person kept the
+  change only when one did, because no path an agent reaches produces that value.
+- **A keep is visible where the change is read.** The pull request body names the measure, the
+  budget, each keep, who gave it, and its note, so a reviewer knows the change was kept whole on
+  purpose.
+- **A worker that stopped before pushing raised no hold.** A coordinator that means to keep its
+  change whole tells it to push, through section 6's steering, and answers the hold that push's
+  run raises, so the override is never recorded anywhere else.
+- **Splitting comes before a harder lever.** None of the fix ladder's rungs shrinks the change,
+  and in the evidence the size at a round predicted further failure where its growth did not. So
+  before a fix round would climb a rung of section 5's [fix ladder](#fix-ladder), the program
+  measures the change, and past the budget or the allowance the stage holds on this check's `ask`
+  instead of climbing. When the ladder is spent, its `ask` names the measure beside the budget, and
+  the coordinator's relay of it, which leads with evidence and then the options as section 6's
+  "What reaches you" requires, asks first whether the change can be split. For a run your own push
+  started, the question is yours. The ladder's rules are otherwise its own and unchanged.
+
+**Split by behavior, not by layer.** A slice is one behavior a person could accept or refuse on its
+own, such as a rule, an answer, or a safety check, complete through every layer it touches and
+carrying the tests that establish it. A store slice, then a service slice, then a command-line
+slice is the wrong cut, because none of them can be judged without the others. A slice is small
+enough when one acceptance row in section 13's manner describes it. Where a behavior needs new
+mechanism, such as a type, a store accessor, or a typed git operation, the mechanism comes first as
+a slice of its own, with its tests and no caller, and its intent names the behavior that will call
+it, so its review judges it as mechanism. A mechanical change, such as a rename, a moved file, or
+generated code, is one slice however large, and it is what keep is for. The program cannot tell a
+behavior from a layer, so this rests on the coordinator's slicing, the worker's instructions, and
+each slice's review, which reads the slice against its own intent.
+
+**Slices stack, and land in order.** A delivery task may be created **after** another delivery
+task of the same repository, its **base link**. A chain of such tasks is a **stack**.
+
+- **The link is written once, at intake.** Create takes the task it follows as an optional field
+  beside the role. It must name a delivery task of the same repository that has not landed, and,
+  for a subordinate coordinator, one in its own domain. An investigation can be neither a link nor
+  a base link, since it pushes nothing, and neither can a task under `local`, since it starts no
+  run that could push a base or review a link. The task record holds the link, written once at
+  intake and kept by promotion and relaunch, and nothing else stores it. A link can name only a
+  task that already exists, so a stack has no cycle.
+- **A link dispatches once its base link has pushed.** It is Queued until a run of its base link
+  has pushed the base link's branch, a blocker that clears like any other, and its copy's branch
+  starts at the commit that run pushed, so its worker builds on code that has been validated once.
+- **Each link is reviewed alone.** While its base link has not landed, a run of a link takes the
+  base link's branch as its base, the base section 8's run record holds. Its rebase stage rebases
+  onto that branch at a fresh fetch, its review reads only the link's own change, its measure is of
+  that change, and its pull request proposes into that branch. Configuration is still read from the
+  default branch and never from a base link's branch (P7).
+- **The next link is retargeted as its base lands.** When the base link resolves Landed, the
+  program raises one wake, **base landed**, about the link, and changes no run. The link's next run
+  takes the base its base link's runs took, which at the bottom of a stack is the default branch.
+  That run starts from a push of the link's branch, its worker's when the coordinator steers it or
+  yours, and never from the program, because only a push consents to validation (P1). It replays
+  only the link's own commits, those its base link's branch did not hold at the commit the link's
+  previous run read, so a base link that landed squashed or rebased does not hand the link its
+  commits a second time. It is reviewed again in a fresh session, as every run is, and its pull
+  request stage sets the pull request's base to the run's base.
+- **Only a merge into the default branch lands a link.** Section 8's merge record names the base
+  the pull request merged into, and a link resolves Landed only from a merge record whose base is
+  the default branch. A link's pull request merged into its base link's branch is not a landing:
+  the task holds for you naming the merge, because what it delivered now rides on a link that has
+  not landed.
+- **A failed link lands nothing above it.** The autonomy flag merges a link only once its base link
+  has landed and the run it merges took the default branch as its base. So a base link that fails,
+  parks, holds, or is closed without merging leaves every link above it unmerged by the program, and
+  the coordinator escalates the stack to you; nothing relinks a link or lands one on its own, and
+  each link's work stays in its copy (P6). Merging without the flag is yours, and the forge's rules
+  decide it as always: the pull request body and the link's status line name the link it waits on.
+- **The task that was split is the last piece.** A task whose run was cancelled to be split keeps
+  the whole change in its copy, and the program rewrites nothing there. Its worker declares a wait,
+  section 6's Paused, on the slices landing, or is stopped. Once they have landed, its next push is
+  measured against the default branch as it then stands, so it carries only what the slices did
+  not: nothing, and when its branch was never published it lands on section 6's
+  [nothing left to deliver](#nothing-to-deliver), or a remainder, reviewed as a piece of its own.
+
+**What is recorded per review.** Revisiting the budget needs the size of each change at each review
+beside what reviewing it took, and each fact has one owner. A pull request's facts are read from
+the runs whose record names it, and the size at every review is a fact of that review:
+
+| Fact | Owner | How a reader gets it |
+|---|---|---|
+| Lines and files by kind at the head reviewed | Section 6's [learning what converges](#round-records) round record, new fields | Written once on the round row of each review, held or made: the head measured, the base commit, each kind's lines, files, and uncounted files, and how many directories the code files sit in. A row written before the fields reads them as unknown. |
+| A hold at the budget, and its answer | The hold record | The `ask` names the round row it measured, and its resolution says keep, cancel, approve, or skip, who gave it, and the note. |
+| Stack position | The task record's link | The base link, and from it the stack. |
+| Rounds, review kind, verdict, and blocking reviews | The round record | As that section gives them: a review that blocked, one with a `fix` or an `ask`, is derived on read from the counts by action. |
+| Tokens | The agent invocation record | Through the invocations the round rows name, on that section's terms. |
+| Time open | The run record and the merge record | When the pull request stage created the pull request, new, written once on the run that created it; and the merge record's time, or the read that found the pull request closed without merging. A pull request still open reads as open. |
+
+- **Nothing here decides at run time.** The budget changes only when a person changes it in
+  configuration, from what these records show, as the fix ladder's order does. The evidence's own
+  method for that is to recompute, as pull requests land, how often changes at or under the value
+  and above it were hard, and to set the largest value whose at-or-under rate stays at one in ten,
+  moving it only once enough hard pull requests are in the window; it also reads how kept changes
+  fared, since a keep that keeps failing argues for a lower value and one that passes for a higher.
+  That method is guidance for the person, and nothing here runs it.
+- **No surface is added.** Which surface shows a pull request's size beside its rounds is left to
+  section 9, which this does not extend; until then the records are read by a person's own tooling
+  on this machine.
+
+What this does not establish:
+
+- That splitting lowers the total. The evidence shows each large diff faring worse per review; no
+  change in it was split and compared with its whole, so three slices may still take as many
+  rounds between them. The records let a stack be compared with the change it came from.
+- That size causes the failures. A change may be large because its task is hard, and the budget
+  assumes size is partly controllable, which the evidence does not test. It is one repository over
+  eight days, 24 hard pull requests in all, and the relation was weaker in the later half.
+- That a slice is one behavior. Nothing checks the cut but each slice's review.
+- That the code count is what a reviewer reads. A large test or documentation change is outside
+  the budget, a generated file is code unless a pattern names it, and a test in a language whose
+  test files no pattern names counts as code.
+- That a split leaves nothing to reconcile. A slice its review changed no longer matches the whole
+  change's own commits, so the split task's last push carries a difference against the landed
+  slices that its worker or a person has to reconcile; its rebase holds where that replay
+  conflicts, and nothing here decides the content.
+- That a branch's allowance is one change's. A branch reused for unrelated work keeps the
+  allowance an earlier keep gave it, and nothing here detects the reuse.
+- A merge you make out of order. A link's pull request retargeted by hand and merged into the
+  default branch before its base link lands carries the base link's commits with it; that is a
+  landing of the link, and the base link resolves from its own records, which nothing here
+  corrects.
+- What a stack costs. Every retarget is a further run of the link, reviewed again, and a link
+  waits for its base link's push before its worker starts.
 
 <sub>Section 7</sub>
 
@@ -2783,7 +2985,7 @@ flowchart TB
   global["Your global settings<br />in your home"]
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
-  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Housekeeping paths, proposed"]
+  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Housekeeping paths, proposed<br />Slice budget, proposed"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection and roles<br />Fix ladder, proposed"]
 
   global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority<br />Housekeeping interval, proposed<br />Case harvesting, proposed"]
@@ -2859,6 +3061,9 @@ is its audit.
 | `review.path_rules` | empty | Extra review guidance scoped to paths. Applied in declared order, each labelled with its own scope and the files it matched, so a scoped rule never reads as repository-wide. |
 | `judge_paths` | tests, CI, lint config | Path patterns for the files that decide whether a check passes. Read only from the trusted copy. The default is `*_test.go`, `*_test.py`, `test_*.py`, `*.test.*`, `*.spec.*`, `**/test/**`, `**/tests/**`, `**/__tests__/**`, `**/testdata/**`, `.github/workflows/**`, `.golangci.yml`, `.golangci.yaml`, `.eslintrc*`, `eslint.config.*`, `ruff.toml`, `Makefile`, `.gitlab-ci.yml`, `*Test.java`, `*Test.kt`, `**/src/test/**`, `conftest.py`, `pytest.ini`, `tox.ini`, `jest.config.*`, `vitest.config.*`, and `.mocharc*`. Like any list, a repository's value replaces the default rather than extending it, and an empty list turns the rule off. |
 | `housekeeping.paths` <kbd>proposed</kbd> | agent instruction files | Path patterns for the repository's agent context, the files a housekeeping pass keeps true and the only ones it may change (section 6's [housekeeping](#housekeeping)). Read only from the trusted copy, because a branch that could widen the list could let a pass edit anything. The default is `AGENTS.md`, `**/AGENTS.md`, `CLAUDE.md`, `**/CLAUDE.md`, `.claude/rules/**`, `.cursor/rules/**`, `README.md`, and `assistant-knowledge.md`. Like any list, a repository's value replaces the default rather than extending it, and an empty list turns housekeeping off for that repository. |
+| `slice_budget.code_lines` <kbd>proposed</kbd> | `300` | How many changed code lines, added and deleted, the change a review is about to read may hold before the review is not made and the stage holds on splitting it, on section 6's [work in small slices](#slices) terms. It is checked before every review a run makes, and a delivery task's worker is told it at launch. Zero is no budget. A line is code when neither `slice_budget.test_paths` nor `slice_budget.doc_paths` matches its file. The default follows the development fleet's evidence, recorded on the proposal's pull request, and is not a measured cutoff. Read only from the trusted copy, because a branch that could raise its own budget could exempt itself from the hold, and like every trusted-only key the operator's own file may also set it. It is read at each launch that tells it and each review it precedes, so a change to it applies from the next of either. It is not a loop bound and parks nothing. |
+| `slice_budget.test_paths` <kbd>proposed</kbd> | test files | Path patterns for the changed files the slice budget counts as tests rather than code. The default is `*_test.go`, `*_test.py`, `test_*.py`, `*.test.*`, `*.spec.*`, `**/test/**`, `**/tests/**`, `**/__tests__/**`, `**/testdata/**`, `*Test.java`, `*Test.kt`, `**/src/test/**`, and `conftest.py`. A path both lists match is a test. It decides only what the budget counts and what section 6's per review record calls each line, and it is not `judge_paths`, which decides what a check may not edit. Like any list, a repository's value replaces the default rather than extending it. In `slice_budget.code_lines`' trust class, read on the same terms. |
+| `slice_budget.doc_paths` <kbd>proposed</kbd> | documentation files | Path patterns for the changed files the slice budget counts as documentation rather than code. The default is `*.md`, `*.mdx`, `*.rst`, `*.adoc`, `docs/**`, and `doc/**`. Like any list, a repository's value replaces the default rather than extending it. In `slice_budget.code_lines`' trust class, read on the same terms. |
 | `document.ownership` | empty | Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes. |
 | `suppress_project_instructions` | `false` | For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it. |
 | `no_ci` | `false` | A positive declaration that this repository has no checks. Only this makes an empty check list count as green. |
@@ -3059,6 +3264,7 @@ role resumes is resumed on the terms the role names at that launch.
 | git deadline ceiling | `2h` | `git_deadline`. Above this a wedged git holds a run for longer than a sitting before it is ended. Chosen, not measured. |
 | gh deadline floor | `10s` | `gh_deadline`. Below this an ordinary request to the code host is ended before it can answer. Chosen, not measured. |
 | gh deadline ceiling | `30m` | `gh_deadline`. Above this a wedged `gh` holds a run for half an hour, far past what a handful of requests takes. Chosen, not measured. |
+| Slice budget path patterns <kbd>proposed</kbd> | `512` | Elements of `slice_budget.test_paths`, and separately of `slice_budget.doc_paths`. The judge path patterns' bound. Chosen, not measured. |
 | Housekeeping path patterns <kbd>proposed</kbd> | `512` | Elements of `housekeeping.paths`. The judge path patterns' bound. Chosen, not measured. |
 | Housekeeping interval floor <kbd>proposed</kbd> | `1h` | `housekeeping.interval` when not zero. Below this the due check fetches every repository far more often than merges arrive. Chosen, not measured. |
 | Housekeeping interval ceiling <kbd>proposed</kbd> | `168h` | `housekeeping.interval`. Above this a repository's agent context goes more than a week without a pass. Chosen, not measured. |
@@ -3244,6 +3450,7 @@ Several of them are the only reason the corresponding rule stays true a year lat
 | **Fix ladder** <kbd>proposed</kbd> | **(P4, P5, P6.)** Through the binary, with the stand-in agent as the fixer and a stage whose review keeps reporting a `fix` finding after every round, a `fix` role naming `medium`, one entry in `fix_ladder.models`, `climb_after` and `rounds_per_rung` both one, and a round limit of five: round one opens a session, round two's invocation opens a new one rather than resuming and its prompt is the program's handoff, naming the earlier round's commits and marking its summary as the fixer's claim; round three opens another at `high`; round four opens another on the entry's agent and model at the entry's effort; and the next automatic round is not taken and the stage holds on an `ask` naming each rung. Every review invocation of the run is session-free, and none is given the handoff or a fixer session's reference. Standing consent leaves that hold open. A round you ask for at it runs at the last rung and moves nothing. Under standing consent, a stage whose round limit is zero climbs on the rounds consent asks for at its holds: the first opens a session, the second opens a new one on `fresh`, and so on up the same ladder, and the consent answer that would start a round past the last rung leaves the ladder's hold instead (positive control: the same stage with the counter of unattended traversals ignored stays on the opening rung, which is the defect the counter exists for). Rounds you ask for at a hold between them do not move the rung, before or after a later unattended answer. A checkpoint written before the counter existed resumes with it read as zero. With a round limit of two the run parks on that limit after round two, and nothing holds for the ladder (positive control: the limit is reached first). A round that changes nothing on a new rung still parks the loop at its second such round, so the rung is not part of what convergence measures (positive control: a run whose rounds change something is not parked). With session reuse off, `fresh` is recorded as skipped; with the `fix` role naming `high`, `effort` is; with no entries, `model` is; each skipped rung takes no round. An empty `fix_ladder.order` resumes the opening session on every round and never holds for the ladder. A name outside the set, a repeated name, and an entry outside section 10's table each fail at parse time naming the key; a pushed copy setting any `fix_ladder` key has no effect without `allow_pushed_commands` (P7); an entry whose agent cannot run fails the run before its first stage. A ladder changed in configuration between two segments of one run leaves the run on the ladder it started with. |
 | **Round records** <kbd>proposed</kbd> | **(P8, P14.)** Through the binary across two repositories, every review and every fix round has a round row naming the invocations it served, its rung, and its kind, and a report built from the rows reads each round's tokens only from those invocations: a count the stand-in did not report reads unreported, and is never summed as zero. A review after a fix round whose finding sits in a line that round changed counts it, and one whose finding sits elsewhere does not. A run that parks, one that holds, and one whose task later lands each read their outcome from the run's records, and no round row is revised when the task lands. A worker that reports usage on two turns writes two rows of purpose `worker` naming its task and attempt and no run; the usage view totals them by task and says it covers worker turns; the usage ceiling's figures and the per-run usage budget's spend are unchanged by them (positive control: a stage call in the same window does move the ceiling's figures). An adapter that does not declare worker usage writes no worker row, and the view says the task's turns are not recorded. No row holds a prompt, an output, a diff, or a credential. |
 | **Evaluation cases** <kbd>proposed</kbd> | **(P6, P7, P15.)** With `evaluation.harvest` empty, a review with an `error` `fix` finding writes no case. With the repository named, it writes exactly one case naming the reviewed commit, and a review of only notes or warnings writes none (positive control). When the branch's run merges, the case gains the landing and the merged head, once. A person's push of a branch no task is attributed to writes a case, and a later push of the same branch whose run merges completes it the same way, through a rebase that leaves the merged head not descending from the reviewed commit (positive control: a merge of a different branch completes nothing). A run of the branch whose pull request is closed without merging leaves its case open, and a later run of that branch that merges completes it from that merge (positive control: the closed run's merge record is the first one written for that branch after the case, so only its end keeps it from completing the case). A branch whose run rebases to nothing completes its case with no fix of its own, and a case whose branch never lands stays open. The reviewed commit stays readable from the gate's bare repository after its branch is deleted and the gate's repository is garbage collected, and no branch the push stage pushes, and no pull request, carries the case's reference. A repository file, trusted or pushed, naming `evaluation.harvest` is refused at parse time. No adapter, forge, notify command, or decision-model request is given a case, which is a test of what each of them can reach and not of one call. A case that cannot be written leaves the run as it would have been. |
+| **Slices** <kbd>proposed</kbd> | **(P1, P2, P3, P6, P7, P14.)** Through the binary, with the stand-in as reviewer and as a delivery task's worker and `slice_budget.code_lines` at 10: a push whose change holds 11 code lines, 200 test lines, and a document makes no reviewer call, and the review stage holds on exactly one `ask` naming 11 code lines, the test and documentation counts, and the budget, written on a round row that records the head and each kind's counts; the same push with 10 code lines and the same tests and document is reviewed, which is the positive control that tests and documentation are not counted, and the 11-line push holding is the one that shows the check can fail. A binary file counts toward its kind's files and is named uncounted. A base that cannot be fetched holds naming it and calls no reviewer. A person's push holds the same way. A change of documentation alone, however long, is reviewed. `keep` runs the stage again and the reviewer is called once, its resolver and note are recorded, and the pull request body names the measure and the keep; a fix round that grows the change to 11 lines is re-reviewed without a hold, and one that grows it to 12 holds again before the re-review (positive control: the allowance can fail); a later run of the same branch at 11 lines is reviewed without a hold, and the allowance is the largest kept count, not the latest. A fourth keep in one stage of one run is refused while the hold stays open. `approve` and `skip` advance with the record and the pull request body saying no review was made; a `fix` round you ask for that leaves 11 code lines holds again before its review, and standing consent leaves the hold open. A decision 7 review of commits after an approved one that adds 11 code lines holds at the push stage before anything is pushed. A fix round that would climb a rung of the fix ladder on a change past the budget holds on this `ask` and climbs nothing (positive control: under the budget it climbs). A pushed copy setting any `slice_budget` key has no effect on the measure (P7), while the default branch's copy does. With the budget zero, nothing holds. A task created after another is Queued until a run of the other has pushed, and its copy's branch starts at the pushed commit; its run's base is the other's branch, its review is given only its own change, its measure counts only its own lines, and its pull request proposes into the other's branch. Configuration is read from the default branch, not from the base link's branch, which sets a command that does not run. A merge of the link's pull request into its base link's branch is not a landing and holds the task. When the base link lands, exactly one base-landed wake names the link and no run starts; the link's next push starts a run whose base is the default branch, which replays only the link's own commits after a squashed merge of the base link, and whose pull request stage sets the pull request's base to it. With `autonomy.merge` naming the repository, a link whose base link has not landed is never merged, and once the base link lands and the link's run passes on the default branch it is (positive control). A base link whose run parks leaves the links above it unmerged, with their copies and branches unchanged. A create naming an investigation, a task under `local`, a task of another repository, or a landed task as the base link is refused and creates no task. A task whose run was cancelled at this hold, pushed again after its slices landed carrying exactly their changes, lands on nothing left to deliver. A report of one pull request's size at each review, its rounds, its blocking reviews, and its time open reads each from the record that owns it, with none written twice. |
 | **Judge paths** | A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an `ask` naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a `note`. A branch whose own configuration sets `judge_paths` has no effect on either. |
 | **Graph** | A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision. |
 | **Decision model** | Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In `evaluate` no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode `off` or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time. |
@@ -3305,6 +3512,7 @@ answered.
 | 28 | <kbd>proposed, not decided</kbd> A kept-work claim nobody can carry out **is withdrawn by your answer**, given as a hold answer, refused while its outcome is mid-flight, and removing nothing. | Proposed 2026-10-25 (#530, AGE-438) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-22 on #475's design, recorded on #530, that kept-work answers follow the claim rule: an answer closes an entry only in the write that records its outcome, and an answer in progress is a claim that keeps the entry open, listed, holding dispatch, and refusing other answers. Section 6 now states that rule, which was decided and not yet written here. A claim the program can neither carry out nor take back on its own, a carry on whose task was created but whose copy cannot be adopted among them, leaves the entry stuck, and nothing unsticks it. The proposal recommends: (1) each answer's outcome is named: a landing's run, recorded when it starts, so the entry closes then and not when the work lands; a carry on's new task owning the copy; a discard's removal, which records no claim while it is deferred to AGE-486; (2) a withdraw answer for a claim, with no verb of its own, on the terms the entry's other answers are given; (3) mid-flight, when it is refused, is a claim a call is carrying out now, a landing whose unrecorded run, left by a stopped service, has not ended or has begun validation, a carry on whose task has begun an attempt, and a discard whose removal has begun; a landing whose run is recorded has already closed the entry; (4) a carry on that moved the copy is withdrawn by moving the copy back to the entry's path, only when it is the copy the claim read and the path is free; a claim whose copy is gone from every path it knows is withdrawn by closing the entry as gone, since an entry reopened over no copy would hold its project with nothing able to release it (P15); (5) a withdraw clears the claim and reopens the entry, removes nothing (P6), and ends a task the carry on created before it ever dispatches, which resolves Withdrawn, a terminal fact, is not in flight, and is refused by dispatch; (6) each withdrawal is one record, written once with the clearing, naming the claim as it stood, who withdrew it, when, any move back, any closure as gone, and the note, which is evidence and never read for whether an entry is claimed (P8); (7) an entry holding a claim is listed naming it, and a task it holds waits naming the claim and the withdraw. Residual gap: an entry with no claim whose copy is gone has no answer that closes it in this build; this proposal closes only a claimed one. Rejected: leaving a carry on's created task standing for a later carry on, since a later land answer would release it to dispatch a fresh clone and redo finished work; refusing a withdraw once the task exists, which leaves the stuck example stuck; and refusing a withdraw once the copy moved, for the same reason. Section 6's [kept work](#kept-work) owns the rule; section 6's lifecycle, resolver and in-flight list gain Withdrawn; section 8 gains the kept-work withdrawal record; section 9 gains `--answer withdraw`; and section 13 gains an acceptance row. |
 | 29 | <kbd>proposed, not decided</kbd> A delivery task whose rebase leaves **nothing to deliver lands**, from a nothing-to-deliver record its run writes, and every other end that does not land goes to you. | Proposed 2026-10-26 (AGE-487) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-24, recorded on AGE-487: only this end ends a task on its own, as a typed outcome the task records, and every other end that does not land, a long run or a hang among them, is detected by the coordinator and escalated to you. The proposal recommends: (1) the outcome is a record of the run, written once in the same write that ends a run on section 5's empty-diff short circuit, read from the run's recorded position and never from its report or status; (2) only a run whose submitted commits P12's content check finds present in the default-branch commit it read writes one, since an empty replay alone also follows a patch the default branch applied and later reverted, and only one whose push anchor found its branch absent where it would push, so a branch somebody already published, perhaps with a pull request, never lands this way; (3) the task the run is attributed to resolves Landed from it in the terminal tier, so everything that already waits on Landed proceeds as after a merge and no state or waiter is added; (4) the copy is removed only on P12's proof read against the copy as it stands, and kept as kept work otherwise (P6, P15); (5) it is not a pass, and the task's line never words it as validated or merged; (6) it replaces the on-proof retirement decision 26 proposed for a housekeeping pass as a stopgap: a pass whose run rebases to nothing lands like any delivery task, so housekeeping keeps only the retirement you answer (P14). Left open: the run's own outcome word, which section 9's set does not name for this end; how a task that does not land this way reaches you; and section 5's short circuit ending a run successfully whose change matched a reverted patch. Section 6's [nothing left to deliver](#nothing-to-deliver) owns the rule. Section 6's lifecycle, resolver, housekeeping and stalled worker, section 5's rebase row, section 8's process model and data model, section 9's catch-up read, section 13's rows, and decision 26 point at it. The alternatives weighed are on the proposal's pull request. No code implements it at this proposal. |
 | 30 | <kbd>proposed, not decided</kbd> The product **records every round, worker turns included, and climbs a fix ladder** when a stage's fixer session is not converging, a fresh session, then effort, then model, then a hold for you. | Proposed 2026-10-26 (AGE-491) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's decision of 2026-10-26, recorded on AGE-491, that the product should learn what makes review and rework converge for all the work it does in every repository it serves. The proposal recommends: (1) every review and fix round keeps a round row that names the agent invocations it served, its rung, its review kind, a measure of findings in the previous round's own lines, and its wall time, and points at the records that own every other fact, the outcome among them, so nothing gains a second owner (P8, P14); (2) worker turns join the agent invocation record as rows of purpose `worker`, which extends what the usage view covers from stage agent calls to stage agent calls and worker turns, while the usage ceiling and the per-run usage budget keep comparing stage calls only; (3) section 5's fix ladder replaces resuming the run's fixer session on every unattended round, with its accounting in the graph module beside the run budget, its rungs skipped and recorded where they would change nothing, and a hold, never a park, past the last rung, inside the unchanged `fix_rounds` bounds and convergence check; (4) the handoff a fresh session gets is P4's explicit summary written by the program, and no review is given it or any fixer session (P4, P5); (5) evaluation cases are kept only for repositories the global-only `evaluation.harvest` names, in this home, and are sent nowhere, and each completes from its branch's landing, a merge or nothing to deliver and never a pull request closed without merging, whether or not a task is attributed to it; (6) the ladder counts a stage's unattended rounds, its automatic rounds and the rounds standing consent asks for, which needs one new counter in the graph's bound accounting, per edge the traversals that followed an unattended answer, since the accounting today keeps only whether the latest answer was. Left open: whether the usage ceiling should count worker turns; whether a task's worker should climb a ladder of its own across runs, which is what the evidence measured; whether the closed effort set should gain the efforts above `high` that evidence used; how harvested cases are removed; and whether the default ladder should be on before the replay benchmark reports. Section 5's [fix ladder](#fix-ladder) and section 6's [learning what converges](#round-records) own the rules. Section 2's vocabulary, section 8's data model, section 9's usage view and standing consent, section 10's schema, roles, and limits, and section 13's rows point at them. The evidence and the alternatives weighed are on the proposal's pull request. No code implements it at this proposal. |
+| 31 | <kbd>proposed, not decided</kbd> The change a review is about to read **holds for a split decision when it passes a budget of changed code lines**, checked before every review, and slices **stack and land in order**. | Proposed 2026-10-27 (AGE-493) for the owner's decision, and nothing here is decided until the owner says so. It follows the owner's request of 2026-10-27 that pull request size be tracked and acted on, because large pull requests get harder to pass as the product grows, and it takes its measure and its default from the AGE-494 investigation, recorded on the proposal's pull request. The proposal recommends: (1) one predictor, the changed code lines of the change about to be reviewed, with tests and documentation told apart by two trusted-only pattern lists and recorded but not compared; (2) the trusted-only `slice_budget.code_lines`, default 300, zero turning it off; (3) the check before every review a run makes, re-reviews and decision 7's review among them, because changes grow while they are reviewed and their size at each round predicts what follows, with the worker also told the budget at launch; past it the reviewer is not called and the stage holds on an `ask` the program builds and marks, a hold and not a park, whose remedy is outside the change, so standing consent leaves it, in every run, a person's push included (P1, P2, P3); (4) a `keep` answer offered only at that hold, on Retry's terms at the usage ceiling's hold, which runs the review and is recorded once as the hold's resolution, with its resolver and note, the one record of the override, the largest count kept on a branch becoming its allowance, and the pull request body naming it; the coordinator may give it, as it may answer any hold; (5) cancel as the split, the slices cut by behavior with their tests, mechanism first, never by layer, which rests on the coordinator and the review because the program cannot tell the two apart; (6) a fix round that would climb a rung of decision 30's ladder on a change past the budget holds on splitting first, and the ladder's spent hold names the measure; (7) a task may be created after another of the same repository, written once at intake; it dispatches once its base link has pushed, its runs are based on the base link's branch until that lands, then a base-landed wake leads to a run from the link's next push, never one the program starts (P1), based on the default branch and replaying only the link's own commits; only a merge into the default branch lands a link, and the autonomy flag merges a link only after its base link landed, so a failed link lands nothing above it; (8) the task that was split keeps the whole change and is the stack's last piece, landing on decision 29's nothing to deliver when its slices covered it; (9) each review's round row records the size of the head it read by kind, and a pull request's rounds, blocking reviews, and tokens are read from decision 30's round records (P14). Rejected: a hard cap, which is a silent cap on work a person may want whole; the earlier guess of twenty files or two thousand lines, which would have held 9 and 2 of the 22 hard pull requests where 300 code lines holds 15; counting every line, because tests and documentation would hold a well-tested change first; a check only at dispatch or only at the first review, which a change that grows under review passes; computing the age of the touched code, the earlier difficulty of the touched packages, or the specification sections a change touches, which showed no relation the evidence can tell from zero; the program choosing the slices, which needs a judgment it cannot make; the program starting a link's retargeted run itself, which P1 does not consent to; and a classifier deciding which large change is mechanical, a guess weakening a bound (decision 6). Left open: whether the budget is on by default; whether a keep needs a person rather than the coordinator; whether approve and skip should stay offered at this hold, since each advances past a review that did not happen; whether a link should dispatch before its base link has pushed; how a split task reconciles slices its review changed; a measure for changes of documentation alone; and which surface reads the per review record. Section 6's [work in small slices](#slices) owns the rules. Section 2's vocabulary, section 5's fix ladder, section 6's first turn and flowchart, section 10's schema, trust diagram, and limits, and section 13's row point at it. Once decided, section 5's hold actions, review row, and pull request row, section 8's task, run, round, hold, and merge records, and section 9's create field and hold answer carry it. No code implements it at this proposal. |
 
 ### What to settle next
 
