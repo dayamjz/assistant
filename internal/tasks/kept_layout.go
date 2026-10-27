@@ -149,7 +149,8 @@ func partialHistory(ctx context.Context, copied *vcs.Repository, refuse func(str
 // internal/safety's terms (safety.VerifyKeptCopy): the registry is the
 // entry's copy path and its own .git for a task's clone, and for a run's
 // worktree the gate at gatePath, whose registry names the worktree's
-// record (copyRecord, which also holds the worktree's .git file to it).
+// record (copyRecord, which also holds the worktree's .git file to it)
+// and whose repository the worktree must share.
 // Every path that answers a kept copy asks it first: the loss a discard
 // shows and a land reads, and carry on, before its claim and, when
 // a stopped carry on is
@@ -169,7 +170,8 @@ func (c *Cleaner) VerifyKeptCopy(ctx context.Context, entry store.KeptWork, gate
 // passes its own options with replacement references off, as a Cleaner's
 // are.
 func verifyKeptCopy(ctx context.Context, git []vcs.Option, entry store.KeptWork, gatePath string) error {
-	want := safety.KeptCopy{Worktree: entry.CopyPath, GitDir: filepath.Join(entry.CopyPath, ".git")}
+	dotGit := filepath.Join(entry.CopyPath, ".git")
+	want := safety.KeptCopy{Worktree: entry.CopyPath, GitDir: dotGit, CommonDir: dotGit}
 	if !entry.TaskID.IsKnown() {
 		bare, err := vcs.OpenBare(ctx, gatePath, git...)
 		if err != nil {
@@ -178,6 +180,11 @@ func verifyKeptCopy(ctx context.Context, git []vcs.Option, entry store.KeptWork,
 		if want.GitDir, err = copyRecord(ctx, bare, entry.CopyPath); err != nil {
 			return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)
 		}
+		// A run's worktree shares the gate's repository, where its objects
+		// and references live: the record's commondir file names it, and a
+		// record made to name another repository is refused by the
+		// verification rather than read and written through (round 44).
+		want.CommonDir = gatePath
 	}
 	if err := safety.VerifyKeptCopy(ctx, want, git...); err != nil {
 		return fmt.Errorf("%w: %w", ErrLayoutUnsupported, err)

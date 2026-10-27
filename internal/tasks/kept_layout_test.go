@@ -12,6 +12,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -87,7 +88,17 @@ func TestALossRefusesALayoutItDoesNotSupport(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"a commondir file", "has a commondir file", func(t *testing.T, copyPath, other string) {
+		{"a commondir file naming its own repository", "has a commondir file", func(t *testing.T, copyPath, _ string) {
+			// Naming the clone's own .git, git reads the same shared
+			// directory, so the verification passes and it is the layout
+			// that refuses the file.
+			if err := os.WriteFile(filepath.Join(copyPath, ".git", "commondir"), []byte(filepath.Join(copyPath, ".git")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"a commondir file naming another repository", "is read by git as sharing the repository directory", func(t *testing.T, copyPath, other string) {
+			// Naming another repository, the verification refuses it
+			// before the layout is read (round 44).
 			if err := os.WriteFile(filepath.Join(copyPath, ".git", "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -341,5 +352,67 @@ func TestAClonesRepositoryIsTheOneGitReadsForIt(t *testing.T) {
 				t.Errorf("the clone reads\n%s\nwant it as it was\n%s", now, beforeCopy)
 			}
 		})
+	}
+}
+
+// A run's worktree reads and writes its objects and references in the gate's
+// repository, which its record's commondir file names. A record made to name
+// another repository is refused before anything of the copy is read, by the
+// verification and so by the loss a discard shows and a land reads, with
+// safety.ErrCopyNotVerified under ErrLayoutUnsupported (round 44: both
+// passed, and a discard preview fetched into the other repository's object
+// database). The positive control is the same worktree with its record as
+// the gate wrote it, and git still reads the worktree through the redirected
+// record, so it is the binding alone that refuses.
+func TestARunsWorktreeRecordedAsSharingAnotherRepositoryIsRefused(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	const runID = "run-shared-elsewhere"
+	if _, err := s.store.CreateRun(ctx, store.Run{
+		ID: runID, RepositoryID: cleanupRepository, Branch: "topic", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	gateRepo := filepath.Join(t.TempDir(), "gate.git")
+	rawGit(t, filepath.Dir(gateRepo), "clone", "-q", "--bare", s.upstream, gateRepo)
+	copyPath := s.home.Worktree(cleanupRepository, runID)
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, gateRepo, "worktree", "add", "-q", "--detach", copyPath, "main")
+	commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
+	kept, err := s.cleaner.Keep(ctx, Kept{Run: runID, Reason: string(ReasonCopyChanged)})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v; want the run's copy kept", kept, err)
+	}
+	if err := s.cleaner.VerifyKeptCopy(ctx, kept.Entry, gateRepo); err != nil {
+		t.Fatalf("VerifyKeptCopy of the worktree as the gate recorded it = %v; want it verified", err)
+	}
+
+	// The other repository holds the worktree's commit, so git reads the
+	// worktree, HEAD and all, through the redirected record.
+	other := filepath.Join(t.TempDir(), "other")
+	rawGit(t, filepath.Dir(other), "clone", "-q", gateRepo, other)
+	record := rawGit(t, copyPath, "rev-parse", "--absolute-git-dir")
+	if err := os.WriteFile(filepath.Join(record, "commondir"), []byte(filepath.Join(other, ".git")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := filepath.EvalSymlinks(rawGit(t, copyPath, "rev-parse", "--git-common-dir"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want, err := filepath.EvalSymlinks(filepath.Join(other, ".git")); err != nil || got != want {
+		t.Fatalf("git reads the worktree as sharing %s, want the other repository %s (%v)", got, want, err)
+	}
+	err = s.cleaner.VerifyKeptCopy(ctx, kept.Entry, gateRepo)
+	if !errors.Is(err, ErrLayoutUnsupported) || !errors.Is(err, safety.ErrCopyNotVerified) ||
+		!strings.Contains(err.Error(), "is read by git as sharing the repository directory") {
+		t.Fatalf("VerifyKeptCopy of the worktree whose record names another repository = %v; want it refused as not verified", err)
+	}
+	if _, err := s.cleaner.Loss(ctx, kept.Entry, gateRepo); !errors.Is(err, safety.ErrCopyNotVerified) {
+		t.Fatalf("Loss of that worktree = %v; want it refused as not verified before anything is read", err)
 	}
 }

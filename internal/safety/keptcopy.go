@@ -31,16 +31,26 @@ import (
 //   - the copy's working tree is a directory, not a symbolic link;
 //   - the recorded repository directory is a directory, not a link, its
 //     parent path resolved;
+//   - the recorded shared repository directory, the one the copy's
+//     objects and references are read from and written to, is a
+//     directory, not a link, its parent path resolved: the clone's own
+//     .git again for a task's clone, and the gate's repository for a
+//     run's worktree;
 //   - git reads the copy (vcs.Observe: rev-parse --show-toplevel
-//     --absolute-git-dir) with the working tree the copy itself and the
+//     --absolute-git-dir --git-common-dir) with the working tree the copy
+//     itself, the repository directory the one recorded and the shared
 //     repository directory the one recorded, each compared once links are
 //     resolved, so a .git that is a link or a file pointing at another
 //     repository or another worktree's record, a .git git does not take
-//     for a repository, and another repository's core.worktree naming the
-//     copy are each refused;
-//   - no symbolic link stands anywhere in that repository directory, so
-//     no reference, reflog, object or index is read or written in another
-//     repository through one;
+//     for a repository, another repository's core.worktree naming the
+//     copy, and a worktree record whose commondir file names another
+//     repository, so that every object and reference would be read and
+//     written there, are each refused;
+//   - no symbolic link stands anywhere in the recorded repository
+//     directory, so no reference, reflog, object or index is read or
+//     written in another repository through one. For a run's worktree
+//     that directory is its record; the gate's shared directory, which
+//     holds the references and objects, is bound above and not walked;
 //   - no symbolic link in the working tree resolves to a directory, so no
 //     path inside the copy passes through one into another directory.
 //
@@ -61,6 +71,12 @@ var ErrCopyNotVerified = errors.New("safety: the kept copy is not verified to be
 type KeptCopy struct {
 	Worktree string
 	GitDir   string
+	// CommonDir is the repository directory the copy shares with every
+	// other worktree of its repository, where its objects and references
+	// are read and written: GitDir again for a task's clone, and the
+	// gate's repository for a run's worktree, which the worktree's record
+	// names in its commondir file. A record that names none is refused.
+	CommonDir string
 }
 
 // CopyRefusal is VerifyKeptCopy's refusal, naming the copy and why. It
@@ -105,6 +121,21 @@ func VerifyKeptCopy(ctx context.Context, want KeptCopy, opts ...vcs.Option) erro
 	if info, err := os.Lstat(gitDir); err != nil || !info.IsDir() {
 		return refuse("has no repository directory of its own at " + want.GitDir)
 	}
+	// The shared repository directory is resolved the same way: for a run's
+	// worktree it is the gate's repository, and a record whose commondir
+	// names another would have git read and write every object and
+	// reference there.
+	if want.CommonDir == "" {
+		return refuse("is recorded with no shared repository directory")
+	}
+	commonParent, err := filepath.EvalSymlinks(filepath.Dir(want.CommonDir))
+	if err != nil {
+		return refuse("has no shared repository directory at " + want.CommonDir + ": " + err.Error())
+	}
+	commonDir := filepath.Join(commonParent, filepath.Base(want.CommonDir))
+	if info, err := os.Lstat(commonDir); err != nil || !info.IsDir() {
+		return refuse("has no shared repository directory at " + want.CommonDir)
+	}
 	obs, err := vcs.Observe(ctx, want.Worktree, opts...)
 	if err != nil {
 		return refuse("is not a repository git reads: " + err.Error())
@@ -114,6 +145,9 @@ func VerifyKeptCopy(ctx context.Context, want KeptCopy, opts ...vcs.Option) erro
 	}
 	if read, err := filepath.EvalSymlinks(obs.GitDir); err != nil || read != gitDir {
 		return refuse("is read by git through the repository directory " + obs.GitDir + ", not the recorded " + want.GitDir)
+	}
+	if read, err := filepath.EvalSymlinks(obs.CommonDir); err != nil || read != commonDir {
+		return refuse("is read by git as sharing the repository directory " + obs.CommonDir + ", not the recorded " + want.CommonDir)
 	}
 	if link, err := firstLink(gitDir, func(string) bool { return true }); err != nil {
 		return refuse("has a repository directory that could not be read: " + err.Error())

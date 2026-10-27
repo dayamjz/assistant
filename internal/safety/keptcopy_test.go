@@ -60,8 +60,8 @@ func newKeptCopies(t *testing.T) keptCopies {
 	linked := filepath.Join(base, "linked")
 	gitIn(t, clone, "worktree", "add", "--quiet", "--detach", linked)
 	gitIn(t, base, "clone", "--quiet", clone, k.other)
-	k.clone = safety.KeptCopy{Worktree: clone, GitDir: filepath.Join(clone, ".git")}
-	k.linked = safety.KeptCopy{Worktree: linked, GitDir: gitIn(t, linked, "rev-parse", "--absolute-git-dir")}
+	k.clone = safety.KeptCopy{Worktree: clone, GitDir: filepath.Join(clone, ".git"), CommonDir: filepath.Join(clone, ".git")}
+	k.linked = safety.KeptCopy{Worktree: linked, GitDir: gitIn(t, linked, "rev-parse", "--absolute-git-dir"), CommonDir: filepath.Join(clone, ".git")}
 	return k
 }
 
@@ -75,7 +75,10 @@ func newKeptCopies(t *testing.T) keptCopies {
 // another worktree's record; the clone's .git without its HEAD, so git
 // reads the checkout around it, and again with that checkout's
 // core.worktree naming the clone, so git reports the clone as the working
-// tree and reads the other .git; a link in the repository directory; and a
+// tree and reads the other .git; a linked worktree whose record names
+// another repository as the one it shares, so git would read and write
+// its objects and references there (round 44); a copy recorded with no
+// shared repository directory; a link in the repository directory; and a
 // link in the working tree to a directory.
 func TestAKeptCopyIsTheOneItsRegistryRecorded(t *testing.T) {
 	principles.Cite(t, principles.P6)
@@ -115,7 +118,7 @@ func TestAKeptCopyIsTheOneItsRegistryRecorded(t *testing.T) {
 			return k.clone
 		}},
 		{"a worktree recorded with another's record", "is read by git through the repository directory", func(t *testing.T, k keptCopies) safety.KeptCopy {
-			return safety.KeptCopy{Worktree: k.linked.Worktree, GitDir: k.clone.GitDir}
+			return safety.KeptCopy{Worktree: k.linked.Worktree, GitDir: k.clone.GitDir, CommonDir: k.clone.CommonDir}
 		}},
 		{"its .git without HEAD inside another checkout", "is read by git as part of the working tree", func(t *testing.T, k keptCopies) safety.KeptCopy {
 			gitIn(t, k.parent, "init", "--quiet", ".")
@@ -131,6 +134,22 @@ func TestAKeptCopyIsTheOneItsRegistryRecorded(t *testing.T) {
 				t.Fatal(err)
 			}
 			return k.clone
+		}},
+		{"a worktree whose record names another repository as the one it shares", "is read by git as sharing the repository directory", func(t *testing.T, k keptCopies) safety.KeptCopy {
+			// The other repository is a clone of the worktree's, so git
+			// still reads the worktree, HEAD and all, through the
+			// redirected record: only the binding refuses it.
+			commondir := filepath.Join(k.linked.GitDir, "commondir")
+			if err := os.WriteFile(commondir, []byte(filepath.Join(k.other, ".git")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if got := gitIn(t, k.linked.Worktree, "rev-parse", "HEAD"); got == "" {
+				t.Fatal("git no longer reads the worktree through the redirected record")
+			}
+			return k.linked
+		}},
+		{"recorded with no shared repository directory", "is recorded with no shared repository directory", func(t *testing.T, k keptCopies) safety.KeptCopy {
+			return safety.KeptCopy{Worktree: k.clone.Worktree, GitDir: k.clone.GitDir}
 		}},
 		{"a link in its repository directory", "has a symbolic link in its repository directory", func(t *testing.T, k keptCopies) safety.KeptCopy {
 			heads := filepath.Join(k.clone.GitDir, "refs", "heads")
