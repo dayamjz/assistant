@@ -366,6 +366,17 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		if _, held := s.isolationOf(r.Record.ID); held {
 			continue
 		}
+		if r.Record.Housekeeping {
+			// A pass retired before its dispatch is never begun: its claim
+			// on its repository is released, and the store's claim would
+			// refuse it anyway (store.ErrPassRetired).
+			if _, retired, err := s.store.RetirementOf(ctx, r.Record.ID); err != nil || retired {
+				if err != nil {
+					s.log.Printf("dispatching: whether housekeeping pass %s is retired could not be read: %v", r.Record.ID, err)
+				}
+				continue
+			}
+		}
 		// The slot is taken for the service's lifetime, so a task that is a
 		// relaunch question is passed over before the slot rather than
 		// refused behind it, where it would keep a relaunch out too.
