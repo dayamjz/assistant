@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestARepositoryHasAtMostOneOpenHousekeepingPass(t *testing.T) {
 
 	// A retired pass releases the claim too, though it resolves nothing.
 	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: second.ID, Hold: registerRetireHold(t, s, second.ID),
-		By: ResolvedByMachineInterface(), Ended: func(RunStatus) bool { return true }, Delivered: relayed}); err != nil {
+		By: ResolvedByMachineInterface(), Relaunches: func(string) bool { return false }, Ended: func(RunStatus) bool { return true }, Delivered: relayed}); err != nil {
 		t.Fatalf("retiring %s: %v", second.ID, err)
 	}
 
@@ -207,7 +208,7 @@ func TestARetirementIsWrittenOnceAndOnlyWhileNothingMovesThePass(t *testing.T) {
 	seedRepository(t, s)
 	attempt, run := promotedPassWithRun(t, s, "taskhkaaaaca", "housekeeping/one", RunRunning)
 	retire := registerRetireHold(t, s, "taskhkaaaaca")
-	answer := Retirement{Task: "taskhkaaaaca", Attempt: attempt.Sequence, Run: run.ID, Hold: retire, By: ResolvedByMachineInterface(),
+	answer := Retirement{Task: "taskhkaaaaca", Attempt: attempt.Sequence, Run: run.ID, Hold: retire, By: ResolvedByMachineInterface(), Relaunches: func(string) bool { return false },
 		Ended: ended, Delivered: relayed}
 
 	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassMoves) {
@@ -240,5 +241,86 @@ func TestARetirementIsWrittenOnceAndOnlyWhileNothingMovesThePass(t *testing.T) {
 	snap, err := s.TaskSnapshot(ctx, "taskhkaaaaca")
 	if err != nil || snap.Retirement != Known(retired.Record) {
 		t.Fatalf("the snapshot carries %+v, %v, want the record", snap.Retirement, err)
+	}
+}
+
+// An answered retirement closes its hold retire and every other open hold
+// that would relaunch the worker stop, under the one resolver, and leaves a
+// hold that does not relaunch it open; a retirement hold already answered
+// is refused with nothing written.
+func TestAnAnsweredRetirementAnswersStopOnTheHoldsThatWouldRelaunch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	attempt, run := promotedPassWithRun(t, s, "taskhkaaaada", "housekeeping/one", RunTerminated)
+	retire := registerRetireHold(t, s, "taskhkaaaada")
+	for _, key := range []string{"task/taskhkaaaada/stopped/1", "task/taskhkaaaada/relaunch-bound/1", "task/taskhkaaaada/finding/1"} {
+		if _, err := s.RegisterHold(ctx, Hold{Key: key, TaskID: Known("taskhkaaaada"), Subject: "s", Detail: "d"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	relaunches := func(key string) bool {
+		return key == "task/taskhkaaaada/stopped/1" || key == "task/taskhkaaaada/relaunch-bound/1"
+	}
+	answer := Retirement{Task: "taskhkaaaada", Attempt: attempt.Sequence, Run: run.ID, Hold: retire, Note: "retire it",
+		By: ResolvedByMachineInterface(), Relaunches: relaunches, Ended: ended, Delivered: relayed}
+	retired, err := s.RetireHousekeepingPass(ctx, answer)
+	if err != nil || retired.Record.Hold != retire || len(retired.Closed) != 3 {
+		t.Fatalf("the answered retirement = %+v, %v, want the record naming %s and three holds closed", retired, err, retire)
+	}
+	if retired.Closed[0].Key != retire || retired.Closed[0].Resolution != Known(AnswerRetire) {
+		t.Fatalf("the retirement hold was closed %+v, want %q", retired.Closed[0], AnswerRetire)
+	}
+	for _, h := range retired.Closed[1:] {
+		if h.Resolution != Known(AnswerStop) || h.ResolvedBy != retired.Closed[0].ResolvedBy {
+			t.Fatalf("hold %s was closed %v by %v, want %q by the retire answer's resolver", h.Key, h.Resolution, h.ResolvedBy, AnswerStop)
+		}
+	}
+	if finding, err := s.Hold(ctx, "task/taskhkaaaada/finding/1"); err != nil || !finding.Open() {
+		t.Fatalf("the report's own hold reads %+v, %v; want it open, since it relaunches nothing", finding, err)
+	}
+
+	attempt, run = promotedPassWithRun(t, s, "taskhkaaaadb", "housekeeping/two", RunFailed)
+	stale := registerRetireHold(t, s, "taskhkaaaadb")
+	if _, err := s.ResolveHold(ctx, stale, "keep", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	answer = Retirement{Task: "taskhkaaaadb", Attempt: attempt.Sequence, Run: run.ID, Hold: stale, By: ResolvedByMachineInterface(),
+		Relaunches: relaunches, Ended: ended, Delivered: relayed}
+	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrHoldResolved) {
+		t.Fatalf("a retire on a hold answered keep = %v, want ErrHoldResolved", err)
+	}
+	if snap, err := s.TaskSnapshot(ctx, "taskhkaaaadb"); err != nil || snap.Retirement.IsKnown() {
+		t.Fatalf("the refused retirement wrote %+v, %v", snap.Retirement, err)
+	}
+
+	// An answer decided against the newest run while that run has not
+	// ended is refused, whatever its anchors say.
+	// A store of its own, since the pass above is still open.
+	s = openStore(t)
+	seedRepository(t, s)
+	attempt, run = promotedPassWithRun(t, s, "taskhkaaaadc", "housekeeping/three", RunRunning)
+	unended := registerRetireHold(t, s, "taskhkaaaadc")
+	answer = Retirement{Task: "taskhkaaaadc", Attempt: attempt.Sequence, Run: run.ID, Hold: unended, By: ResolvedByMachineInterface(),
+		Relaunches: relaunches, Ended: ended, Delivered: relayed}
+	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("a retire while run %s runs = %v, want ErrPassMoves", run.ID, err)
+	}
+	// A newer run that started and ended since the decision moved the pass
+	// too, though it has ended: the anchor names the run decided against.
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunRunning}, RunFailed); err != nil {
+		t.Fatal(err)
+	}
+	tick()
+	if _, err := s.CreateRun(ctx, Run{ID: "run-newer", RepositoryID: "repo-1", Branch: "housekeeping/three", SubmittedHead: "aaaa",
+		Base: "bbbb", Intent: "validate", IntentSource: "task", Build: testBuild(), ConfigDigest: "cfg-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TransitionRun(ctx, "run-newer", []RunStatus{RunPending}, RunTerminated); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassMoves) || !strings.Contains(err.Error(), "run-newer") {
+		t.Fatalf("a retire decided before run-newer = %v, want ErrPassMoves naming it", err)
 	}
 }
