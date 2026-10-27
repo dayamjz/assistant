@@ -124,9 +124,10 @@ import (
 // answers no task hold, so it never answers this one.
 //
 // A retired pass is never begun again: every attempt claim refuses it in
-// the store (store.ErrPassRetired), and the record of an attempt's session
-// refuses it, so no session is recorded for an attempt of a retired pass
-// after its retirement. Nor is it in flight by its state alone
+// the store (store.ErrPassRetired), and relaunch.go refuses it before it
+// sweeps anything, and the record of an attempt's session refuses it, so
+// no session is recorded for an attempt of a retired pass after its
+// retirement. Nor is it in flight by its state alone
 // (supervisor.RegardOf): the loop watches it, the stop guard counts it and
 // the catch-up read lists it under way only while a run of its branch has
 // not ended or a wake about it is queued, so once its wakes are
@@ -148,9 +149,10 @@ import (
 //     worker fallback at the launch included (workerfallback.go), the slot
 //     every retirement is written under and the retirement hold's offer
 //     reads, so a retire answered meanwhile is refused with the hold open
-//     (errSteerInFlight) and the offer is skipped until the next pass; the
-//     pass stays open and resolves Dispatched, in flight, until its worker
-//     is recorded. For a retirement the slot does not order, written by
+//     (errSteerInFlight), the offer is skipped until the next pass, and a
+//     launch that reads a pass already retired under the slot creates no
+//     worker (errLaunchRetired); the pass stays open and resolves
+//     Dispatched, in flight, until its worker is recorded. For a retirement the slot does not order, written by
 //     another incarnation or past a crash, the store decides the two writes
 //     with exactly one loser: a retirement anchored to no session refuses
 //     once the session is recorded (store.ErrPassMoves), and the record

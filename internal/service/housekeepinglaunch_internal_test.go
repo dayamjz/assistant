@@ -201,6 +201,44 @@ func TestARetireAnsweredWhileItsPassIsLaunchingIsRefusedAndThePassStaysInFlight(
 	}
 }
 
+// The other order under the slot: a pass retired before its launch takes
+// the slot is refused there, before any worker is created, so the attempt
+// has no session, nothing was started, and the stop hook's reading of
+// nothing in flight is true. The control is the pass not retired, whose
+// launch under the same subject records its worker.
+func TestALaunchOfAPassRetiredBeforeItTookTheSlotCreatesNoWorker(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	w := passRecordWindow(t)
+	s := w.service
+	d, err := s.dispatchTask(ctx, w.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	retireAtSeam(t, w.records, w.task)
+	before := len(w.agent.Calls())
+	launched, err := s.launchTask(ctx, d)
+	if !errors.Is(err, errLaunchRetired) || !errors.Is(err, store.ErrPassRetired) || launched != nil {
+		t.Fatalf("launching the retired pass = %v, %v; want it refused before a worker is created", launched, err)
+	}
+	if after := len(w.agent.Calls()); after != before {
+		t.Fatalf("the refused launch started a worker: the stand-in records %d call(s) where it recorded %d", after, before)
+	}
+	if _, held, ok := s.sessionOf(w.task); ok {
+		t.Fatalf("the refused launch holds session %s", held.Reference())
+	}
+	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != "" {
+		t.Fatalf("the refused launch recorded session %q", got)
+	}
+	if guard := feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()); guard.Reason != supervisor.StopNothingInFlight {
+		t.Fatalf("with no worker created the stop hook reads %s, want %s", guard.Reason, supervisor.StopNothingInFlight)
+	}
+	w.letGo()
+	close(w.launched)
+	w.launched = make(chan launchOutcome, 1)
+	w.launched <- launchOutcome{}
+}
+
 // offerRetirementHoldOf registers the pass's retirement hold through the
 // store as the loop's offer does, against the attempts as recorded, under
 // a fresh incarnation.
