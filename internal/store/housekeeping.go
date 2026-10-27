@@ -127,6 +127,19 @@ func openPassTx(ctx context.Context, tx *sql.Tx, repository string, delivered fu
 	return Optional[string]{}, nil
 }
 
+// refuseRetiredTx refuses, with ErrPassRetired, a task whose retirement is
+// recorded.
+func refuseRetiredTx(ctx context.Context, tx *sql.Tx, task string) error {
+	_, retired, err := retirementOf(ctx, tx, task)
+	if err != nil {
+		return err
+	}
+	if retired {
+		return fmt.Errorf("%w: task %s", ErrPassRetired, task)
+	}
+	return nil
+}
+
 // Retirement is what RetireHousekeepingPass is asked to record, and what the
 // caller read when it decided nothing moves the pass: the pass's latest
 // attempt, that attempt's session and the newest attributed run as they

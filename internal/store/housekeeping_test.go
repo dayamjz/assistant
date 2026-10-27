@@ -199,7 +199,8 @@ func ended(st RunStatus) bool { return st == RunPassed || st == RunFailed || st 
 // decided in its own transaction: a run that has not ended, a run newer
 // than the one the retirement was decided against, and a relaunch since
 // all refuse it with nothing written; and once written it is the one
-// record, naming the hold the answer closed, never rewritten (P6).
+// record, naming the hold the answer closed, never rewritten, that every
+// later attempt is refused on (P6).
 func TestARetirementIsWrittenOnceAndOnlyWhileNothingMovesThePass(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -241,6 +242,14 @@ func TestARetirementIsWrittenOnceAndOnlyWhileNothingMovesThePass(t *testing.T) {
 	snap, err := s.TaskSnapshot(ctx, "taskhkaaaaca")
 	if err != nil || snap.Retirement != Known(retired.Record) {
 		t.Fatalf("the snapshot carries %+v, %v, want the record", snap.Retirement, err)
+	}
+	if _, err := s.BeginTaskAttempt(ctx, "taskhkaaaaca", attempt.Sequence); !errors.Is(err, ErrPassRetired) {
+		t.Fatalf("an attempt of the retired pass = %v, want ErrPassRetired", err)
+	}
+	// The positive control: the same attempt of a pass not retired begins.
+	other, _ := promotedPassWithRun(t, s, "taskhkaaaacb", "housekeeping/two", RunPassed)
+	if _, err := s.BeginTaskAttempt(ctx, "taskhkaaaacb", other.Sequence); err != nil {
+		t.Fatalf("an attempt of a pass not retired = %v, want it begun", err)
 	}
 }
 
@@ -322,5 +331,68 @@ func TestAnAnsweredRetirementAnswersStopOnTheHoldsThatWouldRelaunch(t *testing.T
 	}
 	if _, err := s.RetireHousekeepingPass(ctx, answer); !errors.Is(err, ErrPassMoves) || !strings.Contains(err.Error(), "run-newer") {
 		t.Fatalf("a retire decided before run-newer = %v, want ErrPassMoves naming it", err)
+	}
+}
+
+// PRD section 6's "nothing moves the pass" at the one window every attempt
+// claim leaves: a launch whose attempt was claimed before the retirement
+// records the attempt's session after it. The retirement and that record
+// have exactly one loser in either order, decided in the store. Retirement
+// first: the record of the session refuses the retired pass (ErrPassRetired)
+// and the attempt stays without one, while the same record on a pass not
+// retired is written. Session first: a retirement, a check and a retirement
+// hold's offer decided against the attempt having no session are refused
+// (ErrPassMoves), because that session is a launch under way, and the
+// retirement decided against the session as recorded, which is the one whose
+// caller probed that worker, is written (P6, P10).
+func TestARetirementAndTheSessionRecordOfALaunchUnderWayHaveOneLoser(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P10)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	none := func(string) bool { return false }
+	answerOf := func(task, hold string, attempt int64, session string) Retirement {
+		return Retirement{Task: task, Attempt: attempt, Session: session, Hold: hold, By: ResolvedByMachineInterface(),
+			Relaunches: none, Ended: ended, Delivered: relayed}
+	}
+
+	// Retirement first.
+	mustPass(t, s, "taskhkaaaaea")
+	attempt := beginAttempt(t, s, "taskhkaaaaea", 0)
+	retire := registerRetireHold(t, s, "taskhkaaaaea")
+	if _, err := s.RetireHousekeepingPass(ctx, answerOf("taskhkaaaaea", retire, attempt.Sequence, "")); err != nil {
+		t.Fatalf("retiring the pass whose attempt never had a session: %v", err)
+	}
+	if err := s.SetAttemptSession(ctx, "taskhkaaaaea", attempt.Sequence, "pane-late", SessionHost{}); !errors.Is(err, ErrPassRetired) {
+		t.Fatalf("recording the session of the retired pass's attempt = %v, want ErrPassRetired", err)
+	}
+	attempts, err := s.TaskAttempts(ctx, "taskhkaaaaea")
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the retired pass's attempts read %+v, %v; want the one attempt with no session", attempts, err)
+	}
+	// The positive control: the same record on a pass not retired.
+	mustPass(t, s, "taskhkaaaaeb")
+	control := beginAttempt(t, s, "taskhkaaaaeb", 0)
+	if err := s.SetAttemptSession(ctx, "taskhkaaaaeb", control.Sequence, "pane-control", SessionHost{}); err != nil {
+		t.Fatalf("recording the session of a pass not retired = %v, want it written", err)
+	}
+	relay(t, s, "taskhkaaaaeb")
+
+	// Session first.
+	mustPass(t, s, "taskhkaaaaec")
+	attempt = beginAttempt(t, s, "taskhkaaaaec", 0)
+	retire = registerRetireHold(t, s, "taskhkaaaaec")
+	if err := s.SetAttemptSession(ctx, "taskhkaaaaec", attempt.Sequence, "pane-early", SessionHost{}); err != nil {
+		t.Fatal(err)
+	}
+	unlaunched := answerOf("taskhkaaaaec", retire, attempt.Sequence, "")
+	if _, err := s.RetireHousekeepingPass(ctx, unlaunched); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("a retirement decided against no session = %v, want ErrPassMoves", err)
+	}
+	launched := answerOf("taskhkaaaaec", retire, attempt.Sequence, "pane-early")
+	if _, err := s.RetireHousekeepingPass(ctx, launched); err != nil {
+		t.Fatalf("a retirement decided against the session as recorded = %v, want it written", err)
 	}
 }

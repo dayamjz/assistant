@@ -639,6 +639,16 @@ func (e *PassOpenError) Error() string {
 // Unwrap makes every *PassOpenError match ErrPassOpen.
 func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
 
+// ErrPassRetired is returned, wrapped, by BeginTaskAttempt and
+// BeginFirstTaskAttempt for a housekeeping pass whose retirement is
+// recorded: PRD section 11's one anchored relaunch refuses a retired pass,
+// whoever asks, so no worker starts in its copy once its claim on its
+// repository is released. SetAttemptSession returns it for the launch of an
+// attempt claimed before the retirement, so no session is recorded for an
+// attempt of a retired pass after its retirement, and TransitionTaskShape
+// for a promotion of a retired pass, whose delivery could never begin.
+var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
+
 // ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
 // still moves the pass as its transaction reads it: a run attributed to it
 // that has not ended, a run or an attempt newer than the retirement was
