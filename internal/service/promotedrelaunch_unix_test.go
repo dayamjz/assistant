@@ -356,3 +356,46 @@ func TestAPromotionsRelaunchIsAnnouncedAsClaimedNotAsBegun(t *testing.T) {
 		}
 	})
 }
+
+// The order between a promotion's answer and its relaunch's launch is not
+// one the service keeps: the launch is started in the background before the
+// answer is returned, so it can finish first. Holding the answer back until
+// attempt 2's worker is recorded, the answer still says only that the
+// attempt was claimed, and nothing about the launch coming after it.
+func TestAPromotionsAnswerClaimsNoOrderAgainstItsRelaunchsLaunch(t *testing.T) {
+	t.Parallel()
+	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation after a restart")
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+	})
+	homeIsFree(t, inv.home)
+	inv.serve(t, func(running serviceUnderTest) {
+		waitState(t, running.client, inv.task, "read Reported after the restart", reportedFromTheReport(taskstate.Dead))
+		inv.waitKept(t)
+		launched := false
+		running.service.SetAfterPromotedLaunchStartedForTest(func(task string) {
+			deadline := time.Now().Add(launchWait)
+			for time.Now().Before(deadline) {
+				if attempts := attemptsOf(t, inv.home, task); len(attempts) == 2 && attempts[1].SessionRef.IsKnown() {
+					launched = true
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+		})
+		promoted := inv.promote(t, running, "task/promoted-launched-first")
+		if !launched || promoted.Relaunch == nil || promoted.Relaunch.Attempt != 2 {
+			t.Fatalf("the relaunch's worker was recorded before the answer: %v; the answer is %+v, want attempt 2 claimed", launched, promoted)
+		}
+		row := machine.TaskPromotedPhrase(promoted)
+		for _, said := range []string{row.Consequence, promoted.Brief.Unsent} {
+			if strings.Contains(said, "comes before the worker") || strings.Contains(said, "follows this answer") {
+				t.Errorf("an answer returned after its relaunch's launch says the launch comes after it: %q", said)
+			}
+		}
+		if !strings.Contains(row.Consequence, "whether it began shows in the listing") {
+			t.Errorf("the answer is phrased %q, want it to leave whether the worker began to the listing", row.Consequence)
+		}
+	})
+}
