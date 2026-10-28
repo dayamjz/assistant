@@ -143,10 +143,11 @@ func (r Roles) ForHousekeeping() Role {
 	return r[RoleFix]
 }
 
-// ForRecorded resolves the role a task recorded at intake: ForHousekeeping
-// for the housekeeping role, which only intake of a housekeeping pass
-// records, and ForTask for every other name, so the role ForTask refuses a
-// create resolves for the one record that may name it.
+// ForRecorded resolves the role a task recorded at intake, which is what a
+// launch reads (internal/service's launch.go and workerfallback.go):
+// ForHousekeeping for the housekeeping role, which only intake of a
+// housekeeping pass records, and ForTask for every other name, so the role
+// ForTask refuses a create resolves for the one record that may name it.
 func (r Roles) ForRecorded(name string) (Role, error) {
 	if TaskRoleName(name) == RoleHousekeeping {
 		return r.ForHousekeeping(), nil
