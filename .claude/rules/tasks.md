@@ -95,9 +95,12 @@ paths: ["internal/tasks/**"]
   through the same body (`verifyKeptCopy`) before its flip answers the
   copy's entries and again before it writes into the copy.
 - `kept_journal.go` is a confirmed discard's own directory beside its copy
-  (`home.Home.Discarding`) and its journal, written through `writeWhole`
-  before anything is set aside. Only a whole journal naming the copy proves
-  the directory a discard's, and nothing is recognized by its name:
+  (`home.Home.Discarding`) and its journal, written through `replaceWhole`
+  (which removes only the partial its own call made, never a sibling by
+  name; intake's `writeWhole` sweep is not for a discard's directory) and
+  only over the journal the discard last wrote, before anything is set
+  aside. Only a whole journal naming the copy proves the directory a
+  discard's, and nothing is recognized by its name:
   `beginDiscard` writes the first journal into a staging directory
   (`home.Home.DiscardingStage`) and renames it into place whole, never
   over anything (`renameNoReplace`, `rename_*.go`; refused where the
@@ -111,8 +114,9 @@ paths: ["internal/tasks/**"]
   the state its bytes, `ErrLossChanged` otherwise) and never over a name
   that stands (`renameNoReplace`).
 - Intake writes the instructions file whole and never through a link,
-  `writeWhole` (an exclusively created partial of a fresh name, then a
-  rename; a path standing as a link is `*InstructionsLinkError`), so a file
+  `writeWhole` (`replaceWhole`'s exclusively created partial of a fresh
+  name, then a rename; a path standing as a link is
+  `*InstructionsLinkError`; then the sweep of partials by name), so a file
   under the name is never partial, and `CompleteIntake` is intake's second
   step for a row a stop left without its file, removing stale partials as
   names; `InterruptAfterRecordForTest` is the seam between the two.
