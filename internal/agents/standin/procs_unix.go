@@ -529,9 +529,9 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // listing that still finds a process after sweepRounds of them fails the
 // package, so the check ends: it stops what that listing found and every
 // process descended from it before naming any, then names and kills that
-// whole set (endStarting), so what it names is what it ends, and nothing
-// in the set, a child the listing could not see among them, starts a
-// process once named.
+// whole set (endStarting), listing again after the stop for what a child
+// it could not see started as it exited, so what it names is what it ends,
+// and nothing in the set starts a process once named.
 //
 // What it does not see: a process running another executable that was
 // started with an environment without OwnerVar, unless it is a tmux the
@@ -540,7 +540,8 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // on some macOS machines is a whole program's (carrying); what such a
 // process starts once the check's last listing has begun, whether it goes
 // on running or exits (processesWhere), unless it descends from a process
-// that listing found, which the last round stops with it (endStarting); a
+// that listing found, which the last round stops with it, or is found by a
+// listing that round makes once it has stopped them (endStarting); a
 // process of
 // another user's whose command line cannot be read (processesWhere), and
 // what it starts; and anything at all
@@ -570,11 +571,14 @@ func leftAfterTests() bool {
 			return true
 		}
 		if listing == sweepRounds {
-			endStarting(listed, func(frozen []Process) {
+			list := func() ([]Process, error) { return leftRunning(kernel{}, self, value) }
+			if err := endStarting(listed, list, nil, func(frozen []Process) {
 				for _, p := range frozen {
 					fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
 				}
-			})
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "FAIL: could not list again for what the processes still being started had started: %v\n", err)
+			}
 			return false
 		}
 		if left := stayed(listed, EndGrace); len(left) > 0 {

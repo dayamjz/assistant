@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -537,10 +538,16 @@ func endSet(ps []Process, send func(Process, syscall.Signal) bool) {
 
 // endStarting ends ps, the processes a check found still being started once
 // it stopped following them, so that none of them, and nothing they
-// started, runs again: it stops every process in ps and every process
-// descended from one (freeze), hands that whole set to named before any is
-// ended, and then kills each, waiting up to EndGrace for each to go, all at
-// once.
+// started that list or the process tree can find, runs again. It stops
+// every process in ps and every process descended from one (freeze); then
+// it lists again with list and stops what that finds that is not yet
+// stopped, with its descendants, until a listing finds nothing new or
+// sweepRounds listings have; it hands the whole stopped set to named before
+// any is ended, and then kills each, waiting up to EndGrace for each to go,
+// all at once. stopped, when not nil, is called each time a batch has been
+// read as stopped and before its children are read, which is where a
+// sender can be descheduled. The error is list's, after which the set
+// stopped so far is still named and killed.
 //
 // The order is what makes the set named the set ended. A process sent
 // SIGTERM runs on while it handles it, and so does a child of its the
@@ -548,22 +555,39 @@ func endSet(ps []Process, send func(Process, syscall.Signal) bool) {
 // (carrying), which can run its EXIT trap on its own timer in the meantime
 // and start a process nothing names (#645). A stopped process runs nothing,
 // so once a process is read as stopped every child it started is already
-// in the process table, and a set stopped parents first and read again for
-// children until none is new can start nothing more; killed, it never runs
-// again. It is killed rather than sent SIGTERM because a stopped process
-// handles no signal but SIGKILL until it is continued, and a continued one
-// could start another before its SIGTERM is handled.
+// in the process table, and it is killed rather than sent SIGTERM because a
+// stopped process handles no signal but SIGKILL until it is continued, and
+// a continued one could start another before its SIGTERM is handled. A
+// child is stopped only after its parent, so while it still runs it can
+// start a process and exit, and the process it started, its parent gone,
+// descends from nothing in the set (#712's review): listing again after the
+// tree is stopped finds that process when the listing can see it, and
+// stops it with what it started.
 //
-// What it does not cover: a process in ps that exited before it was
-// stopped may have started one that, its parent gone, descends from
-// nothing in the set, and that is not stopped unless it is in ps; a process
-// not read as stopped within EndGrace is killed with the rest, but what it
+// What it does not cover: a process that descends from nothing in the set,
+// because its parent exited before it was stopped, and that list does not
+// find, a shell whose environment cannot be read for one, is not stopped,
+// and neither is what it starts; nor is what a process list finds starts
+// once more than sweepRounds listings have found one new; a process not
+// read as stopped within EndGrace is killed with the rest, but what it
 // starts in the meantime is not looked for; a process table that cannot be
-// read is read as holding no children, so only ps is stopped and named; and
-// a check killed between the stop and the kill leaves the set stopped, for
-// the owner sweep to end.
-func endStarting(ps []Process, named func([]Process)) {
-	frozen := freeze(ps)
+// read is read as holding no children; and a check killed between the stop
+// and the kill leaves the set stopped, for the owner sweep to end.
+func endStarting(ps []Process, list func() ([]Process, error), stopped func([]Process), named func([]Process)) error {
+	sent := map[agents.Identity]bool{}
+	frozen := freeze(ps, sent, stopped)
+	var err error
+	for range sweepRounds {
+		var listed []Process
+		if listed, err = list(); err != nil {
+			break
+		}
+		listed = slices.DeleteFunc(listed, func(p Process) bool { return sent[p.Identity] })
+		if len(listed) == 0 {
+			break
+		}
+		frozen = append(frozen, freeze(listed, sent, stopped)...)
+	}
 	named(frozen)
 	var wg sync.WaitGroup
 	for _, p := range frozen {
@@ -572,19 +596,21 @@ func endStarting(ps []Process, named func([]Process)) {
 		}
 	}
 	wg.Wait()
+	return err
 }
 
-// freeze stops every process in ps, parents first (parentsFirst), and
-// every process descended from one, and returns them in the order it
-// stopped them. It reads the children of a process only once that process
-// reads as stopped, so it reads every child that process started, and it
-// reads children again of each newly stopped process until it finds none
-// new. A process signal reads as gone is left out, and one not read as
+// freeze stops every process in ps not in sent, parents first
+// (parentsFirst), and every process descended from one, records each in
+// sent, and returns them in the order it stopped them. It reads the
+// children of a process only once that process reads as stopped, so it
+// reads every child that process started, and it reads children again of
+// each newly stopped process until it finds none new; stopped, when not
+// nil, is called with each batch read as stopped before its children are
+// read. A process signal reads as gone is left out, and one not read as
 // stopped within EndGrace is kept in the set but its children are not
 // read, since it may still be starting them.
-func freeze(ps []Process) []Process {
+func freeze(ps []Process, sent map[agents.Identity]bool, stopped func([]Process)) []Process {
 	var frozen []Process
-	sent := map[agents.Identity]bool{}
 	next := parentsFirst(ps)
 	for len(next) > 0 {
 		var signalled []Process
@@ -597,14 +623,17 @@ func freeze(ps []Process) []Process {
 				signalled = append(signalled, p)
 			}
 		}
-		var stopped []Process
+		var batch []Process
 		for _, p := range signalled {
 			frozen = append(frozen, p)
 			if p.stoppedWithin(EndGrace) {
-				stopped = append(stopped, p)
+				batch = append(batch, p)
 			}
 		}
-		next = childrenOf(stopped)
+		if stopped != nil && len(batch) > 0 {
+			stopped(batch)
+		}
+		next = childrenOf(batch)
 	}
 	return frozen
 }
