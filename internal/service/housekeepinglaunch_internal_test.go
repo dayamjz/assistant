@@ -35,8 +35,9 @@ func passRecordWindow(t *testing.T) *recordWindow {
 
 // retireAtSeam retires the pass as an answered retire does once the pass's
 // latest attempt reads as never having had a session: the retirement hold
-// is registered and the record written against the attempts as the store
-// shows them, which is what answerRetirement reads before it writes.
+// is offered, as the loop offers it, and the record written against the
+// attempts as the store shows them, which is what answerRetirement reads
+// before it writes.
 func retireAtSeam(t *testing.T, records *store.Store, task string) {
 	t.Helper()
 	ctx := t.Context()
@@ -44,12 +45,9 @@ func retireAtSeam(t *testing.T, records *store.Store, task string) {
 	if ref := latestRef(attempts); ref != "" {
 		t.Fatalf("at the seam pass %s's attempt already runs in session %s, so the retirement would not read it as never launched", task, ref)
 	}
-	key := retireHold{Task: task, Epoch: 1, Attempt: latestSequence(attempts)}.key()
-	if _, err := records.RegisterHold(ctx, store.Hold{Key: key, TaskID: store.Known(task), Subject: "retire?", Detail: "d"}); err != nil {
-		t.Fatalf("registering the retirement hold: %v", err)
-	}
+	hold := offerRetirementHoldOf(t, records, task)
 	r := retirementOf(task, attempts, "")
-	r.Hold, r.By = key, store.ResolvedByMachineInterface()
+	r.Hold, r.By = hold.Key, store.ResolvedByMachineInterface()
 	if _, err := records.RetireHousekeepingPass(ctx, r); err != nil {
 		t.Fatalf("retiring pass %s at the seam: %v", task, err)
 	}
