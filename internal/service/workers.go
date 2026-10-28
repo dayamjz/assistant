@@ -591,7 +591,10 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // intentSourceSupplied, and the run starts with pipeline.Start.IntentSupplied
 // set, so every stage holds the change to it. The source stays task, so the
 // record still says the text was read off the task. A person's push of the
-// same branch carries none of it.
+// same branch carries none of it. A promoted housekeeping pass whose
+// instructions cannot be read is refused (taskIntent, errPassIntentUnread):
+// the push reports that it started no run for the branch rather than start
+// one held to none of the pass's scope, rules or notes.
 //
 // Everything else carries no intent, as every push did before: a person's
 // push, and a worker's update to anything but its own task's branch, which
@@ -616,22 +619,26 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // the coordinator asked the worker for, which PRD section 5's "what the gate
 // does not establish" leaves where it was: the lens measures the change
 // against that text and never asks where it came from.
-func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subject, update gate.RefUpdate) pushedIntent {
+func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subject, update gate.RefUpdate) (pushedIntent, error) {
 	m, worker, err := s.workerPeer(from)
 	if err != nil || !worker {
-		return noPushedIntent
+		return noPushedIntent, nil
 	}
 	task, err := s.store.Task(ctx, m.Task)
 	if err != nil {
 		s.log.Printf("the worker of task %s pushed %s and the task could not be read, so its run carries no intent: %v",
 			m.Task, update.Ref, err)
-		return noPushedIntent
+		return noPushedIntent, nil
 	}
 	if task.Shape != store.TaskDelivery || task.RepositoryID.Or("") != found.repository.ID ||
 		task.Branch.Or("") != update.Branch() {
-		return noPushedIntent
+		return noPushedIntent, nil
 	}
-	return pushedIntent{text: s.taskIntent(task), source: intentSourceTask}
+	text, err := s.taskIntent(task)
+	if err != nil {
+		return pushedIntent{}, err
+	}
+	return pushedIntent{text: text, source: intentSourceTask}, nil
 }
 
 // taskIntent composes a task's intent: its project, then a body. A promoted
@@ -645,10 +652,14 @@ func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subjec
 // notes. Every other task's body is its instructions as
 // intakeInstructions reads them, which is also what a task promoted before
 // the store recorded a delivery intent gets, since it has none to read.
-// Instructions that cannot be read leave the project alone, which is logged;
-// intake refuses an empty project, so the text is never empty for a task
-// intake recorded.
-func (s *Service) taskIntent(task store.Task) string {
+// Instructions that cannot be read leave any other task's intent its project
+// and delivery intent alone, which is logged; intake refuses an empty
+// project, so the text is never empty for a task intake recorded. A
+// promoted pass's are its scope, its rules and the coordinator's notes, the
+// constraints its run is held to, so a pass whose instructions cannot be
+// read is refused with errPassIntentUnread rather than given an intent
+// without them, and no run starts on it.
+func (s *Service) taskIntent(task store.Task) (string, error) {
 	project := strings.TrimSpace(task.Project)
 	if delivery, ok := task.DeliveryIntent.Get(); ok {
 		text := project + "\n\n" + strings.TrimSpace(delivery)
@@ -656,31 +667,51 @@ func (s *Service) taskIntent(task store.Task) string {
 			// PRD section 6's housekeeping: both parts of a pass's
 			// instructions, the program's and the coordinator's notes,
 			// stay the intent after promotion, beside its delivery intent.
-			if instructions := s.intakeInstructionsOf(task); instructions != "" {
+			instructions, err := s.readIntakeInstructions(task)
+			if err != nil {
+				return "", fmt.Errorf("%w: task %s: %w", errPassIntentUnread, task.ID, err)
+			}
+			if instructions != "" {
 				text += "\n\n" + instructions
 			}
 		}
-		return redact.New().Redact(strings.TrimSpace(text))
+		return redact.New().Redact(strings.TrimSpace(text)), nil
 	}
 	text := project
 	if body := s.intakeInstructionsOf(task); body != "" {
 		text = project + "\n\n" + body
 	}
-	return redact.New().Redact(strings.TrimSpace(text))
+	return redact.New().Redact(strings.TrimSpace(text)), nil
 }
 
-// intakeInstructionsOf is intakeInstructions of the task's instructions
-// file, or empty, logged, when the file cannot be read.
-func (s *Service) intakeInstructionsOf(task store.Task) string {
+// errPassIntentUnread refuses the intent of a promoted housekeeping pass
+// whose instructions cannot be read: its run would be held to none of its
+// scope, its rules or the coordinator's notes. The push starts no run for
+// the branch, and a land answer is refused.
+var errPassIntentUnread = errors.New("service: the housekeeping pass's instructions, which its run is held to, could not be read")
+
+// readIntakeInstructions is intakeInstructions of the task's instructions
+// file, and the error when the file cannot be read.
+func (s *Service) readIntakeInstructions(task store.Task) (string, error) {
 	path, err := s.home.TaskInstructions(task.ID)
-	if err == nil {
-		var raw []byte
-		if raw, err = os.ReadFile(path); err == nil {
-			return intakeInstructions(string(raw))
-		}
+	if err != nil {
+		return "", err
 	}
-	s.log.Printf("the instructions of task %s could not be read, so its run's intent carries none of them: %v", task.ID, err)
-	return ""
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return intakeInstructions(string(raw)), nil
+}
+
+// intakeInstructionsOf is readIntakeInstructions, or empty, logged, when the
+// file cannot be read.
+func (s *Service) intakeInstructionsOf(task store.Task) string {
+	text, err := s.readIntakeInstructions(task)
+	if err != nil {
+		s.log.Printf("the instructions of task %s could not be read, so its run's intent carries none of them: %v", task.ID, err)
+	}
+	return text
 }
 
 // intakeInstructions is the part of an instructions file the coordinator

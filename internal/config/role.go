@@ -155,6 +155,18 @@ func (r Roles) ForRecorded(name string) (Role, error) {
 	return r.ForTask(name)
 }
 
+// CarriedRole is the role a task carried on from a task recorded under
+// name is created with: name itself, except housekeeping, which the program
+// assigns only to a housekeeping pass and ForTask refuses for every other
+// task. A carry on creates an ordinary task, never a pass, so a pass's work
+// is carried on under the worker role, the empty name.
+func CarriedRole(name string) string {
+	if TaskRoleName(name) == RoleHousekeeping {
+		return ""
+	}
+	return name
+}
+
 // TaskRoleName is the role name a task's recorded role runs under: the name
 // itself, or worker when the task named none. It decides nothing about
 // whether that role can run; ForTask does.
