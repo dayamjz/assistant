@@ -47,6 +47,7 @@ func main() {
 		// A person is at a terminal when both the stream init reads an
 		// answer from and the one it asks on are one.
 		Interactive: terminal(os.Stdin) && terminal(os.Stderr),
+		OffTerminal: cli.OffTerminal(os.Getpid()),
 	})
 	os.Exit(int(code))
 }

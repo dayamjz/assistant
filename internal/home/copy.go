@@ -33,6 +33,24 @@ var ErrNotACopy = errors.New("home: not an isolated copy this home's layout plac
 // which ends what runs in a directory and so must not be pointed anywhere
 // else.
 func (h *Home) CopyAt(dir string) (string, error) {
+	cleaned, err := h.copyPlace(dir)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s cannot be resolved: %w", ErrNotACopy, cleaned, err)
+	}
+	if resolved != cleaned {
+		return "", fmt.Errorf("%w: %s resolves through a symbolic link to %s", ErrNotACopy, cleaned, resolved)
+	}
+	return cleaned, nil
+}
+
+// copyPlace is CopyAt's half about the layout alone: dir, cleaned, when it
+// is written as exactly where this home places a task's copy or a run's
+// copy, refused with ErrNotACopy otherwise. It reads nothing on disk.
+func (h *Home) copyPlace(dir string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("%w: %q is not absolute", ErrNotACopy, dir)
 	}
@@ -51,14 +69,36 @@ func (h *Home) CopyAt(dir string) (string, error) {
 	default:
 		return "", fmt.Errorf("%w: %s is not a task's copy or a run's copy under %s", ErrNotACopy, cleaned, h.root)
 	}
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err != nil {
-		return "", fmt.Errorf("%w: %s cannot be resolved: %w", ErrNotACopy, cleaned, err)
-	}
-	if resolved != cleaned {
-		return "", fmt.Errorf("%w: %s resolves through a symbolic link to %s", ErrNotACopy, cleaned, resolved)
-	}
 	return cleaned, nil
+}
+
+// Discarding is the directory a confirmed discard of the copy at copyPath
+// sets what it removes aside into and keeps its journal in, PRD section 8's
+// on-disk layout: beside the copy, so on its file system, under a name no
+// copy takes. That is tasks/<id>/.copy.discarding for a task's copy and
+// worktrees/<repo>/.<run>.discarding for a run's. copyPath is held to the
+// layout as CopyAt holds it, and refused with ErrNotACopy otherwise, but
+// nothing is read on disk: a discard past its point of no return has moved
+// the copy away, and its directory is still named from the copy's path.
+func (h *Home) Discarding(copyPath string) (string, error) {
+	cleaned, err := h.copyPlace(copyPath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(cleaned), "."+filepath.Base(cleaned)+".discarding"), nil
+}
+
+// DiscardingStage is where a discard writes its first journal before its
+// directory (Discarding) exists: a directory os.MkdirTemp makes in parent
+// from pattern, beside the copy, which the discard then renames to
+// Discarding whole. So Discarding never stands without a journal. copyPath
+// is held to the layout as Discarding holds it.
+func (h *Home) DiscardingStage(copyPath string) (parent, pattern string, err error) {
+	dir, err := h.Discarding(copyPath)
+	if err != nil {
+		return "", "", err
+	}
+	return filepath.Dir(dir), filepath.Base(dir) + ".begin*", nil
 }
 
 // element reports whether s is one path element that names a child, rather
