@@ -17,8 +17,9 @@ import (
 //
 //   - no retirement hold is offered while a launch of the pass is under way:
 //     its latest attempt's launch is claimed (ClaimAttemptLaunch, the last
-//     write before a worker's process starts) and that attempt's session is
-//     not recorded (SetAttemptSession);
+//     write before a worker's process starts), that attempt's session is
+//     not recorded (SetAttemptSession), and its launcher has not recorded
+//     the launch's end with none (EndAttemptLaunch);
 //   - no attempt is claimed, no launch is claimed and no session is recorded
 //     while the pass's retirement hold is open or once its retirement is
 //     recorded;
@@ -38,9 +39,13 @@ import (
 // claimed, reads as nothing, so a hold can be offered while it runs; its
 // session record is then refused (ErrPassHeld or ErrPassRetired), and its
 // caller ends the worker it started, which runs with no record naming it
-// until then. And a launch claimed whose worker never recorded a session
-// cannot be told from one still starting, so it reads as under way, and
-// the pass is offered no retirement hold, until a later attempt is claimed.
+// until then. And a launch claimed whose launcher stopped before it recorded
+// either a session or the launch's end, a crash between the two, cannot be
+// told from one still starting, so it reads as under way, and the pass is
+// offered no retirement hold, until a later attempt is claimed (the next
+// open's dispatch claims one). A launcher that is still running records
+// the end (EndAttemptLaunch), after which the attempt is one that never had
+// a session, PRD section 6's "nothing moves the pass".
 
 // passWrite is a write the launch-retirement exclusion orders. Each one asks
 // exclusionTx in its own transaction.
@@ -130,20 +135,21 @@ func (s *Store) RetirementHoldOpen(ctx context.Context, task string) (string, bo
 }
 
 // refuseLaunchUnderWayTx refuses, with ErrPassMoves, a task whose latest
-// attempt's launch is claimed and whose session is not recorded.
+// attempt's launch is claimed, whose session is not recorded and whose end
+// EndAttemptLaunch has not recorded.
 func refuseLaunchUnderWayTx(ctx context.Context, tx *sql.Tx, task string) error {
 	var sequence int64
-	var claimed, session Optional[string]
+	var claimed, session, ended Optional[string]
 	err := tx.QueryRowContext(ctx,
-		`SELECT sequence, launch_claimed_at, session_ref FROM task_attempt WHERE task_id = ? ORDER BY sequence DESC LIMIT 1`, task).
-		Scan(&sequence, &claimed, &session)
+		`SELECT sequence, launch_claimed_at, session_ref, launch_ended_at FROM task_attempt WHERE task_id = ? ORDER BY sequence DESC LIMIT 1`, task).
+		Scan(&sequence, &claimed, &session, &ended)
 	switch {
 	case isNoRows(err):
 		return nil
 	case err != nil:
 		return fmt.Errorf("reading whether a launch of task %s is under way: %w", task, err)
 	}
-	if claimed.IsKnown() && !session.IsKnown() {
+	if claimed.IsKnown() && !session.IsKnown() && !ended.IsKnown() {
 		return fmt.Errorf("%w: the launch of its latest attempt %d is claimed and its session is not recorded, so its worker may be starting",
 			ErrPassMoves, sequence)
 	}

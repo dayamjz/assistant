@@ -82,7 +82,13 @@ import (
 // escalation the coordinator relays. When nothing moves it
 // (supervisor.PassMoves), it is also offered the retirement hold, unless a
 // dispatch or relaunch holds its slot unsettled, which is a launch under
-// way (dispatch.go's launching), keyed by the interval, the latest
+// way (dispatch.go's launching). A launch that ended with no session, its
+// worker failing to start, is not one: launch.go records that end
+// (store.EndAttemptLaunch) before it settles the slot, so the store too
+// reads the pass's latest attempt as one that never had a session. The one
+// launch that keeps the hold off is one whose launcher stopped between its
+// claim and either record, a crash, which reads as under way until the next
+// open's dispatch claims a later attempt. The hold is keyed by the interval, the latest
 // attempt and the newest run it was decided against, so at most one is
 // registered per interval, none while an earlier one is unanswered, and a
 // retire answer given after a run started or the worker was begun again is

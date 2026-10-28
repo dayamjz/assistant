@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -587,5 +589,47 @@ func TestARetirementHoldRefusingAPassesWorkerHandoffRaisesNoFallbackHold(t *test
 			fatalUnlessSweepsStoppedClearing(t, unestablished, "after keep the pass has attempts %+v; want the backup started", attempts)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// PRD section 6's "an open pass ... that nothing moves gets a hold", for a
+// pass whose worker never started (the review of #688 at 17a3d15): the
+// configured worker resolves but cannot be executed, there is no
+// fallback, and the launch fails at Create, after its claim. The launch records its end with no session
+// (store.EndAttemptLaunch), so the pass's latest attempt is one that never
+// had a session, which is nothing moving it: the slot is settled, and the
+// retirement hold the loop offers is registered. Before, the claim alone
+// read as a launch under way for as long as the service ran, every offer
+// was refused (store.ErrPassMoves), and the pass blocked every later pass
+// with no hold for a person to answer.
+func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	ctx := t.Context()
+	sub := launchSubjectOver(t, workerStandIn(t), passDispatchSubject(t))
+	s := sub.service
+	// A file the router resolves as executable (it checks no more) and
+	// that is no program, so the launch fails at Create, after its claim.
+	broken := filepath.Join(t.TempDir(), "not-a-worker")
+	if err := procgroup.WriteProgram(broken, []byte("this is not a program\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.catalog = agents.NewCatalog(agents.ClaudeFactory(agents.WithBinary(broken)), cursorFactory{runner: sub.agent.Runner()})
+	s.cfg.Roles = config.Roles{config.RoleHousekeeping: config.Role{Agent: agents.ClaudeName}}
+	d, err := s.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching the pass: %v", err)
+	}
+	if launched, err := s.launchTask(ctx, d); launched != nil || err == nil {
+		t.Fatalf("launching the pass with no worker to execute = %v, %v; want the launch failed", launched, err)
+	}
+	attempts := recordedAttempts(t, sub.records, sub.task)
+	if len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the failed launch left attempts %+v, want one with no session", attempts)
+	}
+	if s.launching(sub.task) {
+		t.Fatal("the failed launch left the pass's slot unsettled, which the loop reads as a launch under way")
+	}
+	if h := offerRetirementHoldOf(t, sub.records, sub.task); !h.Open() {
+		t.Fatalf("the retirement hold the loop offers reads %+v, want it open", h)
 	}
 }

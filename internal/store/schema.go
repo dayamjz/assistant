@@ -2919,4 +2919,42 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 69,
+		name:    attemptLaunchEndMigration,
+		statements: []string{
+			// When a claimed launch ended with no session recorded, written
+			// once by EndAttemptLaunch, by the launcher whose worker never
+			// had a session recorded, so the launch-retirement exclusion
+			// reads the attempt as a launch over, not one under way. It is
+			// written only on an attempt whose launch is claimed and whose
+			// session is not recorded, and no session is recorded after it.
+			// NULL is no end recorded: a launch under way, one that recorded
+			// its session, or one whose launcher stopped before it wrote this.
+			`ALTER TABLE task_attempt ADD COLUMN launch_ended_at TEXT`,
+			`CREATE TRIGGER task_attempt_launch_end_is_written_once
+				BEFORE UPDATE OF launch_ended_at ON task_attempt
+				WHEN OLD.launch_ended_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task attempt''s launch end is written once and is not rewritten');
+				END`,
+			`CREATE TRIGGER task_attempt_launch_end_follows_an_unrecorded_claim
+				BEFORE UPDATE OF launch_ended_at ON task_attempt
+				WHEN NEW.launch_ended_at IS NOT NULL AND (OLD.launch_claimed_at IS NULL OR OLD.session_ref IS NOT NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a launch end is written only for a claimed launch with no session recorded');
+				END`,
+			`CREATE TRIGGER task_attempt_no_session_after_its_launch_end
+				BEFORE UPDATE OF session_ref ON task_attempt
+				WHEN OLD.launch_ended_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: no session is recorded for an attempt whose launch ended without one');
+				END`,
+		},
+	},
 }
+
+// attemptLaunchEndMigration names the migration that records a claimed
+// launch's end with no session, for the reason sealCheckpointTableMigration
+// is a constant.
+const attemptLaunchEndMigration = "attempt launch end"

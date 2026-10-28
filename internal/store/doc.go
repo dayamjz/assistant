@@ -432,7 +432,10 @@
 // launch-retirement exclusion, the one guard every attempt claim, the
 // launch's claim, the record of a session, the offer and the retirement ask
 // in their own transactions: no hold is offered while the latest attempt's
-// launch is claimed and its session is not recorded (ErrPassMoves), no
+// launch is claimed and its session is not recorded (ErrPassMoves), unless
+// its launcher recorded the launch's end with none (migration 69's
+// launch_ended_at, EndAttemptLaunch, after which SetAttemptSession refuses
+// the attempt with ErrAttemptLaunchEnded), no
 // attempt or launch is claimed and no session recorded while the hold is
 // open (ErrPassHeld) or once the pass is retired (ErrPassRetired), and a
 // retirement answers only the pass's retirement hold; its file comment

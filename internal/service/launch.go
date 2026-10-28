@@ -292,6 +292,24 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		}
 		return nil, err
 	}
+	// From the claim on, a return with no session recorded for this
+	// attempt records the launch's end with none (store.EndAttemptLaunch):
+	// Create failed, a worker fallback took the work to a new attempt, or
+	// the record was refused and the worker ended. Until then the store
+	// reads the attempt as a launch under way and refuses a housekeeping
+	// pass's retirement hold; after it, the attempt is one that never had a
+	// session, which PRD section 6 reads as nothing moving the pass. It runs
+	// before the deferred settle, so the slot is never settled ahead of it.
+	recorded := false
+	defer func() {
+		if recorded {
+			return
+		}
+		if err := s.store.EndAttemptLaunch(context.WithoutCancel(ctx), d.id, d.attempt); err != nil {
+			s.log.Printf("the launch of task %s attempt %d ended with no session, and that end could not be recorded, "+
+				"so the attempt reads as a launch under way until a later attempt is claimed: %v", d.id, d.attempt, err)
+		}
+	}()
 	host := s.sessionHost(selection.Resolution.Runner)
 	launched, err := host.Create(s.registry.hurrying(ctx), session.Spec{
 		TaskID:       d.id,
@@ -336,6 +354,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	// Every task this build dispatches is on this machine, whose worker's
 	// server the store does not record.
 	recordErr := s.store.SetAttemptSession(ctx, d.id, d.attempt, reference, store.SessionHost{})
+	recorded = recordErr == nil
 	if recordErr == nil && s.afterSessionRecorded != nil {
 		s.afterSessionRecorded(d.id, reference)
 	}

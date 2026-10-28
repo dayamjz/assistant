@@ -183,3 +183,72 @@ func TestALaunchUnderWayAndARetirementExcludeEachOther(t *testing.T) {
 		})
 	}
 }
+
+// A launch whose worker never had a session (the review of #688 at
+// 17a3d15): once its launcher records the launch's end with none
+// (EndAttemptLaunch), the exclusion no longer reads it as under way, so the
+// pass is one whose latest attempt never had a session, PRD section 6's
+// "nothing moves the pass", and its retirement hold can be offered. No
+// session is recorded for that attempt afterwards, so the end and a session
+// record have one loser. The end is written only for a claimed launch with
+// no session, and once; the control is the same offer before the end,
+// refused as a launch under way.
+func TestALaunchThatEndedWithoutASessionNoLongerHoldsOffTheRetirementHold(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	const pass = "taskhkendeda"
+	mustPass(t, s, pass)
+	beginAttempt(t, s, pass, 0)
+	if err := s.EndAttemptLaunch(ctx, pass, 1); err == nil {
+		t.Fatal("ending a launch that was never claimed was accepted")
+	}
+	if err := s.ClaimAttemptLaunch(ctx, pass, 1); err != nil {
+		t.Fatal(err)
+	}
+	offer := RetirementOffer{Hold: Hold{Key: "task/" + pass + "/housekeeping-retire/1/1/-", TaskID: Known(pass), Subject: "retire?", Detail: "d"},
+		Attempt: 1, Ended: ended, Delivered: relayed}
+	if _, err := s.OfferRetirementHold(ctx, inc, offer); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("the offer while the launch is claimed and neither recorded nor ended = %v, want ErrPassMoves", err)
+	}
+	if err := s.EndAttemptLaunch(ctx, pass, 1); err != nil {
+		t.Fatalf("ending the claimed launch: %v", err)
+	}
+	if err := s.EndAttemptLaunch(ctx, pass, 1); err != nil {
+		t.Fatalf("ending it again = %v, want the end already recorded answered nil", err)
+	}
+	if err := s.SetAttemptSession(ctx, pass, 1, "pane-late", SessionHost{}); !errors.Is(err, ErrAttemptLaunchEnded) {
+		t.Fatalf("recording a session after the launch's end = %v, want ErrAttemptLaunchEnded", err)
+	}
+	if h, err := s.OfferRetirementHold(ctx, inc, offer); err != nil || !h.Open() {
+		t.Fatalf("the offer once the launch ended with no session = %+v, %v, want it open", h, err)
+	}
+
+	// A recorded session is no launch to end.
+	relayOpenRetirement(t, s, offer.Hold.Key, pass)
+	const other = "taskhkendedb"
+	mustPass(t, s, other)
+	beginAttempt(t, s, other, 0)
+	if err := s.ClaimAttemptLaunch(ctx, other, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAttemptSession(ctx, other, 1, "pane-ran", SessionHost{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EndAttemptLaunch(ctx, other, 1); !errors.Is(err, ErrAttemptSessionRecorded) {
+		t.Fatalf("ending a launch whose session is recorded = %v, want ErrAttemptSessionRecorded", err)
+	}
+}
+
+// relayOpenRetirement answers keep on the pass's open retirement hold and
+// relays the pass, so the repository's next pass can be created.
+func relayOpenRetirement(t *testing.T, s *Store, hold, pass string) {
+	t.Helper()
+	if _, err := s.ResolveHold(context.Background(), hold, "keep", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	relay(t, s, pass)
+}
