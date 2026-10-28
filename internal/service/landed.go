@@ -404,7 +404,9 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 // window passes; a promoted task gets no entry. Gone is the probe's Dead,
 // whether or not this service still holds the session: a worker that exits
 // by itself leaves its handle held, and the probe answers Live for a held
-// session only while its process runs. A worker left running, one
+// session only while its process runs. Such a dead handle is released
+// first, whatever else this call does (releaseDeadWorker), so a keep that
+// already settled does not leave it held. A worker left running, one
 // whose end could not be verified among them, gets no keep, since it may
 // still write in the copy.
 //
@@ -427,12 +429,18 @@ func (s *Service) endWindow(ctx context.Context, id string) {
 		return
 	}
 	ref := latestRef(o.Snapshot.Attempts)
-	if ref == "" || s.windowKeptWasTried(id, ref) {
+	if ref == "" {
 		return
 	}
 	expired := promotionWindowPassed(o, time.Now(), s.cfg.PromotionWindow)
 	held := s.holdsSession(id, ref)
 	gone := o.State.Basis.Process == taskstate.Dead
+	if held && gone {
+		s.releaseDeadWorker(id, ref)
+	}
+	if s.windowKeptWasTried(id, ref) {
+		return
+	}
 	if !gone {
 		if !expired {
 			return
@@ -462,6 +470,17 @@ func (s *Service) endWindow(ctx context.Context, id string) {
 	}
 	if s.keepWork(ctx, kept) {
 		s.markWindowKept(id, ref)
+	}
+}
+
+// releaseDeadWorker forgets the session this service holds for a reported
+// investigation's worker the probe read Dead, through endHeldWorker, so the
+// handle and its output are not held once nothing reads them, and the pass,
+// which looks for a held session, stops coming back for it. The process is
+// already gone; the Close only releases what the provider kept for it.
+func (s *Service) releaseDeadWorker(id, ref string) {
+	if _, err := s.endHeldWorker(id, ref); err != nil {
+		s.log.Printf("task %s: the session of its worker (session %s), which had ended, was not released cleanly: %v", id, ref, err)
 	}
 }
 

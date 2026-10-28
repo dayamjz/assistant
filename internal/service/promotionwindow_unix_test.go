@@ -416,8 +416,8 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 }
 
 // The same, for a worker that exits by itself inside the window, with no
-// stop and no restart: this service still holds its session, so only the
-// probe says the worker is gone. Its copy is kept at once as one kept work
+// stop and no restart: this service still holds its session when it exits,
+// so only the probe says the worker is gone. Its copy is kept at once as one kept work
 // entry for the worker that ended inside the window, and a delivery task
 // created in the project waits on it. Keeping only a worker the service no
 // longer held left this copy silent until the window passed.
@@ -432,9 +432,6 @@ func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t
 			t.Fatalf("telling the worker to finish: %v", err)
 		}
 		waitProbe(t, w.provider, w.session.Reference().String(), taskstate.Dead)
-		if _, held, ok := running.service.SessionOf(inv.task); !ok || held.Reference() != w.session.Reference() {
-			t.Fatal("the service no longer holds the worker that exited by itself, so this is not the case under test")
-		}
 		entry, _ := inv.waitKeptWake(t)
 		if entry.TaskID.Or("") != inv.task || entry.Reason != tasks.KeptPromotionWorkerEnded || !slices.Contains(entry.Holds, head) {
 			t.Fatalf("the entry = %+v, want task %s's copy, kept for a worker ended inside the window, holding %s", entry, inv.task, head)
@@ -472,5 +469,33 @@ func TestAWindowsEndWaitsForTheTasksSlot(t *testing.T) {
 		}
 		release()
 		inv.workerEnded(t, running)
+	})
+}
+
+// A worker that exits by itself inside the window leaves this service
+// holding its dead session, and the keep of its copy settles the window's
+// memory for that reference. The dead session is released all the same,
+// so neither the handle nor its output stays held once the window has
+// passed: past a five-second window, after the copy is kept for the worker
+// that ended inside it, the service holds no session for the task.
+func TestADeadSessionIsReleasedOnceItsCopyIsKeptInsideTheWindow(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "5s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		w := inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+		if err := w.provider.Send(t.Context(), w.session, "finish"); err != nil {
+			t.Fatalf("telling the worker to finish: %v", err)
+		}
+		waitProbe(t, w.provider, w.session.Reference().String(), taskstate.Dead)
+		entry, _ := inv.waitKeptWake(t)
+		if entry.Reason != tasks.KeptPromotionWorkerEnded {
+			t.Fatalf("the entry = %+v, want it kept for a worker that ended inside the window", entry)
+		}
+		time.Sleep(5 * time.Second) // past the window's end
+		passes()
+		if _, _, held := running.service.SessionOf(inv.task); held {
+			t.Fatal("past the window the service still holds the dead session of a worker whose copy was kept")
+		}
 	})
 }
