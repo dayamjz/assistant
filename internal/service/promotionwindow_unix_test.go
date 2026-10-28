@@ -225,10 +225,18 @@ func TestAnUnchangedCopyIsRemovedOnceTheWindowEndsItsWorker(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+		// The pass that removed the copy holds the task's slot until it has
+		// recorded the removal, and a promotion asked meanwhile is refused as
+		// in flight, to be asked again (CI run 40645974701).
 		var promoted machine.TaskPromoted
-		err = running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
-			Task: inv.task, Repository: inv.repository.ID, Branch: "task/window-removed", Intent: "Cache each parse.",
-		}, &promoted)
+		for deadline := time.Now().Add(launchWait); ; time.Sleep(50 * time.Millisecond) {
+			err = running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
+				Task: inv.task, Repository: inv.repository.ID, Branch: "task/window-removed", Intent: "Cache each parse.",
+			}, &promoted)
+			if err == nil || !strings.Contains(err.Error(), "in flight") || !time.Now().Before(deadline) {
+				break
+			}
+		}
 		if err == nil || !strings.Contains(err.Error(), "cleanup record") {
 			t.Fatalf("promoting after the copy was removed answered %+v, %v; want it refused for the removed copy", promoted, err)
 		}
