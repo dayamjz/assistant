@@ -562,10 +562,11 @@ func leftAfterTests() bool {
 			return true
 		}
 		if listing == sweepRounds {
-			for _, p := range listed {
-				fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
-			}
-			endAll(listed)
+			endStarting(listed, func(frozen []Process) {
+				for _, p := range frozen {
+					fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
+				}
+			})
 			return false
 		}
 		if left := stayed(listed, EndGrace); len(left) > 0 {

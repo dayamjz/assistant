@@ -115,3 +115,29 @@ func statExiting(stat string) (bool, error) {
 	}
 	return flags&pfExiting != 0, nil
 }
+
+// stoppedProcess reports whether pid is stopped: the state field, the third,
+// of /proc/<pid>/stat reads T, stopped by a signal, or t, stopped by a
+// tracer. A process that is stopped runs none of its code, so it starts no
+// process until it is continued.
+func stoppedProcess(pid int) (bool, error) {
+	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false, err
+	}
+	return statStopped(string(raw))
+}
+
+// statStopped reads the state from a /proc/<pid>/stat line, after the last
+// ')' as statExiting reads the flags, and reports whether it is T or t.
+func statStopped(stat string) (bool, error) {
+	end := strings.LastIndexByte(stat, ')')
+	if end < 0 {
+		return false, fmt.Errorf("a /proc stat line has no command name: %q", stat)
+	}
+	fields := strings.Fields(stat[end+1:])
+	if len(fields) < 1 {
+		return false, fmt.Errorf("a /proc stat line has no state after its command name: %q", stat)
+	}
+	return fields[0] == "T" || fields[0] == "t", nil
+}

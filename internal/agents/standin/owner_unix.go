@@ -535,6 +535,130 @@ func endSet(ps []Process, send func(Process, syscall.Signal) bool) {
 	wg.Wait()
 }
 
+// endStarting ends ps, the processes a check found still being started once
+// it stopped following them, so that none of them, and nothing they
+// started, runs again: it stops every process in ps and every process
+// descended from one (freeze), hands that whole set to named before any is
+// ended, and then kills each, waiting up to EndGrace for each to go, all at
+// once.
+//
+// The order is what makes the set named the set ended. A process sent
+// SIGTERM runs on while it handles it, and so does a child of its the
+// listing could not see, a shell whose environment the read cannot find
+// (carrying), which can run its EXIT trap on its own timer in the meantime
+// and start a process nothing names (#645). A stopped process runs nothing,
+// so once a process is read as stopped every child it started is already
+// in the process table, and a set stopped parents first and read again for
+// children until none is new can start nothing more; killed, it never runs
+// again. It is killed rather than sent SIGTERM because a stopped process
+// handles no signal but SIGKILL until it is continued, and a continued one
+// could start another before its SIGTERM is handled.
+//
+// What it does not cover: a process in ps that exited before it was
+// stopped may have started one that, its parent gone, descends from
+// nothing in the set, and that is not stopped unless it is in ps; a process
+// not read as stopped within EndGrace is killed with the rest, but what it
+// starts in the meantime is not looked for; a process table that cannot be
+// read is read as holding no children, so only ps is stopped and named; and
+// a check killed between the stop and the kill leaves the set stopped, for
+// the owner sweep to end.
+func endStarting(ps []Process, named func([]Process)) {
+	frozen := freeze(ps)
+	named(frozen)
+	var wg sync.WaitGroup
+	for _, p := range frozen {
+		if p.signal(syscall.SIGKILL) {
+			wg.Go(func() { p.GoneWithin(EndGrace) })
+		}
+	}
+	wg.Wait()
+}
+
+// freeze stops every process in ps, parents first (parentsFirst), and
+// every process descended from one, and returns them in the order it
+// stopped them. It reads the children of a process only once that process
+// reads as stopped, so it reads every child that process started, and it
+// reads children again of each newly stopped process until it finds none
+// new. A process signal reads as gone is left out, and one not read as
+// stopped within EndGrace is kept in the set but its children are not
+// read, since it may still be starting them.
+func freeze(ps []Process) []Process {
+	var frozen []Process
+	sent := map[agents.Identity]bool{}
+	next := parentsFirst(ps)
+	for len(next) > 0 {
+		var signalled []Process
+		for _, p := range next {
+			if sent[p.Identity] || p.PID == os.Getpid() {
+				continue
+			}
+			sent[p.Identity] = true
+			if p.signal(syscall.SIGSTOP) {
+				signalled = append(signalled, p)
+			}
+		}
+		var stopped []Process
+		for _, p := range signalled {
+			frozen = append(frozen, p)
+			if p.stoppedWithin(EndGrace) {
+				stopped = append(stopped, p)
+			}
+		}
+		next = childrenOf(stopped)
+	}
+	return frozen
+}
+
+// stoppedWithin reports whether p reads as stopped (stoppedProcess) within
+// wait, and false once it reads as gone.
+func (p Process) stoppedWithin(wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if presence, err := p.Presence(); err == nil && presence != agents.PresencePresent {
+			return false
+		}
+		if stopped, err := stoppedProcess(p.PID); err == nil && stopped {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// childrenOf is every running process whose parent, as the kernel records
+// it (agents.ReadLineage), is one in ps and started no later than it, each
+// with its arguments when they can be read. A process whose lineage cannot
+// be read is not one of them.
+func childrenOf(ps []Process) []Process {
+	if len(ps) == 0 {
+		return nil
+	}
+	byPID := map[int]Process{}
+	for _, p := range ps {
+		byPID[p.PID] = p
+	}
+	pids, err := processIDs()
+	if err != nil {
+		return nil
+	}
+	var children []Process
+	for _, pid := range pids {
+		lineage, found, err := agents.ReadLineage(pid)
+		if err != nil || !found {
+			continue
+		}
+		parent, ok := byPID[lineage.Parent]
+		if !ok || parent.Identity == lineage.Identity || parent.Start > lineage.Start {
+			continue
+		}
+		_, args, _ := commandLine(pid)
+		children = append(children, Process{Identity: lineage.Identity, Args: args})
+	}
+	return children
+}
+
 // parentsFirst is ps ordered so that each process comes after the one in ps
 // that is its parent, and otherwise in ps's order. A process's parent is read
 // from the kernel (agents.ReadLineage), and the one in ps with that
