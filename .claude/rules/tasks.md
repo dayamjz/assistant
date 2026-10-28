@@ -111,8 +111,10 @@ paths: ["internal/tasks/**"]
   stopped first write left blocks nothing and is left. No discard answer
   calls it yet; the set-aside that does follows in AGE-486's stack. An
   entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
-  the state its bytes, `ErrLossChanged` otherwise) and never over a name
-  that stands (`renameNoReplace`).
+  the state its bytes, `ErrLossChanged` otherwise, an entry that changed
+  while read among it, by its `stampOf` stamp read before and after and a
+  directory listed again) and never over a name that stands
+  (`renameNoReplace`).
 - Intake writes the instructions file whole and never through a link,
   `writeWhole` (`replaceWhole`'s exclusively created partial of a fresh
   name, then a rename; a path standing as a link is

@@ -15,17 +15,37 @@ import (
 // refuses". The state is the bytes: a file rewritten with the bytes it
 // held, or its mode set to what it was, is not a change. Tests compare it
 // before and after what they say changes nothing.
+//
+// A state is read only from entries that stood still while it was read:
+// each entry's stamp (stampOf) is read before its bytes or, for a
+// directory, its listing, and once all are read every stamp is read again
+// and every directory listed again, and a difference is ErrLossChanged.
+// What it does not cover: a file rewritten in place with as many bytes in
+// the same timestamp tick as its last change (a move's rename among the
+// changes) leaves its stamp as it was, and goes unseen.
 
 // ErrLossChanged is a discard's refusal of a copy that no longer holds
 // exactly what was read before its loss was: an entry it would set aside
-// changed, was added to or went missing since. What the discard set aside
-// is put back.
+// changed, was added to or went missing since, or changed while it was
+// read. What the discard set aside is put back.
 var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what was read when its loss was, so the discard went no further")
 
 // copyState is the state of every entry under some directories, by
 // absolute path: its type and permission bits, and a regular
 // file's bytes by their hash or a link's target.
 type copyState map[string]stateEntry
+
+// stamp is what the file system records of an entry, stampOf's.
+type stamp struct {
+	ino          uint64
+	size         int64
+	mtime, ctime [2]int64
+}
+
+// stateReadForTest, when set, is called once a state's entries are read
+// and before their stamps are read again: the seam a test changes an
+// entry through while it is read.
+var stateReadForTest func()
 
 // stateEntry is one entry of a copyState.
 type stateEntry struct {
@@ -34,26 +54,60 @@ type stateEntry struct {
 }
 
 // readCopyState reads the state of every entry under each root, the roots
-// included, without following a link.
+// included, without following a link, and refuses with ErrLossChanged
+// when, once all are read, an entry's stamp differs or a directory lists
+// other names than were read under it.
 func readCopyState(roots ...string) (copyState, error) {
-	state := copyState{}
+	state, stamps := copyState{}, map[string]stamp{}
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			entry, err := stateOf(p)
-			if err != nil {
+			if stamps[p], err = stampOf(p); err != nil {
 				return err
 			}
-			state[p] = entry
-			return nil
+			state[p], err = stateOf(p)
+			return err
 		})
 		if err != nil {
 			return nil, fmt.Errorf("tasks: reading the state of %s: %w", root, err)
 		}
 	}
+	if stateReadForTest != nil {
+		stateReadForTest()
+	}
+	children := map[string]int{}
+	for p := range state {
+		children[filepath.Dir(p)]++
+	}
+	for _, root := range roots {
+		children[filepath.Dir(root)]--
+	}
+	for p, was := range stamps {
+		if now, err := stampOf(p); err != nil || now != was || !listsAsRead(p, state, children[p]) {
+			return nil, fmt.Errorf("%w: %s changed while it was read", ErrLossChanged, p)
+		}
+	}
 	return state, nil
+}
+
+// listsAsRead reports whether the entry at p, when state read it as a
+// directory, lists exactly the n names state holds under it.
+func listsAsRead(p string, state copyState, n int) bool {
+	if !state[p].mode.IsDir() {
+		return true
+	}
+	names, err := os.ReadDir(p)
+	if err != nil || len(names) != n {
+		return false
+	}
+	for _, e := range names {
+		if _, ok := state[filepath.Join(p, e.Name())]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // stateOf reads one entry's state, without following a link.
@@ -83,9 +137,9 @@ func stateOf(p string) (stateEntry, error) {
 // moved true, so the caller, which journals the move before making it,
 // puts it back.
 //
-// What it does not cover: the state is read after the move, so a process
-// writing through a file it opened before the move changes what moved
-// after the read, unseen.
+// What it does not cover: a process writing through a file it opened
+// before the move changes what moved after the state is read, unseen; a
+// change during the read is readCopyState's to see.
 func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 	_, had := before[from]
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {
