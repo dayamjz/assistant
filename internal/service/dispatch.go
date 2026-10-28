@@ -515,6 +515,23 @@ func (s *Service) giveBackSlot(id string) {
 	delete(s.claiming, id)
 }
 
+// giveBackSettledSlot gives back the task's slot when this service holds it
+// settled, which a launch that failed or a dispatch that ended without a
+// proof leaves for the service's lifetime, and reports whether it did. A
+// slot a claim in flight or a steer holds is left. It is for an answer that
+// decides the task is to be begun again, whose dispatch claims a new
+// attempt under the store's anchor, so it is no second launch of the
+// attempt the slot was kept for.
+func (s *Service) giveBackSettledSlot(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, held := s.isolated[id]; !held || s.claiming[id] {
+		return false
+	}
+	delete(s.isolated, id)
+	return true
+}
+
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
 // over an unsweepable standing copy raised. It takes the task's slot through
 // claimRelaunch, because the refusal that raised the hold settled the slot

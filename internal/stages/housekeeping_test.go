@@ -80,10 +80,8 @@ func TestAPassChangeOutsideItsScopeHoldsAtReviewWhateverItsAccountSays(t *testin
 		t.Fatal("the pass's review invoked no reviewer, so nothing here shows how one is started")
 	}
 	for _, call := range calls {
-		for _, arg := range call.Args {
-			if arg == "--resume" || arg == "--session-id" || arg == "--continue" || arg == "resume" {
-				t.Fatalf("a review invocation of the pass's run resumed a session: %q", call.Args)
-			}
+		if session := call.Session(); session != "" {
+			t.Fatalf("a review invocation of the pass's run resumed session %q: %q", session, call.Args)
 		}
 	}
 

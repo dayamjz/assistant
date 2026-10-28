@@ -705,8 +705,13 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		// own. The answer runs it, on dispatchInBackground's terms, which
 		// claims the next attempt. An attempts read that fails runs it too,
 		// since the dispatch reads them again and skips a launched task.
+		// A launch that ended with no session left the pass's slot settled
+		// for the service's lifetime, which the dispatch passes over, so the
+		// slot is given back first (giveBackSettledSlot) and the dispatch
+		// claims the pass's next attempt.
 		attempts, readErr := s.store.TaskAttempts(ctx, r.Task)
 		if _, launched := latestSession(attempts); readErr != nil || !launched {
+			s.giveBackSettledSlot(r.Task)
 			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since its latest attempt has no session", r.Task, hold.Key, r.Answer)
 			s.dispatchInBackground()
 		}

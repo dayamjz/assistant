@@ -629,7 +629,29 @@ func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
 	if s.launching(sub.task) {
 		t.Fatal("the failed launch left the pass's slot unsettled, which the loop reads as a launch under way")
 	}
-	if h := offerRetirementHoldOf(t, sub.records, sub.task); !h.Open() {
+	h := offerRetirementHoldOf(t, sub.records, sub.task)
+	if !h.Open() {
 		t.Fatalf("the retirement hold the loop offers reads %+v, want it open", h)
+	}
+
+	// keep then begins the pass again (the review of #688 at f50b270): the
+	// failed launch left the slot settled for the service's lifetime, which
+	// the dispatch passes over, so keep gives it back and the dispatch
+	// claims the pass's next attempt. Before, keep logged a dispatch that
+	// skipped the pass, and it stayed on its one attempt.
+	rh, ok := parseRetireHold(h.Key, sub.task)
+	if !ok {
+		t.Fatalf("the offered hold's key %s does not parse as the pass's retirement hold", h.Key)
+	}
+	s.terminals = heldTerminals{s}
+	if _, err := s.answerRetirement(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Answer: machine.AnswerKeep}, h, rh); err != nil {
+		t.Fatalf("answering keep: %v", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for len(recordedAttempts(t, sub.records, sub.task)) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("keep did not begin the pass again: its attempts are %+v", recordedAttempts(t, sub.records, sub.task))
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
