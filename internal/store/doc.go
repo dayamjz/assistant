@@ -404,7 +404,8 @@
 // advances in the wake's own transaction when the wake is a due check's, or
 // AdvanceHousekeepingMarker alone when nothing was due, both only while the
 // passes the check read are unmoved, re-read in the writing transaction
-// (DueCheck, ErrDueCheckStale). ForgetRepository refuses a repository with a
+// (DueCheck, ErrDueCheckStale); the repository re-read, the marker's and
+// the wake's are one, named once by the write. ForgetRepository refuses a repository with a
 // wake queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows,
 // their notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
@@ -424,16 +425,19 @@
 // Migration 64 adds the housekeeping retirement record, written once by
 // RetireHousekeepingPass in the transaction that reads the pass again and
 // finds nothing moving it, which PassOpen reads as closing the pass; the
-// state resolver does not read it. It is refused at every attempt claim,
-// at the record of an attempt's session and at the shape transition that
-// would promote the pass (ErrPassRetired), which with the retirement's
-// session anchor records no session for an attempt of a retired pass after
-// its retirement. Migration 65 marks the retirement hold on the hold row:
-// OfferRetirementHold registers it, fenced by the loop's incarnation, in
-// the transaction that reads the pass again and finds it open and still,
-// and every attempt claim, the launch's claim and the record of a session
-// refuse a pass with one open (ErrPassHeld), so the offer and each of those
-// writes have exactly one loser in either order.
+// state resolver does not read it. The shape transition that would promote
+// a retired pass refuses it (ErrPassRetired). Migration 65 marks the
+// retirement hold on the hold row: OfferRetirementHold registers it, fenced
+// by the loop's incarnation, in the transaction that reads the pass again
+// and finds it open and still. housekeepinglaunch.go is the
+// launch-retirement exclusion, the one guard every attempt claim, the
+// launch's claim, the record of a session, the offer and the retirement ask
+// in their own transactions: no hold is offered while the latest attempt's
+// launch is claimed and its session is not recorded (ErrPassMoves), no
+// attempt or launch is claimed and no session recorded while the hold is
+// open (ErrPassHeld) or once the pass is retired (ErrPassRetired), and a
+// retirement answers only the pass's retirement hold; its file comment
+// states the invariant and what it leaves.
 //
 // A wake's recipient is decided at the drain and stored on no row (P14):
 // DrainWakes, OfferedWakes and QueuedWakesFor take a WakeRoute, the domain

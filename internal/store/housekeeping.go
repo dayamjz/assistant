@@ -228,15 +228,13 @@ type Retired struct {
 // It resolves the retirement hold retire, then every other open hold of
 // the pass Relaunches names stop, each under the same resolver, and writes
 // the record naming the hold. Whether the worker is dead is
-// the probe's, which no transaction can take; the attempt anchor is what
-// keeps a relaunch since the caller's probe from slipping past, and the
-// session anchor what keeps a launch under way at the caller's reading from
-// doing so: a session recorded since the caller read none refuses here, and
-// SetAttemptSession refuses once the record is written, so the two writes
-// have exactly one loser in either order: no session is recorded for an
-// attempt of a retired pass after its retirement, and a retired pass's
-// latest attempt either has no session or has the one its retirement was
-// decided against, which the caller had read dead.
+// the probe's, which no transaction can take; the attempt and session
+// anchors are what keep a relaunch, or a session recorded, since the
+// caller's probe from slipping past. A launch under way is the
+// launch-retirement exclusion's (housekeepinglaunch.go): the hold this
+// answers was offered only while none was, and none was claimed while it
+// stood, so no retirement is written while a launch is under way, and every
+// launch write refuses the pass once it is retired (ErrPassRetired).
 func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retired, error) {
 	if err := r.validate(); err != nil {
 		return Retired{}, err
@@ -262,6 +260,9 @@ func (s *Store) RetireHousekeepingPass(ctx context.Context, r Retirement) (Retir
 			return ErrPassClosed
 		}
 		if err := passStillTx(snap, r); err != nil {
+			return err
+		}
+		if err := exclusionTx(ctx, tx, r.Task, answersRetire, r.Hold); err != nil {
 			return err
 		}
 		now := encodeTime(nowUTC())
@@ -352,20 +353,8 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 		}
 		return fmt.Errorf("hold %s: %w with %s", key, ErrHoldResolved, existing.Or(""))
 	}
-	// The hold answered retire is the pass's own retirement hold, the one
-	// OfferRetirementHold marked: no other hold of the pass, a report's
-	// decision or a relaunch's, releases its claim on the repository.
-	var owner Optional[string]
-	var marked Optional[int64]
-	switch err := tx.QueryRowContext(ctx, `SELECT task_id, housekeeping_retirement FROM hold WHERE key = ?`, r.Hold).Scan(&owner, &marked); {
-	case isNoRows(err):
-		return nil, fmt.Errorf("hold %s: %w", r.Hold, ErrNotFound)
-	case err != nil:
-		return nil, err
-	}
-	if owner.Or("") != snap.Task.ID || marked.Or(0) != 1 {
-		return nil, fmt.Errorf("%w: hold %s is not the retirement hold OfferRetirementHold registered for pass %s", ErrNotRetirementHold, r.Hold, snap.Task.ID)
-	}
+	// The caller asked exclusionTx that r.Hold is the pass's open
+	// retirement hold.
 	if err := resolve(r.Hold, AnswerRetire, note); err != nil {
 		return nil, err
 	}
@@ -420,24 +409,26 @@ type RetirementOffer struct {
 //     among them;
 //   - ErrPassMoves, wrapped, for a pass with a run attributed to it newer
 //     than Run or one that has not ended, or whose latest attempt's session
-//     is not Session, on RetireHousekeepingPass's terms;
+//     is not Session, on RetireHousekeepingPass's terms, and for a pass
+//     whose latest attempt's launch is claimed and whose session is not
+//     recorded, a worker that may be starting, on the launch-retirement
+//     exclusion's terms (housekeepinglaunch.go);
 //
 // and an error for a task that is not a pass. A retire answer to a hold
 // registered past any of those could only be refused. Whether the worker is
 // dead is the probe's, which no transaction can take; the attempt and
-// session anchors are what keep a relaunch, or a launch under way, since the
+// session anchors are what keep a relaunch, or a session recorded, since the
 // loop's probe from slipping past, as they are for the retirement itself.
 // The hold is marked as the retirement hold in the same transaction, and
-// every attempt claim, the launch's claim of its start (ClaimAttemptLaunch)
-// and the record of its session (SetAttemptSession) refuse a pass with one
-// open (ErrPassHeld). So an attempt claimed after the offer begins nothing;
-// an offer after the claim and before the launch's claim leaves the launch
-// refused before any worker starts; an offer after that and before the
-// session's record leaves the record refused, and its caller ends the worker
-// it started; and an offer after the record is refused on its session
-// anchor. No worker is recorded running in a pass that resolves Held from
-// this hold, which is not in flight (P10); between a refused record and its
-// caller ending the worker, that worker runs with no record naming it.
+// every attempt claim, the launch's claim (ClaimAttemptLaunch) and the
+// record of a session (SetAttemptSession) refuse a pass with one open
+// (ErrPassHeld). So an offer before a launch's claim leaves the launch
+// refused before any worker starts, and an offer after the claim and before
+// the session's record is itself refused: no launch of the latest attempt
+// starts, and no worker is recorded running, in a pass that resolves Held
+// from this hold, which is not in flight (P10). The exclusion's file comment
+// names the one launch the offer does not read, an earlier attempt's, whose
+// record is refused instead.
 func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o RetirementOffer) (Hold, error) {
 	h := o.Hold
 	if err := validateHold(h); err != nil {
@@ -476,8 +467,8 @@ func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o Reti
 		if err != nil {
 			return err
 		}
-		if snap.Retirement.IsKnown() {
-			return fmt.Errorf("%w: task %s", ErrPassRetired, task)
+		if err := exclusionTx(ctx, tx, task, offersRetirement, ""); err != nil {
+			return err
 		}
 		if !PassOpen(snap, o.Delivered) {
 			return fmt.Errorf("%w: task %s is in the terminal tier", ErrPassClosed, task)

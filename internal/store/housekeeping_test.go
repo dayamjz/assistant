@@ -442,9 +442,10 @@ func TestARetirementHoldIsOfferedOnlyToAPassThatIsStillOpenAndStill(t *testing.T
 	}
 }
 
-// PRD section 6's "nothing moves the pass" at the one window every attempt
-// claim leaves: a launch whose attempt was claimed before the retirement
-// records the attempt's session after it. The retirement and that record
+// PRD section 6's "nothing moves the pass" at an attempt claimed before the
+// retirement: its session's record after the retirement. (The launch claim
+// that precedes such a record in the service is refused once the pass is
+// retired, which TestALaunchUnderWayAndARetirementExcludeEachOther plays.) The retirement and that record
 // have exactly one loser in either order, decided in the store. Retirement
 // first: the record of the session refuses the retired pass (ErrPassRetired)
 // and the attempt stays without one, while the same record on a pass not
@@ -647,14 +648,16 @@ func TestOnlyThePassesOwnRetirementHoldIsAnsweredRetire(t *testing.T) {
 	}
 }
 
-// The retirement hold against a launch under way (the review of #683 at
-// ec7bc68): the offer reads a claimed attempt with no session as nothing
-// moving the pass, so it can be registered between the attempt's claim and
-// the launch's own writes. Those writes refuse the pass while the hold is
-// open, ClaimAttemptLaunch before any worker starts and SetAttemptSession
-// after one has, so no worker is recorded running in a pass that resolves
-// Held from this hold, which is not in flight (P10); once the hold is
-// answered keep, both are written, the control that the refusal is the
+// The retirement hold against a launch (the reviews of #683 at ec7bc68 and
+// 2e40d5e): an offer between the attempt's claim and the launch's claim is
+// registered, and the launch's claim is then refused, so no worker starts;
+// an offer between the launch's claim and its session's record is refused
+// (ErrPassMoves), since a worker may be starting, and the record is
+// written. The one launch the offer does not read, an earlier attempt's
+// outrun by a later claim, has its session record refused while the hold
+// is open. No worker is recorded running in a pass that resolves Held from
+// this hold, which is not in flight (P10); once the hold is answered keep,
+// each refused write is written, the control that the refusal is the
 // hold's.
 func TestNoLaunchProceedsWhileARetirementHoldIsOpen(t *testing.T) {
 	t.Parallel()
@@ -691,26 +694,57 @@ func TestNoLaunchProceedsWhileARetirementHoldIsOpen(t *testing.T) {
 	}
 
 	// The offer after the launch's claim and before its session's record:
-	// the worker has started, and its record is refused, so the caller ends
-	// it and the attempt stays without a session.
+	// the launch is under way, so the offer is refused and writes nothing,
+	// and the record is written. An offer decided against the session as
+	// recorded is then registered.
 	relay(t, s, "taskhklnchaa")
 	mustPass(t, s, "taskhklnchab")
 	beginAttempt(t, s, "taskhklnchab", 0)
 	if err := s.ClaimAttemptLaunch(ctx, "taskhklnchab", 1); err != nil {
 		t.Fatal(err)
 	}
-	hold, err = s.OfferRetirementHold(ctx, inc, offerOf("taskhklnchab"))
-	if err != nil {
-		t.Fatalf("the offer to a pass whose launch is claimed and unrecorded = %v, want it registered", err)
+	if _, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhklnchab")); !errors.Is(err, ErrPassMoves) {
+		t.Fatalf("the offer to a pass whose launch is claimed and unrecorded = %v, want ErrPassMoves", err)
 	}
-	if err := s.SetAttemptSession(ctx, "taskhklnchab", 1, "pane-held", SessionHost{}); !errors.Is(err, ErrPassHeld) {
-		t.Fatalf("the session record of a pass whose retirement hold is open = %v, want ErrPassHeld", err)
+	if h, err := s.Hold(ctx, offerOf("taskhklnchab").Hold.Key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused offer left %+v, %v", h, err)
 	}
-	if attempts, err := s.TaskAttempts(ctx, "taskhklnchab"); err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
-		t.Fatalf("the refused record left attempts %+v (%v), want one with no session", attempts, err)
+	if err := s.SetAttemptSession(ctx, "taskhklnchab", 1, "pane-under-way", SessionHost{}); err != nil {
+		t.Fatalf("the session record of the launch the offer gave way to = %v, want it written", err)
+	}
+	recorded := offerOf("taskhklnchab")
+	recorded.Session = "pane-under-way"
+	hold, err = s.OfferRetirementHold(ctx, inc, recorded)
+	if err != nil || !hold.Open() {
+		t.Fatalf("the offer decided against the session as recorded = %+v, %v, want it open", hold, err)
 	}
 	keep(hold)
-	if err := s.SetAttemptSession(ctx, "taskhklnchab", 1, "pane-kept", SessionHost{}); err != nil {
+
+	// The one launch the offer does not read: an earlier attempt's, still
+	// under way once a later attempt was claimed. The offer, decided on the
+	// later attempt, is registered, and the earlier launch's record is
+	// refused, so its caller ends the worker and nothing records it.
+	relay(t, s, "taskhklnchab")
+	mustPass(t, s, "taskhklnchac")
+	beginAttempt(t, s, "taskhklnchac", 0)
+	if err := s.ClaimAttemptLaunch(ctx, "taskhklnchac", 1); err != nil {
+		t.Fatal(err)
+	}
+	beginAttempt(t, s, "taskhklnchac", 1)
+	later := offerOf("taskhklnchac")
+	later.Attempt = 2
+	hold, err = s.OfferRetirementHold(ctx, inc, later)
+	if err != nil {
+		t.Fatalf("the offer decided on the later attempt, whose launch is not claimed = %v, want it registered", err)
+	}
+	if err := s.SetAttemptSession(ctx, "taskhklnchac", 1, "pane-earlier", SessionHost{}); !errors.Is(err, ErrPassHeld) {
+		t.Fatalf("the earlier attempt's session record under the open hold = %v, want ErrPassHeld", err)
+	}
+	if attempts, err := s.TaskAttempts(ctx, "taskhklnchac"); err != nil || len(attempts) != 2 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the refused record left attempts %+v (%v), want the earlier one with no session", attempts, err)
+	}
+	keep(hold)
+	if err := s.SetAttemptSession(ctx, "taskhklnchac", 1, "pane-kept", SessionHost{}); err != nil {
 		t.Fatalf("the session record once the hold was answered keep = %v, want it written", err)
 	}
 }
@@ -731,7 +765,7 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	inc := incarnationOf(t, s)
 	request := HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due", Marker: "due:none:1", Detail: "no pass was ever created"}
 	checked := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	first, err := s.AppendHousekeepingWake(ctx, inc, request, &DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked}, Delivered: relayed})
+	first, err := s.AppendHousekeepingWake(ctx, inc, request, &DueCheck{CheckedAt: checked, Delivered: relayed})
 	if err != nil || first.Disposition != WakeAppended || first.Wake.Repository != "repo-1" || first.Wake.Pass.IsKnown() || !first.Wake.Queued() {
 		t.Fatalf("the first append = %+v, %v", first, err)
 	}
@@ -749,7 +783,7 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 		Marker: "due:none:2", Detail: "d"}, nil); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a replaced incarnation's append = %v, want ErrStaleIncarnation", err)
 	}
-	if err := s.AdvanceHousekeepingMarker(ctx, stale, DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked.Add(time.Hour)}, Delivered: relayed}); !errors.Is(err, ErrStaleIncarnation) {
+	if err := s.AdvanceHousekeepingMarker(ctx, stale, "repo-1", "", DueCheck{CheckedAt: checked.Add(time.Hour), Delivered: relayed}); !errors.Is(err, ErrStaleIncarnation) {
 		t.Fatalf("a replaced incarnation's marker = %v, want ErrStaleIncarnation", err)
 	}
 
@@ -808,13 +842,10 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 	seedRepository(t, s)
 	inc := incarnationOf(t, s)
 	checked := time.Date(2026, 10, 27, 7, 0, 0, 0, time.UTC)
-	check := func(pass string) DueCheck {
-		return DueCheck{Check: HousekeepingCheck{Repository: "repo-1", Pass: pass, CheckedAt: checked}, Delivered: relayed}
-	}
+	c := DueCheck{CheckedAt: checked, Delivered: relayed}
 	due := func(marker, pass string) HousekeepingWakeRequest {
 		return HousekeepingWakeRequest{Repository: "repo-1", Pass: pass, Kind: "housekeeping-due", Marker: marker, Detail: "d"}
 	}
-	c := check("")
 	if out, err := s.AppendHousekeepingWake(ctx, inc, due("due:none:1", ""), &c); err != nil || out.Disposition != WakeAppended {
 		t.Fatalf("the check before any pass = %+v, %v, want it written", out, err)
 	}
@@ -822,7 +853,7 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 	if _, err := s.AppendHousekeepingWake(ctx, inc, due("due:none:2", ""), &c); !errors.Is(err, ErrDueCheckStale) {
 		t.Fatalf("a due wake following none while taskpassonea is open = %v, want ErrDueCheckStale", err)
 	}
-	if err := s.AdvanceHousekeepingMarker(ctx, inc, check("")); !errors.Is(err, ErrDueCheckStale) {
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, "repo-1", "", c); !errors.Is(err, ErrDueCheckStale) {
 		t.Fatalf("the marker following none while taskpassonea is open = %v, want ErrDueCheckStale", err)
 	}
 	if out, err := s.AppendHousekeepingWake(ctx, inc, HousekeepingWakeRequest{Repository: "repo-1", Pass: "taskpassonea",
@@ -836,8 +867,7 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 	if marker, found, err := s.HousekeepingMarkerOf(ctx, "repo-1"); err != nil || !found || marker.Pass != "" || !marker.CheckedAt.Equal(checked) {
 		t.Fatalf("the marker reads %+v, %v, %v, want the first check's, untouched by the refused ones", marker, found, err)
 	}
-	c = check("taskpassonea")
-	c.Check.CheckedAt = checked.Add(time.Hour)
+	c.CheckedAt = checked.Add(time.Hour)
 	if out, err := s.AppendHousekeepingWake(ctx, inc, due("due:taskpassonea:4", "taskpassonea"), &c); err != nil || out.Disposition != WakeAppended {
 		t.Fatalf("the check following the closed newest pass = %+v, %v, want it written", out, err)
 	}
@@ -848,13 +878,55 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 	if _, err := s.AppendHousekeepingWake(ctx, inc, due("due:taskpassonea:5", "taskpassonea"), &c); !errors.Is(err, ErrDueCheckStale) {
 		t.Fatalf("a due wake following taskpassonea once taskpasstwob exists = %v, want ErrDueCheckStale", err)
 	}
-	if err := s.AdvanceHousekeepingMarker(ctx, inc, check("taskpassonea")); !errors.Is(err, ErrDueCheckStale) {
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, "repo-1", "taskpassonea", c); !errors.Is(err, ErrDueCheckStale) {
 		t.Fatalf("the marker following taskpassonea once taskpasstwob exists = %v, want ErrDueCheckStale", err)
 	}
-	if err := s.AdvanceHousekeepingMarker(ctx, inc, DueCheck{Check: HousekeepingCheck{Repository: "repo-1", CheckedAt: checked}}); err == nil || errors.Is(err, ErrDueCheckStale) {
+	if err := s.AdvanceHousekeepingMarker(ctx, inc, "repo-1", "", DueCheck{CheckedAt: checked}); err == nil || errors.Is(err, ErrDueCheckStale) {
 		t.Fatalf("a check naming no record tier = %v, want a refusal of its own", err)
 	}
 	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 3 {
 		t.Fatalf("the wakes are %+v, %v, want the three written ones", rows, err)
+	}
+}
+
+// A due check's guard reads the repository of the wake it authorizes (the
+// review of #683 at 2e40d5e): the repository and the pass are named once,
+// by the wake, so a due wake about repo-1, which has a pass open, is
+// refused with ErrDueCheckStale whatever else has no pass, and no marker
+// moves. The positive control is the same check written as repo-2's wake,
+// a repository with no pass: it is appended and advances repo-2's marker
+// alone.
+func TestADueCheckIsHeldToTheRepositoryOfTheWakeItWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	if _, err := s.UpsertRepository(ctx, Repository{ID: "repo-2", WorkingPath: "/checkouts/two",
+		UpstreamURL: "https://example.test/two.git", DefaultBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	inc := incarnationOf(t, s)
+	mustPass(t, s, "taskpassopen")
+	check := DueCheck{CheckedAt: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC), Delivered: relayed}
+	due := func(repository string) HousekeepingWakeRequest {
+		return HousekeepingWakeRequest{Repository: repository, Kind: "housekeeping-due", Marker: "due:none:1", Detail: "d"}
+	}
+	if _, err := s.AppendHousekeepingWake(ctx, inc, due("repo-1"), &check); !errors.Is(err, ErrDueCheckStale) {
+		t.Fatalf("a due wake about repo-1, whose pass is open = %v, want ErrDueCheckStale", err)
+	}
+	for _, repository := range []string{"repo-1", "repo-2"} {
+		if marker, found, err := s.HousekeepingMarkerOf(ctx, repository); err != nil || found {
+			t.Fatalf("the refused wake left %s's marker %+v, %v, %v, want none", repository, marker, found, err)
+		}
+	}
+	out, err := s.AppendHousekeepingWake(ctx, inc, due("repo-2"), &check)
+	if err != nil || out.Disposition != WakeAppended || out.Wake.Repository != "repo-2" {
+		t.Fatalf("the due wake about repo-2, which has no pass = %+v, %v, want it appended", out, err)
+	}
+	if marker, found, err := s.HousekeepingMarkerOf(ctx, "repo-2"); err != nil || !found || !marker.CheckedAt.Equal(check.CheckedAt) {
+		t.Fatalf("repo-2's marker reads %+v, %v, %v, want it advanced with its wake", marker, found, err)
+	}
+	if marker, found, err := s.HousekeepingMarkerOf(ctx, "repo-1"); err != nil || found {
+		t.Fatalf("repo-2's wake moved repo-1's marker to %+v, %v, %v", marker, found, err)
 	}
 }
