@@ -411,10 +411,16 @@ type RetirementOffer struct {
 // session anchors are what keep a relaunch, or a launch under way, since the
 // loop's probe from slipping past, as they are for the retirement itself.
 // The hold is marked as the retirement hold in the same transaction, and
-// every attempt claim refuses a pass with one open (ErrPassHeld), so an
-// attempt claimed after the offer begins nothing and an offer after the
-// claim is refused on its anchor: no worker runs in a pass that resolves
-// Held from this hold, which is not in flight (P10).
+// every attempt claim, the launch's claim of its start (ClaimAttemptLaunch)
+// and the record of its session (SetAttemptSession) refuse a pass with one
+// open (ErrPassHeld). So an attempt claimed after the offer begins nothing;
+// an offer after the claim and before the launch's claim leaves the launch
+// refused before any worker starts; an offer after that and before the
+// session's record leaves the record refused, and its caller ends the worker
+// it started; and an offer after the record is refused on its session
+// anchor. No worker is recorded running in a pass that resolves Held from
+// this hold, which is not in flight (P10); between a refused record and its
+// caller ending the worker, that worker runs with no record naming it.
 func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o RetirementOffer) (Hold, error) {
 	h := o.Hold
 	if err := validateHold(h); err != nil {
