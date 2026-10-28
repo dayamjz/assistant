@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/principles"
@@ -70,8 +71,11 @@ func TestADiscardStoppedInItsFirstJournalWriteBlocksNoLaterDiscard(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stage, err := os.MkdirTemp(parent, pattern)
-	if err != nil {
+	// The staging directory os.MkdirTemp makes from the pattern, made here
+	// by name so the test does not call os.MkdirTemp (standin's rule): the
+	// random part os.MkdirTemp writes in place of the pattern's "*".
+	stage := filepath.Join(parent, strings.Replace(pattern, "*", "1027", 1))
+	if err := os.Mkdir(stage, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	partial, err := os.CreateTemp(stage, partialPrefix(filepath.Join(stage, journalName))+"*")
