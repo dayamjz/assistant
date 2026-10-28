@@ -199,7 +199,7 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	return out
 }
 
-// passWaitsOn says what an open pass waits on, for the wake and the hold:
+// passWaitsOn says what an open pass waits on, for the wake:
 // what moves it, when something does, and otherwise what its resolution
 // says.
 func passWaitsOn(o taskstate.Observed, moves bool) string {

@@ -589,8 +589,7 @@ func writeDocument(t *testing.T, dir, path, content string) {
 // open, whether or not the default branch moved": a pass open past one
 // interval raises one wake naming it, keyed by the interval, and another
 // once a second interval has passed; nothing is fetched while it is open.
-// The pass here has no session and no run, so nothing moves it, and it is
-// offered the retirement hold once per interval as well.
+// The pass here has no session and no run, so nothing moves it.
 func TestAWakeRaisedWhileAPassIsOpenNamesItEachInterval(t *testing.T) {
 	t.Parallel()
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {

@@ -157,8 +157,13 @@
 //
 // PRD section 6's supervisor absorbs a wake only on positive evidence that
 // work is proceeding, and Resolution.Progress is that evidence as this package
-// can state it: a Validating answer from a run the service is executing now,
-// or a Running answer from a terminal whose agent process is live. Both facts
+// can state it: a Validating answer from a run the service is executing now;
+// a Running answer from a terminal whose agent process is live; or a
+// housekeeping pass that resolves Held from the hold tier while the service
+// is executing its newest run, which has not settled (the hold tier sits
+// above the run tier, so a promoted pass with an open report decision
+// resolves Held while its run validates; Resolution.Progress says why). The
+// two facts, whether a run is advancing and whether a terminal is live,
 // come from outside the store. Inputs.Advancing is the service's slot map,
 // which internal/service hands NewReader; Inputs.Process is the session
 // provider's probe. Neither is as of the snapshot: both are asked after the
