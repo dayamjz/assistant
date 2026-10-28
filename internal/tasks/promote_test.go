@@ -798,7 +798,14 @@ func TestPromoteRefusesARetiredPass(t *testing.T) {
 	s := newPromotionSubject(t)
 	tk := s.pass(t)
 	retire := store.Hold{Key: "task/" + tk.id + "/housekeeping-retire/1/1/-", TaskID: store.Known(tk.id), Subject: "retire?", Detail: "d"}
-	if _, err := s.store.RegisterHold(ctx, retire); err != nil {
+	// The hold is offered as the loop offers it, so it is the pass's marked
+	// retirement hold, the only hold the store answers retire on.
+	inc, err := s.store.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.OfferRetirementHold(ctx, inc, store.RetirementOffer{Hold: retire, Attempt: 1,
+		Ended: func(store.RunStatus) bool { return true }, Delivered: taskstate.Delivered}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.store.RetireHousekeepingPass(ctx, store.Retirement{Task: tk.id, Attempt: 1, Hold: retire.Key,
