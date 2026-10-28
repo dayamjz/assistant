@@ -930,3 +930,74 @@ func TestADueCheckIsHeldToTheRepositoryOfTheWakeItWrites(t *testing.T) {
 		t.Fatalf("repo-2's wake moved repo-1's marker to %+v, %v, %v", marker, found, err)
 	}
 }
+
+// A hold's key names one decision (the review of #683 at 05b23ee): the
+// retirement hold's offer marks only a hold it created, so an offer whose
+// key is already a report decision of the pass, or another task's hold, is
+// refused with ErrHoldKeyTaken and marks nothing; the decision stays
+// unmarked, a retire answer naming it is refused, and the other task's
+// claims are not held. RegisterHold refuses another task's key, and a
+// retirement hold's key, the same way, and the control is its documented
+// re-registration of a key of the same decision, which returns the hold
+// unchanged.
+func TestARetirementHoldIsMarkedOnlyOnAHoldItsOfferCreated(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	mustPass(t, s, "taskhkcollid")
+	decision, err := s.RegisterHold(ctx, Hold{Key: "task/taskhkcollid/finding/1", TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	offer := func(key string) RetirementOffer {
+		return RetirementOffer{Hold: Hold{Key: key, TaskID: Known("taskhkcollid"), Subject: "retire?", Detail: "d"},
+			Ended: ended, Delivered: relayed}
+	}
+	if _, err := s.OfferRetirementHold(ctx, inc, offer(decision.Key)); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("an offer keyed as the pass's report decision = %v, want ErrHoldKeyTaken", err)
+	}
+	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: "taskhkcollid", Hold: decision.Key, By: ResolvedByMachineInterface(),
+		Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}); !errors.Is(err, ErrNotRetirementHold) {
+		t.Fatalf("a retire answer naming the report decision after the refused offer = %v, want ErrNotRetirementHold", err)
+	}
+	if h, err := s.Hold(ctx, decision.Key); err != nil || !h.Open() {
+		t.Fatalf("the report decision reads %+v, %v, want it open", h, err)
+	}
+
+	// Another task's hold: the offer is refused and that task is not held.
+	if _, err := s.CreateTask(ctx, Task{ID: "taskotherone", Shape: TaskInvestigation, Project: "one", Mode: "interactive",
+		WorktreePath: "/tasks/taskotherone/copy"}, Disposition{}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.RegisterHold(ctx, Hold{Key: "task/taskotherone/finding/1", TaskID: Known("taskotherone"), Subject: "s", Detail: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.OfferRetirementHold(ctx, inc, offer(other.Key)); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("an offer keyed as another task's hold = %v, want ErrHoldKeyTaken", err)
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskotherone", OnThisMachine()); err != nil {
+		t.Fatalf("the other task's first attempt after the refused offer = %v, want it begun", err)
+	}
+	if _, err := s.RegisterHold(ctx, Hold{Key: other.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"}); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("registering another task's hold key for the pass = %v, want ErrHoldKeyTaken", err)
+	}
+
+	// The control: the same decision registered again is returned unchanged,
+	// and an offer under a fresh key is registered and marked.
+	again, err := s.RegisterHold(ctx, Hold{Key: decision.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"})
+	if err != nil || again.Key != decision.Key || !again.Open() {
+		t.Fatalf("re-registering the pass's report decision = %+v, %v, want it unchanged", again, err)
+	}
+	retire, err := s.OfferRetirementHold(ctx, inc, offer("task/taskhkcollid/housekeeping-retire/1/0/-"))
+	if err != nil || !retire.Open() {
+		t.Fatalf("an offer under its own key = %+v, %v, want it open", retire, err)
+	}
+	// And the retirement hold's key is not an ordinary decision's either.
+	if _, err := s.RegisterHold(ctx, Hold{Key: retire.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"}); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("registering the pass's retirement hold key as a decision = %v, want ErrHoldKeyTaken", err)
+	}
+}
