@@ -358,7 +358,7 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.switchWorker(ctx, task, d.attempt, nil, nil, role.Agent, role, agents.FailureUnavailable); !errors.Is(err, store.ErrDispatchHeld) {
+	if _, err := s.switchWorker(ctx, task, d.attempt, nil, nil, role.Agent, role, agents.FailureUnavailable, d.handSlot()); !errors.Is(err, store.ErrDispatchHeld) {
 		fatalUnlessSweepsStoppedClearing(t, unestablished, "the handoff = %v; want the backup's attempt refused for kept work", err)
 	}
 	if entry.ID == 0 {

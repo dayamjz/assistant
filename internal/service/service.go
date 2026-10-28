@@ -380,9 +380,14 @@ type Service struct {
 	// through claimRelaunch, which is the one way a slot is retaken.
 	isolated map[string]tasks.Isolation
 	// claiming holds the tasks whose slot a dispatch or a relaunch has
-	// taken and not yet settled, so a relaunch cannot retake a slot that a
-	// claim in flight holds. dispatch.go owns it beside isolated.
+	// taken and not yet settled, or a stop or another steer holds through
+	// claimSteer, so a relaunch cannot retake a slot that a claim in flight
+	// holds. dispatch.go owns it beside isolated.
 	claiming map[string]bool
+	// steering holds the tasks whose slot claimSteer holds, the subset of
+	// claiming that is not a dispatch or relaunch in flight, so launching
+	// can tell the two apart. steer.go writes it; dispatch.go reads it.
+	steering map[string]bool
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
@@ -422,6 +427,12 @@ type Service struct {
 	// why the skip loses nothing. It is not mu, because an intake reads the
 	// gate and the project's configuration while it holds it.
 	intake sync.RWMutex
+	// afterBackupRedispatch runs in a retry answered on a worker fallback
+	// hold once the redispatch has claimed its attempt and before the
+	// stopped attempt's messages are read, with the task. It is nil in
+	// production and set only by this package's tests, which use it to end
+	// the request there, as a client that disconnected does.
+	afterBackupRedispatch func(task string)
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two
@@ -511,6 +522,12 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// beforeFallbackClaim runs in switchWorker with the task, before the
+	// switch takes the slot it was handed or claims one, outside mu. It is
+	// nil in production and set only by this package's tests, which use it
+	// to read the slot at the point a slot settled by the failed launch
+	// would let a steer in.
+	beforeFallbackClaim func(id string)
 	// afterPromotedLaunchStarted runs in relaunchPromoted once the relaunch's
 	// launch has been started in the background and before the promotion's
 	// answer is returned, with the task. It is nil in production and set only
@@ -770,6 +787,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		afterMergeReadPass:        o.afterMergeReadPass,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
+		steering:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),
 		delegated:                 make(map[string]launchedSubordinate),
 		survivors:                 session.NewSurvivors(),
