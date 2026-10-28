@@ -120,10 +120,10 @@ import (
 // # The end, by an answer
 //
 // answerRetirement answers the retirement hold: keep closes it and leaves
-// the pass open, and for a hold offered before the pass's first attempt,
-// which refused the dispatch that read it (store.ErrPassHeld), runs the
-// dispatch (dispatchInBackground), since dispatch runs at open and on intake
-// and nothing else would begin the pass; retire, under the task's slot, refuses a pass whose worker
+// the pass open, and for a pass whose latest attempt has no session, or
+// that has none, which the hold kept from being dispatched or launched
+// (store.ErrPassHeld), runs the dispatch (dispatchInBackground), since
+// dispatch runs at open and on intake and nothing else would begin the pass; retire, under the task's slot, refuses a pass whose worker
 // the probe does not read dead and otherwise asks
 // store.RetireHousekeepingPass, which answers stop on every open hold of the
 // pass whose retry would relaunch its worker (isRetryHold) under the same
@@ -698,13 +698,16 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		}
 		s.publishHoldState(resolved)
 		s.log.Printf("housekeeping pass %s is kept open: its retirement hold %s was answered %q", r.Task, hold.Key, r.Answer)
-		if rh.Attempt == 0 {
-			// The hold was offered before the pass's first attempt, so the
-			// dispatch that read it was refused (store.ErrPassHeld) and
-			// claimed nothing, and nothing else begins the pass: dispatch
-			// runs at open and on intake, not on the loop's own. The
-			// answer runs it, on dispatchInBackground's terms.
-			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since the hold had refused its dispatch", r.Task, hold.Key, r.Answer)
+		// A pass whose latest attempt has no session, or that has none, was
+		// refused its dispatch or its launch by the hold (store.ErrPassHeld),
+		// or kept a claimed attempt across a restart, and nothing else
+		// begins it: dispatch runs at open and on intake, not on the loop's
+		// own. The answer runs it, on dispatchInBackground's terms, which
+		// claims the next attempt. An attempts read that fails runs it too,
+		// since the dispatch reads them again and skips a launched task.
+		attempts, readErr := s.store.TaskAttempts(ctx, r.Task)
+		if _, launched := latestSession(attempts); readErr != nil || !launched {
+			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since its latest attempt has no session", r.Task, hold.Key, r.Answer)
 			s.dispatchInBackground()
 		}
 		return machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}, nil

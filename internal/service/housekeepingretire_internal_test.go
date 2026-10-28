@@ -1114,3 +1114,63 @@ func TestKeepOnAHoldOfferedBeforeTheFirstAttemptDispatchesThePass(t *testing.T) 
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// The same answer for a hold on an attempt that was claimed and never
+// launched (the review of #688 at 17a3d15): a hold offered after the
+// pass's first attempt was claimed refuses its launch, or survives a
+// restart with that attempt sessionless, and the pass then waits on a
+// dispatch that claims its next attempt, which nothing but this answer
+// runs. keep runs it whenever the pass's latest attempt has no session, so
+// a second attempt is claimed. Before, keep ran the dispatch only for a
+// pass with no attempt, and this one stayed with its one sessionless
+// attempt.
+func TestKeepOnAHoldOverAnUnlaunchedAttemptDispatchesThePassAgain(t *testing.T) {
+	t.Parallel()
+	const pass = "taskhkkeepab"
+	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
+		copyPath, err := sub.h.TaskCopy(pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := records.CreateTask(t.Context(), store.Task{
+			ID: pass, Shape: store.TaskInvestigation, Project: "one", Mode: "headless", WorktreePath: copyPath,
+			RepositoryID: store.Known(hkRepository), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}); err != nil {
+			t.Fatal(err)
+		}
+		instructions, err := sub.h.TaskInstructions(pass)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(instructions), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(instructions, []byte("check the agent context\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := records.BeginFirstTaskAttempt(t.Context(), pass, store.OnThisMachine()); err != nil {
+			t.Fatal(err)
+		}
+		offerRetirementHoldOf(t, records, pass)
+	})
+	if attempts := recordedAttempts(t, sub.records(t), pass); len(attempts) != 1 {
+		t.Fatalf("the open's dispatch left attempts %+v over the open retirement hold, want the one planted", attempts)
+	}
+	holds := sub.retireHolds(t, pass)
+	if len(holds) != 1 || !holds[0].Open() {
+		t.Fatalf("the pass carries %+v, want its one open retirement hold", holds)
+	}
+	if kept, err := sub.answer(t, pass, holds[0].Key, machine.AnswerKeep); err != nil || kept.Effect != machine.AnswerRecorded {
+		t.Fatalf("keep answered %+v, %v", kept, err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if attempts := recordedAttempts(t, sub.records(t), pass); len(attempts) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("keep did not dispatch the pass again: its attempts are %+v", recordedAttempts(t, sub.records(t), pass))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
