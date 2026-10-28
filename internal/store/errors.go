@@ -235,6 +235,31 @@ var ErrSchemaChanged = errors.New("store: a recorded migration differs from this
 // than a failure of the write.
 var ErrHoldResolved = errors.New("store: hold is already resolved")
 
+// ErrHoldKeyTaken is the class every *HoldKeyTakenError belongs to: a hold's
+// key names one decision, and a registration under a key another decision
+// already holds is refused rather than passed over, so nothing reads the
+// other decision's hold back as its own.
+var ErrHoldKeyTaken = errors.New("store: the hold key is registered for another decision")
+
+// HoldKeyTakenError refuses a hold registration whose key is already
+// registered for another decision: another task or run, a housekeeping
+// pass's retirement hold, or, for OfferRetirementHold, which marks only a
+// hold it created, any hold at all. Nothing is written.
+type HoldKeyTakenError struct {
+	// Key is the key asked for.
+	Key string
+	// Reason says what already holds it.
+	Reason string
+}
+
+// Error names the key and what holds it.
+func (e *HoldKeyTakenError) Error() string {
+	return fmt.Sprintf("store: hold key %s is taken: %s", e.Key, e.Reason)
+}
+
+// Unwrap makes every *HoldKeyTakenError match ErrHoldKeyTaken.
+func (e *HoldKeyTakenError) Unwrap() error { return ErrHoldKeyTaken }
+
 // ErrNotRetirementHold is returned, wrapped, by RetireHousekeepingPass for a
 // hold that is not the pass's retirement hold, the one OfferRetirementHold
 // registered and marked: a report's decision, a relaunch's hold or another
