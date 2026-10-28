@@ -352,14 +352,17 @@ func TestAnOversizedBriefStillLetsAPromotionRelaunch(t *testing.T) {
 }
 
 // A promotion's answer claims no more than the relaunch did: the relaunch
-// claims its attempt and the launch follows the answer, as task.relaunch's
-// does, so a launch refused after the claim must not have been announced as
-// a worker begun. The investigation is reported and its worker ended by a
-// restart; the next service's worker role names a context window its agent
-// does not declare, so the promotion claims attempt 2 and routing then
-// refuses its launch, the task resolving Failed with no session on that
-// attempt. The answer names the attempt and says whether its worker began
-// shows in the listing, and its brief says the same.
+// claims its attempt and says nothing of the launch, which relaunchPromoted
+// starts in the background before the answer returns and which may finish
+// before or after it (as task.relaunch's does; the next test holds the
+// answer back until the worker is recorded), so a launch refused after the
+// claim must not have been announced as a worker begun. The investigation
+// is reported and its worker ended by a restart; the next service's worker
+// role names a context window its agent does not declare, so the promotion
+// claims attempt 2 and routing then refuses its launch, the task resolving
+// Failed with no session on that attempt. The answer names the attempt and
+// says whether its worker began shows in the listing, and its brief says
+// the same.
 func TestAPromotionsRelaunchIsAnnouncedAsClaimedNotAsBegun(t *testing.T) {
 	t.Parallel()
 	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation after a restart")
