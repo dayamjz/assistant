@@ -591,6 +591,74 @@ func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
 	}
 }
 
+// The retirement hold against a launch under way (the review of #683 at
+// ec7bc68): the offer reads a claimed attempt with no session as nothing
+// moving the pass, so it can be registered between the attempt's claim and
+// the launch's own writes. Those writes refuse the pass while the hold is
+// open, ClaimAttemptLaunch before any worker starts and SetAttemptSession
+// after one has, so no worker is recorded running in a pass that resolves
+// Held from this hold, which is not in flight (P10); once the hold is
+// answered keep, both are written, the control that the refusal is the
+// hold's.
+func TestNoLaunchProceedsWhileARetirementHoldIsOpen(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P10)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	inc := incarnationOf(t, s)
+	offerOf := func(task string) RetirementOffer {
+		return RetirementOffer{Hold: Hold{Key: "task/" + task + "/housekeeping-retire/1/1/-",
+			TaskID: Known(task), Subject: "retire?", Detail: "d"}, Attempt: 1, Ended: ended, Delivered: relayed}
+	}
+	keep := func(h Hold) {
+		t.Helper()
+		if _, err := s.ResolveHold(ctx, h.Key, "keep", ResolvedByMachineInterface()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The offer after the attempt's claim and before its launch's claim:
+	// the launch's claim is refused, so no worker is started.
+	mustPass(t, s, "taskhklnchaa")
+	beginAttempt(t, s, "taskhklnchaa", 0)
+	hold, err := s.OfferRetirementHold(ctx, inc, offerOf("taskhklnchaa"))
+	if err != nil {
+		t.Fatalf("the offer to a pass whose attempt has no session = %v, want it registered", err)
+	}
+	if err := s.ClaimAttemptLaunch(ctx, "taskhklnchaa", 1); !errors.Is(err, ErrPassHeld) {
+		t.Fatalf("the launch claim of a pass whose retirement hold is open = %v, want ErrPassHeld", err)
+	}
+	keep(hold)
+	if err := s.ClaimAttemptLaunch(ctx, "taskhklnchaa", 1); err != nil {
+		t.Fatalf("the launch claim once the hold was answered keep = %v, want it written", err)
+	}
+
+	// The offer after the launch's claim and before its session's record:
+	// the worker has started, and its record is refused, so the caller ends
+	// it and the attempt stays without a session.
+	relay(t, s, "taskhklnchaa")
+	mustPass(t, s, "taskhklnchab")
+	beginAttempt(t, s, "taskhklnchab", 0)
+	if err := s.ClaimAttemptLaunch(ctx, "taskhklnchab", 1); err != nil {
+		t.Fatal(err)
+	}
+	hold, err = s.OfferRetirementHold(ctx, inc, offerOf("taskhklnchab"))
+	if err != nil {
+		t.Fatalf("the offer to a pass whose launch is claimed and unrecorded = %v, want it registered", err)
+	}
+	if err := s.SetAttemptSession(ctx, "taskhklnchab", 1, "pane-held", SessionHost{}); !errors.Is(err, ErrPassHeld) {
+		t.Fatalf("the session record of a pass whose retirement hold is open = %v, want ErrPassHeld", err)
+	}
+	if attempts, err := s.TaskAttempts(ctx, "taskhklnchab"); err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the refused record left attempts %+v (%v), want one with no session", attempts, err)
+	}
+	keep(hold)
+	if err := s.SetAttemptSession(ctx, "taskhklnchab", 1, "pane-kept", SessionHost{}); err != nil {
+		t.Fatalf("the session record once the hold was answered keep = %v, want it written", err)
+	}
+}
+
 // PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
 // repository, appended once per marker under the incarnation fence with the
 // due-check marker in its own transaction, drained, acknowledged and
