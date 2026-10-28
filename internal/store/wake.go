@@ -298,7 +298,9 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 		}
 		out.Markers = markers
 		if h, ok := w.Registers.Get(); ok {
-			if err := insertHold(ctx, tx, h); err != nil {
+			// A replayed wake registers its hold again, which is the same
+			// decision; a key another decision holds refuses the append.
+			if _, err := insertHold(ctx, tx, h); err != nil {
 				return err
 			}
 		}

@@ -98,15 +98,20 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 	if again, err := s.TaskReport(ctx, task.ID); err != nil || !reflect.DeepEqual(again, stored) {
 		t.Fatalf("the second write disturbed the first: %+v, %v", again, err)
 	}
-	// A hold already registered is left as it stands: resolving one and
-	// storing a report naming its key again does not reopen it.
+	// A hold already registered is left as it stands: a report of another
+	// task naming its key is a different decision under the same key, so it
+	// is refused (ErrHoldKeyTaken) and stores nothing, and the resolved hold
+	// is neither reopened nor rewritten.
 	if _, err := s.ResolveHold(ctx, holds[0].Key, "bounded", ResolvedByProgram()); err != nil {
 		t.Fatalf("ResolveHold: %v", err)
 	}
 	other := seedTask(t, s, "taskaaaaaaac")
 	if _, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: other.ID, Body: "x", Report: []byte(`{}`)},
-		[]Hold{{Key: holds[0].Key, TaskID: Known(other.ID), Subject: "the same decision"}}); err != nil {
-		t.Fatalf("storing a report naming an existing key: %v", err)
+		[]Hold{{Key: holds[0].Key, TaskID: Known(other.ID), Subject: "the same decision"}}); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("storing a report naming another task's hold key = %v, want ErrHoldKeyTaken", err)
+	}
+	if _, err := s.TaskReport(ctx, other.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused report was stored: %v", err)
 	}
 	if got, err := s.Hold(ctx, holds[0].Key); err != nil || got.Open() || got.TaskID.Or("") != task.ID {
 		t.Fatalf("an existing hold was rewritten: %+v, %v", got, err)
