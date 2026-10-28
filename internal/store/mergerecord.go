@@ -209,11 +209,9 @@ func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from 
 // was given before it is stored.
 func (s *Store) closeHold(ctx context.Context, tx *sql.Tx, closing HoldClosure, now string) error {
 	h := closing.Hold
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
-		VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
-		ON CONFLICT(key) DO NOTHING`,
-		h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, now); err != nil {
+	// The same decision registered before is closed here; a key another
+	// decision holds is refused (insertHold), so nothing closes it.
+	if _, err := insertHold(ctx, tx, h); err != nil {
 		return fmt.Errorf("store: registering hold %s: %w", h.Key, err)
 	}
 	resolver, err := resolverText(closing.By)

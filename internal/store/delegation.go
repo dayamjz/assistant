@@ -631,8 +631,9 @@ func scanEscalation(sc scanner) (Escalation, error) {
 
 // RegisterDelegationHold registers a hold about a delegation only while the
 // delegation stands, reading it in the transaction that inserts the hold,
-// on RegisterHold's terms otherwise: a key already registered is returned
-// unchanged, resolved or not. A delegation that has ended is refused with
+// on RegisterHold's terms otherwise: a key already registered for the same
+// decision is returned unchanged, resolved or not, and one registered for
+// another is refused with a *HoldKeyTakenError. A delegation that has ended is refused with
 // ErrDelegationEnded and nothing is written, so a pass that read the
 // delegation standing and registers after its end cannot leave a hold that
 // waits on a delegation nothing can act on; an unknown delegation is
@@ -649,7 +650,8 @@ func (s *Store) RegisterDelegationHold(ctx context.Context, id int64, h Hold) (H
 		if !d.Standing() {
 			return fmt.Errorf("%w: delegation %d of domain %s", ErrDelegationEnded, id, d.Domain)
 		}
-		return insertHold(ctx, tx, h)
+		_, err = insertHold(ctx, tx, h)
+		return err
 	})
 	if err != nil {
 		if errors.Is(err, ErrDelegationEnded) {
