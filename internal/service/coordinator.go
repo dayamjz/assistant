@@ -173,9 +173,11 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 // which decides from its own read and is held to everything task.relaunch
 // is: the floor, the re-probe, the sweep, the claim, and relaunch_attempts,
 // which counts this relaunch like any other because it counts attempts and
-// not who asked. The relaunched worker is
-// begun with the instructions file, which already carries the brief, and
-// the stored report as its starting point (relaunch.go). A refused relaunch
+// not who asked. The relaunch's worker is launched after the answer, as
+// task.relaunch's is, begun with the instructions file, which already
+// carries the brief, and the stored report as its starting point
+// (relaunch.go); the answer names the claimed attempt and not a started
+// worker. A refused relaunch
 // does not undo the promotion: the answer says why in Brief.Unsent, and a
 // later task.relaunch begins the worker on the same terms. A worker that
 // reads Unobserved is neither briefed nor relaunched, as before.
@@ -217,8 +219,10 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 
 // relaunchPromoted relaunches a promoted task whose worker read Dead, on
 // promoteTask's terms, and returns the relaunch and the briefing amended to
-// say what became of the brief: carried by the relaunched worker's
-// instructions, or not, with the refusal named.
+// say what became of the brief: to be carried by the relaunched worker's
+// instructions, or not, with the refusal named. The relaunch is the claimed
+// attempt; its launch runs after this returns, on launchInBackground's
+// terms, so neither the answer nor the briefing says a worker started.
 func (s *Service) relaunchPromoted(ctx context.Context, req ipc.Request, task string, brief machine.Briefing) (*machine.TaskRelaunched, machine.Briefing) {
 	out, err := s.relaunchTask(ctx, task)
 	if err != nil {
@@ -226,13 +230,14 @@ func (s *Service) relaunchPromoted(ctx context.Context, req ipc.Request, task st
 		s.log.Printf("promoted task %s was not relaunched: %v", task, err)
 		return nil, brief
 	}
-	s.log.Printf("task %s was promoted with its worker ended, so it was relaunched in place as attempt %d by %s, superseding session %s; %s",
+	s.log.Printf("task %s was promoted with its worker ended, so attempt %d was claimed to relaunch it in place by %s, superseding session %s; %s",
 		task, out.launch.attempt, peerOf(req), out.superseded, out.swept)
 	s.launchInBackground(out.launch)
-	brief.Unsent += fmt.Sprintf("; a worker was relaunched in the same copy as attempt %d and is begun with the brief in its instructions", out.launch.attempt)
+	brief.Unsent += fmt.Sprintf("; attempt %d was claimed to relaunch a worker in the same copy, to be begun with the brief in its instructions", out.launch.attempt)
 	if out.fromReport {
 		brief.Unsent += " and the stored report as its starting point"
 	}
+	brief.Unsent += "; the launch follows this answer, so whether its worker began shows in the task's state"
 	return &machine.TaskRelaunched{Task: task, Attempt: out.launch.attempt, Superseded: out.superseded, Swept: out.swept}, brief
 }
 
