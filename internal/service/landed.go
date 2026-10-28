@@ -158,15 +158,12 @@ import (
 //     task's (the first gap); one whose reference cannot be verified is
 //     reported in the log once per reference per service life and left
 //     running.
-//   - PRD section 6's "its copy is kept either way" is not met in this
-//     build: once a reported investigation's worker has ended, the window's
-//     end among the ways, a copy holding nothing the cleanup decision keeps
-//     is removed, and a later promotion is refused for it
-//     (store.ErrCleanupRecorded). A copy holding work is kept as a kept work
-//     entry and a promotion relaunches in it. The removal is main's for a
-//     worker that exits, is stopped or is ended by a restart; the window adds
-//     one more way the worker ends. #438 keeps the copy for a promotion and
-//     closes this.
+//   - This change is incomplete alone, and #438 completes it in the same
+//     landing. Without #438, PRD section 6's "its copy is kept either way"
+//     is not met: once a reported investigation's worker has ended, the
+//     window's end among the ways, a copy holding nothing the cleanup
+//     decision keeps is removed, and a later promotion is refused for it
+//     (store.ErrCleanupRecorded). #438 keeps the copy for a promotion.
 //   - A window's end waits for the task's slot, with no bound here: a
 //     promotion, stop, relaunch or dispatch holding the slot defers it to
 //     the first pass after the slot is released.
