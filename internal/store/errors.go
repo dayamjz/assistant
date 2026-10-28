@@ -235,6 +235,12 @@ var ErrSchemaChanged = errors.New("store: a recorded migration differs from this
 // than a failure of the write.
 var ErrHoldResolved = errors.New("store: hold is already resolved")
 
+// ErrNotRetirementHold is returned, wrapped, by RetireHousekeepingPass for a
+// hold that is not the pass's retirement hold, the one OfferRetirementHold
+// registered and marked: a report's decision, a relaunch's hold or another
+// task's hold is never answered retire, and nothing is written.
+var ErrNotRetirementHold = errors.New("store: the hold is not the housekeeping pass's retirement hold")
+
 // ErrMigrationsMalformed is returned when the migration list itself is wrong:
 // versions that do not start at one or do not increase by one. It is a
 // programming error in this package rather than a condition of the database.
