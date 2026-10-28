@@ -17,8 +17,15 @@ jobs:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Above the test step's -timeout 30m with room for setup, vet and lint,
-    # so go test's own bound is the one that ends a slow package.
-    timeout-minutes: 40
+    # so go test's own bound is the one that ends a slow package. 50 (was
+    # 40) leaves ~15 minutes of headroom on recent slow macOS greens
+    # (job 35.5m, Test 34.1m on run 40745205051): internal/service alone
+    # was 12.8-21.5 minutes there, and a setup-go cache stall has taken
+    # ~10 minutes (#559). A cancel at the bound of a passing suite is
+    # re-run noise; go test's 30m per package still ends a hung package.
+    # Speeding the suite (for example -parallel on macOS) is a separate
+    # change that needs the repeat gate before it lands.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
