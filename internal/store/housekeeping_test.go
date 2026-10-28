@@ -714,9 +714,8 @@ func TestNoLaunchProceedsWhileARetirementHoldIsOpen(t *testing.T) {
 
 // PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
 // repository, appended once per marker under the incarnation fence with the
-// due-check marker in its own transaction, acknowledged and claimed for
-// the private channel on the other shapes' terms, never handed out by a
-// drain that has nobody to return it to, the first
+// due-check marker in its own transaction, drained, acknowledged and
+// claimed for the private channel on the other shapes' terms, the first
 // coordinator's alone, and it holds its repository's records until
 // acknowledged.
 func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
@@ -769,12 +768,9 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	if _, err := s.ClaimHousekeepingNotification(ctx, first.Wake.ID); !errors.Is(err, ErrNotificationClaimed) {
 		t.Fatalf("a second claim = %v, want ErrNotificationClaimed", err)
 	}
-	// The drain does not hand the row out: no caller can return it yet.
-	if _, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 1 || rows[0].HandedOutAt.IsKnown() {
-		t.Fatalf("after a drain the housekeeping wakes are %+v, %v, want the row queued and not handed out", rows, err)
+	drained, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"})
+	if err != nil || len(drained.HousekeepingWakes) != 1 || drained.HousekeepingWakes[0].ID != first.Wake.ID {
+		t.Fatalf("the drain = %+v, %v, want the housekeeping row", drained, err)
 	}
 	if err := s.AcknowledgeAll(ctx, nil, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)

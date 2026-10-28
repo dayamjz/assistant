@@ -14,9 +14,8 @@ import (
 // task, keyed by the repository and by the pass it follows, or by none
 // before the first pass. It is appended on Wake's terms, under the
 // supervisor loop's incarnation fence (AppendHousekeepingWake), and
-// counted on offer, acknowledged and offered to the private channel on the
-// kept-work wake's terms; DrainAll does not hand it out. It is in no
-// domain, so it is the
+// drained, handed out, acknowledged and offered to the private channel on
+// the kept-work wake's terms. It is in no domain, so it is the
 // first coordinator's alone. Acknowledging it creates nothing and answers
 // nothing. Its identifiers are a sequence of their own, apart from every
 // other shape's.
@@ -293,6 +292,24 @@ func (s *Store) QueuedHousekeepingWakes(ctx context.Context, limit int) ([]House
 // terms.
 func (s *Store) OfferedHousekeepingWakes(ctx context.Context, held []string, route WakeRoute) (int, error) {
 	return housekeepingWakeShape.offered(ctx, s, held, route)
+}
+
+// drainHousekeepingWakesTx hands out the housekeeping wakes on offer inside
+// a transaction.
+func drainHousekeepingWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]HousekeepingWake, error) {
+	ids, err := housekeepingWakeShape.handOutTx(ctx, tx, limit, h)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HousekeepingWake, 0, len(ids))
+	for _, id := range ids {
+		w, err := scanHousekeepingWake(tx.QueryRowContext(ctx, housekeepingWakeColumns+` WHERE id = ?`, id))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, nil
 }
 
 // UnacknowledgedHousekeepingWakes returns how many housekeeping wakes are
