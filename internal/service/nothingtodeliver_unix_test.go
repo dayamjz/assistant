@@ -163,7 +163,7 @@ func nothingWalk(t *testing.T, branch string, shape nothingShape, adjust func(se
 		if shape.person {
 			git(t, copyPath, "push", "--quiet", gate.RemoteName, refspec)
 		} else {
-			pushAsWorker(t, w, copyPath, refspec)
+			defer pushAsWorker(t, w, copyPath, refspec)()
 		}
 		records := openRecords(t, h)
 		defer func() { _ = records.Close() }()
@@ -205,12 +205,34 @@ func waitRunHeld(t *testing.T, w launched, id string) machine.Run {
 // the session was closed). Whether the gate admitted the push is read from
 // the record instead, by waitRunSubmitted; a refused push starts no run and
 // fails there with the service log.
-func pushAsWorker(t *testing.T, w launched, dir, refspec string) {
+//
+// The worker runs the push in a process group of its own (standin's Run), so
+// ending the worker does not end the push, which goes on to write dir's
+// remote-tracking reference after the gate answers. A test that ended first
+// had that write recreate the removed copy, the leftover CI run 40675209557
+// reported. So the command marks, outside dir, that the push has exited,
+// whatever it exited with, and pushAsWorker returns the wait for that mark,
+// which the caller runs before the test can end.
+func pushAsWorker(t *testing.T, w launched, dir, refspec string) func() {
 	t.Helper()
-	command := fmt.Sprintf(": call %d; cd %s && %s", shellCalls.Add(1), shellQuote(dir),
-		shellQuote("git", "push", "--quiet", gate.RemoteName, refspec))
+	pushed := filepath.Join(t.TempDir(), "pushed")
+	command := fmt.Sprintf(": call %d; cd %s && %s; : > %s", shellCalls.Add(1), shellQuote(dir),
+		shellQuote("git", "push", "--quiet", gate.RemoteName, refspec), shellQuote(pushed))
 	if err := w.provider.Send(t.Context(), w.session, shellMarker+command); err != nil {
 		t.Fatalf("sending the worker its push: %v", err)
+	}
+	return func() {
+		t.Helper()
+		deadline := time.Now().Add(launchWait)
+		for {
+			if _, err := os.Stat(pushed); err == nil {
+				return
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the worker's push to the gate had not exited %s after it was sent", launchWait)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }
 

@@ -58,14 +58,21 @@ type Hold struct {
 func (h Hold) Open() bool { return !h.Resolution.IsKnown() }
 
 // RegisterHold registers a decision and returns the hold as stored.
-// Registering a key that already exists returns the existing hold unchanged,
-// resolved or not, because the key is what says these are the same decision.
-// A genuinely different decision gets a different key.
+// Registering a key that already exists for the same decision, naming the
+// same task and run, returns the existing hold unchanged, resolved or not,
+// because the key is what says these are the same decision. A key already
+// registered for another task or run, or as a housekeeping pass's
+// retirement hold, is a different decision and is refused with a
+// *HoldKeyTakenError (ErrHoldKeyTaken), writing nothing: a genuinely
+// different decision gets a different key.
 func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 	if err := validateHold(h); err != nil {
 		return Hold{}, err
 	}
-	err := s.inTx(ctx, func(tx *sql.Tx) error { return insertHold(ctx, tx, h) })
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := insertHold(ctx, tx, h)
+		return err
+	})
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: registering hold %s: %w", h.Key, err)
 	}
@@ -164,7 +171,9 @@ func (s *Store) resolveHold(ctx context.Context, inc *Incarnation, key, resoluti
 // ErrNoResolution, and a resolution naming nobody with ErrNoResolver, before
 // anything is written. A key already resolved is left as it stands, which is
 // what makes recording one decision twice one record rather than a refusal:
-// the key is what says these are the same decision.
+// the key is what says these are the same decision. A key another decision
+// holds (another task or run, or a housekeeping pass's retirement hold) is
+// refused with a *HoldKeyTakenError, and nothing is registered or resolved.
 func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (Hold, error) {
 	key := closing.Hold.Key
 	if strings.TrimSpace(key) == "" {
@@ -293,14 +302,45 @@ func redactExistingHoldResolutionNotes(ctx context.Context, tx *sql.Tx, r vcs.Re
 	return nil
 }
 
-func insertHold(ctx context.Context, tx *sql.Tx, h Hold) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO hold (key,run_id,task_id,subject,detail,opened_at,resolution,resolved_at,resolved_by) VALUES(?,?,?,?,?,?,NULL,NULL,NULL) ON CONFLICT(key) DO NOTHING`, h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(nowUTC()))
-	return err
+// insertHold writes h in the caller's transaction and reports whether it
+// created the row. A key already registered is never passed over silently:
+// a row of the same decision, naming the same task and run and not marked
+// as a retirement hold, is RegisterHold's re-registration and answers false
+// with no error, so a caller that must create the hold reads false as a
+// refusal; any other row under the key is a different decision, refused
+// with a *HoldKeyTakenError and nothing written.
+func insertHold(ctx context.Context, tx *sql.Tx, h Hold) (bool, error) {
+	result, err := tx.ExecContext(ctx, `INSERT INTO hold (key,run_id,task_id,subject,detail,opened_at,resolution,resolved_at,resolved_by) VALUES(?,?,?,?,?,?,NULL,NULL,NULL) ON CONFLICT(key) DO NOTHING`, h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(nowUTC()))
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected == 1 {
+		return true, nil
+	}
+	var run, task Optional[string]
+	var marked Optional[int64]
+	if err := tx.QueryRowContext(ctx, `SELECT run_id, task_id, housekeeping_retirement FROM hold WHERE key = ?`, h.Key).
+		Scan(&run, &task, &marked); err != nil {
+		return false, fmt.Errorf("reading the hold already registered under key %s: %w", h.Key, err)
+	}
+	switch {
+	case run != h.RunID || task != h.TaskID:
+		return false, &HoldKeyTakenError{Key: h.Key, Reason: fmt.Sprintf("it is the hold of task %q and run %q, not of task %q and run %q",
+			task.Or(""), run.Or(""), h.TaskID.Or(""), h.RunID.Or(""))}
+	case marked.Or(0) == 1:
+		return false, &HoldKeyTakenError{Key: h.Key, Reason: "it is a housekeeping pass's retirement hold"}
+	}
+	return false, nil
 }
 
 // RegisterTaskAttemptHold records a decision only while the task is still on
 // the attempt observed. It refuses a stale handoff instead of holding a newer
-// worker that somebody else already started.
+// worker that somebody else already started. A key already registered is
+// answered on RegisterHold's terms.
 func (s *Store) RegisterTaskAttemptHold(ctx context.Context, id string, attempt int64, h Hold) (Hold, error) {
 	if err := validateHold(h); err != nil {
 		return Hold{}, err
@@ -313,7 +353,8 @@ func (s *Store) RegisterTaskAttemptHold(ctx context.Context, id string, attempt 
 		if err := checkLatestTaskAttempt(ctx, tx, id, attempt); err != nil {
 			return err
 		}
-		return insertHold(ctx, tx, h)
+		_, err := insertHold(ctx, tx, h)
+		return err
 	})
 	if err != nil {
 		return Hold{}, err
