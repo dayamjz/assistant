@@ -259,7 +259,11 @@ func (s *Service) landingOf(ctx context.Context, entry store.KeptWork) (landing,
 			return refuse("it is the copy of an investigation, whose work is delivered by promoting it, not by landing")
 		}
 		repositoryID, branch = task.RepositoryID.Or(""), task.Branch.Or("")
-		out.intent = pushedIntent{text: s.taskIntent(task), source: intentSourceTask}
+		text, err := s.taskIntent(task)
+		if err != nil {
+			return landing{}, fmt.Errorf("%w: kept work entry %d was not landed: %w", ipc.ErrRefused, entry.ID, err)
+		}
+		out.intent = pushedIntent{text: text, source: intentSourceTask}
 	} else {
 		owner, err := s.store.Run(ctx, entry.RunID.Or(""))
 		if err != nil {
