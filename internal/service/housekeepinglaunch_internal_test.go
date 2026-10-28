@@ -3,11 +3,11 @@ package service
 import (
 	"context"
 	"errors"
-	"github.com/dayamjz/assistant/internal/agents"
-	"github.com/dayamjz/assistant/internal/agents/standin"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
