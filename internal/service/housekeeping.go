@@ -165,16 +165,20 @@ import (
 //     (errSteerInFlight), the offer is skipped until the next pass, and a
 //     launch that reads a pass already retired under the slot creates no
 //     worker (errLaunchRetired); the pass stays open and resolves
-//     Dispatched, in flight, until its worker is recorded. For a retirement the slot does not order, written by
-//     another incarnation or past a crash, the store decides the two writes
-//     with exactly one loser: a retirement anchored to no session refuses
-//     once the session is recorded (store.ErrPassMoves), and the record
-//     refuses once the pass is retired (store.ErrPassRetired), on which
-//     launch.go ends the worker it started and records nothing. What such
-//     a worker did between its start and its end stays in the pass's copy,
-//     which the cleanup decision is asked about as for any retired pass
-//     (P6), and between its start and its end it is a worker no record
-//     names, the gap dispatch.go's crash paragraph states.
+//     Dispatched, in flight, until its worker is recorded. For an offer or a
+//     retirement the slot does not order, written by another incarnation
+//     or past a crash, the store's launch-retirement exclusion decides
+//     (its housekeepinglaunch.go): no hold is offered while the latest
+//     attempt's launch is claimed and unrecorded (store.ErrPassMoves), a
+//     retirement answers only that hold, and no launch is claimed while it
+//     stands or once the pass is retired (store.ErrPassHeld,
+//     store.ErrPassRetired), so no worker is created for a retired pass.
+//     The one launch it does not read, an earlier attempt's outrun by a
+//     later claim, has its record refused instead, on which launch.go ends
+//     the worker it started and records nothing; what that worker did
+//     stays in the pass's copy, which the cleanup decision is asked about
+//     as for any retired pass (P6), and until it is ended it is a worker
+//     no record names, the gap dispatch.go's crash paragraph states.
 //   - The program cannot tell a rule from a fact; what a pass may change
 //     rests on the worker's instructions and the run's review, and the
 //     review's ask on paths outside housekeeping.paths (internal/stages).
@@ -305,11 +309,14 @@ func (s *Service) superviseOpenPass(c *incarnation, r store.Repository, o taskst
 	// It reads the slot rather than taking it, so a stop or the cleanup
 	// ask holding the slot, which exclude nothing here, do not put the
 	// offer off. The read decides nothing by itself: the store orders the
-	// offer against every attempt claim, refusing the offer once an
-	// attempt was claimed (its anchor) and refusing a claim once the hold
-	// is open (store.ErrPassHeld), so a dispatcher that read the pass
-	// before this offer and claims after it begins nothing and gives its
-	// slot back. The read only spares a launch in flight that refusal.
+	// offer against every launch write, refusing the offer once an attempt
+	// was claimed (its anchor) or while the latest attempt's launch is
+	// claimed and unrecorded (store.ErrPassMoves), and refusing an attempt
+	// or launch claim once the hold is open (store.ErrPassHeld), so a
+	// dispatcher that read the pass before this offer and claims after it
+	// starts nothing and gives its slot back. The read only spares a
+	// launch whose attempt is claimed and whose launch is not yet that
+	// refusal.
 	if s.launching(id) {
 		return out
 	}

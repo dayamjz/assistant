@@ -107,25 +107,27 @@ import (
 // be written. A reference that cannot be recorded leaves the session no
 // longer held and ended before the failure is reported, so no process this
 // service started stands behind an attempt whose row does not name it.
-// A reference refused because the task is a housekeeping pass retired
-// since its attempt was claimed (store.ErrPassRetired) is the same path:
-// the worker is ended and the attempt keeps no session, so no session is
-// recorded for an attempt of a retired pass after its retirement
-// (housekeeping.go). Within this service that path is not reached: the
-// task's slot, which the dispatch or relaunch took, stays unsettled from
-// its claim until the record here is settled (dispatched.settle), across a
-// worker fallback made here too, which is handed the slot unsettled and
-// settles it after the backup's launch (dispatched.handSlot), so a
-// retire answered meanwhile is refused (errSteerInFlight) rather than
-// written, the retirement hold is not offered meanwhile either, and a pass
-// retired before the claim is refused here before any worker is created
-// (errLaunchRetired). The record's refusal stands for a retirement the
-// slot does not order: one written by another incarnation, or past a
-// crash. A retirement hold offered the same way, which the offer here
-// skips while the slot is unsettled (launching), refuses the launch's
-// claim before a worker starts or its record after (store.ErrPassHeld):
-// either way no worker is recorded, a started one is ended, and the slot
-// is given back through releasePassHeldSlot, as a held dispatch's is.
+// A housekeeping pass is held to the store's launch-retirement exclusion
+// (its housekeepinglaunch.go): the launch's claim is refused once the pass
+// is retired (store.ErrPassRetired) or while its retirement hold is open
+// (store.ErrPassHeld), before any worker is created, and the store refuses
+// the hold's offer while this launch is claimed and unrecorded, so neither
+// can be written between the worker's creation and its record. Within this
+// service the slot orders them anyway: the task's slot, which the dispatch
+// or relaunch took, stays unsettled from its claim until the record here is
+// settled (dispatched.settle), across a worker fallback made here too,
+// which is handed the slot unsettled and settles it after the backup's
+// launch (dispatched.handSlot), so a retire answered meanwhile is refused
+// (errSteerInFlight) rather than written, the retirement hold is not
+// offered meanwhile either (launching), and a pass retired before the
+// claim is refused here before any worker is created (errLaunchRetired).
+// The store's refusals stand for an offer or a retirement the slot does
+// not order: one by another incarnation, or past a crash. A held launch
+// claim gives the slot back through releasePassHeldSlot, as a held
+// dispatch's is. The record is refused held or retired only for an attempt
+// a later claim outran, which the slot excludes here; the worker is then
+// ended, the attempt keeps no session, and the slot is given back the same
+// way.
 // Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
@@ -348,21 +350,23 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 				d.id, closeErr)
 		}
 		if errors.Is(recordErr, store.ErrPassHeld) {
-			// Offered its retirement hold between the worker's creation
-			// and the record, by an offer this slot did not order: the
-			// worker was ended above and nothing names it, and the slot is
-			// given back as a held dispatch's is.
+			// Offered its retirement hold while this launch was under way.
+			// The store refuses the offer while the pass's latest attempt's
+			// launch is claimed and unrecorded, so this attempt was no
+			// longer the latest: a later claim, which this slot did not
+			// order, outran it (store's housekeepinglaunch.go). The worker
+			// was ended above and nothing names it, and the slot is given
+			// back as a held dispatch's is.
 			d.handSlot()
 			s.releasePassHeldSlot(ctx, d.id)
 			return nil, fmt.Errorf("service: housekeeping pass %s was offered its retirement hold while attempt %d was launching, so its worker was ended and nothing records it: %w",
 				d.id, d.attempt, recordErr)
 		}
 		if errors.Is(recordErr, store.ErrPassRetired) {
-			// The pass was retired between the worker's creation and the
-			// record, the one window every attempt claim leaves, and the
-			// store decided the two writes with this one the loser: the
-			// worker was ended above and nothing names it, on
-			// housekeeping.go's terms.
+			// Retired while this launch was under way, which the store
+			// allows only once a later claim outran this attempt, on the
+			// same terms as the hold above: the worker was ended above and
+			// nothing names it, on housekeeping.go's terms.
 			return nil, fmt.Errorf("service: housekeeping pass %s was retired while attempt %d was launching, so its worker was ended and nothing records it: %w",
 				d.id, d.attempt, recordErr)
 		}

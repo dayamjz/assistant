@@ -53,19 +53,51 @@ func retireAtSeam(t *testing.T, records *store.Store, task string) {
 	}
 }
 
+// outrunAtSeam stands at a launch's seam, its worker created and its
+// session not yet recorded, as an incarnation the launch's slot does not
+// order: the store refuses its retirement hold's offer there, since the
+// pass's latest attempt's launch is claimed and unrecorded
+// (store.ErrPassMoves), and writes no hold. It then claims the pass's next
+// attempt, as the relaunch claim of such a writer would, which outruns the
+// launch: its attempt is no longer the latest, so the store no longer reads
+// it as under way, the one launch its exclusion leaves to the record.
+func outrunAtSeam(t *testing.T, records *store.Store, task string) {
+	t.Helper()
+	ctx := t.Context()
+	inc, err := records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := recordedAttempts(t, records, task)
+	rh := retireHold{Task: task, Epoch: 1, Attempt: latestSequence(attempts)}
+	if _, err := records.OfferRetirementHold(ctx, inc, store.RetirementOffer{
+		Hold:    store.Hold{Key: rh.key(), TaskID: store.Known(task), Subject: "retire?", Detail: "d"},
+		Attempt: rh.Attempt, Session: latestRef(attempts), Ended: runs.Finished, Delivered: taskstate.Delivered,
+	}); !errors.Is(err, store.ErrPassMoves) {
+		t.Fatalf("the retirement hold offered while pass %s's launch is claimed and unrecorded = %v, want ErrPassMoves", task, err)
+	}
+	if h, err := records.Hold(ctx, rh.key()); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the refused offer left %+v, %v", h, err)
+	}
+	if _, err := records.BeginTaskAttempt(ctx, task, rh.Attempt); err != nil {
+		t.Fatalf("claiming pass %s's next attempt at the seam: %v", task, err)
+	}
+}
+
 // PRD section 6's "a retired housekeeping pass is not in flight by its
-// state alone" and P10, at the one window dispatch's slot does not cover:
-// a retire answered after the pass's attempt was claimed and before its
-// launch recorded a session reads the attempt as never launched and is
-// written. The launch, already past the worker's creation, then records
-// nothing: the record of the session refuses the retired pass under the
-// store's serialization, the worker it started is ended, and the attempt
-// stays without a session. So no worker of a retired pass runs, and the
-// stop hook's reading, which takes no probe, is the truth: nothing is in
-// flight, and a turn may end. Before this ordering, the launch recorded its
-// session after the retirement and the worker ran on, live to the probe,
-// while the hook read nothing in flight, which is the P10 failure the
-// review at 14ed5c9 reproduced with host stop.
+// state alone" and P10, at a launch's seam, its worker created and its
+// session not yet recorded. The store's launch-retirement exclusion refuses
+// the retirement hold there, so no retire can be answered (outrunAtSeam);
+// the one launch it leaves is one a later claim outran, and a retire
+// answered then, against the later attempt, is written. The outrun launch
+// then records nothing: the record of its session refuses the retired pass
+// under the store's serialization, the worker it started is ended, and the
+// attempt stays without a session. So no worker of a retired pass runs,
+// and the stop hook's reading, which takes no probe, is the truth: nothing
+// is in flight, and a turn may end. Before the record refused, the launch
+// recorded its session after the retirement and the worker ran on, live to
+// the probe, while the hook read nothing in flight, which is the P10
+// failure the review at 14ed5c9 reproduced with host stop.
 func TestALaunchUnderWayWhenItsPassIsRetiredRecordsNoSessionAndEndsItsWorker(t *testing.T) {
 	principles.Cite(t, principles.P10)
 	principles.Cite(t, principles.P6)
@@ -79,6 +111,7 @@ func TestALaunchUnderWayWhenItsPassIsRetiredRecordsNoSessionAndEndsItsWorker(t *
 	}
 	w.launch(ctx, t)
 	ref := w.atSeam(t, reached)
+	outrunAtSeam(t, w.records, w.task)
 	retireAtSeam(t, w.records, w.task)
 	w.letGo()
 	out := <-w.launched
@@ -95,8 +128,10 @@ func TestALaunchUnderWayWhenItsPassIsRetiredRecordsNoSessionAndEndsItsWorker(t *
 			"while the stop hook reads %s; want the launch refused with ErrPassRetired",
 			w.task, out.err, latestRefOf(attempts), probed.Liveness, guard.Reason)
 	}
-	if got := latestRef(attempts); got != "" {
-		t.Fatalf("the retired pass's attempt records session %q, want none", got)
+	for _, a := range attempts {
+		if a.SessionRef.IsKnown() {
+			t.Fatalf("the retired pass's attempt %d records session %q, want none", a.Sequence, a.SessionRef.Or(""))
+		}
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for probed.Liveness != taskstate.Dead {
@@ -431,11 +466,14 @@ func TestALaunchClaimedAfterItsPassWasOfferedRetirementStartsNoWorkerAndGivesIts
 	}
 }
 
-// The same hold offered after the launch claimed the worker's start and
-// before it recorded the session: the worker is running, the record is
-// refused (store.ErrPassHeld), the launch ends the worker and records
-// nothing, and gives the slot back. So no worker runs, recorded, in a pass
-// that resolves Held from the hold, which is not in flight (P10).
+// The same hold at the launch's seam, after it claimed the worker's start
+// and before it recorded the session: the store refuses the offer there
+// (outrunAtSeam), and once a later claim has outrun the launch the offer,
+// decided on the later attempt, is registered. The worker is running, its
+// record is refused (store.ErrPassHeld), the launch ends the worker and
+// records nothing, and gives the slot back. So no worker runs, recorded,
+// in a pass that resolves Held from the hold, which is not in flight
+// (P10).
 func TestALaunchWhosePassWasOfferedRetirementBeforeItsRecordEndsItsWorkerAndGivesItsSlotBack(t *testing.T) {
 	principles.Cite(t, principles.P10)
 	ctx := t.Context()
@@ -449,6 +487,7 @@ func TestALaunchWhosePassWasOfferedRetirementBeforeItsRecordEndsItsWorkerAndGive
 	}
 	w.launch(ctx, t)
 	ref := w.atSeam(t, reached)
+	outrunAtSeam(t, w.records, w.task)
 	offerRetirementHoldOf(t, w.records, w.task)
 	w.letGo()
 	out := <-w.launched
@@ -456,8 +495,10 @@ func TestALaunchWhosePassWasOfferedRetirementBeforeItsRecordEndsItsWorkerAndGive
 	if !errors.Is(out.err, store.ErrPassHeld) {
 		t.Fatalf("the launch whose pass was offered retirement before its record = %v, want ErrPassHeld", out.err)
 	}
-	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != "" {
-		t.Fatalf("the refused record left session %q, want none", got)
+	for _, a := range recordedAttempts(t, w.records, w.task) {
+		if a.SessionRef.IsKnown() {
+			t.Fatalf("the refused record left attempt %d with session %q, want none", a.Sequence, a.SessionRef.Or(""))
+		}
 	}
 	probed := w.terminals.Probe(ctx, ref)
 	deadline := time.Now().Add(30 * time.Second)
