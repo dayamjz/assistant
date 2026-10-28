@@ -408,8 +408,10 @@
 // wake queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows,
 // their notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the three shapes about no task, and
-// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
+// count and the acknowledgement for the three shapes about no task;
+// AcknowledgeAll takes all four shapes in one transaction, and DrainAll the
+// first three, so no housekeeping wake is handed out to a caller that cannot
+// return it. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
