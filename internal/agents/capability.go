@@ -55,10 +55,11 @@ const (
 	// CapabilityTerminalWorkers is an adapter that can be started as a
 	// worker hosted in a terminal a person can attach to, and driven by
 	// typing into that terminal: internal/session's tmux provider is the
-	// path that needs it. TerminalWorkerRunner carries the mechanism and
-	// OpenTerminalWorker is the one route to it. It sits on the fixer side
-	// of P4 for the reasons CapabilityWorkerSessions does: StartInTerminal
-	// takes a WorkerSpec, which has no purpose and no shape.
+	// path that needs it today, and the herdr provider will share this
+	// capability once its host lands. TerminalWorkerRunner carries the
+	// mechanism and OpenTerminalWorker is the one route to it. It sits on
+	// the fixer side of P4 for the reasons CapabilityWorkerSessions does:
+	// StartInTerminal takes a WorkerSpec, which has no purpose and no shape.
 	//
 	// It is separate from CapabilityWorkerSessions because the two are
 	// different claims about the agent: that one is that the agent reads
