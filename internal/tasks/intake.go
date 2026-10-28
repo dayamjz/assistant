@@ -476,7 +476,18 @@ func (e *InstructionsLinkError) Error() string {
 // Unwrap makes the refusal match ErrInstructionsLink.
 func (e *InstructionsLinkError) Unwrap() error { return ErrInstructionsLink }
 
-// writeWhole writes content to path whole and never through a link. It
+// writeWhole is intake's replaceWhole: it then removes every partial file
+// of path a stop left beside it, found by name through removePartials,
+// which is right only in a task's own directory, where every such name is
+// this package's.
+func writeWhole(path string, content []byte) error {
+	if err := replaceWhole(path, content); err != nil {
+		return err
+	}
+	return removePartials(path)
+}
+
+// replaceWhole writes content to path whole and never through a link. It
 // refuses a path that stands as a symbolic link with an
 // *InstructionsLinkError. Otherwise it creates a partial file beside path
 // with os.CreateTemp, which opens a fresh name exclusively (O_CREATE and
@@ -484,13 +495,14 @@ func (e *InstructionsLinkError) Unwrap() error { return ErrInstructionsLink }
 // and syncs that file and renames it over path, which the filesystem makes
 // one step and which replaces a link's name rather than following it. So a
 // stop at any point leaves either no file under path or the whole content
-// there, never part of it. A stop between the write and the rename leaves a
-// partial file beside path, under partialPattern; the next write over the
-// same path and CompleteIntake remove every one, through removePartials,
-// which removes each name itself and never follows it. The Lstat before the
-// rename and the rename are two steps, so a link planted at path between
-// them is replaced by the rename, never written through.
-func writeWhole(path string, content []byte) error {
+// there, never part of it. The one file it removes is its own partial, by
+// the name os.CreateTemp gave it, when the write fails before the rename
+// (a file another process put under that name meanwhile would go in its
+// place); a stop leaves the partial, and nothing here removes one by its
+// name. The Lstat before the rename and the rename are two steps, so a
+// link planted at path between them is replaced by the rename, never
+// written through.
+func replaceWhole(path string, content []byte) error {
 	if err := refuseLink(path); err != nil {
 		return err
 	}
@@ -518,7 +530,7 @@ func writeWhole(path string, content []byte) error {
 		_ = os.Remove(partial)
 		return err
 	}
-	return removePartials(path)
+	return nil
 }
 
 // AppendNote appends note, a section the program writes into a task's

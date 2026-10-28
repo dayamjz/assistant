@@ -41,6 +41,11 @@ var (
 		Consequence: "Nothing it had already done there was moved or lost, but its worker could not be sent what it is now to deliver; a worker begun on it later is told.",
 		Decision:    "Read why with --json, and send its worker the new direction with assistant coordinator message if it is still at work; run assistant tasks to see how it goes.",
 	}
+	phraseTaskPromotedRelaunched = Phrase{
+		Outcome:     "The investigation now delivers a change, on a branch of its own in the same local copy.",
+		Consequence: "Its worker had already ended, so a new worker was asked for in that copy, to be told what it is now to deliver and to start from the investigation's report when one was filed; this answer says only that it was asked for, so whether it began shows in the listing.",
+		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
+	}
 	phraseTaskRelaunched = Phrase{
 		Outcome:     "The work was begun again in its own local copy, by a new worker.",
 		Consequence: "This answer comes before the worker does, so whether it began shows in the listing.",
@@ -141,12 +146,17 @@ func PeekPhrase(p TaskPeek) Phrase {
 }
 
 // TaskPromotedPhrase is what a person reads about a task.promote answer: the
-// row for a brief the record says reached the worker's input, and the row
-// for one it does not say that of, which names what to do instead. A
+// row for a brief the record says reached the worker's input, the row for a
+// relaunch the promotion claimed because the worker before had ended, which
+// says what was claimed and not that a worker started, and the
+// row for a brief neither reached, which names what to do instead. A
 // promotion that did not complete is a refusal and never an answer.
 func TaskPromotedPhrase(p TaskPromoted) Phrase {
-	if p.Brief.Delivered() {
+	switch {
+	case p.Brief.Delivered():
 		return phraseTaskPromoted
+	case p.Relaunch != nil:
+		return phraseTaskPromotedRelaunched
 	}
 	return phraseTaskPromotedUnsent
 }
@@ -391,7 +401,7 @@ func ArmPhrase(a supervisor.Arm) Phrase {
 // with the counted rows' placeholder filled in.
 func coordinatorRows() []Phrase {
 	return []Phrase{
-		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskPromotedUnsent, phraseTaskRelaunched, phraseTaskRelayed,
+		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskPromotedUnsent, phraseTaskPromotedRelaunched, phraseTaskRelaunched, phraseTaskRelayed,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
 		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
 		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,
