@@ -531,6 +531,12 @@ type Service struct {
 	// to read the slot at the point a slot settled by the failed launch
 	// would let a steer in.
 	beforeFallbackClaim func(id string)
+	// afterPromotedLaunchStarted runs in relaunchPromoted once the relaunch's
+	// launch has been started in the background and before the promotion's
+	// answer is returned, with the task. It is nil in production and set only
+	// by this package's tests, which use it to hold the answer back until the
+	// launch has run, an order nothing else here prevents.
+	afterPromotedLaunchStarted func(task string)
 	// beforeSessionRecord runs in launchTask once the session is held
 	// pending and immediately before the store write that records the
 	// attempt's session reference, outside mu, with the task and the
