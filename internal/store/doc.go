@@ -429,7 +429,8 @@
 // a retired pass refuses it (ErrPassRetired). Migration 65 marks the
 // retirement hold on the hold row: OfferRetirementHold registers it, fenced
 // by the loop's incarnation, in the transaction that reads the pass again
-// and finds it open and still. housekeepinglaunch.go is the
+// and finds it open and still, and marks only a hold it created, refusing a
+// key already registered (ErrHoldKeyTaken). housekeepinglaunch.go is the
 // launch-retirement exclusion, the one guard every attempt claim, the
 // launch's claim, the record of a session, the offer and the retirement ask
 // in their own transactions: no hold is offered while the latest attempt's

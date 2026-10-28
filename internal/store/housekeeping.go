@@ -400,6 +400,10 @@ type RetirementOffer struct {
 // nothing:
 //
 //   - ErrStaleIncarnation, wrapped, for a loop the watchdog replaced;
+//   - a *HoldKeyTakenError (ErrHoldKeyTaken) for a key under which a hold
+//     already exists, whoever's it is: the offer marks only the hold it
+//     creates, so a report decision or another task's hold is never marked
+//     and so never answered retire;
 //   - a *TaskMovedError for a pass whose latest attempt is not Attempt,
 //     begun again since the caller read it;
 //   - ErrPassRetired, wrapped, for a pass already retired, whose claim is
@@ -476,12 +480,19 @@ func (s *Store) OfferRetirementHold(ctx context.Context, inc Incarnation, o Reti
 		if err := passStillTx(snap, Retirement{Task: task, Attempt: o.Attempt, Session: o.Session, Run: o.Run, Ended: o.Ended}); err != nil {
 			return err
 		}
-		if err := insertHold(ctx, tx, h); err != nil {
+		// The offer marks only the hold it creates: a key another decision
+		// already holds, a report decision of the pass or any other task's
+		// hold, is refused, so no hold but this one is ever answered retire.
+		created, err := insertHold(ctx, tx, h)
+		if err != nil {
 			return err
 		}
-		// The mark every attempt claim reads (anchorTaskAttemptTx), written
-		// in the registering transaction, so the offer and a claim have
-		// exactly one loser in either order.
+		if !created {
+			return &HoldKeyTakenError{Key: h.Key, Reason: "a retirement hold is created by its offer, and a hold under the key already exists"}
+		}
+		// The mark the launch-retirement exclusion reads (exclusionTx),
+		// written in the registering transaction, so the offer and each
+		// launch write have exactly one loser in either order.
 		_, err = tx.ExecContext(ctx, `UPDATE hold SET housekeeping_retirement = 1 WHERE key = ?`, h.Key)
 		return err
 	})
