@@ -511,6 +511,12 @@ type Service struct {
 	// package's tests, which use it to look at the stream at the point a
 	// service that stopped there would have left it.
 	afterConsentRegistered func()
+	// afterPromotedLaunchStarted runs in relaunchPromoted once the relaunch's
+	// launch has been started in the background and before the promotion's
+	// answer is returned, with the task. It is nil in production and set only
+	// by this package's tests, which use it to hold the answer back until the
+	// launch has run, an order nothing else here prevents.
+	afterPromotedLaunchStarted func(task string)
 	// beforeSessionRecord runs in launchTask once the session is held
 	// pending and immediately before the store write that records the
 	// attempt's session reference, outside mu, with the task and the

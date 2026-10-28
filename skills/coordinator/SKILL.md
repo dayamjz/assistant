@@ -218,7 +218,13 @@ other; the same brief is appended to its instructions, which a worker begun
 on the task later reads. The answer's `brief.message` is that record. When no
 running worker could be sent it, the promotion still stands, `brief.message`
 is absent and `brief.unsent` says why; send the worker the new direction
-yourself if one is running again.
+yourself if one is running again. When the worker has ended, the promotion
+relaunches one in the same copy on `relaunch`'s terms, begun with the brief
+and, for a reported investigation, the stored report: `relaunch` in the
+answer is the attempt claimed for it, and its worker is launched in the
+background, so whether it began shows in `assistant tasks`, as for `relaunch`. A
+relaunch that was refused (a hold still open on the task, the relaunch
+bound) is named in `brief.unsent` and leaves the promotion standing.
 
 ## Record an investigation's findings relayed
 
@@ -472,8 +478,10 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   report its ended terminal as gone. Decisions the report raised are holds,
   and the task reads `held` until you answer them with
   `assistant --task ID --answer ...`. Once the worker has ended and nothing
-  but the report's decisions holds the task, its copy is cleaned up and it
-  can no longer be promoted. A stop's hold keeps the copy until you answer
+  but the report's decisions holds the task, a copy holding nothing unlanded
+  is cleaned up and the task can no longer be promoted, while a copy holding
+  work is kept as a kept-work entry, and a promotion relaunches a worker
+  there from the stored report. A stop's hold keeps the copy until you answer
   it. A reported investigation reads `reported`, never `complete`, even
   after its copy is gone, until you record its findings relayed with
   `assistant coordinator relayed ID`, which also ends its worker.
