@@ -102,11 +102,7 @@ func TestARetiredPassIsNeverRelaunched(t *testing.T) {
 	ctx := t.Context()
 
 	sub := passRelaunchSubject(t)
-	retire := store.Hold{Key: retireHold{Task: sub.task, Epoch: 1, Attempt: 1}.key(), TaskID: store.Known(sub.task),
-		Subject: "retire?", Detail: "d"}
-	if _, err := sub.records.RegisterHold(ctx, retire); err != nil {
-		t.Fatal(err)
-	}
+	retire := offerRetirementHoldOf(t, sub.records, sub.task)
 	r := retirementOf(sub.task, recordedAttempts(t, sub.records, sub.task), "")
 	r.Hold, r.By = retire.Key, (ipc.Request{}).HoldResolver()
 	if _, err := sub.records.RetireHousekeepingPass(ctx, r); err != nil {

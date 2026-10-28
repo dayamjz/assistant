@@ -775,13 +775,9 @@ func TestARetiredPassWhoseCleanupWasNeverAskedIsKeptOnceTheServiceOpensAgain(t *
 	sub := openHousekeeping(t, housekeepingConfig, func(t *testing.T, records *store.Store, sub *hkSubject) {
 		ctx := t.Context()
 		copyPath = unreportedPassCopy(t, records, sub, pass, "pane-stopped")
-		hold := retireHold{Task: pass, Epoch: 1, Attempt: 1}.key()
-		if _, err := records.RegisterHold(ctx, store.Hold{Key: hold, TaskID: store.Known(pass),
-			Subject: "whether to retire a housekeeping pass", Detail: "d"}); err != nil {
-			t.Fatal(err)
-		}
+		hold := offerRetirementHoldOf(t, records, pass)
 		r := retirementOf(pass, recordedAttempts(t, records, pass), "")
-		r.Hold, r.By = hold, store.ResolvedByMachineInterface()
+		r.Hold, r.By = hold.Key, store.ResolvedByMachineInterface()
 		if _, err := records.RetireHousekeepingPass(ctx, r); err != nil {
 			t.Fatalf("retiring the pass: %v", err)
 		}
