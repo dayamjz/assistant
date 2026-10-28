@@ -22,7 +22,8 @@ import (
 )
 
 // An operator's file that sets a remote host, a placement limit or
-// architecture, the remote disconnect grace, or the herdr provider is refused
+// architecture, the remote disconnect grace, a housekeeping.interval that
+// is not zero, or the herdr provider is refused
 // where the service reads it, naming the key, because this build parses each
 // and acts on none (P7: a configuration the service cannot honor stops it
 // before it launches anything, rather than being run as something else). The
@@ -42,6 +43,7 @@ func TestTheServiceRefusesARemoteSettingThisBuildDoesNotActOn(t *testing.T) {
 		{config.KeyPlacementLocal, "placement:\n  local:\n    max_workers: 4\n"},
 		{config.KeyPlacementArch, "placement:\n  arch: [arm64]\n"},
 		{config.KeyRemoteDisconnectGrace, "remote_disconnect_grace: 1h\n"},
+		{config.KeyHousekeepingInterval, "housekeeping:\n  interval: 12h\n"},
 	}
 	for _, c := range cases {
 		path := filepath.Join(t.TempDir(), "config.yaml")
@@ -57,7 +59,7 @@ func TestTheServiceRefusesARemoteSettingThisBuildDoesNotActOn(t *testing.T) {
 			t.Errorf("GlobalConfig(%q) = %v, want a refusal naming %s and saying this build does not act on it", c.doc, err, c.key)
 		}
 	}
-	for _, doc := range []string{"no_ci: true\n", "session_provider: tmux\n", "session_provider: pipe\n"} {
+	for _, doc := range []string{"no_ci: true\n", "session_provider: tmux\n", "session_provider: pipe\n", "housekeeping:\n  interval: 0s\n"} {
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
 			t.Fatal(err)

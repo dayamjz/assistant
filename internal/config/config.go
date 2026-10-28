@@ -154,6 +154,15 @@ type Config struct {
 	// keeps the workers it started. KeyRemoteDisconnectGrace says what it
 	// bounds and what it does not.
 	RemoteDisconnectGrace time.Duration
+	// HousekeepingPaths are the patterns naming the repository's agent
+	// context, the files a housekeeping pass keeps true and the only ones it
+	// may change. An empty set turns housekeeping off for the repository.
+	// KeyHousekeepingPaths says who may set it.
+	HousekeepingPaths PatternSet
+	// HousekeepingInterval is how long after one housekeeping pass of a
+	// repository was created the next may fall due; zero makes none due.
+	// KeyHousekeepingInterval says who may set it and what it decides.
+	HousekeepingInterval time.Duration
 	// Roles says which agent, model, effort, and context window each role runs. A Config from
 	// Resolve names the fixer as cursor unless the winning document named the
 	// fix role. A role that names no agent uses Agent. KeyRoles says which
@@ -322,6 +331,10 @@ const (
 	// DefaultRemoteDisconnectGrace is PRD section 10's default for
 	// remote_disconnect_grace. Chosen, not measured.
 	DefaultRemoteDisconnectGrace = 30 * time.Minute
+	// DefaultHousekeepingInterval is PRD section 10's default for
+	// housekeeping.interval: zero, so recurring passes start only when the
+	// operator sets it, never by a default changing underneath them.
+	DefaultHousekeepingInterval time.Duration = 0
 )
 
 // SessionProvider names a terminal session provider. The set is closed:
@@ -487,6 +500,10 @@ const (
 	MaxGuidanceRunes = 4096
 	// MaxJudgePaths is the number of judge path patterns.
 	MaxJudgePaths = 512
+	// MaxHousekeepingPaths is the number of housekeeping path patterns, PRD
+	// section 10's housekeeping path patterns, the judge path patterns'
+	// bound. Chosen, not measured.
+	MaxHousekeepingPaths = 512
 	// MaxOwnership is the number of document ownership entries.
 	MaxOwnership = 512
 	// MaxSubjectRunes is the length of an ownership subject or document path.
@@ -602,6 +619,15 @@ const (
 	// remote_disconnect_grace: above it an unreachable worker runs
 	// unobserved for a day. Chosen, not measured.
 	MaxRemoteDisconnectGrace = 24 * time.Hour
+	// MinHousekeepingInterval is PRD section 10's floor for a
+	// housekeeping.interval that is not zero: below it the due check fetches
+	// every repository far more often than merges arrive. Chosen, not
+	// measured.
+	MinHousekeepingInterval = time.Hour
+	// MaxHousekeepingInterval is PRD section 10's ceiling for
+	// housekeeping.interval: above it a repository's agent context goes more
+	// than a week without a pass. Chosen, not measured.
+	MaxHousekeepingInterval = 168 * time.Hour
 )
 
 // RemoteHost is one entry of remote_hosts: another machine workers may run
@@ -883,6 +909,36 @@ var defaultJudgePaths = func() PatternSet {
 		p, err := ParsePattern(s)
 		if err != nil {
 			panic("config: the default judge path " + quote(s) + " does not compile: " + err.Error())
+		}
+		out = append(out, p)
+	}
+	return out
+}()
+
+// defaultHousekeepingPatterns is PRD section 10's default for
+// housekeeping.paths, in its order: the files the common agents read at the
+// root, in subdirectories and in rules folders, the README, and section 10's
+// project knowledge document. A pattern with no separator is a basename
+// pattern under Pattern's rules, so "AGENTS.md", "CLAUDE.md", "README.md"
+// and "assistant-knowledge.md" each match that name at any depth, not only
+// at the root.
+var defaultHousekeepingPatterns = []string{
+	"AGENTS.md",
+	"CLAUDE.md",
+	".claude/rules/**",
+	".cursor/rules/**",
+	"README.md",
+	"assistant-knowledge.md",
+}
+
+// defaultHousekeepingPaths is defaultHousekeepingPatterns compiled, on
+// defaultJudgePaths' terms.
+var defaultHousekeepingPaths = func() PatternSet {
+	out := make(PatternSet, 0, len(defaultHousekeepingPatterns))
+	for _, s := range defaultHousekeepingPatterns {
+		p, err := ParsePattern(s)
+		if err != nil {
+			panic("config: the default housekeeping path " + quote(s) + " does not compile: " + err.Error())
 		}
 		out = append(out, p)
 	}
