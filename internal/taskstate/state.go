@@ -160,7 +160,9 @@ type Inputs struct {
 	// Advancing is whether the service is executing the newest of Runs now:
 	// its own fact about the slot a run advances in, which no record holds.
 	// It is recorded in Basis as asked and used only for Progress, and there
-	// only when the run tier answered Validating; it moves no state, so a
+	// only when the run tier answered Validating or a housekeeping pass
+	// resolved Held from the hold tier while its newest run has not settled
+	// (Resolution.Progress's first and third cases); it moves no state, so a
 	// caller that cannot answer passes false and loses nothing but Progress.
 	Advancing bool
 }
@@ -276,6 +278,8 @@ type Basis struct {
 	Process Liveness `json:"process"`
 	// Advancing is Inputs.Advancing as it was asked, whether or not the
 	// answer used it: it is recorded so a reader can see what Progress
-	// rested on, and it is used only for Validating from the run tier.
+	// rested on, and it is used only for Validating from the run tier and for
+	// a housekeeping pass Held from the hold tier while its newest run has not
+	// settled (Resolution.Progress's first and third cases).
 	Advancing bool `json:"advancing"`
 }
