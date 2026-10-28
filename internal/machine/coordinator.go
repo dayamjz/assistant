@@ -43,7 +43,7 @@ var (
 	}
 	phraseTaskPromotedRelaunched = Phrase{
 		Outcome:     "The investigation now delivers a change, on a branch of its own in the same local copy.",
-		Consequence: "Its worker had already ended, so a new worker is being begun in that copy, told what it is now to deliver and starting from the investigation's report when one was filed; this answer comes before the worker does, so whether it began shows in the listing.",
+		Consequence: "Its worker had already ended, so a new worker was asked for in that copy, to be told what it is now to deliver and to start from the investigation's report when one was filed; this answer says only that it was asked for, so whether it began shows in the listing.",
 		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
 	}
 	phraseTaskRelaunched = Phrase{
