@@ -78,12 +78,15 @@ func readCopyState(roots ...string) (copyState, error) {
 	if stateReadForTest != nil {
 		stateReadForTest()
 	}
+	// Each entry read counts once under its parent, whichever roots reached
+	// it, and a parent's count is asked only of a directory read, so a root
+	// is counted only where it is a directory's entry, as an overlapping
+	// root is.
 	children := map[string]int{}
 	for p := range state {
-		children[filepath.Dir(p)]++
-	}
-	for _, root := range roots {
-		children[filepath.Dir(root)]--
+		if parent := filepath.Dir(p); parent != p {
+			children[parent]++
+		}
 	}
 	for p, was := range stamps {
 		if now, err := stampOf(p); err != nil || now != was || !listsAsRead(p, state, children[p]) {

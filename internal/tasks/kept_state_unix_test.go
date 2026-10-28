@@ -90,3 +90,39 @@ func afterLastChange(t *testing.T, p string) {
 	}
 	t.Fatalf("the file system stamped no change later than %s's", p)
 }
+
+// Roots that overlap read as the outer root alone does (the review of
+// 9986941): an unchanged directory read with one of its own entries as a
+// second root is no change, and its state is the outer root's. A change
+// during the read is still seen through the overlap: a file added under
+// the inner root refuses with ErrLossChanged. Not parallel: it sets the
+// package's seam.
+func TestOverlappingRootsReadAsTheOuterRootAlone(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	dir := filepath.Join(t.TempDir(), "entry")
+	tree(t, dir)
+	inner := filepath.Join(dir, "sub")
+	alone, err := readCopyState(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both, err := readCopyState(dir, inner)
+	if err != nil {
+		t.Fatalf("reading overlapping roots of an unchanged directory: %v", err)
+	}
+	if len(both) != len(alone) {
+		t.Fatalf("overlapping roots read %d entries, the outer root alone %d", len(both), len(alone))
+	}
+	for p, s := range alone {
+		if both[p] != s {
+			t.Fatalf("%s read as %+v with overlapping roots, %+v alone", p, both[p], s)
+		}
+	}
+
+	stateReadForTest = func() { writeFile(t, filepath.Join(inner, "new.txt"), "added\n") }
+	_, err = readCopyState(dir, inner)
+	stateReadForTest = nil
+	if !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("a file added under the inner root during the read = %v; want ErrLossChanged", err)
+	}
+}
