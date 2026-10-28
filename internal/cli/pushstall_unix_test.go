@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -120,16 +121,40 @@ func (p *boundedPush) giveUp() string {
 // ended the group is gone. A process that leads none is ended as
 // standin.Process.End ends one, so the group git push shares with this test
 // is never signalled.
+//
+// The group is sent SIGTERM first and SIGKILL only once standin.EndGrace has
+// passed with a process still in it, because the gate's hook script removes
+// the temporary file it copies the reference updates into from a trap on
+// SIGTERM and on exit, which SIGKILL never runs.
 func endPushProcess(proc standin.Process) {
 	group, err := syscall.Getpgid(proc.PID)
 	if err != nil || group != proc.PID {
 		proc.End()
 		return
 	}
-	if presence, err := proc.Presence(); err == nil && presence == agents.PresencePresent {
-		_ = syscall.Kill(-group, syscall.SIGKILL)
+	if presence, err := proc.Presence(); err != nil || presence != agents.PresencePresent {
+		return
 	}
-	proc.GoneWithin(standin.EndGrace)
+	_ = syscall.Kill(-group, syscall.SIGTERM)
+	if !groupGoneWithin(group, standin.EndGrace) {
+		_ = syscall.Kill(-group, syscall.SIGKILL)
+		groupGoneWithin(group, standin.EndGrace)
+	}
+}
+
+// groupGoneWithin reports whether no process is left in the process group
+// group within wait.
+func groupGoneWithin(group int, wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if err := syscall.Kill(-group, 0); errors.Is(err, syscall.ESRCH) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // quit sends each of ps SIGQUIT once its identity still names the running
@@ -189,7 +214,8 @@ func TestAPushGivenUpOnSaysWhatItWasDoingAndLeavesNothingRunning(t *testing.T) {
 	}
 	defer func() { _ = lock.Release() }()
 
-	push := startBoundedPush(t, h, machine.PhraseCopyBusy.Outcome, subject, "push", gate.RemoteName, "work")
+	push := startBoundedPush(t, h, machine.PhraseCopyBusy.Outcome,
+		gitCmd(context.Background(), subject, "push", gate.RemoteName, "work"))
 	select {
 	case <-push.out.cued:
 	case <-push.done:
@@ -242,7 +268,13 @@ func TestAPushGivenUpOnInsideAHookLeavesNothingOfItRunning(t *testing.T) {
 	git(t, subject, "checkout", "--quiet", "-b", "work")
 	commitOn(t, subject, "work", "work.txt", "a change\n")
 
-	push := startBoundedPush(t, h, started, subject, "push", gate.RemoteName, "work")
+	// The push gets a temporary directory of its own, which the hook script's
+	// copy of the reference updates is made in, so what giving up leaves
+	// there can be read.
+	scratch := t.TempDir()
+	cmd := gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")
+	cmd.Env = append(cmd.Env, "TMPDIR="+scratch)
+	push := startBoundedPush(t, h, started, cmd)
 	select {
 	case <-push.out.cued:
 	case <-push.done:
@@ -263,8 +295,15 @@ func TestAPushGivenUpOnInsideAHookLeavesNothingOfItRunning(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the held hook, process %d, is not running before the push is given up on (found %t): %v", pid, found, err)
 	}
+	if entries, err := os.ReadDir(scratch); err != nil || len(entries) == 0 {
+		t.Fatalf("the held hook's copy of the reference updates is not in the push's temporary directory "+
+			"(%d entries, %v), so the check that giving up removes it would see nothing", len(entries), err)
+	}
 	said := push.giveUp()
 	out := push.out.String()
+	if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
+		t.Fatalf("giving up on the push left %v in its temporary directory (%v):\n%s", entries, err, said)
+	}
 	if !strings.Contains(said, "the gate's receive command had started: true; git receive-pack had started: true") {
 		t.Fatalf("giving up did not find the receive command and receive-pack:\n%s\n%s", said, out)
 	}

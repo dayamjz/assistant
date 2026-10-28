@@ -216,7 +216,8 @@ func TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage(t *testing.T) {
 	// that waits for the run: the stage body is held open for the whole of
 	// this call, so a push that waited would never return at all and would
 	// take the whole test binary's deadline rather than reporting anything.
-	if out, err := startBoundedPush(t, h, "", subject, "push", gate.RemoteName, "work").within(30 * time.Second); err != nil {
+	if out, err := startBoundedPush(t, h, "", gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")).
+		within(30 * time.Second); err != nil {
 		t.Fatalf("the push did not return while the run it started was inside a stage body: %v\ngit's output:\n%s", err, out)
 	}
 
@@ -554,17 +555,16 @@ type boundedPush struct {
 	err  error
 }
 
-// startBoundedPush starts git with args in dir, in gitCommand's environment,
-// as a push into h's gate. cue, when not empty, is text whose arrival in
-// git's output closes the output's cued. A push still running when the test
-// ends is given up on then.
-func startBoundedPush(t *testing.T, h *home.Home, cue, dir string, args ...string) *boundedPush {
+// startBoundedPush starts cmd, a git push into h's gate built with gitCmd
+// and a context that never ends, and not yet started. cue, when not empty,
+// is text whose arrival in git's output closes the output's cued. A push
+// still running when the test ends is given up on then.
+func startBoundedPush(t *testing.T, h *home.Home, cue string, cmd *exec.Cmd) *boundedPush {
 	t.Helper()
-	cmd := gitCmd(context.Background(), dir, args...)
 	out := &pushOutput{cue: cue, cued: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting git %s: %v", strings.Join(args, " "), err)
+		t.Fatalf("starting %s: %v", strings.Join(cmd.Args, " "), err)
 	}
 	p := &boundedPush{h: h, cmd: cmd, out: out, done: make(chan struct{})}
 	go func() {
