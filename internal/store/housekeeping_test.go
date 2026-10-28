@@ -626,7 +626,11 @@ func TestOnlyThePassesOwnRetirementHoldIsAnsweredRetire(t *testing.T) {
 	if h, err := s.Hold(ctx, finding); err != nil || !h.Open() {
 		t.Fatalf("the refused retirement left the report decision %+v (%v), want it open", h, err)
 	}
-	// Another pass's marked retirement hold is no more this pass's.
+	// Another pass's marked retirement hold is no more this pass's. The
+	// report decision is answered first, so the pass can be relayed.
+	if _, err := s.ResolveHold(ctx, finding, "note", ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
 	relay(t, s, "taskhkownaaa")
 	mustPass(t, s, "taskhkownbbb")
 	others := registerRetireHold(t, s, "taskhkownbbb")
