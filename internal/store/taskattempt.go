@@ -275,7 +275,12 @@ func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequenc
 // one loser in either order, so no session is recorded for an attempt of a
 // retired pass after its retirement; a session recorded before it is the
 // one the retirement was decided against (PRD section 6's housekeeping).
-// The caller ends the worker it started.
+// A pass whose retirement hold is open is refused the same way, with
+// ErrPassHeld, wrapped: the hold was offered on a reading of this attempt
+// as having no session, after the launch claimed its start, and recording
+// the session now would leave a worker running in a pass that resolves Held
+// from the hold, which is not in flight (P10). The caller ends the worker
+// it started.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)
@@ -293,6 +298,9 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
 		}
 		if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
+		}
+		if err := refuseHeldTx(ctx, tx, taskID); err != nil {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 		}
 		var hostPID, hostStart any
