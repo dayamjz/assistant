@@ -1,8 +1,10 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,8 +216,8 @@ func TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage(t *testing.T) {
 	// that waits for the run: the stage body is held open for the whole of
 	// this call, so a push that waited would never return at all and would
 	// take the whole test binary's deadline rather than reporting anything.
-	if out, err := gitWithin(t.Context(), 30*time.Second, subject, "push", gate.RemoteName, "work"); err != nil {
-		t.Fatalf("the push did not return while the run it started was inside a stage body: %v\n%s", err, out)
+	if out, err := startBoundedPush(t, h, "", subject, "push", gate.RemoteName, "work").within(30 * time.Second); err != nil {
+		t.Fatalf("the push did not return while the run it started was inside a stage body: %v\ngit's output:\n%s", err, out)
 	}
 
 	// The push is over. The run it started is inside the stage body, which is
@@ -535,16 +537,89 @@ func tryGit(dir string, args ...string) (string, error) {
 	return gitCommand(context.Background(), dir, args...)
 }
 
-// gitWithin is tryGit under a deadline, for a test whose regression would be a
-// git invocation that never returns rather than one that fails.
-func gitWithin(ctx context.Context, within time.Duration, dir string, args ...string) (string, error) {
-	bounded, cancel := context.WithTimeout(ctx, within)
-	defer cancel()
-	out, err := gitCommand(bounded, dir, args...)
-	if bounded.Err() != nil {
-		return out, bounded.Err()
+// boundedPush is a git push a test bounds, for a test whose regression would
+// be a push that never returns rather than one that fails. A push still
+// running at its bound is given up on (giveUp) rather than only killed,
+// because killing git push alone leaves the receive command and the hooks it
+// started running past the test, and says nothing about what they were
+// doing.
+type boundedPush struct {
+	// h is the home whose gate the push is into.
+	h   *home.Home
+	cmd *exec.Cmd
+	out *pushOutput
+	// done is closed once git push has been waited for, and err is then
+	// what the wait answered.
+	done chan struct{}
+	err  error
+}
+
+// startBoundedPush starts git with args in dir, in gitCommand's environment,
+// as a push into h's gate. cue, when not empty, is text whose arrival in
+// git's output closes the output's cued. A push still running when the test
+// ends is given up on then.
+func startBoundedPush(t *testing.T, h *home.Home, cue, dir string, args ...string) *boundedPush {
+	t.Helper()
+	cmd := gitCmd(context.Background(), dir, args...)
+	out := &pushOutput{cue: cue, cued: make(chan struct{})}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting git %s: %v", strings.Join(args, " "), err)
 	}
-	return out, err
+	p := &boundedPush{h: h, cmd: cmd, out: out, done: make(chan struct{})}
+	go func() {
+		p.err = cmd.Wait()
+		close(p.done)
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-p.done:
+		default:
+			_ = p.giveUp()
+		}
+	})
+	return p
+}
+
+// within waits up to bound for the push to end and returns git's output and
+// what git answered. A push still running at the bound is given up on, and
+// the error then carries what giveUp found.
+func (p *boundedPush) within(bound time.Duration) (string, error) {
+	select {
+	case <-p.done:
+		return p.out.String(), p.err
+	case <-time.After(bound):
+	}
+	said := p.giveUp()
+	return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s", bound, said)
+}
+
+// pushOutput is a push's standard output and standard error as one buffer,
+// which closes cued once cue has arrived in it.
+type pushOutput struct {
+	cue  string
+	cued chan struct{}
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	said bool
+}
+
+func (o *pushOutput) Write(b []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, err := o.buf.Write(b)
+	if !o.said && o.cue != "" && strings.Contains(o.buf.String(), o.cue) {
+		o.said = true
+		close(o.cued)
+	}
+	return n, err
+}
+
+// String is everything the push has written so far.
+func (o *pushOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
 }
 
 // gitCommand runs git in the environment these tests give it, and owns that
@@ -552,6 +627,13 @@ func gitWithin(ctx context.Context, within time.Duration, dir string, args ...st
 // assembling its own, so a bounded call and an unbounded one cannot differ in
 // what git reads.
 func gitCommand(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitCmd(ctx, dir, args...).CombinedOutput()
+	return string(out), err
+}
+
+// gitCmd is the git command gitCommand runs, not yet started, for a caller
+// that watches it run.
+func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	// Without a wait delay, killing git on the deadline still leaves this call
@@ -569,8 +651,7 @@ func gitCommand(ctx context.Context, dir string, args ...string) (string, error)
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
 	)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	return cmd
 }
 
 // listRuns is the repository's runs, newest first, read through the command
