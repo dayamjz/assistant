@@ -395,6 +395,12 @@ func decodeStopGrace(k Key, v any) (any, error) {
 	return decodeBoundedDuration(k, v, "a stop grace", "30s", MinStopGrace, MaxStopGrace)
 }
 
+// decodePromotionWindow is decodeBoundedDuration between MinPromotionWindow
+// and MaxPromotionWindow.
+func decodePromotionWindow(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a promotion window", "1h", MinPromotionWindow, MaxPromotionWindow)
+}
+
 // decodeCommandTimeout is decodeBoundedDuration between MinCommandTimeout
 // and MaxCommandTimeout.
 func decodeCommandTimeout(k Key, v any) (any, error) {
