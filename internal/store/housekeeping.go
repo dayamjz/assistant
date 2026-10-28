@@ -220,7 +220,10 @@ type Retired struct {
 //     attempt's session, or newest attributed run is not the one the caller
 //     read, or with a run attributed to it that has not ended;
 //   - with ErrHoldResolved, wrapped, a retirement whose hold is no longer
-//     open, and ErrNotFound for one that does not exist.
+//     open, and ErrNotFound for one that does not exist;
+//   - with ErrNotRetirementHold, wrapped, a hold that is not the pass's
+//     retirement hold as OfferRetirementHold registered and marked it, so
+//     only that hold's answer releases the pass's claim.
 //
 // It resolves the retirement hold retire, then every other open hold of
 // the pass Relaunches names stop, each under the same resolver, and writes
@@ -348,6 +351,20 @@ func closeRetirementHoldsTx(ctx context.Context, tx *sql.Tx, snap TaskSnapshot, 
 			return err
 		}
 		return fmt.Errorf("hold %s: %w with %s", key, ErrHoldResolved, existing.Or(""))
+	}
+	// The hold answered retire is the pass's own retirement hold, the one
+	// OfferRetirementHold marked: no other hold of the pass, a report's
+	// decision or a relaunch's, releases its claim on the repository.
+	var owner Optional[string]
+	var marked Optional[int64]
+	switch err := tx.QueryRowContext(ctx, `SELECT task_id, housekeeping_retirement FROM hold WHERE key = ?`, r.Hold).Scan(&owner, &marked); {
+	case isNoRows(err):
+		return nil, fmt.Errorf("hold %s: %w", r.Hold, ErrNotFound)
+	case err != nil:
+		return nil, err
+	}
+	if owner.Or("") != snap.Task.ID || marked.Or(0) != 1 {
+		return nil, fmt.Errorf("%w: hold %s is not the retirement hold OfferRetirementHold registered for pass %s", ErrNotRetirementHold, r.Hold, snap.Task.ID)
 	}
 	if err := resolve(r.Hold, AnswerRetire, note); err != nil {
 		return nil, err
