@@ -162,7 +162,7 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 	case store.KeptCarryOn:
 		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
-		return s.discardKeptWork(ctx, entry, r.Confirm)
+		return s.discardKeptWork(ctx, req, entry, r.Confirm)
 	default:
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on and discard",
 			ipc.ErrInvalidRequest, r.Answer)

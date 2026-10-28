@@ -249,6 +249,19 @@ var PhraseDiscardRemovalDeferred = Phrase{
 	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything a discard would show as lost that you want to keep.",
 }
 
+// PhraseDiscardNeedsTerminal is the row for a discard confirmation given
+// from somewhere other than the foreground of a terminal: under --json or
+// off a terminal, where the command line refuses it before the service is
+// asked, and from a peer the service does not place in a terminal's
+// foreground (PRD section 6, "Removing a discarded copy"). The copy and its
+// entry are as they were. Removal on a confirmed discard is still deferred
+// to AGE-486, so the row promises none.
+var PhraseDiscardNeedsTerminal = Phrase{
+	Outcome:     "Nothing was removed, because a discard is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
+	Consequence: "The copy stays, with everything it holds, and nothing was recorded.",
+	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
+}
+
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept
 // work entry: one row per effect.
 func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
@@ -264,5 +277,5 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseKeptWorkLosesNothing,
-		PhraseDiscardRemovalDeferred}
+		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal}
 }
