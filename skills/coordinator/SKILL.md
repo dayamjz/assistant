@@ -218,7 +218,8 @@ other; the same brief is appended to its instructions, which a worker begun
 on the task later reads. The answer's `brief.message` is that record. When no
 running worker could be sent it, the promotion still stands, `brief.message`
 is absent and `brief.unsent` says why; send the worker the new direction
-yourself if one is running again. When the worker has ended, the promotion
+yourself if one is running again. When the worker has ended, a reported
+investigation's after its promotion window among them, the promotion
 relaunches one in the same copy on `relaunch`'s terms, begun with the brief
 and, for a reported investigation, the stored report: `relaunch` in the
 answer is the attempt claimed for it, and its worker is launched in the
@@ -471,13 +472,16 @@ assistant --domain DOMAIN --answer stop      # end the delegation
 - **The service pushes only to `listen`.** It does not start a turn in your
   host by itself; a coordinator holding neither `listen` nor `await` is
   woken by nothing.
-- **Promote an investigation before its worker ends.** Once a worker
+- **Promote an investigation inside its promotion window.** Once a worker
   files its report through `assistant worker`, the task reads `reported`
   (`state.source` is `report`) whether its worker is still running or has
   ended. The program does not relaunch it, and the wake queue does not
   report its ended terminal as gone. Decisions the report raised are holds,
   and the task reads `held` until you answer them with
-  `assistant --task ID --answer ...`. Once the worker has ended and nothing
+  `assistant --task ID --answer ...`. The service keeps the worker for the
+  operator's `promotion_window` (1h unless configured) after the report is
+  stored, so promote within it to continue that worker; past it the worker
+  is ended. Once the worker has ended and nothing
   but the report's decisions holds the task, a copy holding nothing unlanded
   is cleaned up and the task can no longer be promoted, while a copy holding
   work is kept as a kept-work entry, and a promotion relaunches a worker
