@@ -173,18 +173,15 @@ func (s *Store) beginTaskAttempt(ctx context.Context, taskID string, expectedLat
 
 // anchorTaskAttemptTx refuses, with a *TaskMovedError, a task whose highest
 // attempt is not expectedLatest, with ErrNotFound one that does not exist,
-// with ErrPassRetired a housekeeping pass whose retirement is recorded, and
-// with ErrPassHeld one whose retirement hold is open, which is every
-// attempt's claim: dispatch, a retried dispatch, and the one anchored
-// relaunch.
+// and, on the launch-retirement exclusion's terms (housekeepinglaunch.go),
+// with ErrPassRetired a housekeeping pass whose retirement is recorded and
+// with ErrPassHeld one whose retirement hold is open. It is every attempt's
+// claim: dispatch, a retried dispatch, and the one anchored relaunch.
 func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expectedLatest int64) error {
 	if err := taskExists(ctx, tx, taskID); err != nil {
 		return err
 	}
-	if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
-		return err
-	}
-	if err := refuseHeldTx(ctx, tx, taskID); err != nil {
+	if err := exclusionTx(ctx, tx, taskID, claimsAttempt, ""); err != nil {
 		return err
 	}
 	var stands int64
@@ -197,51 +194,6 @@ func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expecte
 		return &TaskMovedError{Task: taskID, Anchor: AnchoredAttempt, Expected: expectedLatest, Stands: stands}
 	}
 	return nil
-}
-
-// refuseHeldTx refuses, with ErrPassHeld, a housekeeping pass whose
-// retirement hold, the one OfferRetirementHold marked, is open: the hold
-// waits on a person about whether the pass ends, and a worker begun under
-// it would run in a pass that resolves Held, out of supervision. Read in the
-// claim's transaction, so the offer and the claim have one loser in either
-// order.
-func refuseHeldTx(ctx context.Context, tx *sql.Tx, task string) error {
-	key, open, err := openRetirementHoldOf(ctx, tx, task)
-	switch {
-	case err != nil:
-		return err
-	case open:
-		return fmt.Errorf("%w: task %s holds on %s", ErrPassHeld, task, key)
-	}
-	return nil
-}
-
-// openRetirementHoldOf is the one reading of whether a housekeeping pass
-// holds on its retirement: the key of its open retirement hold, the one
-// OfferRetirementHold marked, and false for none.
-func openRetirementHoldOf(ctx context.Context, q querier, task string) (string, bool, error) {
-	var key string
-	err := q.QueryRowContext(ctx,
-		`SELECT key FROM hold WHERE task_id = ? AND resolution IS NULL AND housekeeping_retirement = 1 LIMIT 1`, task).Scan(&key)
-	switch {
-	case isNoRows(err):
-		return "", false, nil
-	case err != nil:
-		return "", false, fmt.Errorf("reading whether task %s holds on its retirement: %w", task, err)
-	}
-	return key, true, nil
-}
-
-// RetirementHoldOpen reports the key of a housekeeping pass's open
-// retirement hold, and false for none, on refuseHeldTx's terms: the reading
-// every attempt claim refuses a held pass by, taken outside any claim. A
-// caller that a claim refused with ErrPassHeld reads it again once it has
-// let go of what it held, so an answer given in between is not missed.
-func (s *Store) RetirementHoldOpen(ctx context.Context, task string) (string, bool, error) {
-	if err := s.live(); err != nil {
-		return "", false, err
-	}
-	return openRetirementHoldOf(ctx, s.read, task)
 }
 
 // insertTaskAttemptTx writes attempt sequence of the task, with no session.
@@ -267,20 +219,15 @@ func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequenc
 // no machine.
 //
 // A housekeeping pass whose retirement is recorded is refused with
-// ErrPassRetired, wrapped, read in the same transaction. Every attempt claim
-// refuses a retired pass, so the one launch that can reach this write after
-// the retirement is of an attempt claimed before it, and its retirement was
-// written on a reading of that attempt as having no session; this refusal
-// and RetireHousekeepingPass's Session anchor give the two writes exactly
-// one loser in either order, so no session is recorded for an attempt of a
-// retired pass after its retirement; a session recorded before it is the
-// one the retirement was decided against (PRD section 6's housekeeping).
-// A pass whose retirement hold is open is refused the same way, with
-// ErrPassHeld, wrapped: the hold was offered on a reading of this attempt
-// as having no session, after the launch claimed its start, and recording
-// the session now would leave a worker running in a pass that resolves Held
-// from the hold, which is not in flight (P10). The caller ends the worker
-// it started.
+// ErrPassRetired, wrapped, and one whose retirement hold is open with
+// ErrPassHeld, wrapped, read in the same transaction, on the
+// launch-retirement exclusion's terms (housekeepinglaunch.go), so no
+// session is recorded for an attempt of a retired pass after its
+// retirement, nor while its hold stands, when the pass would resolve Held,
+// which is not in flight (P10). The exclusion refuses the offer while the
+// latest attempt's launch is under way, so this refusal is reached by the
+// launch of an earlier attempt, outrun by a later claim; its caller ends
+// the worker it started.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)
@@ -297,10 +244,7 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
 		}
-		if err := refuseRetiredTx(ctx, tx, taskID); err != nil {
-			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
-		}
-		if err := refuseHeldTx(ctx, tx, taskID); err != nil {
+		if err := exclusionTx(ctx, tx, taskID, recordsSession, ""); err != nil {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 		}
 		var hostPID, hostStart any

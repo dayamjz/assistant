@@ -35,16 +35,19 @@ paths: ["internal/store/**"]
   only while nothing moves the pass as its transaction reads it,
   `ErrPassMoves`, and answering `stop` under the same resolver on every
   open hold `Retirement.Relaunches` names, which `internal/service` keys),
-  which `PassOpen` reads as closing the pass, refused by every attempt
-  claim, by `SetAttemptSession` and by `TransitionTaskShape` with
-  `ErrPassRetired`, and anchored to the latest attempt's session so the
-  two writes have exactly one loser and no session is recorded for an
-  attempt of a retired pass after its retirement.
+  which `PassOpen` reads as closing the pass, and `TransitionTaskShape`
+  refuses a retired pass's promotion with `ErrPassRetired`.
   housekeepingHoldMigration (65) is the retirement hold's mark on the
   `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
-  to a pass still open and still; every attempt claim, `ClaimAttemptLaunch`
-  and `SetAttemptSession` refuse a pass with one open, `ErrPassHeld`, so
-  the offer and each of those writes have one loser in either order).
+  to a pass still open and still). `housekeepinglaunch.go`'s `exclusionTx`
+  is the launch-retirement exclusion, asked by every attempt claim,
+  `ClaimAttemptLaunch`, `SetAttemptSession`, the offer and the retirement
+  in their own transactions: no hold is offered while the latest attempt's
+  launch is claimed and its session unrecorded (`ErrPassMoves`), no attempt
+  or launch is claimed and no session recorded while the hold is open
+  (`ErrPassHeld`) or once the pass is retired (`ErrPassRetired`), and a
+  retirement answers only the marked hold. A new write that begins a
+  worker or ends a pass asks it too, never a check of its own.
   housekeepingWakesMigration (66) is the queue's fourth shape
   `housekeeping_wake` about a repository (`AppendHousekeepingWake` is its
   one append; `untaskedShape` serves its offer, handout and
@@ -55,7 +58,8 @@ paths: ["internal/store/**"]
   other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,
   the due check's comparison base, written with a due check's wake or
   alone only while the passes the check read are unmoved, re-read in the
-  writing transaction (`DueCheck`, `ErrDueCheckStale`).
+  writing transaction (`DueCheck`, `ErrDueCheckStale`); `DueCheck` names
+  no repository, so the wake's or the marker's is the one re-read.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

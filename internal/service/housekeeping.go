@@ -505,7 +505,7 @@ func (s *Service) dueCheckFromPass(c *incarnation, r store.Repository, last *tas
 // the wake or the marker written under the incarnation that started it,
 // held to the passes as the loop read them.
 func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, lastCreated time.Time, base store.Optional[string], now time.Time) taskReport {
-	checked := &store.DueCheck{Check: store.HousekeepingCheck{Repository: r.ID, Pass: follows, CheckedAt: now}, Delivered: taskstate.Delivered}
+	checked := &store.DueCheck{CheckedAt: now, Delivered: taskstate.Delivered}
 	which := "none"
 	if follows != "" {
 		which = follows
@@ -534,7 +534,7 @@ func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, l
 		return raise(fmt.Sprintf("the due check of repository %s could not resolve its trusted configuration at %s: %v", r.ID, tip, err))
 	}
 	if len(resolution.Config.HousekeepingPaths) == 0 {
-		return s.advanceHousekeeping(c, *checked)
+		return s.advanceHousekeeping(c, r.ID, follows, *checked)
 	}
 	if follows == "" {
 		return raise(fmt.Sprintf("no housekeeping pass of repository %s was ever created, and its default branch %s stands at %s",
@@ -547,21 +547,21 @@ func (s *Service) dueCheck(c *incarnation, r store.Repository, follows string, l
 			follows, r.ID, r.DefaultBranch, tip))
 	}
 	if b == tip {
-		return s.advanceHousekeeping(c, *checked)
+		return s.advanceHousekeeping(c, r.ID, follows, *checked)
 	}
 	return raise(fmt.Sprintf("the default branch %s of repository %s stands at %s, past %s, the base of housekeeping pass %s created at %s",
 		r.DefaultBranch, r.ID, tip, b, follows, lastCreated.UTC().Format(time.RFC3339)))
 }
 
-// advanceHousekeeping writes a due check's marker with no wake, or nothing
-// once the passes moved since the check read them, on the file comment's
-// terms.
-func (s *Service) advanceHousekeeping(c *incarnation, check store.DueCheck) taskReport {
+// advanceHousekeeping writes the repository's due-check marker, following
+// follows, with no wake, or nothing once the passes moved since the check
+// read them, on the file comment's terms.
+func (s *Service) advanceHousekeeping(c *incarnation, repository, follows string, check store.DueCheck) taskReport {
 	ctx, cancel := s.sup.bound(c.ctx)
 	defer cancel()
-	err := s.store.AdvanceHousekeepingMarker(ctx, c.inc, check)
+	err := s.store.AdvanceHousekeepingMarker(ctx, c.inc, repository, follows, check)
 	if errors.Is(err, store.ErrDueCheckStale) {
-		s.log.Printf("the housekeeping due check of repository %s wrote nothing: %v", check.Check.Repository, err)
+		s.log.Printf("the housekeeping due check of repository %s wrote nothing: %v", repository, err)
 		return taskReport{Watched: true}
 	}
 	return taskReport{Watched: true, Err: err}
