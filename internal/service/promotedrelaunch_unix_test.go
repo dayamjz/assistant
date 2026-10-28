@@ -143,16 +143,25 @@ func (inv investigation) promote(t *testing.T, running serviceUnderTest, branch 
 	return inv.promoteWith(t, running, branch, "Cache each parse.")
 }
 
-// promoteWith is promote with the intent stated.
+// promoteWith is promote with the intent stated. A promotion refused as in
+// flight is asked again, on promoteTask's terms: the supervisor's pass holds
+// the task's slot while it ends a worker or keeps or removes a copy, and a
+// test that saw the outcome of that work can ask before the pass has given
+// the slot back (CI run 40645974701).
 func (inv investigation) promoteWith(t *testing.T, running serviceUnderTest, branch, intent string) machine.TaskPromoted {
 	t.Helper()
 	var promoted machine.TaskPromoted
-	if err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
-		Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
-	}, &promoted); err != nil {
-		t.Fatalf("task.promote: %v", err)
+	for deadline := time.Now().Add(launchWait); ; time.Sleep(50 * time.Millisecond) {
+		err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
+			Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
+		}, &promoted)
+		if err == nil {
+			return promoted
+		}
+		if !strings.Contains(err.Error(), "in flight") || !time.Now().Before(deadline) {
+			t.Fatalf("task.promote: %v", err)
+		}
 	}
-	return promoted
 }
 
 // copyStands fails the test unless the task's copy is still a directory.
