@@ -63,9 +63,13 @@ func TestEveryRefusalIsPlacedAsKeptWorkOrNot(t *testing.T) {
 // keptOnRetirement is which refusals keep a retired housekeeping pass's copy
 // for its work, written from PRD section 6's housekeeping and P15 one reason
 // at a time: the reasons keptForWork keeps, and a report or a hold that
-// retirement means nothing will now store or register, since no later
-// cleanup is asked for a retired pass. A terminal, a changed or missing copy
-// and a moved shape are no fact about the copy's work.
+// retirement means nothing will now store or register. A retired pass is
+// never begun again, so no worker files its report or registers its holds;
+// the cleanup internal/service asks again for a retired pass's standing copy
+// (retiredCleanupOwed) only answers those same refusals, so the copy is kept
+// for whatever work it holds rather than waiting on a record that will not
+// come. A terminal, a changed or missing copy and a moved shape are no fact
+// about the copy's work.
 var keptOnRetirement = map[CleanupReason]bool{
 	ReasonUnproven:           true,
 	ReasonCopyDirty:          true,
