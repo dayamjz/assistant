@@ -22,6 +22,7 @@ or parse problem sets run=true. Permissions: checks:read, actions:read.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -32,6 +33,9 @@ import urllib.request
 
 API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 RUN_URL = re.compile(r"/actions/runs/(\d+)(?:/|$)")
+# IncompleteRead is an HTTPException, not an OSError; both must become
+# APIError so main can fail closed to run=true (#708 review).
+READ_ERRORS = (OSError, TimeoutError, http.client.HTTPException)
 
 
 class APIError(Exception):
@@ -89,6 +93,8 @@ class Client:
             raise APIError(f"{path}: HTTP {error.code}: {detail}") from None
         except urllib.error.URLError as error:
             raise APIError(f"{path}: {error.reason}") from None
+        except READ_ERRORS as error:
+            raise APIError(f"{path}: {error}") from None
         try:
             return json.loads(body)
         except ValueError as error:
@@ -99,6 +105,8 @@ class Client:
             {"check_name": check_name, "status": "completed", "filter": "all", "per_page": "100"}
         )
         body = self.get(f"repos/{repo}/commits/{sha}/check-runs?{query}")
+        if not isinstance(body, dict):
+            raise APIError(f"repos/{repo}/commits/{sha}/check-runs: expected an object")
         return body.get("check_runs") or []
 
     def workflow_event(self, repo: str, run_id: int) -> str:
@@ -138,7 +146,10 @@ def latest_pull_request_head(client: Client, repo: str) -> str:
     return runs[0]["head_sha"]
 
 
-def untested_commit(client: Client, repo: str, check_name: str) -> str:
+def untested_commit(client: Client, repo: str, check_name: str) -> str | None:
+    """A recent commit with no successful pull_request check, or None when
+    every recent commit already has one (healthy history; the probe then
+    demonstrates the run path via fail-closed instead of failing the job)."""
     body = client.get(f"repos/{repo}/commits?{urllib.parse.urlencode({'per_page': 30})}")
     if not isinstance(body, list):
         raise APIError("repos/.../commits: expected a list")
@@ -146,7 +157,7 @@ def untested_commit(client: Client, repo: str, check_name: str) -> str:
         sha = commit.get("sha")
         if sha and not evaluate(client, repo, sha, check_name, current_run_id=0)[0]:
             return sha
-    raise APIError(f"no recent commit without a successful pull_request {check_name}")
+    return None
 
 
 def probe(client: Client, repo: str, check_name: str) -> None:
@@ -156,6 +167,18 @@ def probe(client: Client, repo: str, check_name: str) -> None:
     if not skip:
         raise SystemExit(f"prior-check probe: expected skip for {tested}")
     never = untested_commit(client, repo, check_name)
+    if never is None:
+        # Healthy history: every recent commit was PR-tested. Still show
+        # the run path (empty check runs → do not skip) and exit 0 so the
+        # suite is not blocked (#708 review).
+        skip, reason = decide([], {}, current_run_id=0)
+        print(
+            f"prior-check probe: never-tested (no recent untested commit; "
+            f"empty check runs): skip={skip} ({reason})"
+        )
+        if skip:
+            raise SystemExit("prior-check probe: empty check runs must not skip")
+        return
     skip, reason = evaluate(client, repo, never, check_name, current_run_id=0)
     print(f"prior-check probe: never-tested {never}: skip={skip} ({reason})")
     if skip:
@@ -181,8 +204,10 @@ def main(argv=None) -> int:
         try:
             probe(Client(token), args.repo, args.check_name)
         except APIError as error:
-            print(f"prior-check probe: {error}", file=sys.stderr)
-            return 1
+            # An unreadable API must not fail the Ubuntu job before the
+            # suite; fall back so the suite runs (#708 review).
+            print(f"prior-check probe: {error}; continuing so the suite runs", file=sys.stderr)
+            return 0
         return 0
 
     if not args.sha or args.run_id is None:
@@ -198,7 +223,9 @@ def main(argv=None) -> int:
             skip, reason = evaluate(
                 Client(token), args.repo, args.sha, args.check_name, args.run_id
             )
-        except APIError as error:
+        except Exception as error:
+            # Every API or parse failure falls back to running the suite,
+            # including IncompleteRead and other non-APIError escapes.
             skip, reason = False, f"not read ({error}); running the suite"
             print(f"prior-check: {reason}", file=sys.stderr)
 

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Tests for prior-check.py, as the check job will run it on a push to main."""
 
+import http.client
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -158,6 +160,33 @@ class ProbeTest(unittest.TestCase):
             prior_check.probe(FakeClient(), "dayamjz/assistant", "check (ubuntu-latest)")
         self.assertGreaterEqual(calls["n"], 2)
 
+    def test_probe_healthy_history_does_not_fail_the_job(self):
+        """When every recent commit already has a PR check, the probe must
+        still exit 0 so the Ubuntu suite runs (#708 review)."""
+        commits = [{"sha": f"{i:040x}"} for i in range(30)]
+
+        class FakeClient:
+            def get(self, path):
+                if "workflows/ci.yml/runs" in path:
+                    return {"workflow_runs": [{"head_sha": commits[0]["sha"]}]}
+                if path.startswith("repos/dayamjz/assistant/commits?"):
+                    return commits
+                raise AssertionError(path)
+
+        with mock.patch.object(prior_check, "Client", lambda token, **k: FakeClient()):
+            with mock.patch.object(
+                prior_check, "evaluate", side_effect=lambda *a, **k: (True, "already")
+            ):
+                with mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}):
+                    code = prior_check.main(
+                        [
+                            "--repo", "dayamjz/assistant",
+                            "--check-name", "check (ubuntu-latest)",
+                            "--probe",
+                        ]
+                    )
+        self.assertEqual(code, 0)
+
 
 class MainTest(unittest.TestCase):
     def test_non_push_event_runs_without_api(self):
@@ -206,6 +235,43 @@ class MainTest(unittest.TestCase):
                 )
                 self.assertEqual(code, 0)
                 self.assertIn("run=true", Path(out.name).read_text())
+
+    def test_incomplete_read_fails_closed_to_run(self):
+        """A truncated API body must set run=true, not escape (#708 review)."""
+
+        class Truncated:
+            def read(self):
+                raise http.client.IncompleteRead(partial=b'{"check_runs":')
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        real = prior_check.Client
+
+        def factory(token, api_url=prior_check.API_URL, opener=None):
+            return real(token, api_url=api_url, opener=lambda *a, **k: Truncated())
+
+        with mock.patch.object(prior_check, "Client", factory):
+            with mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}):
+                with tempfile.NamedTemporaryFile("r+", suffix=".txt") as out:
+                    code = prior_check.main(
+                        [
+                            "--repo", "dayamjz/assistant",
+                            "--sha", "abc",
+                            "--check-name", "check (ubuntu-latest)",
+                            "--run-id", "1",
+                            "--event-name", "push",
+                            "--ref", "refs/heads/main",
+                            "--github-output", out.name,
+                        ]
+                    )
+                    text = Path(out.name).read_text()
+        self.assertEqual(code, 0)
+        self.assertIn("run=true", text)
+        self.assertIn("not read", text)
 
 
 if __name__ == "__main__":
