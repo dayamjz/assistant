@@ -248,7 +248,10 @@ func (s *Service) notify(ctx context.Context, from ipc.Request, req machine.Gate
 			out.Ignored = append(out.Ignored, s.offerLocal(ctx, task, update))
 			continue
 		}
-		intent := s.pushIntent(ctx, from, found, update)
+		intent, err := s.pushIntent(ctx, from, found, update)
+		if err != nil {
+			return machine.Notification{}, pushPartlyStarted(req.Gate, out.Started, update.Ref, err)
+		}
 		started, err := s.startPushedBranch(ctx, found, update.Branch(), update.New, intent)
 		if err != nil {
 			return machine.Notification{}, pushPartlyStarted(req.Gate, out.Started, update.Ref, err)

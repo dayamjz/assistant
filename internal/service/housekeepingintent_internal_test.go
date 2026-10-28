@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -18,6 +19,8 @@ import (
 // intent and its instructions as intake wrote them, and not the sections
 // the program appends for the worker. The positive control is an ordinary
 // promoted task, whose intent is its project and its delivery intent alone.
+// A pass whose instructions cannot be read is refused its intent, so a run
+// is never held to less than them.
 func TestAPromotedPassesRunIntentCarriesItsInstructions(t *testing.T) {
 	t.Parallel()
 	sub := newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
@@ -46,7 +49,10 @@ func TestAPromotedPassesRunIntentCarriesItsInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("promoting the pass: %v", err)
 	}
-	intent := sub.service.taskIntent(promoted)
+	intent, err := sub.service.taskIntent(promoted)
+	if err != nil {
+		t.Fatalf("composing the promoted pass's intent: %v", err)
+	}
 	for _, want := range []string{"agent context", "Correct the README command.", program, notes} {
 		if !strings.Contains(intent, want) {
 			t.Errorf("the promoted pass's run intent does not carry %q:\n%s", want, intent)
@@ -57,7 +63,21 @@ func TestAPromotedPassesRunIntentCarriesItsInstructions(t *testing.T) {
 	}
 
 	plain := store.Task{ID: "taskhkplaina", Project: "plain", DeliveryIntent: store.Known("Deliver it.")}
-	if got := sub.service.taskIntent(plain); got != "plain\n\nDeliver it." {
-		t.Fatalf("an ordinary promoted task's intent is %q", got)
+	if got, err := sub.service.taskIntent(plain); err != nil || got != "plain\n\nDeliver it." {
+		t.Fatalf("an ordinary promoted task's intent is %q, %v", got, err)
+	}
+
+	// With its instructions gone (the review of #685 at b73ff76), the pass's
+	// intent is refused rather than composed without its scope, rules and
+	// notes, so no run its push starts is held to less. An ordinary task
+	// whose instructions are gone keeps its project and delivery intent.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := sub.service.taskIntent(promoted); !errors.Is(err, errPassIntentUnread) {
+		t.Fatalf("the promoted pass's intent with its instructions gone = %q, %v; want errPassIntentUnread", got, err)
+	}
+	if got, err := sub.service.taskIntent(plain); err != nil || got != "plain\n\nDeliver it." {
+		t.Fatalf("an ordinary promoted task's intent with no instructions file is %q, %v", got, err)
 	}
 }

@@ -52,6 +52,18 @@ func plantKeptInvestigationAs(t *testing.T, h *home.Home, subject, repositoryID,
 // worker's commit, which it returns with the task.
 func plantInvestigationCopy(t *testing.T, h *home.Home, subject, repositoryID, role string) (string, string) {
 	t.Helper()
+	return plantInvestigationCopyOf(t, h, subject, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskInvestigation, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
+			RepositoryID: store.Known(repositoryID), Role: role,
+		}, store.Disposition{}
+	})
+}
+
+// plantInvestigationCopyOf is plantInvestigationCopy for the investigation
+// record of says, of the project "the parser".
+func plantInvestigationCopyOf(t *testing.T, h *home.Home, subject string, of func(id, copyPath string) (store.Task, store.Disposition)) (string, string) {
+	t.Helper()
 	ctx := t.Context()
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
@@ -66,10 +78,8 @@ func plantInvestigationCopy(t *testing.T, h *home.Home, subject, repositoryID, r
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.CreateTask(ctx, store.Task{
-		ID: id, Shape: store.TaskInvestigation, Project: "the parser", Mode: "headless", WorktreePath: copyPath,
-		RepositoryID: store.Known(repositoryID), Role: role,
-	}, store.Disposition{}); err != nil {
+	task, disposition := of(id, copyPath)
+	if _, err := records.CreateTask(ctx, task, disposition); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := records.BeginFirstTaskAttempt(ctx, id, store.OnThisMachine()); err != nil {
