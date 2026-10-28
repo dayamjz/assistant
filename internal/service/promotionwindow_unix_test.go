@@ -452,3 +452,25 @@ func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t
 		}
 	})
 }
+
+// The window's end is taken at a pass under the task's slot, so it waits for
+// the slot like a stop or a relaunch does, with no bound of its own: while
+// a promotion, a stop, a relaunch or a dispatch of the task holds the slot,
+// every pass skips the task. Here the slot is held from before the report is
+// filed, the pass runs several times past a one-second window, and the
+// worker is still held; once the slot is released, the next pass ends it.
+func TestAWindowsEndWaitsForTheTasksSlot(t *testing.T) {
+	t.Parallel()
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		var release func()
+		w := inv.reportedAfter(t, running, func() { release = running.service.ClaimSlotForTest(t, inv.task) })
+		passes()
+		if _, held, ok := running.service.SessionOf(inv.task); !ok || held.Reference() != w.session.Reference() {
+			release()
+			t.Fatal("the window ended the worker while its task's slot was held")
+		}
+		release()
+		inv.workerEnded(t, running)
+	})
+}
