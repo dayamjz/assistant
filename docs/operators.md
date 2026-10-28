@@ -724,7 +724,12 @@ shown, each file by what it holds. It records and removes nothing.
 Removing the copy on that answer is not in this build: given again with
 `--confirm DIGEST` it is refused, with nothing read or changed, the copy
 and its entry exactly as they were, and new tasks in the project still
-wait on it. To let them go ahead, answer land or carry-on, or commit or
+wait on it. A confirmation is accepted only from a terminal, in the
+foreground: under `--json`, from a script, a background job or an agent's
+tool it is refused first, with a line saying so, and the service decides
+that from the calling process itself, not from the command line. A
+terminal's foreground is not proof of a person, so a program you run there
+can give one; from there it meets the refusal above. To let them go ahead, answer land or carry-on, or commit or
 remove what is uncommitted, untracked or stashed, and push its commits
 where one of the cleanup proofs above finds them. That proof reads only
 the commits the copy's HEAD and its branches, tags and stash reach, and

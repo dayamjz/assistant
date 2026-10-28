@@ -335,6 +335,21 @@ func decodeBoundedDuration(k Key, v any, what, example string, floor, ceiling ti
 	return d, nil
 }
 
+// decodeHousekeepingInterval accepts zero, written as any duration string
+// that parses to it, or decodeBoundedDuration between
+// MinHousekeepingInterval and MaxHousekeepingInterval. Zero is the default
+// and makes no pass due, so it is the one value below the floor that is not
+// refused.
+func decodeHousekeepingInterval(k Key, v any) (any, error) {
+	if s, err := asString(k, v); err == nil {
+		if d, perr := time.ParseDuration(s); perr == nil && d == 0 {
+			return time.Duration(0), nil
+		}
+	}
+	return decodeBoundedDuration(k, v, "a housekeeping interval that is not zero", "12h",
+		MinHousekeepingInterval, MaxHousekeepingInterval)
+}
+
 // decodeUsageCeilingWindow is decodeBoundedDuration between
 // MinUsageCeilingWindow and MaxUsageCeilingWindow.
 func decodeUsageCeilingWindow(k Key, v any) (any, error) {
@@ -860,6 +875,14 @@ func decodeIgnorePatterns(k Key, v any) (any, error) {
 // the default list.
 func decodeJudgePaths(k Key, v any) (any, error) {
 	return decodePatterns(k, v, "", "judge path patterns", MaxJudgePaths)
+}
+
+// decodeHousekeepingPaths accepts the housekeeping path list. An empty list
+// is a legitimate value and turns housekeeping off for the repository whose
+// trusted copy says so; it is distinct from the key being absent, which
+// keeps the default list.
+func decodeHousekeepingPaths(k Key, v any) (any, error) {
+	return decodePatterns(k, v, "", "housekeeping path patterns", MaxHousekeepingPaths)
 }
 
 // decodePathRules accepts the path-scoped review rules, in declared order.

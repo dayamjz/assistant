@@ -81,6 +81,9 @@ placement:
     max_load: 12
   arch: [arm64, amd64]
 remote_disconnect_grace: 2h
+housekeeping:
+  paths: [AGENTS.md, docs/agents/**]
+  interval: 12h
 `
 
 const wholeSchemaJSON = `{
@@ -121,7 +124,8 @@ const wholeSchemaJSON = `{
 	"remote_hosts": [{"host": "studio", "root": "/Users/me/remote", "bridge": "/Users/me/bin/assistant",
 		"max_workers": 4, "min_free_disk": "20GiB", "max_load": 6.5}],
 	"placement": {"local": {"max_workers": 8, "min_free_disk": "500MB", "max_load": 12}, "arch": ["arm64", "amd64"]},
-	"remote_disconnect_grace": "2h"
+	"remote_disconnect_grace": "2h",
+	"housekeeping": {"paths": ["AGENTS.md", "docs/agents/**"], "interval": "12h"}
 }`
 
 func resolvedGlobal(t *testing.T, l Layer) Config {

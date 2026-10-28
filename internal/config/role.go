@@ -8,17 +8,21 @@ import (
 	"unicode/utf8"
 )
 
-// The three role names the program assigns. review is the review stage,
-// fix is a fix round, and worker is a task that names no other role. Any
-// other name that validRoleName accepts is a worker role a task may name.
+// The role names the program assigns. review is the review stage, fix is a
+// fix round, worker is a task that names no other role, and housekeeping is
+// every housekeeping pass and nothing else, PRD section 6's housekeeping.
+// Any other name that validRoleName accepts is a worker role a task may
+// name.
 const (
-	RoleReview = "review"
-	RoleFix    = "fix"
-	RoleWorker = "worker"
+	RoleReview       = "review"
+	RoleFix          = "fix"
+	RoleWorker       = "worker"
+	RoleHousekeeping = "housekeeping"
 )
 
-// ErrTaskRole reports that a task named a role it cannot run: review or
-// fix, a name that is not a role name, or a name no configured role has.
+// ErrTaskRole reports that a task named a role it cannot run: review, fix or
+// housekeeping, a name that is not a role name, or a name no configured role
+// has.
 // Intake wraps it so the task is not created.
 var ErrTaskRole = errors.New("config: the task's role cannot be run")
 
@@ -104,12 +108,14 @@ func (r Role) equal(other Role) bool {
 }
 
 // ForTask resolves the role a task may run under. An empty name is the
-// worker role. review and fix are refused. A worker role that nobody
-// configured is the agent list, with no model and no effort. Any other
-// missing name is refused.
+// worker role. review and fix are refused, and so is housekeeping, which
+// the program assigns to a housekeeping pass and no task may name; a pass
+// resolves through ForHousekeeping. A worker role that nobody configured is
+// the agent list, with no model and no effort. Any other missing name is
+// refused.
 func (r Roles) ForTask(name string) (Role, error) {
 	name = TaskRoleName(name)
-	if name == RoleReview || name == RoleFix {
+	if name == RoleReview || name == RoleFix || name == RoleHousekeeping {
 		return Role{}, fmt.Errorf("%w: a task cannot name %s", ErrTaskRole, name)
 	}
 	if err := validRoleName(name); err != nil {
@@ -123,6 +129,28 @@ func (r Roles) ForTask(name string) (Role, error) {
 		return Role{}, fmt.Errorf("%w: %q is not a configured role", ErrTaskRole, name)
 	}
 	return role, nil
+}
+
+// ForHousekeeping resolves the housekeeping role a housekeeping pass runs
+// under: the housekeeping row when the table names one, and otherwise the
+// fix row, PRD section 10's roles. It is not the fix role itself: the row is
+// read, and a fix round's session is never the pass's (P4). A table that
+// names neither, which a resolved Config never is, is the agent list.
+func (r Roles) ForHousekeeping() Role {
+	if role, ok := r[RoleHousekeeping]; ok {
+		return role
+	}
+	return r[RoleFix]
+}
+
+// ForRecorded resolves the role a task recorded at intake, which is what a
+// launch reads: ForHousekeeping for the housekeeping role, which only intake
+// of a housekeeping pass records, and ForTask for every other name.
+func (r Roles) ForRecorded(name string) (Role, error) {
+	if TaskRoleName(name) == RoleHousekeeping {
+		return r.ForHousekeeping(), nil
+	}
+	return r.ForTask(name)
 }
 
 // TaskRoleName is the role name a task's recorded role runs under: the name
