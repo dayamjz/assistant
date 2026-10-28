@@ -101,7 +101,11 @@ import (
 // The landing sites run once per landing record. The stop path runs once
 // per stop, which is a person's or a coordinator's request. The pass is the
 // one recurring trigger, at the supervisor's beacon interval, so a window's
-// end is acted on up to one interval late, and it bounds
+// end is acted on at a pass after it, the first one that finds the task's
+// slot free: a pass that finds a stop, a relaunch, a dispatch or a
+// promotion of the task holding the slot skips it, and nothing here bounds
+// how long that lasts, so a window's end waits for as long as the slot is
+// held. It bounds
 // itself: a worker is ended at most once, because ending it forgets the
 // handle the next pass would find; and the cleanup is asked again for a
 // task and session reference observed Dead only once landedAskSpacing has
@@ -154,11 +158,18 @@ import (
 //     task's (the first gap); one whose reference cannot be verified is
 //     reported in the log once per reference per service life and left
 //     running.
-//   - A removed investigation copy cannot be promoted, which internal/tasks
-//     refuses as a missing copy: once its worker has ended, the window's end
-//     among the ways, a copy holding nothing the cleanup decision keeps is
-//     removed, so a coordinator that means to promote it does so inside the
-//     window.
+//   - PRD section 6's "its copy is kept either way" is not met in this
+//     build: once a reported investigation's worker has ended, the window's
+//     end among the ways, a copy holding nothing the cleanup decision keeps
+//     is removed, and a later promotion is refused for it
+//     (store.ErrCleanupRecorded). A copy holding work is kept as a kept work
+//     entry and a promotion relaunches in it. The removal is main's for a
+//     worker that exits, is stopped or is ended by a restart; the window adds
+//     one more way the worker ends. #438 keeps the copy for a promotion and
+//     closes this.
+//   - A window's end waits for the task's slot, with no bound here: a
+//     promotion, stop, relaunch or dispatch holding the slot defers it to
+//     the first pass after the slot is released.
 //   - A reported investigation whose report opened a finding hold resolves
 //     Held, which the supervisor watches the terminal of, so the window's
 //     end raises a terminal-gone wake for it.

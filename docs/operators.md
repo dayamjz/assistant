@@ -405,8 +405,9 @@ What follows for whoever runs the service:
   service started is ended by the identity its session reference recorded,
   and one that cannot be verified is named in the service log and left
   running. Once the worker is ended, the copy is cleaned up as any reported
-  investigation's is: one holding nothing unlanded is removed, and one
-  holding work is kept as a kept-work entry (see Kept work below).
+  investigation's is: one holding nothing unlanded is removed, after which
+  the investigation can no longer be promoted, and one holding work is
+  kept as a kept-work entry (see Kept work below).
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on
