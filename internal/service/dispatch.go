@@ -536,10 +536,10 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 // launch: for a dispatch kept work held it gives the slot back through
 // releaseHeldSlot, for one that ended before it could read the hold
 // (*holdUnread) it gives the slot back and asks nothing, this file's
-// opening comment says why for both; a dispatch refused at its claim
-// because the pass's retirement hold is open (store.ErrPassHeld) claimed
-// nothing, so its slot is given back and the next dispatch reads the task
-// again, which for the pass is the dispatch the keep answer runs; every
+// opening comment says why for both; a dispatch refused because the pass's
+// retirement hold is open (store.ErrPassHeld), at its claim or by reading
+// the pass Held on that hold, claimed nothing, so its slot is given back
+// through releasePassHeldSlot; every
 // other failure is settleOrRelease's; and a dispatch that proved its copy
 // keeps the slot unsettled and is returned with d.settle set, for
 // launchTask to settle with the proof once the launch's record is settled,
@@ -552,7 +552,12 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 			s.betweenHeldAndRelease()
 		}
 		s.releaseHeldSlot(ctx, id)
-	case errors.As(err, &unread), errors.Is(err, store.ErrPassHeld):
+	case errors.Is(err, store.ErrPassHeld):
+		if s.betweenHeldAndRelease != nil {
+			s.betweenHeldAndRelease()
+		}
+		s.releasePassHeldSlot(ctx, id)
+	case errors.As(err, &unread):
 		s.giveBackSlot(id)
 	case err != nil:
 		s.settleOrRelease(id, settle, d.proof, err)
@@ -585,6 +590,21 @@ func (s *Service) releaseHeldSlot(ctx context.Context, id string) {
 	s.giveBackSlot(id)
 	holding, err := s.store.KeptWorkHolding(ctx, id)
 	if err != nil || len(holding) == 0 {
+		s.dispatchInBackground()
+	}
+}
+
+// releasePassHeldSlot gives back the slot of a housekeeping pass whose
+// dispatch its open retirement hold refused, and then reads the hold again
+// (store.RetirementHoldOpen): when it is answered, or the read fails, it
+// asks dispatchDue again through dispatchInBackground. A keep answer runs
+// that dispatch itself, but one answered while this slot was taken passed
+// the taken slot over; reading after the slot is given back means either
+// this read sees the answer, or the answer's own dispatch finds the slot
+// free. That is releaseHeldSlot's order, for the retirement hold.
+func (s *Service) releasePassHeldSlot(ctx context.Context, id string) {
+	s.giveBackSlot(id)
+	if _, open, err := s.store.RetirementHoldOpen(ctx, id); err != nil || !open {
 		s.dispatchInBackground()
 	}
 }
@@ -691,6 +711,20 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, &holdUnread{err: err}
 	}
 	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
+		if resolved.Record.Housekeeping {
+			// A pass offered its retirement hold after a dispatcher selected
+			// it resolves Held from that hold: the hold's refusal, which
+			// claims nothing and gives the slot back, not a pass with
+			// nothing to dispatch, whose slot would be kept and so passed
+			// over by the dispatch a keep answer runs.
+			key, open, err := s.store.RetirementHoldOpen(ctx, id)
+			if err != nil {
+				return dispatched{}, &holdUnread{err: err}
+			}
+			if open {
+				return dispatched{}, fmt.Errorf("%w: task %s holds on %s", store.ErrPassHeld, id, key)
+			}
+		}
 		return dispatched{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
 			resolved.State.State, resolved.State.Source)
 	}

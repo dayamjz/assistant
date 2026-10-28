@@ -206,16 +206,42 @@ func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expecte
 // claim's transaction, so the offer and the claim have one loser in either
 // order.
 func refuseHeldTx(ctx context.Context, tx *sql.Tx, task string) error {
+	key, open, err := openRetirementHoldOf(ctx, tx, task)
+	switch {
+	case err != nil:
+		return err
+	case open:
+		return fmt.Errorf("%w: task %s holds on %s", ErrPassHeld, task, key)
+	}
+	return nil
+}
+
+// openRetirementHoldOf is the one reading of whether a housekeeping pass
+// holds on its retirement: the key of its open retirement hold, the one
+// OfferRetirementHold marked, and false for none.
+func openRetirementHoldOf(ctx context.Context, q querier, task string) (string, bool, error) {
 	var key string
-	err := tx.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		`SELECT key FROM hold WHERE task_id = ? AND resolution IS NULL AND housekeeping_retirement = 1 LIMIT 1`, task).Scan(&key)
 	switch {
 	case isNoRows(err):
-		return nil
+		return "", false, nil
 	case err != nil:
-		return fmt.Errorf("reading whether task %s holds on its retirement: %w", task, err)
+		return "", false, fmt.Errorf("reading whether task %s holds on its retirement: %w", task, err)
 	}
-	return fmt.Errorf("%w: task %s holds on %s", ErrPassHeld, task, key)
+	return key, true, nil
+}
+
+// RetirementHoldOpen reports the key of a housekeeping pass's open
+// retirement hold, and false for none, on refuseHeldTx's terms: the reading
+// every attempt claim refuses a held pass by, taken outside any claim. A
+// caller that a claim refused with ErrPassHeld reads it again once it has
+// let go of what it held, so an answer given in between is not missed.
+func (s *Store) RetirementHoldOpen(ctx context.Context, task string) (string, bool, error) {
+	if err := s.live(); err != nil {
+		return "", false, err
+	}
+	return openRetirementHoldOf(ctx, s.read, task)
 }
 
 // insertTaskAttemptTx writes attempt sequence of the task, with no session.

@@ -442,10 +442,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// betweenHeldAndRelease runs in a dispatch that kept work held, after
-	// the refusal and before the slot is given back. It is nil in
-	// production and set only by this package's tests, which use it to
-	// close the entry and run another dispatch pass inside that window.
+	// betweenHeldAndRelease runs in a dispatch that kept work or a
+	// housekeeping pass's retirement hold held, after the refusal and before
+	// the slot is given back. It is nil in production and set only by this
+	// package's tests, which use it to close the entry or answer the hold,
+	// and run another dispatch pass, inside that window.
 	betweenHeldAndRelease func()
 	// betweenLandingClaimAndStart runs in a landing of kept work after its
 	// claim and before it brings the commit into the gate and starts the

@@ -307,3 +307,89 @@ func TestADispatchThatReadAPassBeforeItsRetirementHoldWasOfferedClaimsNoAttempt(
 	}
 	d.settleSlot()
 }
+
+// passDispatchSubject is a dispatch subject whose task is a housekeeping
+// pass as intake records one, resolving Dispatched, with no attempt yet.
+func passDispatchSubject(t *testing.T) *dispatchSubject {
+	t.Helper()
+	sub := newDispatchSubjectOf(t, func(id, copyPath string) (store.Task, store.Disposition) {
+		return store.Task{
+			ID: id, Shape: store.TaskInvestigation, Project: "one", Mode: "interactive", WorktreePath: copyPath,
+			RepositoryID: store.Known("subject"), Role: config.RoleHousekeeping, Housekeeping: true,
+		}, store.Disposition{Delivered: taskstate.Delivered}
+	})
+	sub.service.stopCtx = t.Context()
+	return sub
+}
+
+// The window between a dispatcher's read of the tasks and its dispatch's
+// own read of the pass (the review of #688 at dd2384a): the retirement hold
+// is offered after dispatchDue selected the pass as Dispatched, so the
+// dispatch reads it Held. That is the hold's refusal and not a pass with
+// nothing to dispatch: the dispatch claims nothing and gives the slot back,
+// so once the hold is answered keep, the dispatch keep's answer runs
+// begins the pass. Before, the dispatch read errTaskNotDispatched and kept
+// the slot for the service's lifetime, so keep's dispatch passed the taken
+// slot over and the pass stayed Dispatched with no attempt until a restart.
+func TestADispatchThatReadsAPassHeldOnItsRetirementGivesItsSlotBack(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	sub := passDispatchSubject(t)
+	s := sub.service
+	hold := offerRetirementHoldOf(t, sub.records, sub.task)
+	if _, err := s.dispatchTask(ctx, sub.task); !errors.Is(err, store.ErrPassHeld) {
+		t.Fatalf("the dispatch of a pass that resolves Held on its retirement hold = %v; want ErrPassHeld", err)
+	}
+	if _, held := s.isolationOf(sub.task); held {
+		t.Fatal("the dispatch refused by the retirement hold kept the pass's slot, so keep's dispatch would pass it over")
+	}
+	if _, err := sub.records.ResolveHold(ctx, hold.Key, machine.AnswerKeep, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatchDue(ctx)
+	if attempts := recordedAttempts(t, sub.records, sub.task); len(attempts) != 1 {
+		t.Fatalf("after keep, the dispatch keep's answer runs left attempts %+v; want the pass begun", attempts)
+	}
+}
+
+// The window between a claim the retirement hold refused and the release of
+// the slot (the review of #688 at dd2384a): keep is answered inside it, and
+// the dispatch keep's answer runs passes the taken slot over. The release
+// then reads the hold again, finds it answered, and asks for another
+// dispatch, which begins the pass. Without that read the pass waits with
+// its hold answered and nothing asking for its dispatch. The control is
+// TestADispatchThatReadAPassBeforeItsRetirementHoldWasOfferedClaimsNoAttempt,
+// where the hold stays open and nothing is dispatched until it is answered.
+func TestKeepAnsweredWhileARefusedPassDispatchHasItsSlotStillDispatchesThePass(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	sub := passDispatchSubject(t)
+	s := sub.service
+	var hold store.Hold
+	s.betweenAttemptReadAndClaim = func() {
+		s.betweenAttemptReadAndClaim = nil
+		hold = offerRetirementHoldOf(t, sub.records, sub.task)
+	}
+	inWindow := false
+	s.betweenHeldAndRelease = func() {
+		inWindow = true
+		s.betweenHeldAndRelease = nil
+		if _, err := sub.records.ResolveHold(ctx, hold.Key, machine.AnswerKeep, store.ResolvedByMachineInterface()); err != nil {
+			t.Errorf("answering the retirement hold keep: %v", err)
+		}
+		s.dispatchDue(ctx)
+		if attempts := recordedAttempts(t, sub.records, sub.task); len(attempts) != 0 {
+			t.Errorf("the dispatch inside the window began %+v; want it to pass the taken slot over", attempts)
+		}
+	}
+	if _, err := s.dispatchTask(ctx, sub.task); !errors.Is(err, store.ErrPassHeld) {
+		t.Fatalf("the first dispatch = %v; want it refused by the retirement hold", err)
+	}
+	if !inWindow {
+		t.Fatal("the refused dispatch never reached the window between its refusal and its release")
+	}
+	s.work.Wait()
+	if attempts := recordedAttempts(t, sub.records, sub.task); len(attempts) != 1 {
+		t.Fatalf("after keep was answered inside the window the pass has attempts %+v; want the dispatch its release asked for to have begun it", attempts)
+	}
+}
