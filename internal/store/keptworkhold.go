@@ -141,13 +141,21 @@ var ErrAttemptLaunchClaimed = errors.New("store: the attempt's launch is already
 // ClaimAttemptLaunch records that the attempt's worker is about to be
 // started, once, in a transaction that first asks keptWorkHoldingTx: a task
 // kept work holds is refused with a *DispatchHeldError and nothing is
-// written. A caller starts the worker only after this returns nil, and makes
-// no further write that could refuse between the two. An attempt already
-// claimed is ErrAttemptLaunchClaimed and one that does not exist is
+// written. A caller starts the worker only after this returns nil, and
+// makes no further write that could refuse between the two. An attempt
+// already claimed is ErrAttemptLaunchClaimed and one that does not exist is
 // ErrNotFound, both wrapped. A task whose worker started before, by a
-// recorded session, is never held, so a relaunch's claim is refused only for
-// being claimed twice. The claim is a record that a launch was begun, and is
-// never read as proof that a worker started.
+// recorded session, is never held by kept work, so kept work refuses a
+// relaunch's claim only for being claimed twice. A housekeeping pass whose
+// retirement hold is open is refused with ErrPassHeld, wrapped, and one
+// whose retirement is recorded with ErrPassRetired, wrapped, read in the
+// same transaction, whichever attempt it is, on the launch-retirement
+// exclusion's terms (housekeepinglaunch.go): the offer can be registered
+// after the attempt's claim and before this one, and this refusal keeps the
+// worker from being started under the hold or after the retirement it
+// allowed. Once this is written, the exclusion refuses the offer until the
+// attempt's session is recorded. The claim is a record that a launch was
+// begun, and is never read as proof that a worker started.
 func (s *Store) ClaimAttemptLaunch(ctx context.Context, taskID string, sequence int64) error {
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		var claimed Optional[string]
@@ -160,6 +168,9 @@ func (s *Store) ClaimAttemptLaunch(ctx context.Context, taskID string, sequence 
 			return fmt.Errorf("task %s attempt %d: %w", taskID, sequence, ErrAttemptLaunchClaimed)
 		}
 		if err := refuseHeldDispatchTx(ctx, tx, taskID); err != nil {
+			return err
+		}
+		if err := exclusionTx(ctx, tx, taskID, claimsLaunch, ""); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE task_attempt SET launch_claimed_at = ? WHERE task_id = ? AND sequence = ?`,

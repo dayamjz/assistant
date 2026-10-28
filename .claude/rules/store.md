@@ -25,6 +25,46 @@ paths: ["internal/store/**"]
   `surfaced_at` in the same transaction. `untaskedShape` serves the second
   and third shapes' offer, handout and acknowledgement; `DrainAll` and
   `AcknowledgeAll` take every shape in one transaction.
+- housekeepingMigration (63) is PRD section 6's housekeeping mark: the task
+  row's `housekeeping` mark (written once at intake; only a marked
+  investigation of a repository carries the `housekeeping` role).
+  `CreateTask` decides one open pass per repository in its own transaction
+  with the record tier passed in as `Disposition.Delivered`; `PassOpen` is
+  the one statement of "open". housekeepingRetirementMigration (64) is the
+  `housekeeping_retirement` record (`RetireHousekeepingPass`, written once,
+  only while nothing moves the pass as its transaction reads it,
+  `ErrPassMoves`, and answering `stop` under the same resolver on every
+  open hold `Retirement.Relaunches` names, which `internal/service` keys),
+  which `PassOpen` reads as closing the pass, and `TransitionTaskShape`
+  refuses a retired pass's promotion with `ErrPassRetired`.
+  housekeepingHoldMigration (65) is the retirement hold's mark on the
+  `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
+  to a pass still open and still, and only on a hold it created:
+  `ErrHoldKeyTaken` otherwise). `insertHold` reports whether it created
+  the row: the same decision registered again answers false, and a key
+  another task, run or retirement hold holds is a `*HoldKeyTakenError`, so
+  no caller passes a collision over. It is the one insert of a hold row
+  (`StoreTaskReport` and `closeHold` included); a new one goes through it. `housekeepinglaunch.go`'s `exclusionTx`
+  is the launch-retirement exclusion, asked by every attempt claim,
+  `ClaimAttemptLaunch`, `SetAttemptSession`, the offer and the retirement
+  in their own transactions: no hold is offered while the latest attempt's
+  launch is claimed and its session unrecorded (`ErrPassMoves`), no attempt
+  or launch is claimed and no session recorded while the hold is open
+  (`ErrPassHeld`) or once the pass is retired (`ErrPassRetired`), and a
+  retirement answers only the marked hold. A new write that begins a
+  worker or ends a pass asks it too, never a check of its own.
+  housekeepingWakesMigration (66) is the queue's fourth shape
+  `housekeeping_wake` about a repository (`AppendHousekeepingWake` is its
+  one append; `untaskedShape` serves its offer and acknowledgement;
+  `AcknowledgeAll` takes it with every other shape in one transaction and
+  `DrainAll` does not hand it out; `ForgetRepository` refuses a repository with one
+  queued); housekeepingNotificationMigration (67) is its notification
+  twin `housekeeping_notification`, one `notificationShape` with the
+  other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,
+  the due check's comparison base, written with a due check's wake or
+  alone only while the passes the check read are unmoved, re-read in the
+  writing transaction (`DueCheck`, `ErrDueCheckStale`); `DueCheck` names
+  no repository, so the wake's or the marker's is the one re-read.
 - A wake's recipient is decided at `DrainWakes` by its task's domain and a
   `WakeRoute` of kinds the caller passes as words, stored on no row (P14).
 - `AcknowledgedBySubordinate` and `SentBySubordinate` are the two closed sets'

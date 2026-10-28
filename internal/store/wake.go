@@ -298,7 +298,9 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w Wa
 		}
 		out.Markers = markers
 		if h, ok := w.Registers.Get(); ok {
-			if err := insertHold(ctx, tx, h); err != nil {
+			// A replayed wake registers its hold again, which is the same
+			// decision; a key another decision holds refuses the append.
+			if _, err := insertHold(ctx, tx, h); err != nil {
 				return err
 			}
 		}
@@ -796,7 +798,10 @@ type Drained struct {
 // rows, then the kept-work rows, each bounded by limit, and the last two
 // none on a subordinate's route. Every shape is handed out or none is, so
 // a drain whose later half fails, or whose context ends between two, leaves
-// no row handed out that its caller was not given.
+// no row handed out that its caller was not given. The fourth shape, the
+// housekeeping wake, is not drained here, so nothing hands one out to a
+// caller that cannot return it; it is offered (OfferedHousekeepingWakes)
+// and acknowledged with the rest (AcknowledgeAll).
 func (s *Store) DrainAll(ctx context.Context, limit int, h WakeHandout) (Drained, error) {
 	if limit < 1 {
 		return Drained{}, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
@@ -932,15 +937,15 @@ func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now s
 	return nil
 }
 
-// AcknowledgeAll acknowledges task wakes, domain wakes and kept-work wakes
-// in one transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes'
+// AcknowledgeAll acknowledges task wakes, domain wakes, kept-work wakes and
+// housekeeping wakes in one transaction, on AcknowledgeWakes' and AcknowledgeDomainWakes'
 // terms for each shape: every row of every shape is checked before any is
 // written, so a batch naming one row of any shape that is unknown or
 // already acknowledged closes nothing, which is the whole-batch refusal an
 // acknowledgement naming several shapes is held to. A batch naming no row
 // of any shape is refused.
-func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWorkWakes []int64, by Acknowledger) error {
-	if len(wakes)+len(domainWakes)+len(keptWorkWakes) == 0 {
+func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWorkWakes, housekeepingWakes []int64, by Acknowledger) error {
+	if len(wakes)+len(domainWakes)+len(keptWorkWakes)+len(housekeepingWakes) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")
 	}
 	who, err := acknowledgerText(by)
@@ -960,7 +965,12 @@ func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWork
 			}
 		}
 		if len(keptWorkWakes) > 0 {
-			return keptWorkWakeShape.acknowledgeTx(ctx, tx, keptWorkWakes, who, now)
+			if err := keptWorkWakeShape.acknowledgeTx(ctx, tx, keptWorkWakes, who, now); err != nil {
+				return err
+			}
+		}
+		if len(housekeepingWakes) > 0 {
+			return housekeepingWakeShape.acknowledgeTx(ctx, tx, housekeepingWakes, who, now)
 		}
 		return nil
 	})

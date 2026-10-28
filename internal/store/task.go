@@ -126,6 +126,13 @@ type Task struct {
 	// reference and a kept work entry point here rather than holding it
 	// again. CreateTask refuses a task that states one.
 	Machine string `json:"machine,omitempty"`
+	// Housekeeping is whether the task is a housekeeping pass, PRD section
+	// 8's field and the one place that fact is stored (P14): written once at
+	// intake and kept by promotion and relaunch, a row written before the
+	// column reading as not one. A pass is created as an investigation of a
+	// repository under config.RoleHousekeeping, and only a pass names that
+	// role, which the schema holds at insert.
+	Housekeeping bool `json:"housekeeping,omitempty"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
 	// StartSnapshot is what the task's isolated copy held when its latest
@@ -160,19 +167,36 @@ type Disposition struct {
 	// because the decision Blocker records was made without seeing it. A
 	// task with no branch has no such set, and for it Observed must be zero.
 	Observed int64
+	// Delivered decides, for a housekeeping pass's intake, whether an
+	// earlier pass of the same repository is in the terminal tier, Landed
+	// or Complete, from its snapshot read inside the creating transaction.
+	// It is internal/taskstate's record tier, which owns what those states
+	// mean, passed in so the store decides the one-open-pass rule under its
+	// own serialization without a second statement of that tier. It is
+	// required for a pass and refused for any other task.
+	Delivered func(TaskSnapshot) bool
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role, domain, machine`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery, delivery_intent, role, domain, machine, housekeeping`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
 	var snapshot, delivery, role, domain, machine Optional[string]
+	var housekeeping Optional[int64]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
 		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery, &t.DeliveryIntent, &role,
-		&domain, &machine); err != nil {
+		&domain, &machine, &housekeeping); err != nil {
 		return Task{}, err
+	}
+	if mark, ok := housekeeping.Get(); ok {
+		// The schema writes 1 or nothing, so another value was not written
+		// by this package, and reading it either way would invent a fact.
+		if mark != 1 {
+			return Task{}, fmt.Errorf("column housekeeping: %d is not a value this package writes", mark)
+		}
+		t.Housekeeping = true
 	}
 	if text, ok := machine.Get(); ok {
 		// The trigger refuses an empty name, so an empty one was not
@@ -241,6 +265,16 @@ func scanTask(sc scanner) (Task, error) {
 // wraps home.ErrTaskID. A non-zero d.Observed on a task that names no branch
 // is a caller's mistake rather than a move, since such a task has no set of
 // branch tasks to have observed, and it is refused before anything is read.
+//
+// A housekeeping pass is created on PRD section 6's one-at-a-time rule: in
+// the same transaction, every earlier pass of its repository is read as
+// TaskSnapshot reads it, and the creation is refused with a *PassOpenError,
+// naming the newest open one, when any is neither retired nor, by
+// d.Delivered, in the terminal tier. The writer is one connection whose
+// transactions begin immediate, so two creations are wholly ordered and
+// cannot both get through. A pass must name its repository, be an
+// investigation and carry config.RoleHousekeeping, and d.Delivered is
+// required for it and refused for any other task.
 func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, error) {
 	if err := home.ValidTaskID(t.ID); err != nil {
 		return Task{}, fmt.Errorf("store: task %q: %w", t.ID, err)
@@ -274,6 +308,18 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 			return Task{}, fmt.Errorf("store: task %s: %w", t.ID, err)
 		}
 	}
+	if t.Housekeeping {
+		switch {
+		case d.Delivered == nil:
+			return Task{}, fmt.Errorf("store: housekeeping pass %s: whether an earlier pass is delivered is decided by internal/taskstate, and no decision was passed", t.ID)
+		case t.Shape != TaskInvestigation:
+			return Task{}, fmt.Errorf("store: housekeeping pass %s is created as an investigation, not %q", t.ID, t.Shape)
+		case !t.RepositoryID.IsKnown():
+			return Task{}, fmt.Errorf("store: housekeeping pass %s names no repository", t.ID)
+		}
+	} else if d.Delivered != nil {
+		return Task{}, fmt.Errorf("store: task %s is not a housekeeping pass, so no earlier pass is asked about", t.ID)
+	}
 	var delivery Optional[string]
 	if posture, ok := t.Delivery.Get(); ok {
 		if !posture.Recognized() {
@@ -301,17 +347,28 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 		if stands != d.Observed {
 			return &TaskMovedError{Task: t.ID, Anchor: AnchoredBranch, Expected: d.Observed, Stands: stands}
 		}
+		var housekeeping any
+		if t.Housekeeping {
+			open, err := openPassTx(ctx, tx, t.RepositoryID.Or(""), d.Delivered)
+			if err != nil {
+				return err
+			}
+			if pass, ok := open.Get(); ok {
+				return &PassOpenError{Repository: t.RepositoryID.Or(""), Pass: pass}
+			}
+			housekeeping = 1
+		}
 		var role any
 		if t.Role != "" {
 			role = t.Role
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO task (id, shape, project, mode, worktree_path, run_id, pull_request,
-				repository_id, branch, blocker_task, created_at, delivery, role, domain)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				repository_id, branch, blocker_task, created_at, delivery, role, domain, housekeeping)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
 			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery, role,
-			namedOrNull(t.Domain)); err != nil {
+			namedOrNull(t.Domain), housekeeping); err != nil {
 			return err
 		}
 		kinds := []string{OpeningEventKind}
@@ -329,7 +386,8 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 	})
 	if err != nil {
 		var moved *TaskMovedError
-		if errors.As(err, &moved) {
+		var open *PassOpenError
+		if errors.As(err, &moved) || errors.As(err, &open) {
 			return Task{}, err
 		}
 		return Task{}, fmt.Errorf("store: creating task %s: %w", t.ID, err)

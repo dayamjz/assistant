@@ -126,9 +126,12 @@ func scanTaskAttempt(sc scanner) (TaskAttempt, error) {
 // attempt belongs to. A dispatch retried after an attempt that never
 // launched claims through BeginDispatchAttempt, the same claim held.
 //
-// It returns ErrNotFound, wrapped, for a task that does not exist. It records
-// no state and launches nothing: the record precedes the process, and the
-// session the process runs in is filled in afterwards by SetAttemptSession.
+// It returns ErrNotFound, wrapped, for a task that does not exist, and for
+// a housekeeping pass ErrPassRetired, wrapped, once its retirement is
+// recorded and ErrPassHeld, wrapped, while its retirement hold is open. It
+// records no state and launches nothing: the record precedes the process,
+// and the session the process runs in is filled in afterwards by
+// SetAttemptSession.
 func (s *Store) BeginTaskAttempt(ctx context.Context, taskID string, expectedLatest int64) (TaskAttempt, error) {
 	return s.beginTaskAttempt(ctx, taskID, expectedLatest, false)
 }
@@ -169,10 +172,16 @@ func (s *Store) beginTaskAttempt(ctx context.Context, taskID string, expectedLat
 }
 
 // anchorTaskAttemptTx refuses, with a *TaskMovedError, a task whose highest
-// attempt is not expectedLatest, and with ErrNotFound one that does not
-// exist.
+// attempt is not expectedLatest, with ErrNotFound one that does not exist,
+// and, on the launch-retirement exclusion's terms (housekeepinglaunch.go),
+// with ErrPassRetired a housekeeping pass whose retirement is recorded and
+// with ErrPassHeld one whose retirement hold is open. It is every attempt's
+// claim: dispatch, a retried dispatch, and the one anchored relaunch.
 func anchorTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, expectedLatest int64) error {
 	if err := taskExists(ctx, tx, taskID); err != nil {
+		return err
+	}
+	if err := exclusionTx(ctx, tx, taskID, claimsAttempt, ""); err != nil {
 		return err
 	}
 	var stands int64
@@ -208,6 +217,17 @@ func insertTaskAttemptTx(ctx context.Context, tx *sql.Tx, taskID string, sequenc
 // names no process, and a task on this machine with
 // ErrSessionHostOnThisMachine when it names one. The reference itself names
 // no machine.
+//
+// A housekeeping pass whose retirement is recorded is refused with
+// ErrPassRetired, wrapped, and one whose retirement hold is open with
+// ErrPassHeld, wrapped, read in the same transaction, on the
+// launch-retirement exclusion's terms (housekeepinglaunch.go), so no
+// session is recorded for an attempt of a retired pass after its
+// retirement, nor while its hold stands, when the pass would resolve Held,
+// which is not in flight (P10). The exclusion refuses the offer while the
+// latest attempt's launch is under way, so this refusal is reached by the
+// launch of an earlier attempt, outrun by a later claim; its caller ends
+// the worker it started.
 func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence int64, sessionRef string, host SessionHost) error {
 	if strings.TrimSpace(sessionRef) == "" {
 		return fmt.Errorf("store: task %s attempt %d: the session reference is empty", taskID, sequence)
@@ -223,6 +243,9 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 		}
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
+		}
+		if err := exclusionTx(ctx, tx, taskID, recordsSession, ""); err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 		}
 		var hostPID, hostStart any
 		switch name, remote := machine.Get(); {

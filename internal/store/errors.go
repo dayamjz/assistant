@@ -235,6 +235,37 @@ var ErrSchemaChanged = errors.New("store: a recorded migration differs from this
 // than a failure of the write.
 var ErrHoldResolved = errors.New("store: hold is already resolved")
 
+// ErrHoldKeyTaken is the class every *HoldKeyTakenError belongs to: a hold's
+// key names one decision, and a registration under a key another decision
+// already holds is refused rather than passed over, so nothing reads the
+// other decision's hold back as its own.
+var ErrHoldKeyTaken = errors.New("store: the hold key is registered for another decision")
+
+// HoldKeyTakenError refuses a hold registration whose key is already
+// registered for another decision: another task or run, a housekeeping
+// pass's retirement hold, or, for OfferRetirementHold, which marks only a
+// hold it created, any hold at all. Nothing is written.
+type HoldKeyTakenError struct {
+	// Key is the key asked for.
+	Key string
+	// Reason says what already holds it.
+	Reason string
+}
+
+// Error names the key and what holds it.
+func (e *HoldKeyTakenError) Error() string {
+	return fmt.Sprintf("store: hold key %s is taken: %s", e.Key, e.Reason)
+}
+
+// Unwrap makes every *HoldKeyTakenError match ErrHoldKeyTaken.
+func (e *HoldKeyTakenError) Unwrap() error { return ErrHoldKeyTaken }
+
+// ErrNotRetirementHold is returned, wrapped, by RetireHousekeepingPass for a
+// hold that is not the pass's retirement hold, the one OfferRetirementHold
+// registered and marked: a report's decision, a relaunch's hold or another
+// task's hold is never answered retire, and nothing is written.
+var ErrNotRetirementHold = errors.New("store: the hold is not the housekeeping pass's retirement hold")
+
 // ErrMigrationsMalformed is returned when the migration list itself is wrong:
 // versions that do not start at one or do not increase by one. It is a
 // programming error in this package rather than a condition of the database.
@@ -615,3 +646,84 @@ func (e *SeenRecordError) Error() string {
 
 // Unwrap makes the error match its Reason.
 func (e *SeenRecordError) Unwrap() error { return e.Reason }
+
+// ErrPassOpen is the class every *PassOpenError belongs to: PRD section 6's
+// "a repository has at most one open pass", refused by CreateTask for a
+// housekeeping pass of a repository that already has one open.
+var ErrPassOpen = errors.New("store: the repository already has an open housekeeping pass")
+
+// PassOpenError is CreateTask's refusal of a second open housekeeping pass,
+// decided in the transaction that would have inserted it, and it names the
+// pass that is open.
+type PassOpenError struct {
+	// Repository is the repository both passes are of.
+	Repository string
+	// Pass is the open pass.
+	Pass string
+}
+
+// Error names the repository and its open pass.
+func (e *PassOpenError) Error() string {
+	return fmt.Sprintf("store: housekeeping pass %s of repository %s is still open, so no second pass is created", e.Pass, e.Repository)
+}
+
+// Unwrap makes every *PassOpenError match ErrPassOpen.
+func (e *PassOpenError) Unwrap() error { return ErrPassOpen }
+
+// ErrPassRetired is returned, wrapped, for a housekeeping pass whose
+// retirement is recorded, on the launch-retirement exclusion's terms
+// (housekeepinglaunch.go), by every attempt claim (BeginFirstTaskAttempt,
+// BeginDispatchAttempt, BeginTaskAttempt), by ClaimAttemptLaunch and by
+// SetAttemptSession: PRD section 11's one anchored relaunch refuses a
+// retired pass, whoever asks, so no worker is claimed, started or recorded
+// in its copy once its claim on its repository is released. It is also
+// returned by OfferRetirementHold for a pass whose claim is already
+// released, and by TransitionTaskShape for a promotion of a retired pass,
+// whose delivery could never begin.
+var ErrPassRetired = errors.New("store: the housekeeping pass is retired and is never begun again")
+
+// ErrPassHeld is returned, wrapped, for a housekeeping pass with an open
+// retirement hold, the one OfferRetirementHold registered, on the
+// launch-retirement exclusion's terms (housekeepinglaunch.go), by every
+// attempt claim, by ClaimAttemptLaunch and by SetAttemptSession: the hold
+// waits on a person about whether the pass ends, and a worker begun under
+// it would run in a pass that resolves Held, which is not in flight, out of
+// supervision (P10). A keep answer closes the hold, and the next claim
+// begins. Each of those writes and the offer have exactly one loser in
+// either order: the offer refuses a pass whose attempt moved (ErrTaskMoved)
+// or whose launch is under way (ErrPassMoves), and each write refuses a
+// pass whose hold is open.
+var ErrPassHeld = errors.New("store: the housekeeping pass holds on its retirement decision and is not begun until it is answered")
+
+// ErrPassMoves is returned, wrapped, by RetireHousekeepingPass when something
+// still moves the pass as its transaction reads it: a run attributed to it
+// that has not ended, a run or an attempt newer than the retirement was
+// decided against, or a session of that attempt recorded since the
+// retirement was decided against none. OfferRetirementHold returns it for a
+// run or a session on the same terms, and for a pass whose latest attempt's
+// launch is claimed and whose session is not recorded, a worker that may be
+// starting (housekeepinglaunch.go). Nothing is written.
+var ErrPassMoves = errors.New("store: something still moves the housekeeping pass")
+
+// ErrPassClosed is returned, wrapped, by RetireHousekeepingPass for a pass
+// already retired or whose records put it in the terminal tier: its claim
+// on its repository is already released, and a second retirement would be a
+// second record of one end. OfferRetirementHold returns it for a pass in the
+// terminal tier, whose retire answer could only be refused.
+var ErrPassClosed = errors.New("store: the housekeeping pass is no longer open")
+
+// ErrHousekeepingWakeQueued is returned by ForgetRepository and
+// RepositoryRemovable for a repository with an unacknowledged housekeeping
+// wake about it.
+var ErrHousekeepingWakeQueued = errors.New("store: a housekeeping wake about the repository is unacknowledged")
+
+// ErrDueCheckStale is returned, wrapped, by AppendHousekeepingWake for a
+// due check's wake and by AdvanceHousekeepingMarker when the passes of the
+// repository the wake or the marker names moved since the check read them: the pass the check followed is no
+// longer the repository's newest, or a pass is open. A due check reads its
+// facts before it fetches, so a wake raised from them would say no pass was
+// ever created of a repository with one open, or name a base a newer pass
+// has replaced, and the coordinator acting on it would create a pass the
+// newest has already made redundant. Neither the wake nor the marker is
+// written, and the next supervision pass reads the passes afresh.
+var ErrDueCheckStale = errors.New("store: the repository's housekeeping passes moved since the due check read them")
