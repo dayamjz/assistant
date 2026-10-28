@@ -272,6 +272,18 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 				task.ID, role.Agent, role.Fallback.Agent, err)
 			return nil, err
 		}
+		if errors.Is(err, store.ErrPassHeld) {
+			// A housekeeping pass offered its retirement hold since the
+			// first launch, by an offer this slot did not order: its claim
+			// refuses the backup's attempt as it refuses any attempt of a
+			// held pass, on kept work's terms above, and the slot is given
+			// back so the dispatch a keep answer runs finds the pass.
+			kept = true
+			s.releasePassHeldSlot(ctx, task.ID)
+			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because its retirement hold is open: %v",
+				task.ID, role.Agent, role.Fallback.Agent, err)
+			return nil, err
+		}
 		// A sweep that did not clear, a terminal that did not read dead, and
 		// a task the relaunch table leaves alone have not asked the backup.
 		// Holding here would resolve the task as held, and the next start
@@ -292,9 +304,10 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 	s.log.Printf("task %s worker fallback from %s to %s: %s", task.ID, role.Agent, role.Fallback.Agent, failure)
 	launched, err := s.launchTask(ctx, launch)
 	if err != nil {
-		if errors.Is(err, store.ErrDispatchHeld) {
-			// The launch claim refused the backup for kept work and gave
-			// the slot back itself; the same stance as above.
+		if errors.Is(err, store.ErrDispatchHeld) || errors.Is(err, store.ErrPassHeld) {
+			// The launch's claim or record refused the backup for kept
+			// work or a pass's retirement hold and gave the slot back
+			// itself; the same stance as above.
 			kept = true
 			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because kept work holds the task: %v",
 				task.ID, role.Agent, role.Fallback.Agent, err)

@@ -121,7 +121,11 @@ import (
 // retired before the claim is refused here before any worker is created
 // (errLaunchRetired). The record's refusal stands for a retirement the
 // slot does not order: one written by another incarnation, or past a
-// crash.
+// crash. A retirement hold offered the same way, which the offer here
+// skips while the slot is unsettled (launching), refuses the launch's
+// claim before a worker starts or its record after (store.ErrPassHeld):
+// either way no worker is recorded, a started one is ended, and the slot
+// is given back through releasePassHeldSlot, as a held dispatch's is.
 // Between Create returning and the row being written, a crash
 // leaves the process internal/session's doc describes: one no record names.
 // The dispatch that retries the task sweeps the standing copy before its
@@ -268,12 +272,21 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	// recorded while the copy was cut and asserted still keeps a new
 	// task's worker from starting; dispatch.go says what remains.
 	if err := s.store.ClaimAttemptLaunch(ctx, d.id, d.attempt); err != nil {
-		if errors.Is(err, store.ErrDispatchHeld) {
+		switch {
+		case errors.Is(err, store.ErrDispatchHeld):
 			// Given back rather than settled: the slot this launch holds
 			// unsettled is dropped first, so the deferred settle does not
 			// take it again after the release.
 			d.handSlot()
 			s.releaseHeldSlot(ctx, d.id)
+		case errors.Is(err, store.ErrPassHeld):
+			// A pass offered its retirement hold since its attempt was
+			// claimed, by an offer this slot did not order (another
+			// service process, or one past a crash): no worker was
+			// started, and the slot is given back on the same terms, so
+			// the dispatch a keep answer runs finds the pass.
+			d.handSlot()
+			s.releasePassHeldSlot(ctx, d.id)
 		}
 		return nil, err
 	}
@@ -333,6 +346,16 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 		if closeErr := host.Close(launched); closeErr != nil && !errors.Is(closeErr, session.ErrNotHeld) {
 			s.log.Printf("the worker of task %s, whose session could not be recorded, was not ended either: %v",
 				d.id, closeErr)
+		}
+		if errors.Is(recordErr, store.ErrPassHeld) {
+			// Offered its retirement hold between the worker's creation
+			// and the record, by an offer this slot did not order: the
+			// worker was ended above and nothing names it, and the slot is
+			// given back as a held dispatch's is.
+			d.handSlot()
+			s.releasePassHeldSlot(ctx, d.id)
+			return nil, fmt.Errorf("service: housekeeping pass %s was offered its retirement hold while attempt %d was launching, so its worker was ended and nothing records it: %w",
+				d.id, d.attempt, recordErr)
 		}
 		if errors.Is(recordErr, store.ErrPassRetired) {
 			// The pass was retired between the worker's creation and the

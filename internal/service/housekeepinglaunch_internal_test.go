@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"testing"
 	"time"
 
@@ -391,5 +394,159 @@ func TestKeepAnsweredWhileARefusedPassDispatchHasItsSlotStillDispatchesThePass(t
 	s.work.Wait()
 	if attempts := recordedAttempts(t, sub.records, sub.task); len(attempts) != 1 {
 		t.Fatalf("after keep was answered inside the window the pass has attempts %+v; want the dispatch its release asked for to have begun it", attempts)
+	}
+}
+
+// A pass offered its retirement hold after its dispatch claimed the attempt
+// and before the launch claimed the worker's start, as a hold another
+// service process or one past a crash offers can be (the review of #683 at
+// ec7bc68): the launch's claim is refused (store.ErrPassHeld), so no worker
+// is started, nothing is recorded, and the slot is given back, so the
+// dispatch a keep answer runs finds the pass. Before, the store let the
+// claim through and the worker ran in a pass that resolves Held.
+func TestALaunchClaimedAfterItsPassWasOfferedRetirementStartsNoWorkerAndGivesItsSlotBack(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	sub := launchSubjectOver(t, workerStandIn(t), passDispatchSubject(t))
+	s := sub.service
+	s.terminals = heldTerminals{s}
+	d, err := s.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching the pass: %v", err)
+	}
+	offerRetirementHoldOf(t, sub.records, sub.task)
+	launched, err := s.launchTask(ctx, d)
+	if launched != nil || !errors.Is(err, store.ErrPassHeld) {
+		t.Fatalf("the launch of a pass offered its retirement hold after its claim = %v, %v; want ErrPassHeld and no worker", launched, err)
+	}
+	if got := latestRef(recordedAttempts(t, sub.records, sub.task)); got != "" {
+		t.Fatalf("the refused launch recorded session %q, want none", got)
+	}
+	s.mu.Lock()
+	_, running := s.launched[sub.task]
+	s.mu.Unlock()
+	if running {
+		t.Fatal("the refused launch left a worker this service holds")
+	}
+	if _, held := s.isolationOf(sub.task); held {
+		t.Fatal("the refused launch kept the pass's slot, so the dispatch keep's answer runs would pass it over")
+	}
+}
+
+// The same hold offered after the launch claimed the worker's start and
+// before it recorded the session: the worker is running, the record is
+// refused (store.ErrPassHeld), the launch ends the worker and records
+// nothing, and gives the slot back. So no worker runs, recorded, in a pass
+// that resolves Held from the hold, which is not in flight (P10).
+func TestALaunchWhosePassWasOfferedRetirementBeforeItsRecordEndsItsWorkerAndGivesItsSlotBack(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	ctx := t.Context()
+	w := passRecordWindow(t)
+	s := w.service
+	s.stopCtx = ctx
+	reached := make(chan string, 1)
+	s.beforeSessionRecord = func(_, ref string) {
+		reached <- ref
+		<-w.release
+	}
+	w.launch(ctx, t)
+	ref := w.atSeam(t, reached)
+	offerRetirementHoldOf(t, w.records, w.task)
+	w.letGo()
+	out := <-w.launched
+	w.launched <- out
+	if !errors.Is(out.err, store.ErrPassHeld) {
+		t.Fatalf("the launch whose pass was offered retirement before its record = %v, want ErrPassHeld", out.err)
+	}
+	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != "" {
+		t.Fatalf("the refused record left session %q, want none", got)
+	}
+	probed := w.terminals.Probe(ctx, ref)
+	deadline := time.Now().Add(30 * time.Second)
+	for probed.Liveness != taskstate.Dead {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker the refused record named still probes %+v, want it ended", probed)
+		}
+		time.Sleep(5 * time.Millisecond)
+		probed = w.terminals.Probe(ctx, ref)
+	}
+	if _, held := s.isolationOf(w.task); held {
+		t.Fatal("the refused launch kept the pass's slot, so the dispatch keep's answer runs would pass it over")
+	}
+}
+
+// A pass offered its retirement hold while a worker handoff is under way,
+// between the backup attempt's read and its claim, by an offer this slot
+// did not order: the claim refuses the backup's attempt (store.ErrPassHeld)
+// as it refuses any attempt of a held pass. That is the hold's refusal and
+// not a worker failure: no worker-fallback hold is raised, the slot is given
+// back, and once the hold is answered keep a dispatch starts the pass on the
+// backup the sealed selection names. TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold
+// is the same handoff refused for kept work.
+func TestARetirementHoldRefusingAPassesWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
+	principles.Cite(t, principles.P10)
+	const unestablished = "that a retirement hold refusing a pass's worker handoff raises no fallback hold"
+	requireSweepClearsHere(t, unestablished)
+	ctx := t.Context()
+	backup := standin.New(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "work", Reply: backupAnswer}},
+	}})
+	subject := launchSubjectOver(t, backup, passDispatchSubject(t))
+	s := subject.service
+	role := config.Role{Agent: "cursor", Fallback: &config.Role{Agent: "claude"}}
+	s.cfg.Roles = config.Roles{config.RoleFix: role}
+	s.terminals = heldTerminals{s}
+	s.stopCtx, s.stopCancel = context.WithCancel(ctx)
+	t.Cleanup(func() { s.stopCancel(); s.stopWork(); s.work.Wait() })
+	var hold store.Hold
+	claims := 0
+	s.betweenAttemptReadAndClaim = func() {
+		if claims++; claims == 2 {
+			hold = offerRetirementHoldOf(t, subject.records, subject.task)
+		}
+	}
+	d, err := s.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching the pass: %v", err)
+	}
+	task, err := s.store.Task(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.switchWorker(ctx, task, d.attempt, nil, nil, role.Agent, role, agents.FailureUnavailable, d.handSlot()); !errors.Is(err, store.ErrPassHeld) {
+		fatalUnlessSweepsStoppedClearing(t, unestablished, "the handoff = %v; want the backup's attempt refused by the retirement hold", err)
+	}
+	if hold.Key == "" {
+		t.Fatal("the handoff never reached the claim where the retirement hold was offered")
+	}
+	holds, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range holds {
+		if h.TaskID.Or("") == subject.task && h.Key != hold.Key {
+			t.Fatalf("the refused handoff raised the hold %s", h.Key)
+		}
+	}
+	if _, slot := s.isolationOf(subject.task); slot {
+		t.Fatal("the refused handoff kept the pass's slot, so the dispatch keep's answer runs would pass it over")
+	}
+	if _, err := subject.records.ResolveHold(ctx, hold.Key, machine.AnswerKeep, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	s.dispatchDue(ctx)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		attempts := recordedAttempts(t, subject.records, subject.task)
+		if n := len(attempts); n >= 2 && attempts[n-1].SessionRef.IsKnown() {
+			if got := attempts[n-1].Adapter.Or(""); got != "claude" {
+				t.Fatalf("the pass was started on %s after keep, want the backup, claude", got)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "after keep the pass has attempts %+v; want the backup started", attempts)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
