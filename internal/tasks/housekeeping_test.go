@@ -82,7 +82,14 @@ func TestALaterPassIsToldTheLastBaseAndTheOpenQuestions(t *testing.T) {
 	// A pass whose report decision is open cannot be relayed, so it ends
 	// by retirement, which leaves the decision open for the next pass.
 	retire := store.Hold{Key: "task/" + first.ID + "/housekeeping-retire/1/1/-", TaskID: store.Known(first.ID), Subject: "retire?", Detail: "d"}
-	if _, err := f.store.RegisterHold(ctx, retire); err != nil {
+	// The hold is offered as the loop offers it, so it is the pass's marked
+	// retirement hold, the only hold the store answers retire on.
+	inc, err := f.store.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.OfferRetirementHold(ctx, inc, store.RetirementOffer{Hold: retire, Attempt: 1,
+		Ended: func(store.RunStatus) bool { return true }, Delivered: taskstate.Delivered}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.store.RetireHousekeepingPass(ctx, store.Retirement{Task: first.ID, Attempt: 1, Hold: retire.Key,
