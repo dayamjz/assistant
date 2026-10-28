@@ -42,9 +42,9 @@ paths: ["internal/store/**"]
   attempt of a retired pass after its retirement.
   housekeepingHoldMigration (65) is the retirement hold's mark on the
   `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
-  to a pass still open and still; every attempt claim refuses a pass with
-  one open, `ErrPassHeld`, so the offer and a claim have one loser in
-  either order). housekeepingWakesMigration (66) is the queue's fourth
+  to a pass still open and still; every attempt claim, `ClaimAttemptLaunch`
+  and `SetAttemptSession` refuse a pass with one open, `ErrPassHeld`, so
+  the offer and each of those writes have one loser in either order). housekeepingWakesMigration (66) is the queue's fourth
   shape `housekeeping_wake` about a repository (`AppendHousekeepingWake`
   is its one append; `untaskedShape` serves its offer, handout and
   acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in
