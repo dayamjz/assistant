@@ -13,8 +13,9 @@ import (
 // housekeeping-due wake, an actionable wake about a repository rather than a
 // task, keyed by the repository and by the pass it follows, or by none
 // before the first pass. It is appended on Wake's terms, under the
-// supervisor loop's incarnation fence (AppendHousekeepingWake), and drained, handed out, acknowledged and offered to the private
-// channel on the kept-work wake's terms. It is in no domain, so it is the
+// supervisor loop's incarnation fence (AppendHousekeepingWake), and
+// drained, handed out, acknowledged and offered to the private channel on
+// the kept-work wake's terms. It is in no domain, so it is the
 // first coordinator's alone. Acknowledging it creates nothing and answers
 // nothing. Its identifiers are a sequence of their own, apart from every
 // other shape's.

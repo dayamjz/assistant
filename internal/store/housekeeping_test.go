@@ -156,12 +156,19 @@ func TestTheHousekeepingMarkIsWrittenOnceAtIntake(t *testing.T) {
 	}
 }
 
-// registerRetireHold registers a stand-in for the retirement hold on a task.
+// registerRetireHold registers a retirement hold on a task and marks it as
+// OfferRetirementHold does, in the same column, without the offer's reading
+// of the pass: the tests that call it are about what the retirement itself
+// decides, and the offer's own refusals are its tests'.
 func registerRetireHold(t *testing.T, s *Store, task string) string {
 	t.Helper()
+	ctx := context.Background()
 	key := "task/" + task + "/housekeeping-retire/1"
-	if _, err := s.RegisterHold(context.Background(), Hold{Key: key, TaskID: Known(task), Subject: "retire it?", Detail: "d"}); err != nil {
+	if _, err := s.RegisterHold(ctx, Hold{Key: key, TaskID: Known(task), Subject: "retire it?", Detail: "d"}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `UPDATE hold SET housekeeping_retirement = 1 WHERE key = ?`, key); err != nil {
+		t.Fatalf("marking %s as the retirement hold: %v", key, err)
 	}
 	return key
 }
@@ -485,10 +492,10 @@ func TestARetirementAndTheSessionRecordOfALaunchUnderWayHaveOneLoser(t *testing.
 	// Session first.
 	mustPass(t, s, "taskhkaaaaec")
 	attempt = beginAttempt(t, s, "taskhkaaaaec", 0)
-	retire = registerRetireHold(t, s, "taskhkaaaaec")
 	if err := s.SetAttemptSession(ctx, "taskhkaaaaec", attempt.Sequence, "pane-early", SessionHost{}); err != nil {
 		t.Fatal(err)
 	}
+	retire = registerRetireHold(t, s, "taskhkaaaaec")
 	unlaunched := answerOf("taskhkaaaaec", retire, attempt.Sequence, "")
 	if _, err := s.RetireHousekeepingPass(ctx, unlaunched); !errors.Is(err, ErrPassMoves) {
 		t.Fatalf("a retirement decided against no session = %v, want ErrPassMoves", err)
@@ -589,6 +596,51 @@ func TestNoAttemptBeginsWhileARetirementHoldIsOpen(t *testing.T) {
 	}
 	if _, err := s.BeginFirstTaskAttempt(ctx, "taskhkaaaaic", OnThisMachine()); err != nil {
 		t.Fatalf("the first attempt of a pass with a report decision open = %v, want it begun", err)
+	}
+}
+
+// Only the pass's own retirement hold, the one OfferRetirementHold
+// registered and marked, is answered retire (the review of #683 at
+// f8a04ed): a retirement naming the pass's report decision, or another
+// pass's retirement hold, is refused with ErrNotRetirementHold and writes
+// nothing, so no other hold releases the pass's claim on its repository.
+// The control is the same retirement naming the pass's marked hold.
+func TestOnlyThePassesOwnRetirementHoldIsAnsweredRetire(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	mustPass(t, s, "taskhkownaaa")
+	attempt := beginAttempt(t, s, "taskhkownaaa", 0)
+	answer := func(hold string) Retirement {
+		return Retirement{Task: "taskhkownaaa", Attempt: attempt.Sequence, Hold: hold, By: ResolvedByMachineInterface(),
+			Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}
+	}
+	finding := "task/taskhkownaaa/finding/1"
+	if _, err := s.RegisterHold(ctx, Hold{Key: finding, TaskID: Known("taskhkownaaa"), Subject: "a report decision", Detail: "d"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RetireHousekeepingPass(ctx, answer(finding)); !errors.Is(err, ErrNotRetirementHold) {
+		t.Fatalf("a retirement naming the pass's report decision = %v, want ErrNotRetirementHold", err)
+	}
+	if h, err := s.Hold(ctx, finding); err != nil || !h.Open() {
+		t.Fatalf("the refused retirement left the report decision %+v (%v), want it open", h, err)
+	}
+	// Another pass's marked retirement hold is no more this pass's.
+	relay(t, s, "taskhkownaaa")
+	mustPass(t, s, "taskhkownbbb")
+	others := registerRetireHold(t, s, "taskhkownbbb")
+	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: "taskhkownbbb", Attempt: 0, Hold: "task/taskhkownaaa/finding/1",
+		By: ResolvedByMachineInterface(), Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}); !errors.Is(err, ErrNotRetirementHold) {
+		t.Fatalf("a retirement naming another task's hold = %v, want ErrNotRetirementHold", err)
+	}
+	if _, found, err := s.RetirementOf(ctx, "taskhkownbbb"); err != nil || found {
+		t.Fatalf("the refused retirements wrote a record (%v, %v)", found, err)
+	}
+	// The control: the pass's own marked hold retires it.
+	if _, err := s.RetireHousekeepingPass(ctx, Retirement{Task: "taskhkownbbb", Attempt: 0, Hold: others,
+		By: ResolvedByMachineInterface(), Relaunches: func(string) bool { return false }, Ended: ended, Delivered: relayed}); err != nil {
+		t.Fatalf("the retirement naming the pass's own retirement hold = %v, want it written", err)
 	}
 }
 

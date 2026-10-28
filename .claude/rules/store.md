@@ -44,11 +44,12 @@ paths: ["internal/store/**"]
   `hold` row (`OfferRetirementHold` writes it, fenced and anchored, only
   to a pass still open and still; every attempt claim, `ClaimAttemptLaunch`
   and `SetAttemptSession` refuse a pass with one open, `ErrPassHeld`, so
-  the offer and each of those writes have one loser in either order). housekeepingWakesMigration (66) is the queue's fourth
-  shape `housekeeping_wake` about a repository (`AppendHousekeepingWake`
-  is its one append; `untaskedShape` serves its offer, handout and
-  acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in
-  one transaction; `ForgetRepository` refuses a repository with one
+  the offer and each of those writes have one loser in either order).
+  housekeepingWakesMigration (66) is the queue's fourth shape
+  `housekeeping_wake` about a repository (`AppendHousekeepingWake` is its
+  one append; `untaskedShape` serves its offer, handout and
+  acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in one
+  transaction; `ForgetRepository` refuses a repository with one
   queued); housekeepingNotificationMigration (67) is its notification
   twin `housekeeping_notification`, one `notificationShape` with the
   other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,
