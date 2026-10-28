@@ -171,7 +171,9 @@ func (s *Store) resolveHold(ctx context.Context, inc *Incarnation, key, resoluti
 // ErrNoResolution, and a resolution naming nobody with ErrNoResolver, before
 // anything is written. A key already resolved is left as it stands, which is
 // what makes recording one decision twice one record rather than a refusal:
-// the key is what says these are the same decision.
+// the key is what says these are the same decision. A key another decision
+// holds (another task or run, or a housekeeping pass's retirement hold) is
+// refused with a *HoldKeyTakenError, and nothing is registered or resolved.
 func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (Hold, error) {
 	key := closing.Hold.Key
 	if strings.TrimSpace(key) == "" {

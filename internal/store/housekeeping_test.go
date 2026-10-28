@@ -937,9 +937,10 @@ func TestADueCheckIsHeldToTheRepositoryOfTheWakeItWrites(t *testing.T) {
 // refused with ErrHoldKeyTaken and marks nothing; the decision stays
 // unmarked, a retire answer naming it is refused, and the other task's
 // claims are not held. RegisterHold refuses another task's key, and a
-// retirement hold's key, the same way, and the control is its documented
-// re-registration of a key of the same decision, which returns the hold
-// unchanged.
+// retirement hold's key, the same way, as do a report's decisions and a
+// recorded closure (StoreTaskReport, RecordHoldResolution), and the
+// control is RegisterHold's documented re-registration of a key of the same
+// decision, which returns the hold unchanged.
 func TestARetirementHoldIsMarkedOnlyOnAHoldItsOfferCreated(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P14)
@@ -999,5 +1000,21 @@ func TestARetirementHoldIsMarkedOnlyOnAHoldItsOfferCreated(t *testing.T) {
 	// And the retirement hold's key is not an ordinary decision's either.
 	if _, err := s.RegisterHold(ctx, Hold{Key: retire.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"}); !errors.Is(err, ErrHoldKeyTaken) {
 		t.Fatalf("registering the pass's retirement hold key as a decision = %v, want ErrHoldKeyTaken", err)
+	}
+	// Nor is it a report's decision: the report is refused and stores nothing.
+	if _, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: "taskhkcollid", Body: "b", Report: []byte(`{"summary":"s"}`)},
+		[]Hold{{Key: retire.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"}}); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("a report whose decision is keyed as the retirement hold = %v, want ErrHoldKeyTaken", err)
+	}
+	if _, err := s.TaskReport(ctx, "taskhkcollid"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused report was stored: %v", err)
+	}
+	// Nor is a decision recorded as closed under its key allowed to close it.
+	if _, err := s.RecordHoldResolution(ctx, HoldClosure{Hold: Hold{Key: retire.Key, TaskID: Known("taskhkcollid"), Subject: "s", Detail: "d"},
+		Resolution: "approved", By: ResolvedByMachineInterface()}); !errors.Is(err, ErrHoldKeyTaken) {
+		t.Fatalf("a closure keyed as the retirement hold = %v, want ErrHoldKeyTaken", err)
+	}
+	if h, err := s.Hold(ctx, retire.Key); err != nil || !h.Open() {
+		t.Fatalf("the retirement hold reads %+v, %v, want it still open", h, err)
 	}
 }

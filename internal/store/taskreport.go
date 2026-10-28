@@ -64,8 +64,9 @@ type TaskReport struct {
 // It refuses a task that already has a report with ErrTaskReportStored and
 // leaves the first standing, with nothing appended, a task that does not
 // exist with ErrNotFound, wrapped, an empty body, an empty parsed report, and
-// a hold naming no key, no subject, or another task. RecordedAt is assigned
-// here.
+// a hold naming no key, no subject, or another task, and a hold whose key
+// another decision already holds with a *HoldKeyTakenError, on RegisterHold's
+// terms. RecordedAt is assigned here.
 //
 // The entry is appended after whatever the history already holds, anchored
 // to nothing: a report is filed once per task, which the refusal above
@@ -115,11 +116,9 @@ func (s *Store) StoreTaskReport(ctx context.Context, r TaskReport, holds []Hold)
 			return err
 		}
 		for _, h := range holds {
-			if _, err := tx.ExecContext(ctx, `
-				INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
-				VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
-				ON CONFLICT(key) DO NOTHING`,
-				h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, now); err != nil {
+			// On RegisterHold's terms: a key another decision holds, a
+			// retirement hold among them, refuses the report (insertHold).
+			if _, err := insertHold(ctx, tx, h); err != nil {
 				return fmt.Errorf("registering hold %s: %w", h.Key, err)
 			}
 		}

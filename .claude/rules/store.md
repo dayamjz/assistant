@@ -43,7 +43,8 @@ paths: ["internal/store/**"]
   `ErrHoldKeyTaken` otherwise). `insertHold` reports whether it created
   the row: the same decision registered again answers false, and a key
   another task, run or retirement hold holds is a `*HoldKeyTakenError`, so
-  no caller passes a collision over. `housekeepinglaunch.go`'s `exclusionTx`
+  no caller passes a collision over. It is the one insert of a hold row
+  (`StoreTaskReport` and `closeHold` included); a new one goes through it. `housekeepinglaunch.go`'s `exclusionTx`
   is the launch-retirement exclusion, asked by every attempt claim,
   `ClaimAttemptLaunch`, `SetAttemptSession`, the offer and the retirement
   in their own transactions: no hold is offered while the latest attempt's
