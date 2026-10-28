@@ -703,6 +703,34 @@ func TestACallTheContextEndsIsARefusal(t *testing.T) {
 	}
 }
 
+// A call whose context had ended before the provider could start is the
+// same refusal as one the context ended while the provider ran: the call
+// ended, which is a different remedy from a command line that could not be
+// run. The context is ended before the call, so nothing decides which of the
+// two the call reaches but that.
+func TestACallTheContextEndedBeforeItStartedSaysTheCallEnded(t *testing.T) {
+	h := newHarness(t, ghScript{"checks": {{Stdout: rollup()}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := h.gh.Checks(ctx, 12)
+	var refusal *forge.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Checks returned %v, want a *Refusal", err)
+	}
+	if calls := h.calls(); len(calls) != 0 {
+		t.Fatalf("the provider ran %d times under a context that had already ended", len(calls))
+	}
+	if refusal.Reason != forge.ReasonUnavailable {
+		t.Errorf("reason is %q, want %q", refusal.Reason, forge.ReasonUnavailable)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("the refusal does not match the context's error: %v", err)
+	}
+	if !strings.Contains(refusal.Detail, "ended before the provider answered") {
+		t.Errorf("the refusal says %q, want that the call ended before the provider answered", refusal.Detail)
+	}
+}
+
 // A provider that exits while a descendant still holds its output pipes must
 // not hold the call. A descendant that left the provider's process group is
 // not reached by ending that group, and nothing here pursues it, so what
