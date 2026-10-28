@@ -16,18 +16,26 @@ import (
 // held, or its mode set to what it was, is not a change. Tests compare it
 // before and after what they say changes nothing.
 //
-// A state is read only from entries that stood still while it was read:
+// A state is refused when an entry is seen to change while it is read:
 // each entry's stamp (stampOf) is read before its bytes or, for a
 // directory, its listing, and once all are read every stamp is read again
 // and every directory listed again, and a difference is ErrLossChanged.
-// What it does not cover: a file rewritten in place with as many bytes in
-// the same timestamp tick as its last change (a move's rename among the
-// changes) leaves its stamp as it was, and goes unseen.
+// That sees only a change the file system records in an entry's stamp or
+// a directory's listing. What it does not cover: a change that leaves the
+// stamp as it was goes unseen, and the state read can then be bytes the
+// file never held whole. Two such changes are known. A write through a
+// shared writable memory mapping of the file left its stamp as it was
+// during the read (reproduced on macOS in the review of e2adb53), and no
+// call this package makes can tell that another process holds a file open
+// for writing or mapped, so it is neither refused nor seen. And a file
+// rewritten in place with as many bytes in the same timestamp tick as its
+// last change (a move's rename among the changes).
 
 // ErrLossChanged is a discard's refusal of a copy that no longer holds
 // exactly what was read before its loss was: an entry it would set aside
-// changed, was added to or went missing since, or changed while it was
-// read. What the discard set aside is put back.
+// changed, was added to or went missing since, or was seen to change
+// while it was read (readCopyState names what is not seen). What the
+// discard set aside is put back.
 var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what was read when its loss was, so the discard went no further")
 
 // copyState is the state of every entry under some directories, by
@@ -131,8 +139,9 @@ func stateOf(p string) (stateEntry, error) {
 // puts it back.
 //
 // What it does not cover: a process writing through a file it opened
-// before the move changes what moved after the state is read, unseen; a
-// change during the read is readCopyState's to see.
+// before the move, or through a memory mapping of it, changes what moved
+// unseen, after the state is read and, where the write leaves the stamp
+// as it was, during the read too (readCopyState's gap).
 func moveAsRead(from, to string, before copyState, what string) (bool, error) {
 	_, had := before[from]
 	if err := os.MkdirAll(filepath.Dir(to), 0o700); err != nil {

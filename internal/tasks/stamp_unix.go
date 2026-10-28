@@ -13,7 +13,8 @@ type stamp struct {
 
 // stampOf reads what the file system records of the entry at p, without
 // following a link: its inode, size, and modification and change times,
-// which readCopyState reads twice to see an entry change while it is read.
+// which readCopyState reads twice to see a change recorded there while an
+// entry is read. A write that leaves them as they were is not seen.
 func stampOf(p string) (stamp, error) {
 	var st unix.Stat_t
 	if err := unix.Lstat(p, &st); err != nil {

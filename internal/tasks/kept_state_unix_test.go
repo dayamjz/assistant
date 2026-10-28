@@ -12,7 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
-// moveAsRead holds what moved to an entry that stood still while it was
+// moveAsRead refuses what moved when it is seen to change while it is
 // read (the review of 50277f10): the reviewer's 512 MiB file rewritten
 // after its prefix was hashed was accepted unchanged. Through the seam, a
 // moved file rewritten with other bytes of the same size once it is
