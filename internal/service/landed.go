@@ -71,15 +71,20 @@ import (
 // reference carries (endWindow). The copy is kept whether its worker was
 // ended by the window, by a stop, or exited on its own, because a later
 // promotion relaunches a worker in it (coordinator.go), and once the worker
-// is ended the copy is kept work (P15): endWindow hands it to keepWork with
-// tasks.KeptPromotionWindow, so it is one kept work entry, surfaced as every
-// other entry is and holding the project's new tasks on dispatch.go's
-// terms, unless internal/tasks reads the copy as holding nothing the
-// default branch lacks (NothingKept). A promotion answers that entry carry
-// on in its flip, as it answers any open entry of its copy, and relaunches
-// in the copy. Its cleanup is owed only once the task leaves the
-// investigation lifecycle through its findings relayed record, below. Nothing here reads the report's text: whether it is stored is the
-// row's to say, and what it says is the relaunch's starting point.
+// is ended the copy is kept work (P15), surfaced the moment the pass reads
+// the worker gone rather than when the window passes, since there is no
+// worker left to keep: endWindow hands it to keepWork with
+// tasks.KeptPromotionWindow when the window has passed and
+// tasks.KeptPromotionWorkerEnded when the worker ended inside it, so it is
+// one kept work entry, surfaced as every other entry is and holding the
+// project's new tasks on dispatch.go's terms, unless internal/tasks reads
+// the copy as holding nothing the default branch lacks (NothingKept). A
+// promotion answers that entry carry on in its flip, as it answers any
+// open entry of its copy, and relaunches in the copy. Its cleanup is owed
+// only once the task leaves the investigation lifecycle through its
+// findings relayed record, below. Nothing here reads the report's text:
+// whether it is stored is the row's to say, and what it says is the
+// relaunch's starting point.
 //
 // # A relayed investigation
 //
@@ -205,15 +210,21 @@ func reportedCleanupOwed(o taskstate.Observed) bool {
 	return true
 }
 
+// reportedInvestigation reports whether o is an investigation whose report
+// is stored and that is not in the terminal tier (a relayed one's worker is
+// ended as a finished task's): the task whose worker promotion_window keeps.
+// It reads the snapshot's ReportStoredAt and nothing remembered.
+func reportedInvestigation(o taskstate.Observed) bool {
+	_, ok := o.Snapshot.ReportStoredAt.Get()
+	return ok && o.Snapshot.Task.Shape == store.TaskInvestigation && !landedEnds(o.State)
+}
+
 // promotionWindowPassed reports whether o is a reported investigation whose
-// promotion_window has passed at now: still an investigation, not in the
-// terminal tier (a relayed one's worker is ended as a finished task's), and
-// its report row's own time at least window before now. It reads the
-// snapshot's ReportStoredAt and nothing remembered, which is what keeps the
-// window across a restart.
+// promotion_window has passed at now: its report row's own time at least
+// window before now, which is what keeps the window across a restart.
 func promotionWindowPassed(o taskstate.Observed, now time.Time, window time.Duration) bool {
 	stored, ok := o.Snapshot.ReportStoredAt.Get()
-	return ok && o.Snapshot.Task.Shape == store.TaskInvestigation && !landedEnds(o.State) && !now.Before(stored.Add(window))
+	return ok && reportedInvestigation(o) && !now.Before(stored.Add(window))
 }
 
 // relayedEnds reports whether a resolution is an investigation's Complete
@@ -309,9 +320,10 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // pass already read, on the file comment's terms: for each task in the
 // terminal tier, and for each reported investigation whose promotion window
 // has passed, it ends the worker this service still holds for the latest
-// attempt, an expired window's survivor and its copy's keep going to
-// endWindow, a worker read Dead included, and for each one still owed a
-// cleanup, landed or a relayed investigation, whose terminal the pass read
+// attempt, an expired window's survivor going to endWindow, as does the
+// copy of every reported investigation whose worker it read Dead and does
+// not hold, for its keep, and for each one still owed a cleanup, landed or
+// a relayed investigation, whose terminal the pass read
 // Dead under a reference whose ask is due (landedAskDue), it asks the
 // decision. The work goes to a goroutine registered through startWork under
 // the task's slot, and an expired window is read again there, so a
@@ -326,15 +338,17 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 	now := time.Now()
 	for _, o := range observed {
 		landed := landedEnds(o.State)
+		reported := reportedInvestigation(o)
 		expired := promotionWindowPassed(o, now, s.cfg.PromotionWindow)
-		if !landed && !expired {
+		if !landed && !reported {
 			continue
 		}
 		id := o.Snapshot.Task.ID
 		ref := latestRef(o.Snapshot.Attempts)
-		held := ref != "" && s.holdsSession(id, ref)
-		survivor := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Unobserved && !s.windowWasTried(id, ref)
-		gone := expired && !held && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
+		holds := ref != "" && s.holdsSession(id, ref)
+		held := (landed || expired) && holds
+		survivor := expired && !holds && ref != "" && o.State.Basis.Process == taskstate.Unobserved && !s.windowWasTried(id, ref)
+		gone := reported && !holds && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
 		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && s.landedAskDue(id, ref, now)
 		if !held && !survivor && !gone && !owed {
 			continue
@@ -364,41 +378,55 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 // endWindow is what the pass does about a reported investigation whose
 // promotion window has passed, read again under the task's slot from a fresh
 // read of the task, so a task the coordinator promoted since the pass read it
-// keeps its worker and gets no entry. It first ends the worker of the latest
+// keeps its worker. Past the window it ends the worker of the latest
 // attempt, through steer.go's endWorker and never by a pattern: through the
 // session this service holds, or, for a worker an earlier service launched
-// that the read found Unobserved, through agents.EndGroup on the identity the
-// attempt's recorded session reference carries, verified before anything is
-// signalled. A reference that cannot be verified (another home's, one with no
-// start time, one that does not decode) or a group that does not end is
-// reported in the log and left running, asked once per reference in this
-// service's life (windowTried), and its copy is not kept as an entry while
-// the worker may still write in it. A worker the read found Dead and this
-// service does not hold is already ended, by itself, by a stop, or by a
-// service that stopped before keeping its copy.
+// that the read found Unobserved, through agents.EndGroup on the identity
+// the attempt's recorded session reference carries, verified before
+// anything is signalled. A reference that cannot be verified (another
+// home's, one with no start time, one that does not decode) or a group that
+// does not end is reported in the log and left running, asked once per
+// reference in this service's life (windowTried). A worker the read found
+// Dead and this service does not hold is already ended, by itself, by a
+// stop, or by a service that stopped before ending it, and there is nothing
+// to wait for. Inside the window a worker this service holds, or one it
+// reads Unobserved, is left alone.
+//
+// endWindow is also asked, inside the window, for a reported investigation
+// whose worker the pass read gone, so its copy is not left silent until the
+// window passes; a promoted task gets no entry. A worker left running, one
+// whose end could not be verified among them, gets no keep, since it may
+// still write in the copy.
 //
 // Once the worker is ended, the copy is kept and handed to keepWork with
-// tasks.KeptPromotionWindow, which internal/tasks reads the copy for: an
-// entry naming what it holds, or none for a copy that holds nothing the
-// default branch lacks (NothingKept). That is once per reference in this
-// service's life (windowKept) after the keep settled, and once per copy and
-// commits across lives because RecordKeptWork finds the entry an earlier
-// life wrote; a keep that failed is asked again at the next pass.
+// tasks.KeptPromotionWindow when the window has passed and
+// tasks.KeptPromotionWorkerEnded when it has not, which internal/tasks
+// reads the copy for: an entry naming what it holds, or none for a copy
+// that holds nothing the default branch lacks (NothingKept). That is once
+// per reference in this service's life (windowKept) after the keep settled,
+// and once per copy and commits across lives because RecordKeptWork finds
+// the entry an earlier life wrote; a keep that failed is asked again at the
+// next pass.
 func (s *Service) endWindow(ctx context.Context, id string) {
 	o, err := s.tasks().ObserveTask(ctx, id)
 	if err != nil {
 		s.log.Printf("task %s: its promotion window could not be read again, so its worker was not ended: %v", id, err)
 		return
 	}
-	if !promotionWindowPassed(o, time.Now(), s.cfg.PromotionWindow) {
+	if !reportedInvestigation(o) {
 		return
 	}
 	ref := latestRef(o.Snapshot.Attempts)
 	if ref == "" || s.windowKeptWasTried(id, ref) {
 		return
 	}
+	expired := promotionWindowPassed(o, time.Now(), s.cfg.PromotionWindow)
 	held := s.holdsSession(id, ref)
-	if held || o.State.Basis.Process != taskstate.Dead {
+	gone := !held && o.State.Basis.Process == taskstate.Dead
+	if !gone {
+		if !expired {
+			return
+		}
 		if !held {
 			if s.windowWasTried(id, ref) {
 				return
@@ -411,12 +439,18 @@ func (s *Service) endWindow(ctx context.Context, id string) {
 				"was not ended and is left running: %v", id, s.cfg.PromotionWindow, ref, err)
 			return
 		}
-		s.log.Printf("task %s is reported and its promotion window of %s has passed, so its worker (session %s) was ended: "+
-			"%s; its copy is kept for a promotion", id, s.cfg.PromotionWindow, ref, ended)
+		s.log.Printf("task %s is reported and its promotion window of %s has passed, so its worker (session %s) was ended: %s",
+			id, s.cfg.PromotionWindow, ref, ended)
 	}
-	if s.keepWork(ctx, tasks.Kept{Task: id, Reason: tasks.KeptPromotionWindow, Detail: fmt.Sprintf(
+	kept := tasks.Kept{Task: id, Reason: tasks.KeptPromotionWindow, Detail: fmt.Sprintf(
 		"the promotion window of %s passed after the report was stored and the worker (session %s) is ended; "+
-			"the copy is kept for a promotion", s.cfg.PromotionWindow, ref)}) {
+			"the copy is kept for a promotion", s.cfg.PromotionWindow, ref)}
+	if !expired {
+		kept.Reason, kept.Detail = tasks.KeptPromotionWorkerEnded, fmt.Sprintf(
+			"the worker (session %s) ended inside the promotion window of %s after the report was stored; "+
+				"the copy is kept for a promotion", ref, s.cfg.PromotionWindow)
+	}
+	if s.keepWork(ctx, kept) {
 		s.markWindowKept(id, ref)
 	}
 }

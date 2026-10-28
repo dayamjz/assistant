@@ -99,9 +99,9 @@ import (
 // included, followed by relaunchNote: which attempt this is, that the
 // previous terminal was found gone with the work not landed, and that the
 // copy is as the previous worker left it. A promoted investigation's
-// relaunch, coordinator.go's after promotion_window among them, adds the
-// stored report as its starting point (promotedReportNote). It is appended
-// at launch and not written into the file, so the file stays the coordinator's text plus the
+// relaunch, coordinator.go's among them, adds the stored report as its
+// starting point (promotedReportNote). It is appended at launch and not
+// written into the file, so the file stays the coordinator's text plus the
 // second check and a later attempt does not read an earlier attempt's note.
 
 // relaunchedKind is the note internal/taskstate gives a relaunch, appended
@@ -383,11 +383,11 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 }
 
 // promotedReportOf reads the stored report of the investigation a delivery
-// task was promoted from, which is the starting point PRD section 6 gives a
-// worker relaunched after promotion_window. Only an investigation stores a
-// report and promotion keeps the row, so a delivery task with one is a
-// promoted investigation; a delivery task without one, and every
-// investigation, has none to carry. A read that fails refuses the relaunch
+// task was promoted from, which is the starting point PRD section 6 gives
+// the worker a promotion relaunches in a reported investigation's copy.
+// Only an investigation stores a report and promotion keeps the row, so a
+// delivery task with one is a promoted investigation; a delivery task
+// without one, and every investigation, has none to carry. A read that fails refuses the relaunch
 // before anything is claimed rather than starting a worker without the
 // report it is owed.
 func (s *Service) promotedReportOf(ctx context.Context, task store.Task) (store.TaskReport, bool, error) {

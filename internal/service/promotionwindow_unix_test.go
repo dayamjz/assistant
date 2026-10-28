@@ -5,7 +5,6 @@ package service_test
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -13,139 +12,21 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
-	"github.com/dayamjz/assistant/internal/agents/standin"
-	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
-	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // These tests drive PRD section 6's promotion_window through the real
-// service and the shipped Claude Code adapter's worker, the stand-in in
-// stream mode: the report is filed by the worker running the call itself,
-// the window is read by the supervisor's pass, and what a relaunched worker
-// starts from is what the stand-in recorded reading.
-
-// windowReport is the report the investigation's worker files. It raises no
-// decision, so the task resolves Reported from its report tier, and its
-// summary is the text a relaunched worker must have been begun with.
-const (
-	windowReport  = `{"summary":"The parser re-reads every file it is given","findings":[{"severity":"info","action":"note","description":"Cache each parse."}]}`
-	reportSummary = "The parser re-reads every file it is given"
-	fromReport    = "started from the report"
-)
-
-// investigation is a reported investigation's world: the home, the
-// repository, the task, and the stand-in every worker of it runs as.
-type investigation struct {
-	home       *home.Home
-	repository store.Repository
-	task       string
-	agent      *standin.Agent
-}
-
-// newInvestigation records a dispatched investigation under the global
-// configuration global, with a stand-in worker that answers its
-// instructions, a brief, and a first turn carrying the stored report.
-func newInvestigation(t *testing.T, global string) investigation {
-	t.Helper()
-	requiresIdentifiedPeer(t)
-	h := newHome(t)
-	subject := newSubject(t)
-	quietMaintenance(t, subject)
-	repository := recordRepository(t, h, subject)
-	quietMaintenance(t, gateRepositoryOf(t, h, subject))
-	if err := os.WriteFile(h.ConfigFile(), []byte(global+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	id := recordDispatchedTask(t, h, repository, store.TaskInvestigation, "")
-	agent := standin.New(t, standin.Script{
-		Steps: []standin.Step{{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")}},
-		Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
-			{Contains: "## The investigation's report", Reply: fromReport},
-			{Contains: "now a delivery task", Reply: briefHeard},
-			{Contains: shellMarker, Run: true},
-			{Contains: "git rev-parse --show-toplevel", Reply: "the instructions were read"},
-			{Contains: "finish", Reply: "worker finished", Ends: true},
-		}},
-	}, agents.WithTerminationGrace(2*time.Second))
-	return investigation{home: h, repository: repository, task: id, agent: agent}
-}
-
-// serve runs one service over the investigation's home, on
-// withServiceOptions' terms.
-func (inv investigation) serve(t *testing.T, body func(serviceUnderTest)) {
-	t.Helper()
-	o := options(t, inv.home)
-	o.Catalog = agents.NewCatalog(fixedFactory{runner: inv.agent.Runner()}, cursorFactory{runner: inv.agent.Runner()})
-	withServiceOptions(t, o, body)
-}
-
-// reported waits for the service's first worker of the task and has it file
-// windowReport, and returns the worker.
-func (inv investigation) reported(t *testing.T, running serviceUnderTest) launched {
-	t.Helper()
-	return inv.reportedAfter(t, running, nil)
-}
-
-// reportedAfter is reported with before run once the worker has read its
-// instructions and before it files the report, which is where the window
-// starts.
-func (inv investigation) reportedAfter(t *testing.T, running serviceUnderTest, before func()) launched {
-	t.Helper()
-	provider, session := waitSession(t, running.service, inv.task)
-	waitCapture(t, provider, session, "the instructions were read")
-	if before != nil {
-		before()
-	}
-	w := launched{running: running, home: inv.home, repository: inv.repository, task: inv.task,
-		group: session.Reference().PID, provider: provider, session: session}
-	if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: windowReport}); code != "" {
-		t.Fatalf("the worker's report was refused with %q", code)
-	}
-	// Under a one-second window the worker may already be ended by the
-	// first read, so either terminal reading is the report tier's answer.
-	waitState(t, running.client, inv.task, "read Reported from its report", func(r taskstate.Resolution) bool {
-		return reportedFromTheReport(taskstate.Live)(r) || reportedFromTheReport(taskstate.Dead)(r)
-	})
-	return w
-}
-
-// promote promotes the task from this process, outside every worker group.
-func (inv investigation) promote(t *testing.T, running serviceUnderTest, branch string) machine.TaskPromoted {
-	t.Helper()
-	return inv.promoteWith(t, running, branch, "Cache each parse.")
-}
-
-// promoteWith is promote with the intent stated.
-func (inv investigation) promoteWith(t *testing.T, running serviceUnderTest, branch, intent string) machine.TaskPromoted {
-	t.Helper()
-	var promoted machine.TaskPromoted
-	if err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
-		Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
-	}, &promoted); err != nil {
-		t.Fatalf("task.promote: %v", err)
-	}
-	return promoted
-}
-
-// copyStands fails the test unless the task's copy is still a directory.
-func (inv investigation) copyStands(t *testing.T, when string) {
-	t.Helper()
-	copyPath, err := inv.home.TaskCopy(inv.task)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, err := os.Stat(copyPath); err != nil || !info.IsDir() {
-		t.Fatalf("the investigation's copy is gone %s: %v", when, err)
-	}
-}
+// service and the shipped Claude Code adapter's worker, on
+// promotedrelaunch_unix_test.go's investigation: the report is filed by the
+// worker running the call itself, and the window is read by the
+// supervisor's pass.
 
 // workerEnded waits until the service holds no session for the task, which
 // is how the window's end through the held session shows.
@@ -161,108 +42,6 @@ func (inv investigation) workerEnded(t *testing.T, running serviceUnderTest) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-}
-
-// commitInCopy makes a commit in the task's copy that no remote has, the
-// work a worker leaves there, and returns it.
-func (inv investigation) commitInCopy(t *testing.T) string {
-	t.Helper()
-	copyPath := resolvedCopy(t, inv.home, inv.task)
-	if err := os.WriteFile(filepath.Join(copyPath, "finding.txt"), []byte("what the worker found\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	git(t, copyPath, "add", "finding.txt")
-	git(t, copyPath, "commit", "--quiet", "-m", "the worker's own commit")
-	return git(t, copyPath, "rev-parse", "HEAD")
-}
-
-// keptWork is the open kept work entries and the task's kept-work wakes, read
-// from the home's records through a reader of its own.
-func (inv investigation) keptWork(t *testing.T) ([]store.KeptWork, []store.Wake) {
-	t.Helper()
-	records, err := store.OpenReadOnly(t.Context(), inv.home.Database())
-	if err != nil {
-		t.Fatalf("opening the records: %v", err)
-	}
-	defer func() { _ = records.Close() }()
-	open, err := records.OpenKeptWork(t.Context())
-	if err != nil {
-		t.Fatalf("listing the kept work: %v", err)
-	}
-	all, err := records.TaskWakes(t.Context(), inv.task)
-	if err != nil {
-		t.Fatalf("listing the task's wakes: %v", err)
-	}
-	var wakes []store.Wake
-	for _, w := range all {
-		if w.Kind == string(supervisor.KindKeptWork) {
-			wakes = append(wakes, w)
-		}
-	}
-	return open, wakes
-}
-
-// waitKeptWake waits for the task's one open kept work entry and its one
-// kept-work wake, and fails the test on a second of either.
-func (inv investigation) waitKeptWake(t *testing.T) (store.KeptWork, store.Wake) {
-	t.Helper()
-	deadline := time.Now().Add(launchWait)
-	for {
-		open, wakes := inv.keptWork(t)
-		if len(open) > 1 || len(wakes) > 1 {
-			t.Fatalf("the window kept %d entries and raised %d kept-work wakes, want one of each: %+v %+v", len(open), len(wakes), open, wakes)
-		}
-		if len(open) == 1 && len(wakes) == 1 {
-			return open[0], wakes[0]
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("past the window the task has kept work %+v and kept-work wakes %+v, want one of each; the log reads:\n%s",
-				open, wakes, serviceLog(t, inv.home))
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// passes lets the supervisor's pass run several times at its 1s interval.
-func passes() { time.Sleep(3500 * time.Millisecond) }
-
-// relaunchedFromTheReport checks a promotion that relaunched: attempt 2 was
-// begun superseding the ended session, the service holds a new session for
-// it, and that worker, started in the task's own copy, read the stored
-// report in its first turn and answered it.
-func (inv investigation) relaunchedFromTheReport(t *testing.T, running serviceUnderTest, promoted machine.TaskPromoted, ended string) {
-	t.Helper()
-	if promoted.Record.Shape != store.TaskDelivery || promoted.Relaunch == nil || promoted.Relaunch.Attempt != 2 ||
-		promoted.Relaunch.Superseded != ended || !strings.Contains(promoted.Brief.Unsent, "stored report") {
-		t.Fatalf("the promotion of an investigation whose worker ended answered %+v, want a relaunch of attempt 2 from the report", promoted)
-	}
-	if row := machine.TaskPromotedPhrase(promoted); row == machine.TaskPromotedPhrase(machine.TaskPromoted{}) {
-		t.Fatalf("a promotion that relaunched reads as one whose brief reached nobody: %q", row)
-	}
-	deadline := time.Now().Add(launchWait)
-	for {
-		if provider, session, ok := running.service.SessionOf(inv.task); ok && session.Reference().String() != ended {
-			waitCapture(t, provider, session, fromReport)
-			break
-		}
-		if !time.Now().Before(deadline) {
-			service.FatalUnlessSweepsStoppedClearing(t, "the promotion's relaunch", "the service never held a new session for task %s", inv.task)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if n := linesCarrying(t, inv.agent, reportSummary); n != 1 {
-		t.Fatalf("the stored report reached a worker on %d lines, want the relaunched worker's first turn alone", n)
-	}
-	want := resolvedCopy(t, inv.home, inv.task)
-	for _, call := range inv.agent.Calls() {
-		if call.Worker && len(call.Lines) > 0 && strings.Contains(call.Lines[0], reportSummary) {
-			if got, _ := filepath.EvalSymlinks(call.Dir); got != want {
-				t.Fatalf("the relaunched worker ran in %s, want the investigation's own copy %s", got, want)
-			}
-			return
-		}
-	}
-	t.Fatal("no worker's first turn carried the stored report")
 }
 
 // PRD section 6's kept work, inside the window: a reported investigation's
@@ -294,18 +73,127 @@ func TestAReportedWorkerInsideThePromotionWindowIsKeptAndContinued(t *testing.T)
 	})
 }
 
-// PRD section 6's kept work, past the window, and P15: under a one-second
-// promotion_window the supervisor's pass ends the reported worker through
-// the session the service holds, so the service no longer holds it and its
-// reference probes Dead; the task stays Reported from its report and its
-// copy stands through several more passes, which are where a reported
-// investigation's copy used to be cleaned up. A promotion then relaunches a
-// worker in that same copy, through the anchored relaunch, begun with the
-// stored report as its starting point.
+// PRD section 6's promotion_window, past the window: under a one-second
+// window the supervisor's pass ends the reported worker through the session
+// the service holds, so the service no longer holds it and its reference
+// probes Dead, and the task stays Reported from its report. The copy holds
+// the worker's commit, so the cleanup the pass then asks refuses it as
+// unlanded and keeps it as one kept work entry (P15), and it stands through
+// several more passes. A promotion then relaunches a worker in that same
+// copy, through the anchored relaunch, begun with the stored report, and
+// its flip answers the entry carry on. With the window ignored the worker
+// is still held long past it.
 func TestAReportedWorkerPastThePromotionWindowIsEndedAndAPromotionRelaunchesItFromTheReport(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation in its copy")
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		w := inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+		ended := w.session.Reference().String()
+		inv.workerEnded(t, running)
+		waitProbe(t, w.provider, ended, taskstate.Dead)
+		waitState(t, running.client, inv.task, "read Reported with its worker ended", reportedFromTheReport(taskstate.Dead))
+		entry := inv.waitKept(t)
+		passes()
+		inv.copyStands(t, "after its worker was ended for the window")
+		if got := attemptsOf(t, inv.home, inv.task); len(got) != 1 {
+			t.Fatalf("ending the worker for the window began %d attempts, want none past the first", len(got)-1)
+		}
+
+		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-passed"), ended)
+		answered, err := recordsOf(t, inv.home).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil || answered.Open() || answered.Answer.Or("") != store.KeptCarryOn {
+			t.Fatalf("after the promotion the copy's entry reads %+v (%v), want it answered carry on", answered, err)
+		}
+	})
+}
+
+// The control for the test above on the promotion's side: a task promoted
+// inside a five-second promotion_window is a delivery task by the time the
+// window would have passed, so the pass's read of the window again under
+// the task's slot finds nothing to end, and its worker is still held and
+// continued past the window's end, with no kept work entry for its copy.
+func TestAPromotionInsideThePromotionWindowKeepsItsWorker(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "5s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		w := inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+		promoted := inv.promote(t, running, "task/window-promoted")
+		if !promoted.Brief.Delivered() || promoted.Relaunch != nil {
+			t.Fatalf("the promotion inside the window answered %+v, want the brief sent to the live worker", promoted)
+		}
+		passes()
+		time.Sleep(3 * time.Second) // past the window's end, with a pass after it
+		if _, held, ok := running.service.SessionOf(inv.task); !ok || held.Reference() != w.session.Reference() {
+			t.Fatal("the window ended the worker of a task promoted inside it")
+		}
+		if open, wakes := inv.keptWork(t); len(open) != 0 || len(wakes) != 0 {
+			t.Fatalf("a task promoted inside the window is kept work %+v with wakes %+v, want neither", open, wakes)
+		}
+	})
+}
+
+// P15 for a worker an earlier service left: the first service files the
+// report under a one-hour window and is then left the way SIGKILL leaves it,
+// its worker running and no service holding a handle to it. The next service,
+// whose operator has shortened the window to a second, holds no session, so
+// it ends the survivor through agents.EndGroup on the identity the attempt's
+// recorded reference carries: the process is gone, the task reads Reported
+// over a dead terminal, the log names the verified identity, and the copy,
+// which holds the worker's commit, stands as kept work.
+func TestAReportedWorkerAnEarlierServiceLeftIsEndedPastThePromotionWindow(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	var survivor session.Reference
+	inv.serve(t, func(running serviceUnderTest) {
+		survivor = inv.reportedAfter(t, running, func() { inv.commitInCopy(t) }).session.Reference()
+		running.service.AbandonSessionsForTest(t)
+	})
+	homeIsFree(t, inv.home)
+	identity := agents.Identity{PID: survivor.PID, Start: survivor.Start}
+	t.Cleanup(func() { _, _ = agents.EndGroup(identity, time.Second) })
+	if presence, err := identity.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the worker reads %q (%v) after its service closed, want it still running, or there is no survivor", presence, err)
+	}
+	if err := os.WriteFile(inv.home.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	inv.serve(t, func(running serviceUnderTest) {
+		deadline := time.Now().Add(launchWait)
+		for {
+			presence, err := identity.Presence()
+			if err == nil && presence != agents.PresencePresent {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("the survivor still reads %q (%v) long past its promotion window", presence, err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		waitState(t, running.client, inv.task, "read Reported over its ended survivor", reportedFromTheReport(taskstate.Dead))
+		if log := serviceLog(t, inv.home); !strings.Contains(log, "by its verified identity") {
+			t.Fatalf("the service log does not say the survivor was ended by its verified identity:\n%s", log)
+		}
+		inv.copyStands(t, "after the survivor was ended for the window")
+	})
+}
+
+// PRD section 6's "its copy is kept either way": past a one-second
+// promotion_window over a copy exactly as its dispatch cut it from the
+// default branch, the pass ends the worker and the copy still stands
+// through several more passes, which are where a reported investigation's
+// copy used to be cleaned up. It holds nothing the default branch lacks, so
+// it is no kept work entry, and a promotion relaunches a worker in it from
+// the stored report. The tests below are the same window over a copy that
+// holds a commit.
+func TestAnUnchangedCopyPastThePromotionWindowIsKeptForAPromotion(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation in its unchanged copy")
 	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
 	// The copy is a clone of the primary checkout, so with the checkout on
 	// its default branch the copy dispatch cuts holds nothing that branch
@@ -316,25 +204,104 @@ func TestAReportedWorkerPastThePromotionWindowIsEndedAndAPromotionRelaunchesItFr
 		ended := w.session.Reference().String()
 		inv.workerEnded(t, running)
 		waitProbe(t, w.provider, ended, taskstate.Dead)
-		waitState(t, running.client, inv.task, "read Reported with its worker ended", reportedFromTheReport(taskstate.Dead))
+		waitLog(t, inv.home, "lacks, so no kept work entry is recorded")
 		passes()
 		inv.copyStands(t, "after its worker was ended for the window")
-		if got := attemptsOf(t, inv.home, inv.task); len(got) != 1 {
-			t.Fatalf("ending the worker for the window began %d attempts, want none past the first", len(got)-1)
-		}
-		// The copy is exactly as its dispatch cut it from the default
-		// branch, so it holds nothing that branch lacks and is no kept work
-		// entry; the test below is the same window over a copy that holds a
-		// commit.
 		if open, wakes := inv.keptWork(t); len(open) != 0 || len(wakes) != 0 {
 			t.Fatalf("an unchanged copy kept past the window is kept work %+v with wakes %+v, want neither", open, wakes)
 		}
-		if log := serviceLog(t, inv.home); !strings.Contains(log, "lacks, so no kept work entry is recorded") {
-			t.Fatalf("the service log does not say the unchanged copy was read and recorded as no kept work:\n%s", log)
-		}
-
-		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-passed"), ended)
+		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-unchanged"), ended)
 	})
+}
+
+// The same copy kept across a restart: the stopping service ends the
+// worker it held, and the next service, inside a one-hour window, reads the
+// worker gone and keeps the unchanged copy rather than cleaning it up, with
+// no entry since it holds nothing the default branch lacks. A promotion
+// there relaunches in the same copy from the report row.
+func TestARestartKeepsAnUnchangedReportedCopyForAPromotion(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation after a restart")
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	git(t, inv.repository.WorkingPath, "checkout", "--quiet", "main")
+	var ended string
+	inv.serve(t, func(running serviceUnderTest) {
+		ended = inv.reported(t, running).session.Reference().String()
+	})
+	homeIsFree(t, inv.home)
+
+	inv.serve(t, func(running serviceUnderTest) {
+		waitState(t, running.client, inv.task, "read Reported after the restart", reportedFromTheReport(taskstate.Dead))
+		waitLog(t, inv.home, "lacks, so no kept work entry is recorded")
+		passes()
+		inv.copyStands(t, "after a restart")
+		if open, _ := inv.keptWork(t); len(open) != 0 {
+			t.Fatalf("an unchanged copy is kept work %+v after the restart, want none", open)
+		}
+		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-restarted"), ended)
+	})
+}
+
+// P15's "kept work is never silent", inside the window: the worker commits
+// in its copy and files its report under a one-hour promotion_window, and a
+// restart ends it. The next service reads the worker gone long before the
+// window passes and keeps the copy at once as one kept work entry, for the
+// worker that ended inside the window, which holds a delivery task created
+// in the same project. Waiting for the window instead, the copy sat with no
+// entry for up to the window and the new task dispatched.
+func TestAWorkerGoneInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	var head string
+	inv.serve(t, func(running serviceUnderTest) {
+		inv.reportedAfter(t, running, func() { head = inv.commitInCopy(t) })
+	})
+	homeIsFree(t, inv.home)
+
+	inv.serve(t, func(running serviceUnderTest) {
+		entry, _ := inv.waitKeptWake(t)
+		if entry.TaskID.Or("") != inv.task || entry.Reason != tasks.KeptPromotionWorkerEnded || !slices.Contains(entry.Holds, head) {
+			t.Fatalf("the entry = %+v, want task %s's copy, kept for a worker ended inside the window, holding %s", entry, inv.task, head)
+		}
+		var created machine.TaskCreated
+		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
+			Repository: inv.repository.ID, Branch: "task/inside-the-window",
+		}, &created); err != nil {
+			t.Fatalf("creating a task in the investigation's project: %v", err)
+		}
+		waitLog(t, inv.home, "task "+created.Record.ID+" waits: ")
+		passes()
+		if got := attemptsOf(t, inv.home, created.Record.ID); len(got) != 0 {
+			t.Fatalf("with entry %d open, task %s was dispatched with attempts %+v", entry.ID, created.Record.ID, got)
+		}
+		if open, wakes := inv.keptWork(t); len(open) != 1 || open[0].ID != entry.ID || len(wakes) != 1 {
+			t.Fatalf("later passes left kept work %+v and kept-work wakes %+v, want entry %d raised once", open, wakes, entry.ID)
+		}
+	})
+}
+
+// waitKeptWake waits for the task's one open kept work entry and its one
+// kept-work wake, and fails the test on a second of either.
+func (inv investigation) waitKeptWake(t *testing.T) (store.KeptWork, store.Wake) {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		open, wakes := inv.keptWork(t)
+		if len(open) > 1 || len(wakes) > 1 {
+			t.Fatalf("the window kept %d entries and raised %d kept-work wakes, want one of each: %+v %+v", len(open), len(wakes), open, wakes)
+		}
+		if len(open) == 1 && len(wakes) == 1 {
+			return open[0], wakes[0]
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the task has kept work %+v and kept-work wakes %+v, want one of each; the log reads:\n%s",
+				open, wakes, serviceLog(t, inv.home))
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // PRD principle P15 and section 6's kept work, past the window over a copy
@@ -444,139 +411,5 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 			t.Fatalf("after the promotion the window's entry reads %+v (%v), want it answered carry on by task %s", answered, err, inv.task)
 		}
 		waitAttempts(t, inv.home, held)
-	})
-}
-
-// The control for the test above: the same copy holding the same commit,
-// promoted inside a five-second promotion_window, continues its worker and
-// is never kept for the window, so no pass past the window's end records an
-// entry or ends the worker.
-func TestAPromotionInsideThePromotionWindowKeepsNoWork(t *testing.T) {
-	t.Parallel()
-	principles.Cite(t, principles.P15)
-	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "5s"}`)
-	inv.serve(t, func(running serviceUnderTest) {
-		w := inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
-		promoted := inv.promote(t, running, "task/window-promoted")
-		if !promoted.Brief.Delivered() || promoted.Relaunch != nil {
-			t.Fatalf("the promotion inside the window answered %+v, want the brief sent to the live worker", promoted)
-		}
-		passes()
-		time.Sleep(3 * time.Second) // past the window's end, with a pass after it
-		if _, held, ok := running.service.SessionOf(inv.task); !ok || held.Reference() != w.session.Reference() {
-			t.Fatal("the window ended the worker of a task promoted inside it")
-		}
-		if open, wakes := inv.keptWork(t); len(open) != 0 || len(wakes) != 0 {
-			t.Fatalf("a task promoted inside the window is kept work %+v with wakes %+v, want neither", open, wakes)
-		}
-	})
-}
-
-// A restart between the report and the promotion: the stopping service ends
-// the worker it held, as every stop does, and the next service reads the
-// reported investigation from its records alone. It neither relaunches the
-// investigation nor removes its copy through several passes, though its
-// terminal reads Dead, and a promotion there relaunches a worker in the same
-// copy with the stored report, which it reads from the report row and not
-// from anything the first service held.
-func TestAPromotionAfterARestartRelaunchesTheReportedInvestigationFromTheRecord(t *testing.T) {
-	t.Parallel()
-	principles.Cite(t, principles.P8)
-	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation after a restart")
-	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
-	var ended string
-	inv.serve(t, func(running serviceUnderTest) {
-		ended = inv.reported(t, running).session.Reference().String()
-	})
-	homeIsFree(t, inv.home)
-
-	inv.serve(t, func(running serviceUnderTest) {
-		waitState(t, running.client, inv.task, "read Reported after the restart", reportedFromTheReport(taskstate.Dead))
-		passes()
-		if _, _, held := running.service.SessionOf(inv.task); held {
-			t.Fatal("the restarted service launched a worker for the reported investigation")
-		}
-		inv.copyStands(t, "after a restart")
-		inv.relaunchedFromTheReport(t, running, inv.promote(t, running, "task/window-restarted"), ended)
-	})
-}
-
-// P15 for a worker an earlier service left: the first service files the
-// report under a one-hour window and is then left the way SIGKILL leaves it,
-// its worker running and no service holding a handle to it. The next service,
-// whose operator has shortened the window to a second, holds no session, so
-// it ends the survivor through agents.EndGroup on the identity the attempt's
-// recorded reference carries: the process is gone, the task reads Reported
-// over a dead terminal, the log names the verified identity, and the copy
-// stands.
-func TestAReportedWorkerAnEarlierServiceLeftIsEndedPastThePromotionWindow(t *testing.T) {
-	t.Parallel()
-	principles.Cite(t, principles.P15)
-	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
-	var survivor session.Reference
-	inv.serve(t, func(running serviceUnderTest) {
-		survivor = inv.reported(t, running).session.Reference()
-		running.service.AbandonSessionsForTest(t)
-	})
-	homeIsFree(t, inv.home)
-	identity := agents.Identity{PID: survivor.PID, Start: survivor.Start}
-	t.Cleanup(func() { _, _ = agents.EndGroup(identity, time.Second) })
-	if presence, err := identity.Presence(); err != nil || presence != agents.PresencePresent {
-		t.Fatalf("the worker reads %q (%v) after its service closed, want it still running, or there is no survivor", presence, err)
-	}
-	if err := os.WriteFile(inv.home.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	inv.serve(t, func(running serviceUnderTest) {
-		deadline := time.Now().Add(launchWait)
-		for {
-			presence, err := identity.Presence()
-			if err == nil && presence != agents.PresencePresent {
-				break
-			}
-			if !time.Now().Before(deadline) {
-				t.Fatalf("the survivor still reads %q (%v) long past its promotion window", presence, err)
-			}
-			time.Sleep(20 * time.Millisecond)
-		}
-		waitState(t, running.client, inv.task, "read Reported over its ended survivor", reportedFromTheReport(taskstate.Dead))
-		if log := serviceLog(t, inv.home); !strings.Contains(log, "by its verified identity") {
-			t.Fatalf("the service log does not say the survivor was ended by its verified identity:\n%s", log)
-		}
-		inv.copyStands(t, "after the survivor was ended for the window")
-	})
-}
-
-// An oversized brief does not hide the reading a promotion relaunches on.
-// With the worker live, an intent past the message limit is refused as
-// TooLarge, nothing is sent and nothing relaunched; with the worker ended
-// for the window, the same intent still relaunches a worker in the copy from
-// the report, begun with the brief through its instructions.
-func TestAnOversizedBriefStillLetsAPromotionRelaunch(t *testing.T) {
-	t.Parallel()
-	service.RequireSweepClearsHere(t, "a promotion with an oversized brief relaunching the reported investigation")
-	intent := "Cache each parse. " + strings.Repeat("x", machine.MaxMessageBytes)
-
-	live := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
-	live.serve(t, func(running serviceUnderTest) {
-		live.reported(t, running)
-		promoted := live.promoteWith(t, running, "task/brief-too-large", intent)
-		if !promoted.Brief.TooLarge || promoted.Brief.Message != nil || promoted.Relaunch != nil {
-			t.Fatalf("an oversized brief to a live worker answered %+v, want it refused as too large and no relaunch", promoted.Brief)
-		}
-	})
-
-	ended := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
-	ended.serve(t, func(running serviceUnderTest) {
-		ref := ended.reported(t, running).session.Reference().String()
-		ended.workerEnded(t, running)
-		waitState(t, running.client, ended.task, "read Reported with its worker ended", reportedFromTheReport(taskstate.Dead))
-		passes() // the window's end holds the task's slot until its goroutine returns
-		promoted := ended.promoteWith(t, running, "task/brief-too-large", intent)
-		if promoted.Brief.TooLarge {
-			t.Fatalf("an oversized brief to an ended worker answered %+v, want the relaunch decided instead", promoted.Brief)
-		}
-		ended.relaunchedFromTheReport(t, running, promoted, ref)
 	})
 }

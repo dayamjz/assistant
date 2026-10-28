@@ -221,9 +221,10 @@ is absent and `brief.unsent` says why; send the worker the new direction
 yourself if one is running again. When the worker has ended, a reported
 investigation's after its promotion window among them, the promotion
 relaunches one in the same copy on `relaunch`'s terms, begun with the brief
-and the stored report: `relaunch` in the answer is that attempt, and a
-relaunch that was refused (a hold still open on the task, the relaunch
-bound) is named in `brief.unsent` and leaves the promotion standing.
+and, for a reported investigation, the stored report: `relaunch` in the
+answer is that attempt, and a relaunch that was refused (a hold still open
+on the task, the relaunch bound) is named in `brief.unsent` and leaves the
+promotion standing.
 
 ## Record an investigation's findings relayed
 
@@ -477,14 +478,14 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   operator's `promotion_window` (1h unless configured) after the report is
   stored, so promote within it to continue that worker; past it the worker
   is ended and its copy is kept, and a promotion relaunches a worker there
-  from the stored report. A copy kept past the window that holds work the
-  default branch lacks is a kept-work entry, which holds new tasks in the
-  project until it is answered; promoting the investigation answers it
-  carry on. The copy stays until you record the findings
-  relayed with `assistant coordinator relayed ID`, which also ends any
-  worker and removes the copy once that is proven safe; a relayed one
-  cannot be promoted. A reported investigation reads `reported`, never
-  `complete`, until then.
+  from the stored report. Once the worker has ended, inside the window or
+  past it, a copy that holds work the default branch lacks is a kept-work
+  entry, which holds new tasks in the project until it is answered;
+  promoting the investigation answers it carry on. The copy stays until
+  you record the findings relayed with `assistant coordinator relayed ID`,
+  which also ends any worker and removes the copy once that is proven safe;
+  a relayed one cannot be promoted. A reported investigation reads
+  `reported`, never `complete`, until then.
 - **An orphaned command is placed as yours.** The service decides who is a
   worker by walking the caller's parent chain to the first process in a
   worker group, or that is itself a worker, so a worker's command in a

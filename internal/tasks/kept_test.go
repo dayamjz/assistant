@@ -70,7 +70,8 @@ func TestEveryRefusalIsPlacedAsKeptWorkOrNot(t *testing.T) {
 // entry (NothingKept), while a copy with a commit or a file no commit
 // records is one entry naming what it holds, written once however often it
 // is asked. A delivery task's copy and a run's are refused, so the reason
-// names only the copy PRD section 6 keeps for a promotion. The unchanged
+// names only the copy PRD section 6 keeps for a promotion, and so is a keep
+// for a worker that ended inside the window. The unchanged
 // case is the control for the other two: the same keep of the same fixture
 // with work in it does write.
 func TestAPromotionWindowKeepRecordsWorkAndNotAnUnchangedCopy(t *testing.T) {
@@ -120,17 +121,29 @@ func TestAPromotionWindowKeepRecordsWorkAndNotAnUnchangedCopy(t *testing.T) {
 			t.Fatalf("keeping a copy with an untracked file answered %+v (%v), want an entry", got, err)
 		}
 	})
-	t.Run("a delivery task's copy is refused", func(t *testing.T) {
+	for _, reason := range []string{KeptPromotionWindow, KeptPromotionWorkerEnded} {
+		t.Run("a delivery task's copy is refused for "+reason, func(t *testing.T) {
+			s := newCleanupSubject(t, nil)
+			tk := s.deliveryTask(t, "task/window")
+			if got, err := s.cleaner.Keep(ctx, Kept{Task: tk.id, Reason: reason}); !errors.Is(err, ErrCleanupRecord) {
+				t.Fatalf("keeping a delivery copy for %s answered %+v (%v), want ErrCleanupRecord", reason, got, err)
+			}
+		})
+		t.Run("a run's copy is refused for "+reason, func(t *testing.T) {
+			s := newCleanupSubject(t, nil)
+			if got, err := s.cleaner.Keep(ctx, Kept{Run: "run-1", Reason: reason}); !errors.Is(err, ErrCleanupRecord) {
+				t.Fatalf("keeping a run's copy for %s answered %+v (%v), want ErrCleanupRecord", reason, got, err)
+			}
+		})
+	}
+	t.Run("a worker ended inside the window is one entry", func(t *testing.T) {
 		s := newCleanupSubject(t, nil)
-		tk := s.deliveryTask(t, "task/window")
-		if got, err := s.cleaner.Keep(ctx, window(tk.id)); !errors.Is(err, ErrCleanupRecord) {
-			t.Fatalf("keeping a delivery copy for the window answered %+v (%v), want ErrCleanupRecord", got, err)
-		}
-	})
-	t.Run("a run's copy is refused", func(t *testing.T) {
-		s := newCleanupSubject(t, nil)
-		if got, err := s.cleaner.Keep(ctx, Kept{Run: "run-1", Reason: KeptPromotionWindow}); !errors.Is(err, ErrCleanupRecord) {
-			t.Fatalf("keeping a run's copy for the window answered %+v (%v), want ErrCleanupRecord", got, err)
+		tk := s.investigationTask(t)
+		s.storeReport(t, tk.id)
+		head := commit(t, tk.copy, "g.txt", "investigated\n", "investigated")
+		got, err := s.cleaner.Keep(ctx, Kept{Task: tk.id, Reason: KeptPromotionWorkerEnded, Detail: "the worker ended"})
+		if err != nil || !got.Recorded || got.Entry.Reason != KeptPromotionWorkerEnded || !slices.Contains(got.Entry.Holds, head) {
+			t.Fatalf("keeping a copy whose worker ended inside the window answered %+v (%v), want an entry holding %s", got, err, head)
 		}
 	})
 }

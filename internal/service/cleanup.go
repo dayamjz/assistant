@@ -85,7 +85,8 @@ import (
 // (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
 // through reclaimAtRecovery, for a finished run whose copy still stands, and
 // so does landed.go's endWindow, for a reported investigation's copy kept
-// once its worker is ended past promotion_window, which is not a refusal. What
+// once its worker is ended, past promotion_window or inside it, which is
+// not a refusal. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
 // task the entry's owner is or is attributed to, or about the entry itself
 // when no task names it, and the status and catch-up reads, which list
@@ -108,8 +109,9 @@ import (
 // established, or a copy read as holding nothing the default branch lacks.
 // It is the one call a site
 // makes for a copy kept because its work has not landed, and the call
-// landed.go's endWindow makes for an investigation's copy kept past
-// promotion_window, with tasks.KeptPromotionWindow as the reason. A write
+// landed.go's endWindow makes for an investigation's copy kept once its
+// worker is ended, with tasks.KeptPromotionWindow or
+// tasks.KeptPromotionWorkerEnded as the reason. A write
 // that failed is logged and refuses nothing, because the copy is kept either
 // way and the next cleanup of it asks again; an entry already recorded for
 // the copy and its commits is logged as such and written again nowhere; and

@@ -52,8 +52,9 @@ paths: ["internal/service/**"]
   guarantees and its gaps.
 - Kept work: `cleanup.go`'s `keepWork` is the one call that turns a copy
   kept for its work into a kept work entry, from every cleanup site, from
-  recovery's `reclaimAtRecovery`, and from `landed.go`'s `endWindow` past
-  `promotion_window`; `supervise.go` raises each open
+  recovery's `reclaimAtRecovery`, and from `landed.go`'s `endWindow` once a
+  reported investigation's worker is ended, inside `promotion_window` or past
+  it; `supervise.go` raises each open
   entry about a task once as a `kept-work` wake, `keptworkwake.go` raises
   an entry no task names once on the queue's third shape, an entry with
   `surfaced_at` recorded is raised on neither again, and status and the
