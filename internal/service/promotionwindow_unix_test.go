@@ -376,6 +376,7 @@ func TestAReportedCopyHoldingWorkPastThePromotionWindowIsOneKeptWorkEntry(t *tes
 func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
+	service.RequireSweepClearsHere(t, "a promotion relaunching the held investigation in its copy")
 	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1s"}`)
 	inv.serve(t, func(running serviceUnderTest) {
 		ctx := t.Context()
