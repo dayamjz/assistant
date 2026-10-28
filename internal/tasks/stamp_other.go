@@ -4,6 +4,9 @@ package tasks
 
 import "errors"
 
+// stamp holds nothing here, since no entry is stamped on this platform.
+type stamp struct{}
+
 // stampOf is refused where this build reads no change time, so no copy's
 // state is read there and a discard refuses, as renameNoReplace does.
 func stampOf(string) (stamp, error) {

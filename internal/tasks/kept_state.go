@@ -35,13 +35,6 @@ var ErrLossChanged = errors.New("tasks: the copy no longer holds exactly what wa
 // file's bytes by their hash or a link's target.
 type copyState map[string]stateEntry
 
-// stamp is what the file system records of an entry, stampOf's.
-type stamp struct {
-	ino          uint64
-	size         int64
-	mtime, ctime [2]int64
-}
-
 // stateReadForTest, when set, is called once a state's entries are read
 // and before their stamps are read again: the seam a test changes an
 // entry through while it is read.

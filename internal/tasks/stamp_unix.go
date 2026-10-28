@@ -4,6 +4,13 @@ package tasks
 
 import "golang.org/x/sys/unix"
 
+// stamp is what the file system records of an entry, stampOf's.
+type stamp struct {
+	ino          uint64
+	size         int64
+	mtime, ctime [2]int64
+}
+
 // stampOf reads what the file system records of the entry at p, without
 // following a link: its inode, size, and modification and change times,
 // which readCopyState reads twice to see an entry change while it is read.
