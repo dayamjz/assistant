@@ -400,14 +400,17 @@ What follows for whoever runs the service:
   own configuration file (1h unless configured, between 1s and 24h; a
   repository file naming it is refused), counted from when the report was
   stored, so a promotion in the same sitting continues it. Past the window
-  the service ends the worker; a later promotion relaunches a worker in the
-  copy with the stored report as its starting point. A worker an earlier
-  service started is ended by the identity its session reference recorded,
-  and one that cannot be verified is named in the service log and left
-  running. Once the worker is ended, the copy is cleaned up as any reported
-  investigation's is: one holding nothing unlanded is removed, after which
-  the investigation can no longer be promoted, and one holding work is
-  kept as a kept-work entry (see Kept work below).
+  the service ends the worker and keeps the copy; a later promotion
+  relaunches a worker in that copy with the stored report as its starting
+  point. A worker an earlier service started is ended by the identity its
+  session reference recorded, and one that cannot be verified is named in
+  the service log and left running. Once the worker is ended, a copy that
+  holds something the default branch lacks, a commit or a file no commit
+  records, is recorded as one kept-work entry (see Kept work below), and
+  like every entry it holds new tasks in the project until it is answered;
+  a copy holding nothing the default branch lacks gets none. A promotion
+  answers that entry carry on, since the relaunched worker continues in the
+  same copy.
 - A reported investigation reads `complete` only once the coordinator
   records its findings relayed with `assistant coordinator relayed ID`. The
   service then ends the worker it holds for the task and removes its copy on

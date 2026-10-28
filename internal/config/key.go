@@ -209,10 +209,9 @@ const (
 	// investigation's worker is kept after its report is stored, so that a
 	// promotion in the same sitting continues the worker that wrote it, PRD
 	// section 6's kept work and section 10's row. Past it internal/service
-	// ends the worker, and a later promotion relaunches a worker in the copy,
-	// while the copy stands, with the stored report as its starting point;
-	// internal/service's landed.go says when the copy does not. It is
-	// global-only for
+	// ends the worker through the session it holds and keeps the copy, and
+	// a later promotion relaunches a worker there with the stored report as
+	// its starting point. It is global-only for
 	// KeySupervisionBeaconInterval's reason: keeping or ending a process is
 	// the service's act on the operator's machine, and a repository has no
 	// standing over how long one idles on its behalf. It is not a loop

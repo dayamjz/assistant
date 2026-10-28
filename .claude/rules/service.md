@@ -47,12 +47,14 @@ paths: ["internal/service/**"]
 - Cleanup and sweep: it is the caller of `internal/tasks`' cleanup decision
   and decides nothing of it, and no verb reaches any of it. `cleanup.go` owns
   the sites, `landed.go` ending a landed task's worker and asking again, and a
-  reported investigation's after `promotion_window`, and
+  reported investigation's after `promotion_window` while keeping its copy, and
   `runsweep.go` the sweep of a finished run's copy: what the order
   guarantees and its gaps.
 - Kept work: `cleanup.go`'s `keepWork` is the one call that turns a copy
-  kept for its work into a kept work entry, from every cleanup site and from
-  recovery's `reclaimAtRecovery`; `supervise.go` raises each open
+  kept for its work into a kept work entry, from every cleanup site, from
+  recovery's `reclaimAtRecovery`, and from `landed.go`'s `endWindow` once a
+  reported investigation's worker is ended, inside `promotion_window` or past
+  it; `supervise.go` raises each open
   entry about a task once as a `kept-work` wake, `keptworkwake.go` raises
   an entry no task names once on the queue's third shape, an entry with
   `surfaced_at` recorded is raised on neither again, and status and the

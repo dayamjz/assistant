@@ -472,23 +472,24 @@ assistant --domain DOMAIN --answer stop      # end the delegation
 - **The service pushes only to `listen`.** It does not start a turn in your
   host by itself; a coordinator holding neither `listen` nor `await` is
   woken by nothing.
-- **Promote an investigation inside its promotion window.** Once a worker
-  files its report through `assistant worker`, the task reads `reported`
-  (`state.source` is `report`) whether its worker is still running or has
-  ended. The program does not relaunch it, and the wake queue does not
-  report its ended terminal as gone. Decisions the report raised are holds,
-  and the task reads `held` until you answer them with
+- **A reported investigation's worker is kept for the promotion window.**
+  Once a worker files its report through `assistant worker`, the task reads
+  `reported` (`state.source` is `report`) whether its worker is still
+  running or has ended. The program does not relaunch it, and the wake queue
+  does not report its ended terminal as gone. Decisions the report raised
+  are holds, and the task reads `held` until you answer them with
   `assistant --task ID --answer ...`. The service keeps the worker for the
   operator's `promotion_window` (1h unless configured) after the report is
   stored, so promote within it to continue that worker; past it the worker
-  is ended. Once the worker has ended and nothing
-  but the report's decisions holds the task, a copy holding nothing unlanded
-  is cleaned up and the task can no longer be promoted, while a copy holding
-  work is kept as a kept-work entry, and a promotion relaunches a worker
-  there from the stored report. A stop's hold keeps the copy until you answer
-  it. A reported investigation reads `reported`, never `complete`, even
-  after its copy is gone, until you record its findings relayed with
-  `assistant coordinator relayed ID`, which also ends its worker.
+  is ended and its copy is kept, and a promotion relaunches a worker there
+  from the stored report. Once the worker has ended, inside the window or
+  past it, a copy that holds work the default branch lacks is a kept-work
+  entry, which holds new tasks in the project until it is answered;
+  promoting the investigation answers it carry on. The copy stays until
+  you record the findings relayed with `assistant coordinator relayed ID`,
+  which also ends any worker and removes the copy once that is proven safe;
+  a relayed one cannot be promoted. A reported investigation reads
+  `reported`, never `complete`, until then.
 - **An orphaned command is placed as yours.** The service decides who is a
   worker by walking the caller's parent chain to the first process in a
   worker group, or that is itself a worker, so a worker's command in a

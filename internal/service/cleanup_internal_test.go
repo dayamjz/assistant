@@ -129,10 +129,9 @@ func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
 }
 
 // Storing an investigation task's report goes through internal/tasks, which
-// registers its holds, and then calls the copy's cleanup with the terminal
-// as the service's reader resolved it after the store, which for a service
-// with no terminal seam is Unobserved and refuses as such.
-func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
+// registers its holds, and asks no cleanup of the task's copy, which is kept
+// for a promotion on landed.go's terms for a reported investigation.
+func TestStoringAReportKeepsTheInvestigationsCopy(t *testing.T) {
 	t.Parallel()
 	s, records, h := cleanupService(t)
 	ctx := context.Background()
@@ -153,8 +152,8 @@ func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
 	if _, err := records.TaskReport(ctx, "lookedaaaaaa"); err != nil {
 		t.Fatalf("the report was not stored: %v", err)
 	}
-	if log := serviceLog(t, h); !strings.Contains(log, "isolated copy of task lookedaaaaaa is left standing ("+string(tasks.ReasonTerminalUnobserved)+")") {
-		t.Fatalf("the investigation's cleanup was not called, or answered something else: %s", log)
+	if log := serviceLog(t, h); strings.Contains(log, "isolated copy of task lookedaaaaaa") {
+		t.Fatalf("storing the report asked the investigation's cleanup: %s", log)
 	}
 	if _, err := s.storeTaskReport(ctx, "lookedaaaaaa", `{"summary":"again"}`); err == nil {
 		t.Fatal("a second report was stored")
