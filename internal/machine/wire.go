@@ -969,11 +969,14 @@ type TaskPromoted struct {
 	// Brief is what became of the brief the promotion sends the task's
 	// live worker: the same text that file was given.
 	Brief Briefing `json:"brief"`
-	// Relaunch is the relaunch the promotion asked for because the task's
-	// worker had ended, on task.relaunch's terms, and absent when none began: the
-	// worker was live, could not be observed, or the relaunch was refused,
-	// which Brief.Unsent then says. The relaunched worker is begun with the
-	// instructions file, the brief included, and the stored report.
+	// Relaunch is the relaunch the promotion claimed because the task's
+	// worker had ended, on task.relaunch's terms, and absent when none was
+	// claimed: the worker was live, could not be observed, or the relaunch was
+	// refused, which Brief.Unsent then says. It names the attempt claimed and
+	// not a worker started: as with task.relaunch, the worker is launched
+	// after this answer, begun with the instructions file, the brief
+	// included, and the stored report, and whether it started shows in the
+	// task's state.
 	Relaunch *TaskRelaunched `json:"relaunch,omitempty"`
 }
 

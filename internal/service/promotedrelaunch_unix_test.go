@@ -341,3 +341,47 @@ func TestAnOversizedBriefStillLetsAPromotionRelaunch(t *testing.T) {
 		ended.relaunchedFromTheReport(t, running, promoted, ref)
 	})
 }
+
+// A promotion's answer claims no more than the relaunch did: the relaunch
+// claims its attempt and the launch follows the answer, as task.relaunch's
+// does, so a launch refused after the claim must not have been announced as
+// a worker begun. The investigation is reported and its worker ended by a
+// restart; the next service's worker role names a context window its agent
+// does not declare, so the promotion claims attempt 2 and routing then
+// refuses its launch, the task resolving Failed with no session on that
+// attempt. The answer names the attempt and says whether its worker began
+// shows in the listing, and its brief says the same.
+func TestAPromotionsRelaunchIsAnnouncedAsClaimedNotAsBegun(t *testing.T) {
+	t.Parallel()
+	service.RequireSweepClearsHere(t, "a promotion relaunching the reported investigation after a restart")
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		inv.reportedAfter(t, running, func() { inv.commitInCopy(t) })
+	})
+	homeIsFree(t, inv.home)
+	refusing := fmt.Sprintf(`{"supervision_beacon_interval": "1s", "roles": {"worker": {"agent": %q, "provider": "anthropic", "type": "haiku", "version": "4.5", "context": "1m"}}}`, inv.agent.Runner().Name())
+	if err := os.WriteFile(inv.home.ConfigFile(), []byte(refusing+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv.serve(t, func(running serviceUnderTest) {
+		waitState(t, running.client, inv.task, "read Reported after the restart", reportedFromTheReport(taskstate.Dead))
+		inv.waitKept(t)
+		promoted := inv.promote(t, running, "task/promoted-unlaunched")
+		if promoted.Relaunch == nil || promoted.Relaunch.Attempt != 2 {
+			t.Fatalf("the promotion answered %+v, want attempt 2 claimed for a relaunch", promoted)
+		}
+		waitState(t, running.client, inv.task, "fail on its refused launch", func(r taskstate.Resolution) bool {
+			return r.State == taskstate.Failed
+		})
+		if attempts := attemptsOf(t, inv.home, inv.task); len(attempts) != 2 || attempts[1].SessionRef.IsKnown() {
+			t.Fatalf("the task has attempts %+v, want attempt 2 claimed with no worker started", attempts)
+		}
+		row := machine.TaskPromotedPhrase(promoted)
+		if strings.Contains(row.Consequence, "was begun") || !strings.Contains(row.Consequence, "whether it began shows in the listing") {
+			t.Fatalf("a promotion whose relaunch was only claimed is phrased %q, want it to defer to the listing", row.Consequence)
+		}
+		if strings.Contains(promoted.Brief.Unsent, "is begun") || !strings.Contains(promoted.Brief.Unsent, "attempt 2") {
+			t.Fatalf("the brief of a relaunch only claimed reads %q, want it to name attempt 2 without saying a worker began", promoted.Brief.Unsent)
+		}
+	})
+}

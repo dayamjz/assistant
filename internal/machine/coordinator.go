@@ -43,7 +43,7 @@ var (
 	}
 	phraseTaskPromotedRelaunched = Phrase{
 		Outcome:     "The investigation now delivers a change, on a branch of its own in the same local copy.",
-		Consequence: "Its worker had already ended, so a new worker was begun in that copy and told what it is now to deliver, starting from the investigation's report when one was filed.",
+		Consequence: "Its worker had already ended, so a new worker is being begun in that copy, told what it is now to deliver and starting from the investigation's report when one was filed; this answer comes before the worker does, so whether it began shows in the listing.",
 		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
 	}
 	phraseTaskRelaunched = Phrase{
@@ -147,7 +147,8 @@ func PeekPhrase(p TaskPeek) Phrase {
 
 // TaskPromotedPhrase is what a person reads about a task.promote answer: the
 // row for a brief the record says reached the worker's input, the row for a
-// worker the promotion relaunched because the one before had ended, and the
+// relaunch the promotion claimed because the worker before had ended, which
+// says what was claimed and not that a worker started, and the
 // row for a brief neither reached, which names what to do instead. A
 // promotion that did not complete is a refusal and never an answer.
 func TaskPromotedPhrase(p TaskPromoted) Phrase {
