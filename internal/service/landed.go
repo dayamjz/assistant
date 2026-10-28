@@ -321,8 +321,8 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // terminal tier, and for each reported investigation whose promotion window
 // has passed, it ends the worker this service still holds for the latest
 // attempt, an expired window's survivor going to endWindow, as does the
-// copy of every reported investigation whose worker it read Dead and does
-// not hold, for its keep, and for each one still owed a cleanup, landed or
+// copy of every reported investigation whose worker it read Dead, held or
+// not, for its keep, and for each one still owed a cleanup, landed or
 // a relayed investigation, whose terminal the pass read
 // Dead under a reference whose ask is due (landedAskDue), it asks the
 // decision. The work goes to a goroutine registered through startWork under
@@ -348,7 +348,7 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 		holds := ref != "" && s.holdsSession(id, ref)
 		held := (landed || expired) && holds
 		survivor := expired && !holds && ref != "" && o.State.Basis.Process == taskstate.Unobserved && !s.windowWasTried(id, ref)
-		gone := reported && !holds && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
+		gone := reported && ref != "" && o.State.Basis.Process == taskstate.Dead && !s.windowKeptWasTried(id, ref)
 		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && s.landedAskDue(id, ref, now)
 		if !held && !survivor && !gone && !owed {
 			continue
@@ -387,14 +387,17 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 // home's, one with no start time, one that does not decode) or a group that
 // does not end is reported in the log and left running, asked once per
 // reference in this service's life (windowTried). A worker the read found
-// Dead and this service does not hold is already ended, by itself, by a
-// stop, or by a service that stopped before ending it, and there is nothing
-// to wait for. Inside the window a worker this service holds, or one it
-// reads Unobserved, is left alone.
+// Dead, held or not, is already ended, by itself, by a stop, or by a
+// service that stopped before ending it, and there is nothing to wait for.
+// Inside the window a live worker, or one it reads Unobserved, is left
+// alone.
 //
 // endWindow is also asked, inside the window, for a reported investigation
 // whose worker the pass read gone, so its copy is not left silent until the
-// window passes; a promoted task gets no entry. A worker left running, one
+// window passes; a promoted task gets no entry. Gone is the probe's Dead,
+// whether or not this service still holds the session: a worker that exits
+// by itself leaves its handle held, and the probe answers Live for a held
+// session only while its process runs. A worker left running, one
 // whose end could not be verified among them, gets no keep, since it may
 // still write in the copy.
 //
@@ -422,7 +425,7 @@ func (s *Service) endWindow(ctx context.Context, id string) {
 	}
 	expired := promotionWindowPassed(o, time.Now(), s.cfg.PromotionWindow)
 	held := s.holdsSession(id, ref)
-	gone := !held && o.State.Basis.Process == taskstate.Dead
+	gone := o.State.Basis.Process == taskstate.Dead
 	if !gone {
 		if !expired {
 			return

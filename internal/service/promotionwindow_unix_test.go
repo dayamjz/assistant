@@ -414,3 +414,41 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 		waitAttempts(t, inv.home, held)
 	})
 }
+
+// The same, for a worker that exits by itself inside the window, with no
+// stop and no restart: this service still holds its session, so only the
+// probe says the worker is gone. Its copy is kept at once as one kept work
+// entry for the worker that ended inside the window, and a delivery task
+// created in the project waits on it. Keeping only a worker the service no
+// longer held left this copy silent until the window passed.
+func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	inv := newInvestigation(t, `{"supervision_beacon_interval": "1s", "promotion_window": "1h"}`)
+	inv.serve(t, func(running serviceUnderTest) {
+		var head string
+		w := inv.reportedAfter(t, running, func() { head = inv.commitInCopy(t) })
+		if err := w.provider.Send(t.Context(), w.session, "finish"); err != nil {
+			t.Fatalf("telling the worker to finish: %v", err)
+		}
+		waitProbe(t, w.provider, w.session.Reference().String(), taskstate.Dead)
+		if _, held, ok := running.service.SessionOf(inv.task); !ok || held.Reference() != w.session.Reference() {
+			t.Fatal("the service no longer holds the worker that exited by itself, so this is not the case under test")
+		}
+		entry, _ := inv.waitKeptWake(t)
+		if entry.TaskID.Or("") != inv.task || entry.Reason != tasks.KeptPromotionWorkerEnded || !slices.Contains(entry.Holds, head) {
+			t.Fatalf("the entry = %+v, want task %s's copy, kept for a worker ended inside the window, holding %s", entry, inv.task, head)
+		}
+		var created machine.TaskCreated
+		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
+			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
+			Repository: inv.repository.ID, Branch: "task/after-the-exit",
+		}, &created); err != nil {
+			t.Fatalf("creating a task in the investigation's project: %v", err)
+		}
+		waitLog(t, inv.home, "task "+created.Record.ID+" waits: ")
+		if got := attemptsOf(t, inv.home, created.Record.ID); len(got) != 0 {
+			t.Fatalf("with entry %d open, task %s was dispatched with attempts %+v", entry.ID, created.Record.ID, got)
+		}
+	})
+}
