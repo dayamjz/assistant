@@ -130,3 +130,42 @@ func TestACombinedDrainThatFailsHandsOutNothing(t *testing.T) {
 		t.Fatal("the task wake the drain returned is not recorded as handed out")
 	}
 }
+
+// A drain hands out no row it does not return (the review of #683 at
+// f8a04ed): with a housekeeping wake queued, the drain wakes.list and
+// wakes.wait answer with returns no housekeeping wake in this build, since
+// the wire carries none, so the store must not hand it out either; a row
+// handed out and never returned would be offered to nobody else while the
+// handout's stream is held, and nobody could acknowledge it. The task wake
+// drained beside it is the positive control that the drain ran.
+func TestADrainHandsOutNoHousekeepingWakeItDoesNotReturn(t *testing.T) {
+	t.Parallel()
+	sub := newDispatchSubject(t)
+	ctx := t.Context()
+	inc, err := sub.records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sub.records.AppendWakeWithMarkers(ctx, inc, store.WakeRequest{
+		TaskID: sub.task, Kind: string(supervisor.KindTerminalGone), Marker: "beside",
+	}, store.MarkerAdvance{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sub.records.AppendHousekeepingWake(ctx, inc, store.HousekeepingWakeRequest{
+		Repository: "subject", Kind: "housekeeping-due", Marker: "due:none:1", Detail: "no pass was ever created",
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	handout := store.WakeHandout{To: store.AcknowledgedByCoordinator(), Under: "drain-1", Held: []string{"drain-1"}, Route: wakeRouteOf(placedPeer{})}
+	drained, err := sub.service.drainAll(ctx, 10, handout)
+	if err != nil || len(drained.Wakes) != 1 {
+		t.Fatalf("the drain = %+v, %v; want the task wake", drained, err)
+	}
+	rows, err := sub.records.HousekeepingWakes(ctx)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("the housekeeping wakes are %+v, %v; want the one appended", rows, err)
+	}
+	if rows[0].HandedOutAt.IsKnown() {
+		t.Fatalf("the drain handed out housekeeping wake %d, which it did not return: %+v", rows[0].ID, rows[0])
+	}
+}
