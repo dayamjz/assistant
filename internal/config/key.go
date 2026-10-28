@@ -23,9 +23,10 @@ const (
 	// version, effort, and context window each role runs. The default names fix as cursor
 	// and names no other role, so review and worker use KeyAgent. A document
 	// that sets this key and does not name fix keeps that fixer. A fix role
-	// that names no agent uses KeyAgent. review, fix, and worker are the
-	// three the program assigns; any other name is a worker role a task may
-	// name. It is the same trust class as KeyAgent. A provider, type, or
+	// that names no agent uses KeyAgent. review, fix, worker and
+	// housekeeping are the four the program assigns, housekeeping resolving
+	// to the fix row unless the table names it; any other name is a worker
+	// role a task may name. It is the same trust class as KeyAgent. A provider, type, or
 	// version outside the model table, a partial triple, an effort other
 	// than low, medium, or high, and a context outside ContextWindows or on
 	// a role with no triple fail at parse time and name the role. Each role
