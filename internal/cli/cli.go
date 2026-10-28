@@ -8,6 +8,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -53,6 +54,26 @@ type Environment struct {
 	// boundary established it, so a caller that does not set it is never
 	// prompted and consents only through --accept-commands.
 	Interactive bool
+	// OffTerminal says this process was read as not in the foreground of a
+	// controlling terminal, the fact a discard's confirmation is admitted on
+	// (PRD section 6, "Removing a discarded copy"). cmd/assistant reads it
+	// with OffTerminal; it is false when the process was read in the
+	// foreground and when its lineage could not be read, so the service,
+	// which decides it either way, is asked.
+	OffTerminal bool
+}
+
+// OffTerminal reports whether the process pid names was read, now, as not
+// in the foreground of a controlling terminal: agents.ReadLineage read it
+// and agents.Lineage.Foreground, the predicate internal/service's
+// foreground relation decides from, is false. A process whose lineage
+// cannot be read, or that is not running, is not reported off a terminal,
+// since that fact was not established. Which streams are terminals plays
+// no part: a command run in a terminal's foreground with a stream
+// redirected is still in it.
+func OffTerminal(pid int) bool {
+	lineage, found, err := agents.ReadLineage(pid)
+	return err == nil && found && !lineage.Foreground()
 }
 
 // usageError marks a failure that is about the command line rather than about

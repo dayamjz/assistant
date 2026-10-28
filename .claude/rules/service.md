@@ -40,7 +40,7 @@ paths: ["internal/service/**"]
   `internal/safety`'s; `local.go` owns what a local task's own push does
   instead of starting a run, the approval hold it raises, and the anchored
   fast-forward an approve answer makes; `foreground.go` owns the relation
-  that hold alone is held to.
+  that hold and a discard's confirmation are held to.
 - Events: `publish.go` owns `task.state` and `hold.state`; `taskView` is the
   one composition of a task's answer for the publisher and the surface
   alike.
@@ -95,7 +95,10 @@ paths: ["internal/service/**"]
   stopped service left them. Discard (`keptdiscard.go`) is the preview
   alone, what would be lost with a digest through `internal/tasks`'
   `Loss`, recording and removing nothing; a confirmation is refused before
-  anything is read (`discardDeferred`, the row
+  anything is read, from a peer `foreground.go`'s relation does not place
+  in a terminal's foreground with `discardOffTerminal` (the row
+  `machine.PhraseDiscardNeedsTerminal`, wire code not-at-terminal) and from
+  any other with `discardDeferred` (the row
   `machine.PhraseDiscardRemovalDeferred`), its removal deferred to AGE-486
   (docs/prd.md, sections 6 and 9). A promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
