@@ -2335,11 +2335,14 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 	}
 	var (
 		once     sync.Once
+		letGo    sync.Once
 		inWindow = make(chan string, 1)
 		awaiting = make(chan struct{}, 1)
 		second   = make(chan answered, 1)
 		leave    = make(chan struct{})
 	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
 	held := func(id string) {
 		first := false
 		once.Do(func() { first = true })
@@ -2359,6 +2362,7 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 	o, _ := workerOptions(t, h)
 	o = service.WithHeldDispatchWindowForTest(service.WithCarryOnInterruptForTest(t, o, lose), held, await)
 	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
 		ctx := t.Context()
 		var out machine.KeptWorkAnswered
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); !errors.Is(err, ipc.ErrRefused) ||
@@ -2376,7 +2380,7 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 			t.Fatal("no dispatch pass held the carried-on task after the refused answer")
 		}
 		if want := owed.CarriedOnTask.Or(""); id != want {
-			close(leave)
+			release()
 			t.Fatalf("the held dispatch was of task %s; want the carried-on task %s", id, want)
 		}
 
@@ -2388,13 +2392,13 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 		select {
 		case <-awaiting:
 		case got := <-second:
-			close(leave)
+			release()
 			t.Fatalf("the same answer again, while a dispatch pass held task %s's slot = %+v, %v; want it to wait for the slot", id, got.out, got.err)
 		case <-ctx.Done():
-			close(leave)
+			release()
 			t.Fatal("the same answer again neither waited for the slot nor returned")
 		}
-		close(leave)
+		release()
 		got := <-second
 		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(got.err.Error(), kept) {
 			t.Fatalf("the same answer again, once the pass gave the slot back = %+v, %v; want it refused naming %s", got.out, got.err, kept)
