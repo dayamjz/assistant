@@ -110,7 +110,7 @@ func (s *Service) watchWorkerFallback(task store.Task, attempt int64, host sessi
 				}
 				continue
 			}
-			if _, err := s.switchWorker(s.stopCtx, task, attempt, host, worker, adapter, role, failure); err != nil {
+			if _, err := s.switchWorker(s.stopCtx, task, attempt, host, worker, adapter, role, failure, nil); err != nil {
 				s.log.Printf("task %s worker handoff: %v", task.ID, err)
 			}
 			return
@@ -174,10 +174,25 @@ func (s *Service) holdWorkerFallbackAttempt(ctx context.Context, id string, atte
 	return cause
 }
 
-func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int64, host session.Host, worker *session.Session, adapter string, role config.Role, failure agents.Failure) (*session.Session, error) {
-	settle, err := s.claimRelaunch(task.ID)
-	if err != nil {
-		return nil, err
+// switchWorker replaces a task's worker with its role's backup: it records
+// the handoff, ends the worker when one runs, begins the backup's attempt
+// and launches it, under the task's slot. slot is the slot the caller
+// already holds unsettled, which launchTask hands over for a fallback it
+// makes itself (dispatched.handSlot), so the slot is never settled between
+// the primary's failure and the backup's claim; nil claims one, as a
+// fallback from a live worker's failure does (watchWorkerFallback). Either
+// way the slot is settled here once, with the backup's proof, after its
+// launch has settled its record or failed.
+func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int64, host session.Host, worker *session.Session, adapter string, role config.Role, failure agents.Failure, slot func(tasks.Isolation)) (*session.Session, error) {
+	if s.beforeFallbackClaim != nil {
+		s.beforeFallbackClaim(task.ID)
+	}
+	settle := slot
+	if settle == nil {
+		var err error
+		if settle, err = s.claimRelaunch(task.ID); err != nil {
+			return nil, err
+		}
 	}
 	var proof tasks.Isolation
 	// A handoff kept work refused is not a worker failure: the slot is
@@ -356,8 +371,16 @@ func (s *Service) answerWorkerFallbackRetry(ctx context.Context, r machine.TaskR
 		refuse(err)
 		return
 	}
+	if s.afterBackupRedispatch != nil {
+		s.afterBackupRedispatch(r.Task)
+	}
 	pending, err := s.unacknowledgedOf(ctx, r.Task, latest.Sequence)
 	if err != nil {
+		// The redispatch claimed its attempt and nothing launches it, so
+		// the slot it took is settled here, with no session recorded: a
+		// stop or a relaunch asked next must find the slot free rather
+		// than a launch in flight until the service restarts.
+		d.settleSlot()
 		_ = s.holdWorkerFallback(ctx, r.Task, err)
 		refuse(err)
 		return

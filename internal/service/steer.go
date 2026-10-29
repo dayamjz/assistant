@@ -164,9 +164,9 @@ const stopProbeBound = reconcileProbeTimeout
 const stopGrace = reapGrace
 
 // errSteerInFlight reports a stop asked of a task whose slot a dispatch, a
-// relaunch or another stop in this service holds unsettled. Nothing is
-// recorded.
-var errSteerInFlight = errors.New("service: a dispatch, a relaunch or a stop of the task is in flight in this service")
+// launch, a relaunch or another stop in this service holds unsettled.
+// Nothing is recorded.
+var errSteerInFlight = errors.New("service: a dispatch, a launch, a relaunch or a stop of the task is in flight in this service")
 
 // errNoWorker reports a message or a stop asked of a task with no attempt
 // whose worker could be addressed: none was ever recorded, or the latest
@@ -324,9 +324,11 @@ func (s *Service) sendMessage(ctx context.Context, id, ref, text string) error {
 	return provider.Send(bound, held, text)
 }
 
-// claimSteer marks the task's slot taken for a stop, leaving whatever proof
-// it holds, and returns the function that releases it. A slot a dispatch, a
-// relaunch or another stop holds unsettled is errSteerInFlight.
+// claimSteer marks the task's slot taken for a stop, or another write
+// that must not interleave with one, leaving whatever proof it holds, and
+// returns the function that releases it. A slot a dispatch or a relaunch
+// holds unsettled, which it does through the launch that follows it
+// (dispatch.go), or another stop holds, is errSteerInFlight.
 func (s *Service) claimSteer(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -335,10 +337,12 @@ func (s *Service) claimSteer(id string) (func(), error) {
 		return nil, fmt.Errorf("%w: task %s", errSteerInFlight, id)
 	}
 	s.claiming[id] = true
+	s.steering[id] = true
 	return func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		delete(s.claiming, id)
+		delete(s.steering, id)
 	}, nil
 }
 

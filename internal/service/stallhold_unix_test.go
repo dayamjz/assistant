@@ -146,6 +146,24 @@ func waitGroupGone(t *testing.T, group int) {
 	}
 }
 
+// waitProbedDead waits, within launchWait, for the worker's provider to
+// probe its session dead, which it does once it has observed the process's
+// exit, and fails naming what it last read.
+func waitProbedDead(t *testing.T, w launched, ref string) {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for {
+		obs := w.provider.Probe(t.Context(), ref)
+		if obs.Liveness == taskstate.Dead {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker's provider still probes %+v after its process group ended", obs)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // answerStall answers the task's one open hold over the service's socket.
 func answerStall(t *testing.T, w launched, word, note string) (machine.TaskAnswered, error) {
 	t.Helper()
@@ -310,6 +328,10 @@ func TestAStalledStandInWorkerThatExitsClosesItsHold(t *testing.T) {
 		}
 		waitCapture(t, w.provider, w.session, "worker finished")
 		waitGroupGone(t, w.group)
+		// The pass asserts on the provider's reading of the exit, which
+		// follows the group's end: until the provider has observed it, the
+		// probe reads the worker live and its last screen reads as a change.
+		waitProbedDead(t, w, ref)
 		if appended := k.Pass(t, w.task); appended[string(supervisor.KindTerminalGone)] != 1 || appended[string(supervisor.KindStallClosed)] != 0 {
 			t.Fatalf("the pass after the exit appended %v, want terminal gone and no closure wake of its own", appended)
 		}
