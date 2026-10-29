@@ -126,8 +126,8 @@ paths: ["internal/tasks/**"]
   removing, anything else at its name, a directory with no journal or a
   journal naming no copy's identity among it. A staging directory a
   stopped first write left blocks nothing and is left. No discard answer
-  calls it yet; the set-aside that does follows in AGE-486's stack. An
-  entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
+  calls it yet; the removal that would is deferred to the rest of AGE-486.
+  An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after
   and a directory listed again; a write that leaves the stamp as it was,
