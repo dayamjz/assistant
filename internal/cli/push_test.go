@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -539,11 +540,23 @@ func tryGit(dir string, args ...string) (string, error) {
 }
 
 // boundedPush is a git push a test bounds, for a test whose regression would
-// be a push that never returns rather than one that fails. A push still
-// running at its bound is given up on (giveUp) rather than only killed,
-// because killing git push alone leaves the receive command and the hooks it
-// started running past the test, and says nothing about what they were
-// doing.
+// be a push that never returns rather than one that fails.
+//
+// Its invariant, which everything else about the push's cleanup answers to:
+// when the test that started the push ends, every process of the push that
+// giving up finds (giveUp) has been ended and read as gone, and the push's
+// output has reached its end, which it does only once no process holds it;
+// otherwise the test fails, naming what still runs, what could not be read,
+// or that the output is still held. endWithTest holds it, and
+// startBoundedPush registers that as the test's cleanup, so it runs however
+// the test ends: with git push waited for, whatever the wait answered; with
+// the push given up on at a bound (within) or by the test; with git push
+// still running when the test returns or fails; and when the test panics,
+// since testing runs a test's cleanups before it reports a panic. That git
+// push has been waited for is never a reason to skip it, since what git push
+// started can outlive git push. What giving up finds, and what it cannot,
+// is pushRecord's to say; a test binary killed outright runs no cleanup at
+// all, which leaves the package's owner check and CI's leak check.
 type boundedPush struct {
 	// h is the home whose gate the push is into.
 	h   *home.Home
@@ -553,64 +566,114 @@ type boundedPush struct {
 	// what the wait answered.
 	done chan struct{}
 	err  error
+	// ended is closed once the push's output has stopped arriving, and
+	// readErr is then why when that was not its end: a failed read.
+	ended   chan struct{}
+	readErr error
 }
 
+// heldOutputGrace is how long a push's output is given to reach its end once
+// git push has ended, or once giving up has ended what it found of the push,
+// before a process the push started is taken to be holding it.
+const heldOutputGrace = 5 * time.Second
+
 // startBoundedPush starts cmd, a git push into h's gate built with gitCmd
-// and a context that never ends, and not yet started. cue, when not empty,
-// is text whose arrival in git's output closes the output's cued. A push
-// still running when the test ends is given up on then.
+// and a context that never ends, and not yet started, and registers
+// endWithTest as the test's cleanup. cue, when not empty, is text whose
+// arrival in git's output closes the output's cued.
+//
+// git push starts leading a process group of its own (inOwnGroup), so what
+// it starts and does not move to another group stays in that group once git
+// push has ended, which is where giving up finds it. Its output goes to a
+// pipe this test owns rather than to one exec.Cmd makes and closes on its
+// own once git push has ended, so the pipe's end says that no process of
+// the push still holds it.
 func startBoundedPush(t *testing.T, h *home.Home, cue string, cmd *exec.Cmd) *boundedPush {
 	t.Helper()
 	out := &pushOutput{cue: cue, cued: make(chan struct{})}
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Start(); err != nil {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("making the pipe git's output goes to: %v", err)
+	}
+	cmd.Stdout, cmd.Stderr = writer, writer
+	inOwnGroup(cmd)
+	err = cmd.Start()
+	_ = writer.Close()
+	if err != nil {
+		_ = reader.Close()
 		t.Fatalf("starting %s: %v", strings.Join(cmd.Args, " "), err)
 	}
-	p := &boundedPush{h: h, cmd: cmd, out: out, done: make(chan struct{})}
+	p := &boundedPush{h: h, cmd: cmd, out: out, done: make(chan struct{}), ended: make(chan struct{})}
+	go func() {
+		_, p.readErr = io.Copy(out, reader)
+		_ = reader.Close()
+		close(p.ended)
+	}()
 	go func() {
 		p.err = cmd.Wait()
 		close(p.done)
 	}()
-	t.Cleanup(func() {
-		select {
-		case <-p.done:
-		default:
-			if gave := p.giveUp(); gave.notEnded != nil {
-				t.Errorf("the push was still running when the test ended, and giving up on it did not end it: %v\n%s",
-					gave.notEnded, gave.said)
-			}
-		}
-	})
+	t.Cleanup(func() { p.endWithTest(t, p.giveUp()) })
 	return p
 }
 
-// gaveUp is what giving up on a push found.
+// endWithTest holds boundedPush's invariant for tb's test with gave, the pass
+// of giving up made as the test ends: a verdict that the push is not shown
+// ended fails the test, naming what is left and with what git wrote, and a
+// pass that found any of the push says in the test's log what it ended.
+func (p *boundedPush) endWithTest(tb testing.TB, gave gaveUp) {
+	tb.Helper()
+	switch {
+	case gave.notEnded != nil:
+		tb.Errorf("when the test ended, giving up on its push did not show the push ended: %v\n%s\ngit's output:\n%s",
+			gave.notEnded, gave.said, p.out.String())
+	case gave.found:
+		tb.Logf("when the test ended, giving up on its push ended what it found of it:\n%s", gave.said)
+	}
+}
+
+// gaveUp is what one pass of giving up on a push found.
 type gaveUp struct {
 	// said is what the push was doing when it was given up on, for a
 	// failure.
 	said string
-	// notEnded is nil only when giving up read the whole of the push and
-	// none of what it read still runs: every reading of it succeeded, and
-	// every process any of them attributed to the push reads as gone once
-	// the push was ended. Otherwise it names what still runs, what could not
-	// be read, or both, so a cleanup that could not read the push is never
-	// taken for one that left nothing.
+	// notEnded is nil only when the pass read the whole of the push, none of
+	// what it read still runs, and the push's output reached its end: every
+	// reading of the pass succeeded, every process giving up has attributed
+	// to the push reads as gone once the push was ended, and nothing holds
+	// the push's output. Otherwise it names what still runs, what could not
+	// be read, that the output is held, or more than one, so a cleanup that
+	// could not read the push is never taken for one that left nothing.
 	notEnded error
+	// found is whether the pass's readings attributed any process to the
+	// push.
+	found bool
 }
 
-// within waits up to bound for the push to end and returns git's output and
-// what git answered. A push still running at the bound is given up on, and
-// the error then carries what giveUp found.
+// within waits up to bound for git push to end, and then up to
+// heldOutputGrace for its output to, and returns git's output and what git
+// answered. A push still running at the bound, or whose output something
+// else still held, is given up on, and the error then carries what giving up
+// found. The output is read after giving up, so it is the push's final
+// output, with what giving up had the push's processes write, such as the
+// stacks SIGQUIT has the receive command write. Whatever within answers,
+// the test's cleanup gives up on the push once more (endWithTest).
 func (p *boundedPush) within(bound time.Duration) (string, error) {
 	select {
 	case <-p.done:
-		return p.out.String(), p.err
 	case <-time.After(bound):
+		gave := p.giveUp()
+		return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s",
+			bound, gave.said)
 	}
-	// said carries the verdict on ending the push as well, since the push
-	// is a failure here either way.
-	return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s",
-		bound, p.giveUp().said)
+	select {
+	case <-p.ended:
+		return p.out.String(), p.err
+	case <-time.After(heldOutputGrace):
+	}
+	gave := p.giveUp()
+	return p.out.String(), fmt.Errorf("git push ended (%v), and something it started still held its output %s later, so "+
+		"the push was given up on:\n%s", p.err, heldOutputGrace, gave.said)
 }
 
 // pushOutput is a push's standard output and standard error as one buffer,

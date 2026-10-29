@@ -29,33 +29,45 @@ import (
 
 // pushRecord is everything giving up on a push has learned of it (giveUp):
 // every process a reading attributed to the push, every process group one
-// of those led when it was read, and every read that failed. Its invariant
-// is that it only grows. A reading adds every process it attributed and
-// every group it found one of them leading, whether or not another of its
-// reads failed, and nothing any reading answers removes anything. Giving up
-// ends what the record holds and takes its verdict (verdict) on what the
-// record holds, so a process one reading found is ended and checked even
-// when no later reading can find it, as none can once its parent has ended
-// and its group was never recorded.
+// of those led when it was read, and every read that failed. One pass of
+// giving up keeps one record, and its invariant is that it only grows. A
+// reading adds every process it attributed and every group it found one of
+// them leading, whether or not another of its reads failed, and nothing any
+// reading answers removes anything. Giving up ends what the record holds and
+// takes its verdict (verdict) on what the record holds, so a process one
+// reading found is ended and checked even when no later reading can find
+// it, as none can once its parent has ended and its group was never
+// recorded.
 //
 // A reading (read) lists the process table once and attributes a process
 // to the push by what the record holds and where the kernel records the
 // process, never by its arguments: the record holds it already, or its
 // parent is git push while git push is held (rootHeld) or is a process the
 // same reading attributes, or it is in a group the record holds other than
-// this process's own, which git push was started in. Every git the push
-// runs is started through procgroup.Run in a group it leads, and git runs
-// the hooks in receive-pack's, so a process that has lost its parent is
-// still found through its group once a reading has recorded that group.
+// this process's own. The record starts holding git push's own group, which
+// git push leads (inOwnGroup), so what git push started and did not move to
+// a group of its own is found there after git push has ended, whatever its
+// parent is by then. Every git the push runs is started through
+// procgroup.Run in a group it leads, and git runs the hooks in
+// receive-pack's, so a process that has lost its parent is still found
+// through its group once a reading has recorded that group. git push itself
+// is never one of the processes: it is ended through its own exec.Cmd.
 //
-// What no reading attributes, and so nothing here ends or checks: a process
-// started after the last reading that could place it, in a group no reading
-// recorded, whose parent had ended by the next reading. Giving up makes that
-// case itself when a recorded process starts one in a group of its own after
-// the last reading before the end, since the end then ends its parent. A
-// process number given to another process while giving up runs is read as
-// that other process, and a group number so given is read as the push's,
-// the coincidence agents.ForceGroup names.
+// What no reading attributes, and so nothing here ends: a process started
+// after the last reading that could place it, either in a group or session
+// of its own, whose parent had ended by the next reading, or after the
+// pass's last reading, which only a process of the push still running then
+// can start, and that process fails the verdict unless it exits before its
+// presence is read. Giving up makes the first case itself when a recorded
+// process starts one in a group of its own after the last reading before
+// the end, since the end then ends its parent. Either kind that holds the
+// push's output still fails the verdict, as one that keeps the output from
+// reaching its end (giveUp), and once the output has reached its end no
+// process holds it, since a process holds it only by having it from one
+// that did; one that holds no copy of it is not seen at all. A process
+// number given to another process while giving up runs is read as that
+// other process, and a group number so given is read as the push's, the
+// coincidence agents.ForceGroup names.
 type pushRecord struct {
 	reads table
 	// root is git push. rootHeld is whether it has not been waited for,
@@ -65,8 +77,8 @@ type pushRecord struct {
 	// processes is every process a reading attributed to the push, in the
 	// order first found.
 	processes []recorded
-	// groups is every process group a recorded process led when it was
-	// read.
+	// groups is git push's own group and every process group a recorded
+	// process led when it was read.
 	groups map[int]bool
 	// failed is every read that failed, each naming the reading that made
 	// it, and the stop of git push when it failed other than by git push
@@ -84,16 +96,33 @@ type recorded struct {
 	reached bool
 }
 
-// newPushRecord is an empty record of push, read through reads, with git
-// push held until the push has been waited for.
+// newPushRecord is a record of push for a new pass, read through reads, that
+// holds git push's own group and nothing else yet, with git push held until
+// the push has been waited for.
 func newPushRecord(reads table, push *boundedPush) *pushRecord {
-	r := &pushRecord{reads: reads, root: push.cmd.Process.Pid, groups: map[int]bool{}}
+	root := push.cmd.Process.Pid
+	r := &pushRecord{reads: reads, root: root, groups: map[int]bool{root: true}}
 	select {
 	case <-push.done:
 	default:
 		r.rootHeld = true
 	}
 	return r
+}
+
+// inOwnGroup has cmd, a git push not yet started, start leading a process
+// group of its own, which pushRecord starts from. The gate still places such
+// a push as a person's: placement walks the push's whole chain of parents,
+// and this test binary, on it, is in its terminal's foreground
+// (standin.AtTerminal). The gate refuses a push it places as nobody's
+// (internal/service's admitPusher), and
+// TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage's push, made this
+// way, is admitted and starts a run.
+func inOwnGroup(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
 }
 
 // table is the two reads of the process table a reading makes: the listing,
@@ -139,7 +168,7 @@ func (r *pushRecord) read(when string) []recorded {
 		grew = false
 		for _, proc := range listed {
 			l, ok := placed[proc.PID]
-			if !ok || in[proc.PID] {
+			if !ok || in[proc.PID] || proc.PID == r.root {
 				continue
 			}
 			held := r.holds(proc.Identity)
@@ -260,14 +289,16 @@ func (r *pushRecord) verdict() error {
 }
 
 // notEnded is a verdict that a push is not shown ended: what of it still
-// runs, and everything that kept giving up from reading the whole of it.
-// Either alone is enough.
+// runs, everything that kept giving up from reading the whole of it, and why
+// its output did not reach its end. Any one alone is enough.
 type notEnded struct {
 	running []standin.Process
 	failed  []error
+	output  error
 }
 
-// Error names what still runs and everything that failed.
+// Error names what still runs, everything that failed, and why the output
+// did not reach its end.
 func (n *notEnded) Error() string {
 	var parts []string
 	if len(n.running) > 0 {
@@ -277,48 +308,85 @@ func (n *notEnded) Error() string {
 		parts = append(parts, fmt.Sprintf("giving up could not read the whole of the push, so it is not shown ended: %v",
 			errors.Join(n.failed...)))
 	}
+	if n.output != nil {
+		parts = append(parts, n.output.Error())
+	}
 	return strings.Join(parts, "; ")
 }
 
-// Unwrap is everything that failed.
-func (n *notEnded) Unwrap() []error { return n.failed }
+// Unwrap is everything that failed, and why the output did not reach its
+// end.
+func (n *notEnded) Unwrap() []error {
+	if n.output == nil {
+		return n.failed
+	}
+	return append(slices.Clone(n.failed), n.output)
+}
+
+// withOutput is verdict, a record's, with output added, why the push's
+// output did not reach its end: nil only when both are.
+func withOutput(verdict, output error) error {
+	if output == nil {
+		return verdict
+	}
+	var left *notEnded
+	if !errors.As(verdict, &left) {
+		left = &notEnded{}
+	}
+	left.output = output
+	return left
+}
 
 // stillRunningAfterGivingUp opens the part of a verdict naming what of a
 // push giving up could not end.
 const stillRunningAfterGivingUp = "still running after the push was ended:"
 
-// giveUp ends a push still running at its bound, and returns what it found,
-// for the failure, with its verdict on whether the push ended.
+// errOutputHeld is the verdict's part saying the push's output never reached
+// its end, so a process the push started still holds it.
+var errOutputHeld = errors.New("the push's output had not reached its end once git push and everything giving up " +
+	"found of the push were ended, so a process the push started still holds it")
+
+// giveUp is one pass of giving up on the push: it ends every process of the
+// push it finds, and returns what it found, for a failure, with its verdict
+// on whether the push ended, which boundedPush's invariant is held to. It is
+// the only way anything of a push is ended, and a push is given up on at
+// least once, by its test's cleanup (endWithTest), and again whenever a test
+// or within gives up on it first.
 //
-// What it found is which of the push's processes had started, what the
-// kernel said of each, and that this binary's were asked for their
-// goroutine stacks. Those stacks are why it does not just kill git. Each of
-// the push's processes that is this binary is sent SIGQUIT first, the hooks
-// before the receive command, so the Go runtime writes every goroutine's
-// stack to its standard error and exits. The receive command's standard
-// error is git push's own, so its stacks reach the push's output directly,
-// and a receive command listed with no stacks there never reached Go code or
-// did not take the signal, which tells a stalled launch from a stalled
-// receive. A hook's standard error is receive-pack's to relay, so this does
-// not undertake that a hook's stacks reach the output; the listing names the
-// hook either way.
+// While git push still runs, the pass first finds out what the push was
+// doing: which of its processes had started, what the kernel said of each,
+// and that this binary's were asked for their goroutine stacks. Those stacks
+// are why it does not just kill git. Each of the push's processes that is
+// this binary is sent SIGQUIT first, the hooks before the receive command,
+// so the Go runtime writes every goroutine's stack to its standard error and
+// exits. The receive command's standard error is git push's own, so its
+// stacks reach the push's output directly, and a receive command listed with
+// no stacks there never reached Go code or did not take the signal, which
+// tells a stalled launch from a stalled receive. A hook's standard error is
+// receive-pack's to relay, so this does not undertake that a hook's stacks
+// reach the output; the listing names the hook either way. Then git push is
+// stopped, as journey's endTree stops the service before it lists what the
+// service started, so the reading that follows and the end find git push as
+// it was stopped, still the parent of what it started. A stop that fails
+// other than by git push having ended is a failure of the record's, as a
+// failed read is. Once git push has been waited for, none of that applies:
+// the pass reads what is left in git push's group, and under it.
 //
-// Everything it learns of the push goes into one pushRecord, which only
-// grows, from three readings: the first, when the push is given up on, which
-// the signals are chosen from; the second, after the signals, once git push
-// has been stopped, as journey's endTree stops the service before it lists
-// what the service started, so the second reading and the end find git push
-// as it was stopped, still the parent of what it started; and the third,
-// after the end has ended everything the record holds and git push has been
-// killed and waited for. A stop that fails other than by git push having
-// ended is a failure of the record's, as a failed read is. The verdict,
-// gaveUp.notEnded, is the record's (pushRecord.verdict), taken after the
-// third reading: nil only when every read of all three, and the stop,
-// succeeded and nothing the record holds still runs. What
-// the third reading found is ended once the verdict is taken, so it does not
-// outlive the test, and it leaves the verdict as it was. A git push that has
-// ended by itself before it could be stopped leaves what it started after
-// the first reading, in this process's group, to the gap pushRecord names.
+// Everything a pass learns goes into one pushRecord, which starts holding
+// git push's own group (newPushRecord), from its readings: when the push
+// is given up on, while git push runs, which the signals are chosen from;
+// after the signals, or once git push had ended; and after the end has ended
+// everything the record holds and git push has been killed and waited for.
+// Between the end and that last reading, the push's output is given
+// heldOutputGrace to reach its end, which it reaches only once nothing holds
+// it. The verdict, gaveUp.notEnded, is the record's (pushRecord.verdict) with
+// the output's end (withOutput), taken after the last reading: nil only when
+// every read of the pass, and the stop, succeeded, nothing the record holds
+// still runs, and the output reached its end. What the last reading found is
+// ended once the verdict is taken, so it does not outlive the test, and it
+// leaves the verdict as it was. A git push that has ended by itself before it
+// could be stopped leaves what it started that left its group to the gap
+// pushRecord names.
 func (p *boundedPush) giveUp() gaveUp { return p.giveUpReading(kernelTable) }
 
 // giveUpReading is giveUp with every reading of the process table made
@@ -326,12 +394,18 @@ func (p *boundedPush) giveUp() gaveUp { return p.giveUpReading(kernelTable) }
 func (p *boundedPush) giveUpReading(reads table) gaveUp {
 	var said strings.Builder
 	rec := newPushRecord(reads, p)
-	reading := func(when string) []recorded {
+	found := false
+	reading := func(when, heading string) []recorded {
 		before := len(rec.failed)
 		added := rec.read(when)
 		for _, err := range rec.failed[before:] {
 			fmt.Fprintf(&said, "%v\n", err)
 		}
+		if len(added) > 0 && heading != "" {
+			said.WriteString(heading + "\n")
+			describe(&said, added)
+		}
+		found = found || len(added) > 0
 		return added
 	}
 	ending := func() {
@@ -339,12 +413,37 @@ func (p *boundedPush) giveUpReading(reads table) gaveUp {
 			fmt.Fprintf(&said, "%s\n", line)
 		}
 	}
+
+	if rec.rootHeld {
+		p.signal(rec, &said, reading("the reading when the push was given up on", ""))
+		reading("the reading after the signals", "Found after the signals, and not before them:")
+	} else {
+		fmt.Fprintf(&said, "git push, process %d, had ended (%v) before the push was given up on.\n", rec.root, p.err)
+		reading("the reading once git push had ended", "Found once git push had ended:")
+	}
+	ending()
+	_ = p.cmd.Process.Kill()
+	<-p.done
+	rec.rootHeld = false
+	output := p.outputEnd()
+	reading("the reading after the push was ended", "Found after the push was ended:")
+	verdict := withOutput(rec.verdict(), output)
+	ending()
+	if verdict != nil {
+		fmt.Fprintf(&said, "%v\n", verdict)
+	}
+	return gaveUp{said: said.String(), notEnded: verdict, found: found}
+}
+
+// signal is the part of giving up made only while git push still runs: from
+// first, the first reading's processes, it writes to said what had started,
+// sends this binary's processes among them SIGQUIT (giveUp), gives git push
+// standin.EndGrace to end, and stops it.
+func (p *boundedPush) signal(rec *pushRecord, said *strings.Builder, first []recorded) {
 	self, err := os.Executable()
 	if err != nil {
-		fmt.Fprintf(&said, "resolving this binary: %v\n", err)
+		fmt.Fprintf(said, "resolving this binary: %v\n", err)
 	}
-
-	first := reading("the reading when the push was given up on")
 	var receivers, hooks []standin.Process
 	receivePack, others := false, 0
 	for _, proc := range first {
@@ -359,19 +458,19 @@ func (p *boundedPush) giveUpReading(reads table) gaveUp {
 			others++
 		}
 	}
-	fmt.Fprintf(&said, "git push was process %d. When it was given up on, the gate's receive command had started: %t; "+
+	fmt.Fprintf(said, "git push was process %d. When it was given up on, the gate's receive command had started: %t; "+
 		"git receive-pack had started: %t; gate hooks running: %d; other processes it had started: %d.\n",
 		rec.root, len(receivers) > 0, receivePack, len(hooks), others)
-	describe(&said, first)
+	describe(said, first)
 	said.WriteString(psLines(append([]int{rec.root}, pids(first)...)))
 
-	quit(&said, hooks)
+	quit(said, hooks)
 	for _, proc := range hooks {
 		proc.GoneWithin(standin.EndGrace)
 	}
-	quit(&said, receivers)
+	quit(said, receivers)
 	if len(receivers)+len(hooks) > 0 {
-		fmt.Fprintf(&said, "Each of this binary's processes above was sent SIGQUIT. A receive command's goroutine "+
+		fmt.Fprintf(said, "Each of this binary's processes above was sent SIGQUIT. A receive command's goroutine "+
 			"stacks are in git's output; one listed with no stacks there never reached Go code or did not take "+
 			"the signal.\n")
 	}
@@ -383,29 +482,26 @@ func (p *boundedPush) giveUpReading(reads table) gaveUp {
 	switch err := p.cmd.Process.Signal(syscall.SIGSTOP); {
 	case errors.Is(err, os.ErrProcessDone):
 		rec.rootHeld = false
-		fmt.Fprintf(&said, "git push had ended by itself once the signals were sent.\n")
+		fmt.Fprintf(said, "git push had ended by itself once the signals were sent.\n")
 	case err != nil:
 		rec.failed = append(rec.failed, fmt.Errorf("stopping git push, process %d: %w", rec.root, err))
-		fmt.Fprintf(&said, "%v\n", rec.failed[len(rec.failed)-1])
+		fmt.Fprintf(said, "%v\n", rec.failed[len(rec.failed)-1])
 	}
-	if again := reading("the reading after the signals"); len(again) > 0 {
-		said.WriteString("Found after the signals, and not before them:\n")
-		describe(&said, again)
+}
+
+// outputEnd waits up to heldOutputGrace for the push's output to reach its
+// end, and answers nil when it did, errOutputHeld when it had not by then,
+// and the failed read when its end was never read.
+func (p *boundedPush) outputEnd() error {
+	select {
+	case <-p.ended:
+		if p.readErr != nil {
+			return fmt.Errorf("reading the push's output failed, so its end was never read: %w", p.readErr)
+		}
+		return nil
+	case <-time.After(heldOutputGrace):
+		return fmt.Errorf("%w (given %s)", errOutputHeld, heldOutputGrace)
 	}
-	ending()
-	_ = p.cmd.Process.Kill()
-	<-p.done
-	rec.rootHeld = false
-	if after := reading("the reading after the push was ended"); len(after) > 0 {
-		said.WriteString("Found after the push was ended:\n")
-		describe(&said, after)
-	}
-	notEnded := rec.verdict()
-	ending()
-	if notEnded != nil {
-		fmt.Fprintf(&said, "%v\n", notEnded)
-	}
-	return gaveUp{said: said.String(), notEnded: notEnded}
 }
 
 // quit sends each of ps SIGQUIT once its identity still names the running
@@ -1117,5 +1213,325 @@ func TestAReadingOfAPushCountsEveryProcessItsRecordHolds(t *testing.T) {
 	if len(with.failed) > 0 || !with.holds(child) {
 		t.Fatalf("a record holding the shell, process %d, did not count its child, process %d, as the push's: "+
 			"%v (%v)", held.PID, child.PID, with.held(), errors.Join(with.failed...))
+	}
+}
+
+// A push that ends while a process it started runs on has that process ended
+// with the test that pushed (review round 4): waiting for git push is no
+// reason to skip giving up. The subject's pre-push hook starts a sleep in
+// the background and refuses the push, so git push ends with the sleep still
+// running, in git push's group, holding git's output, the case the review
+// reproduced, or with its output sent elsewhere. The push runs in a subtest,
+// so its cleanup has run when the subtest returns; the positive control is
+// that the sleep is running once git push has ended, inside it.
+func TestAPushThatEndsLeavingAProcessRunningHasItEndedWithItsTest(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ name, redirect string }{
+		{name: "holding git's output"},
+		{name: "with its output elsewhere", redirect: " >/dev/null 2>&1"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			var left agents.Identity
+			t.Cleanup(func() {
+				if left.PID != 0 {
+					standin.Process{Identity: left}.End()
+				}
+			})
+			passed := t.Run("push", func(t *testing.T) {
+				h := newHome(t)
+				subject := newSubject(t)
+				initializeGate(t, h, subject)
+				git(t, subject, "checkout", "--quiet", "-b", "work")
+				commitOn(t, subject, "work", "work.txt", "a change\n")
+				fifo := filepath.Join(t.TempDir(), "left")
+				reported := reportedOn(t, fifo)
+				prePushLeaving(t, subject, "sleep 600"+c.redirect+" &\necho $! >"+shellWord(fifo))
+				push := startBoundedPush(t, h, "", gitCmd(context.Background(), subject, "push", gate.RemoteName, "work"))
+				select {
+				case left = <-reported:
+				case <-time.After(30 * time.Second):
+					t.Fatalf("the pre-push hook never reported the process it left:\n%s", push.out.String())
+				}
+				select {
+				case <-push.done:
+				case <-time.After(30 * time.Second):
+					t.Fatalf("git push did not end once its pre-push hook refused the push:\n%s", push.out.String())
+				}
+				if presence, err := left.Presence(); err != nil || presence != agents.PresencePresent {
+					t.Fatalf("the pre-push hook's sleep, process %d, is not running once git push ended (%v, %v), so "+
+						"this shows nothing", left.PID, presence, err)
+				}
+				t.Logf("git push answered %v", push.err)
+			})
+			if !passed {
+				t.Fatalf("the push's own test failed")
+			}
+			if presence, err := left.Presence(); err != nil || presence != agents.PresencePresent {
+				return
+			}
+			t.Fatalf("the pre-push hook's sleep, process %d, is still running after the test that pushed ended", left.PID)
+		})
+	}
+}
+
+// within, given up on at its bound, returns the push's output as it stands
+// once giving up is over (review round 4): the receive command's stacks,
+// which SIGQUIT has it write while giving up runs, are in it.
+func TestAPushStillRunningAtItsBoundReturnsItsOutputAfterGivingUp(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	_, repository := initializeGate(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "a change\n")
+	lock, err := gate.LockCopies(t.Context(), repository)
+	if err != nil {
+		t.Fatalf("holding the gate's copies lock as a cut does: %v", err)
+	}
+	defer func() { _ = lock.Release() }()
+	push := startBoundedPush(t, h, machine.PhraseCopyBusy.Outcome,
+		gitCmd(context.Background(), subject, "push", gate.RemoteName, "work"))
+	select {
+	case <-push.out.cued:
+	case <-push.done:
+		t.Fatalf("the push ended (%v) without waiting for the held copies lock:\n%s", push.err, push.out.String())
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the push's receive command never said it was waiting:\n%s", push.out.String())
+	}
+	out, err := push.within(time.Millisecond)
+	if err == nil {
+		t.Fatalf("a push held on the copies lock ended within its bound:\n%s", out)
+	}
+	if !strings.Contains(out, "goroutine ") || !strings.Contains(out, "gate.AwaitCopies") {
+		t.Fatalf("the output within returned lacks the receive command's stacks, which name its wait for the "+
+			"copies lock:\n%s\nthe push's output now:\n%s", out, push.out.String())
+	}
+}
+
+// leaverVar, set in the environment of this binary started with no argument,
+// makes that process the leaver (leaverMain), with the FIFO its child
+// reports on as its value.
+const leaverVar = "ASSISTANT_CLI_TEST_LEAVER"
+
+// leaverMain makes this process the leaver when it was started as one, and
+// returns otherwise. The leaver starts a shell in a process group of its own,
+// with the leaver's standard output and standard error, that writes its
+// process identifier to the FIFO leaverVar names and becomes a sleep, and
+// exits without waiting for it. Run from a push's hook, that child is a
+// process the push started that left git push's group and whose parent is
+// gone before any reading, so no reading finds it (pushRecord's gap), and
+// that holds the push's output, which is how giving up still sees it.
+func leaverMain() {
+	fifo := os.Getenv(leaverVar)
+	if fifo == "" || len(os.Args) != 1 {
+		return
+	}
+	child := exec.Command("/bin/sh", "-c", "echo $$ >"+shellWord(fifo)+"; exec sleep 600")
+	child.Stdout, child.Stderr = os.Stdout, os.Stderr
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := child.Start(); err != nil {
+		fmt.Fprintln(os.Stderr, "the leaver's child:", err)
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+// prePushLeaving makes subject's pre-push hook run body and then refuse the
+// push, so git push ends having started whatever body leaves running. body
+// is shell text, and reports the identifier of what it leaves on fifo.
+func prePushLeaving(t *testing.T, subject, body string) {
+	t.Helper()
+	script := "#!/bin/sh\n" + body + "\nexit 1\n"
+	if err := procgroup.WriteProgram(filepath.Join(subject, ".git", "hooks", "pre-push"), []byte(script), 0o755); err != nil {
+		t.Fatalf("writing the pre-push hook: %v", err)
+	}
+}
+
+// A push whose output a process holds that no reading finds is not shown
+// ended (review round 4). The pre-push hook runs the leaver, whose child
+// left git push's group and lost its parent before any reading, so giving
+// up, once git push has ended, finds none of it; the child holds git's
+// output, so the output never reaches its end, and the verdict says so
+// rather than passing. The positive control is the same check once the child
+// is ended: the output then reaches its end and the verdict passes.
+func TestAPushWhoseOutputAProcessNoReadingFindsHoldsIsNotShownEnded(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	initializeGate(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "a change\n")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolving this binary: %v", err)
+	}
+	fifo := filepath.Join(t.TempDir(), "left")
+	reported := reportedOn(t, fifo)
+	prePushLeaving(t, subject, leaverVar+"="+shellWord(fifo)+"\nexport "+leaverVar+"\n"+shellWord(self))
+
+	push := startBoundedPush(t, h, "", gitCmd(context.Background(), subject, "push", gate.RemoteName, "work"))
+	var left agents.Identity
+	select {
+	case left = <-reported:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the leaver's child never reported:\n%s", push.out.String())
+	}
+	kept := standin.Process{Identity: left}
+	t.Cleanup(func() { kept.End() })
+	select {
+	case <-push.done:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("git push did not end once its pre-push hook refused the push:\n%s", push.out.String())
+	}
+
+	gave := push.giveUp()
+	if presence, err := left.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the leaver's child, process %d, is not running after giving up (%v, %v), so this shows nothing:\n%s",
+			left.PID, presence, err, gave.said)
+	}
+	var verdict *notEnded
+	if !errors.As(gave.notEnded, &verdict) || !errors.Is(gave.notEnded, errOutputHeld) {
+		t.Fatalf("a process holding the push's output still runs, and the verdict is %v:\n%s", gave.notEnded, gave.said)
+	}
+	if slices.ContainsFunc(verdict.running, isProcess(left)) {
+		t.Fatalf("giving up found the leaver's child, process %d, so this does not show the output's end is what "+
+			"fails the verdict:\n%s", left.PID, gave.said)
+	}
+	kept.End()
+	if gave := push.giveUp(); gave.notEnded != nil {
+		t.Fatalf("once nothing held the push's output, giving up still answered %v:\n%s", gave.notEnded, gave.said)
+	}
+}
+
+// within, once git push has ended with something it started still holding
+// its output, gives the push up rather than answering as if it had ended
+// (review round 4): the pre-push hook's sleep holds git's output, within
+// names it in its error, and it is gone once within has answered.
+func TestAPushWhoseOutputOutlivesGitIsGivenUpOnByWithin(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	initializeGate(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "a change\n")
+	fifo := filepath.Join(t.TempDir(), "left")
+	reported := reportedOn(t, fifo)
+	prePushLeaving(t, subject, "sleep 600 &\necho $! >"+shellWord(fifo))
+
+	push := startBoundedPush(t, h, "", gitCmd(context.Background(), subject, "push", gate.RemoteName, "work"))
+	var left agents.Identity
+	select {
+	case left = <-reported:
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the pre-push hook never reported the process it left:\n%s", push.out.String())
+	}
+	t.Cleanup(func() { standin.Process{Identity: left}.End() })
+	out, err := push.within(30 * time.Second)
+	if err == nil || !strings.Contains(err.Error(), "still held its output") {
+		t.Fatalf("git push ended with its pre-push hook's sleep holding its output, and within answered %v:\n%s", err, out)
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("  process %d (parent ", left.PID)) {
+		t.Fatalf("within's answer does not name the sleep, process %d, that held the output:\n%v", left.PID, err)
+	}
+	if presence, err := left.Presence(); err != nil || presence == agents.PresencePresent {
+		t.Fatalf("the sleep, process %d, is %v (%v) once within has given the push up", left.PID, presence, err)
+	}
+}
+
+// A push still running when its test ends is given up on then, and what it
+// started ends with the test (review round 4). The push runs in a subtest
+// that returns while the receive command's rev-parse is parked; the positive
+// control is that the verdict sees the parked rev-parse running inside the
+// subtest (seesRunning).
+func TestAPushStillRunningWhenItsTestEndsIsEndedWithIt(t *testing.T) {
+	t.Parallel()
+	var held agents.Identity
+	t.Cleanup(func() {
+		if held.PID != 0 {
+			standin.Process{Identity: held}.End()
+		}
+	})
+	if !t.Run("push", func(t *testing.T) {
+		h := newHome(t)
+		subject := newSubject(t)
+		initializeGate(t, h, subject)
+		git(t, subject, "checkout", "--quiet", "-b", "work")
+		commitOn(t, subject, "work", "work.txt", "a change\n")
+		execPath, parked := parkGitAt(t, "--is-bare-repository")
+		cmd := gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")
+		cmd.Env = append(cmd.Env, "GIT_EXEC_PATH="+execPath)
+		push := startBoundedPush(t, h, "", cmd)
+		select {
+		case held = <-parked:
+		case <-push.done:
+			t.Fatalf("the push ended (%v) without reaching the parked rev-parse:\n%s", push.err, push.out.String())
+		case <-time.After(30 * time.Second):
+			t.Fatalf("the receive command's rev-parse never parked:\n%s", push.out.String())
+		}
+		seesRunning(t, push, "the parked rev-parse", isProcess(held))
+	}) {
+		t.Fatalf("the push's own test failed")
+	}
+	if presence, err := held.Presence(); err != nil || presence == agents.PresencePresent {
+		t.Fatalf("the parked rev-parse, process %d, is %v (%v) after the test that pushed ended", held.PID, presence, err)
+	}
+}
+
+// errorsOf is a testing.TB that records the errors a test would fail with,
+// and passes everything else to the test it wraps.
+type errorsOf struct {
+	testing.TB
+	errors []string
+}
+
+func (e *errorsOf) Errorf(format string, args ...any) {
+	e.errors = append(e.errors, fmt.Sprintf(format, args...))
+}
+
+func (e *errorsOf) Helper() {}
+
+// endWithTest fails the test whose push a pass of giving up did not show
+// ended, and leaves alone one whose push it did (review round 4). The
+// receive command's rev-parse is parked, and a pass that can list nothing
+// gives the verdict that fails the test. The positive control is the pass
+// after it, which reads: it finds the receive command in git push's group and
+// the rev-parse under it, ends both, and fails nothing.
+func TestTheEndOfAPushsTestFailsItOnlyWhenThePushIsNotShownEnded(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	initializeGate(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "a change\n")
+	execPath, parked := parkGitAt(t, "--is-bare-repository")
+	cmd := gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")
+	cmd.Env = append(cmd.Env, "GIT_EXEC_PATH="+execPath)
+	push := startBoundedPush(t, h, "", cmd)
+	var stalled agents.Identity
+	select {
+	case stalled = <-parked:
+	case <-push.done:
+		t.Fatalf("the push ended (%v) without reaching the parked rev-parse:\n%s", push.err, push.out.String())
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the receive command's rev-parse never parked:\n%s", push.out.String())
+	}
+	t.Cleanup(func() { standin.Process{Identity: stalled}.End() })
+	unlisted := table{lineage: agents.ReadLineage, list: func(func([]string) bool) ([]standin.Process, error) {
+		return nil, errors.New("the process table did not settle (injected)")
+	}}
+
+	failing := &errorsOf{TB: t}
+	push.endWithTest(failing, push.giveUpReading(unlisted))
+	if len(failing.errors) != 1 {
+		t.Fatalf("a pass that could list nothing failed the test %d times, want once: %q", len(failing.errors), failing.errors)
+	}
+	passing := &errorsOf{TB: t}
+	push.endWithTest(passing, push.giveUp())
+	if len(passing.errors) != 0 {
+		t.Fatalf("a pass that read the push and ended it failed the test: %q", passing.errors)
+	}
+	if presence, err := stalled.Presence(); err != nil || presence == agents.PresencePresent {
+		t.Fatalf("the parked rev-parse, process %d, is %v (%v) after the second pass", stalled.PID, presence, err)
 	}
 }
