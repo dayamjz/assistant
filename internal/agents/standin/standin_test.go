@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -44,6 +45,23 @@ func TestMain(m *testing.M) {
 	if err := SweepTempDirs(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	// Plant a same-binary sibling before RunOwned so a list-only re-exec can
+	// prove the leftover check was skipped: leftAfterTests would name this
+	// child if the check ran (#727, TestTestListArgvMatchesGoParsing).
+	if os.Getenv("STANDIN_LIST_SKIP_PROBE") == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		cmd := exec.Command(exe)
+		cmd.Env = append(os.Environ(), "STANDIN_TEST_HOLD_OPEN=1")
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "CHILD=%d\n", cmd.Process.Pid)
 	}
 	os.Exit(RunOwned(m.Run))
 }

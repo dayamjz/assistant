@@ -384,6 +384,18 @@ func TestEndingWhatKeepsStartingFindsWhatAnExitingChildStarted(t *testing.T) {
 // on -test.list=^Test -test.list= and on -- -test.list=^Test while tests still
 // ran, leaving a child alive (P15). Nested RunOwned deadlocks on ForkLock, so
 // each row re-execs this package binary the way go test starts it.
+//
+// Non-list rows plant a child from the probe body (STANDIN_LIST_ARGV_PROBE)
+// and require CHILD=<pid> plus the leftover check's FAIL naming it: that is
+// the positive control that the check stays on when tests still run.
+//
+// List-only rows plant a same-binary sibling in TestMain before RunOwned
+// (STANDIN_LIST_SKIP_PROBE). Go does not run bodies under a non-empty
+// -test.list, so a body probe cannot observe the skip. Exit 0 with the
+// listed name, CHILD=<pid> printed, and no FAIL naming that child proves
+// the check was skipped: without the skip, leftAfterTests would name the
+// planted sibling and fail the package. An empty successful check is silent,
+// so exit 0 alone is not evidence.
 func TestTestListArgvMatchesGoParsing(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	if os.Getenv("STANDIN_LIST_ARGV_PROBE") == "1" {
@@ -459,10 +471,10 @@ func TestTestListArgvMatchesGoParsing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			cmd := exec.Command(exe, tc.args...)
-			if !tc.listOnly {
-				cmd.Env = append(os.Environ(), "STANDIN_LIST_ARGV_PROBE=1")
+			if tc.listOnly {
+				cmd.Env = append(os.Environ(), "STANDIN_LIST_SKIP_PROBE=1")
 			} else {
-				cmd.Env = os.Environ()
+				cmd.Env = append(os.Environ(), "STANDIN_LIST_ARGV_PROBE=1")
 			}
 			out, err := cmd.CombinedOutput()
 			text := string(out)
@@ -476,14 +488,20 @@ func TestTestListArgvMatchesGoParsing(t *testing.T) {
 				}
 			}
 			if tc.listOnly {
+				// Planted before RunOwned; exit 0 with no FAIL naming it is
+				// the positive control that the list-only skip ran.
+				if child == 0 {
+					t.Fatalf("list-only argv %v: TestMain did not print CHILD=<pid>; plant failed:\n%s", tc.args, text)
+				}
 				if err != nil {
-					t.Fatalf("list-only argv %v: want exit 0, got %v\n%s", tc.args, err, text)
+					t.Fatalf("list-only argv %v: want exit 0 with planted child %d skipped, got %v\n%s", tc.args, child, err, text)
 				}
 				if !strings.Contains(text, "TestTestListArgvMatchesGoParsing") {
 					t.Fatalf("list-only argv %v: want listed test name, got:\n%s", tc.args, text)
 				}
-				if strings.Contains(text, "CHILD=") || strings.Contains(text, "FAIL:") {
-					t.Fatalf("list-only argv %v: leftover check ran or a test body ran:\n%s", tc.args, text)
+				wantFail := fmt.Sprintf("FAIL: process %d (", child)
+				if strings.Contains(text, wantFail) {
+					t.Fatalf("list-only argv %v: leftover check named planted child %d; skip did not run:\n%s", tc.args, child, text)
 				}
 				return
 			}
