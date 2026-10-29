@@ -181,6 +181,59 @@ def _close_discovery_pipes(proc):
             pipe.close()
 
 
+def discovery_error(cmd, *, status, stdout="", stderr="", ended=None, leftover=False, pgid=None):
+    """Every discovery failure message. status is 'timed out after Ns' or
+    'exited N'. Always includes the command, that status, stderr (or stdout
+    if stderr is empty), and when the group had members what end_process_group
+    reported. No raise site formats its own message (#744 round 2)."""
+    detail = (stderr or "").strip() or (stdout or "").strip() or "(no output)"
+    cmd_s = " ".join(map(str, cmd))
+    parts = [f"discovery {status}: {detail}"]
+    if ended is not None:
+        if leftover:
+            parts.append(
+                f"process group {pgid} still had members after the listing {status}; "
+                f"ended them: {ended}"
+            )
+        else:
+            parts.append(f"process group {pgid}: {ended}")
+    parts.append(
+        "A descendant that started a session or group of its own (setsid, setpgid) "
+        f"is outside that group and is not ended: {cmd_s}"
+    )
+    return RuntimeError("; ".join(parts))
+
+
+# While end_process_group runs, termination handlers only record the signal
+# so a SIGTERM during the grace cannot cut cleanup short before SIGKILL (#744).
+_cleanup_depth = 0
+_deferred_signum = None
+
+
+def _termination_handler(signum, _frame):
+    global _deferred_signum
+    if _cleanup_depth > 0:
+        _deferred_signum = signum
+        return
+    raise SystemExit(128 + signum)
+
+
+def _begin_cleanup():
+    global _cleanup_depth
+    _cleanup_depth += 1
+
+
+def _end_cleanup():
+    """Leave cleanup mode and return a signum deferred during it, if any."""
+    global _cleanup_depth, _deferred_signum
+    _cleanup_depth -= 1
+    if _cleanup_depth > 0:
+        return None
+    signum = _deferred_signum
+    _deferred_signum = None
+    return signum
+
+
 def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     """Run cmd (go test -list) as the leader of a new session and process
     group, and answer as subprocess.run does.
@@ -188,16 +241,19 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     subprocess.run's timeout ends only `go`, and the compiler, linker or test
     binary it started runs on (#727). One finally ends go's process group
     (end_process_group) on every exit of this call: success, nonzero status,
-    timeout, and any exception including KeyboardInterrupt and a SIGTERM
-    turned into SystemExit by install_termination_signals. A listing that
-    exits while a member of its group is still running fails after those
-    members are ended, so the leftover is not silent to the later leak-check
+    timeout, and any exception including a SIGINT/SIGTERM turned into
+    SystemExit by install_termination_signals. While that cleanup runs
+    (SIGTERM, grace, SIGKILL, empty check), termination signals are deferred
+    and honored only after the group is ended, so a SIGTERM during the grace
+    cannot leave the listing alive. A listing that exits while a member of
+    its group is still running fails after those members are ended
+    (discovery_error), so the leftover is not silent to the later leak-check
     baseline (P15). That is all it ends: a descendant that started a session
     or group of its own (setsid, setpgid) is outside the group and runs on.
-    SIGKILL of this process runs no finally. Nothing in this repository ends
-    or reports either gap: CI runs discovery only in steps before
-    scripts/ci-test.sh's, outside its Linux PID namespace, and its leak
-    check reports only what is new once its own run has begun.
+    SIGKILL of this process runs no finally and cannot be deferred. Nothing
+    in this repository ends or reports either gap: CI runs discovery only in
+    steps before scripts/ci-test.sh's, outside its Linux PID namespace, and
+    its leak check reports only what is new once its own run has begun.
     discovery_bound(timeout) is the longest this waits on the timeout path.
     """
     proc = subprocess.Popen(
@@ -214,49 +270,66 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     stdout = stderr = ""
     leftover_after_exit = False
     ended = ""
+    deferred = None
     try:
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             timed_out = True
+            if exc.stdout:
+                stdout = exc.stdout
+            if exc.stderr:
+                stderr = exc.stderr
         except BaseException as err:
             pending = err
     finally:
         # Leader already reaped with members still in the group: a leftover
         # after exit. End them here; the raise below fails the listing.
-        leftover_after_exit = proc.returncode is not None and _group_present(proc.pid)
-        ended = end_process_group(proc)
-        _close_discovery_pipes(proc)
+        # Defer SIGINT/SIGTERM until cleanup finishes (#744 round 2).
+        _begin_cleanup()
+        try:
+            leftover_after_exit = proc.returncode is not None and _group_present(proc.pid)
+            ended = end_process_group(proc)
+            _close_discovery_pipes(proc)
+        finally:
+            deferred = _end_cleanup()
+    if deferred is not None:
+        raise SystemExit(128 + deferred)
     if pending is not None:
         raise pending
     if timed_out:
-        raise RuntimeError(
-            f"discovery timed out after {timeout:g}s; process group {proc.pid}: {ended}. "
-            f"A descendant that started a session or group of its own (setsid, setpgid) "
-            f"is outside that group and is not ended: {' '.join(cmd)}"
+        raise discovery_error(
+            cmd,
+            status=f"timed out after {timeout:g}s",
+            stdout=stdout,
+            stderr=stderr,
+            ended=ended,
+            pgid=proc.pid,
         ) from None
     if leftover_after_exit:
-        raise RuntimeError(
-            f"discovery's process group {proc.pid} still had members after the listing "
-            f"exited {proc.returncode}; ended them: {ended}. "
-            f"A descendant that started a session or group of its own (setsid, setpgid) "
-            f"is outside that group and is not ended: {' '.join(cmd)}"
+        raise discovery_error(
+            cmd,
+            status=f"exited {proc.returncode}",
+            stdout=stdout,
+            stderr=stderr,
+            ended=ended,
+            leftover=True,
+            pgid=proc.pid,
         )
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
 
 
-def _sigterm_exits(signum, _frame):
-    raise SystemExit(128 + signum)
-
-
 def install_termination_signals():
-    """Turn SIGTERM into SystemExit so run_discovery's finally ends the group.
+    """Route SIGINT and SIGTERM through _termination_handler.
 
-    Python's default SIGTERM handler exits the process without running
-    finally. SIGINT already raises KeyboardInterrupt. SIGKILL cannot be
-    caught and is a residual gap named on run_discovery.
+    Outside cleanup the handler raises SystemExit so run_discovery's finally
+    still runs (Python's default SIGTERM exits without it). During cleanup
+    the handler only records the signal; run_discovery honors it after the
+    group is ended. SIGKILL cannot be caught and is a residual gap named on
+    run_discovery.
     """
-    signal.signal(signal.SIGTERM, _sigterm_exits)
+    signal.signal(signal.SIGTERM, _termination_handler)
+    signal.signal(signal.SIGINT, _termination_handler)
 
 
 def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=None):
@@ -266,9 +339,9 @@ def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=No
     what stayed in it, not only `go` on a timeout (P15, #727); run_discovery
     says what that leaves. runner is an optional test double that returns a
     CompletedProcess-like object; cwd and env are the listing's directory
-    and environment. On failure the error always includes Go's exit code and
-    stderr (or stdout if stderr is empty), so a CI log names the cause
-    rather than only CalledProcessError (#727).
+    and environment. On failure the error is discovery_error: command, exit
+    status or timed out, stderr (or stdout if stderr is empty), and any
+    process-group cleanup (#744 round 2).
     """
     cmd = ["go", "test", *LIST_FLAGS, "-list", "^Test", package]
     if runner is not None:
@@ -276,13 +349,20 @@ def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=No
     else:
         proc = run_discovery(cmd, timeout=timeout, cwd=cwd, env=env)
     if proc.returncode != 0:
-        detail = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "(no output)"
-        raise RuntimeError(
-            f"{' '.join(cmd)} exited {proc.returncode}: {detail}"
+        raise discovery_error(
+            cmd,
+            status=f"exited {proc.returncode}",
+            stdout=proc.stdout,
+            stderr=proc.stderr,
         )
     names = [line for line in proc.stdout.splitlines() if line.startswith("Test")]
     if not names:
-        raise RuntimeError(f"{' '.join(cmd)} printed no Test names")
+        raise discovery_error(
+            cmd,
+            status="printed no Test names",
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
     return names
 
 
