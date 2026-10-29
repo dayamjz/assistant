@@ -163,12 +163,12 @@ func TestAReportedWorkerAnEarlierServiceLeftIsEndedPastThePromotionWindow(t *tes
 	}
 
 	inv.serve(t, func(running serviceUnderTest) {
-		// The window's own log line is the evidence it ended the survivor.
-		// Waiting for the process to go first also accepts a worker that
-		// exited because the abandoned session's stdin was closed (#732).
-		if presence, err := identity.Presence(); err != nil || presence != agents.PresencePresent {
-			t.Fatalf("the survivor reads %q (%v) as the next service opens, before its promotion window could end it", presence, err)
-		}
+		// The window's own log line is the only success signal that it ended
+		// the survivor. Asserting presence as this callback starts races the
+		// supervisor Open already started: a report past the one-second
+		// window can already be ended by verified identity, which is the
+		// path under test (#732). A survivor gone without that line fails
+		// waitLog below.
 		waitLog(t, inv.home, "by its verified identity")
 		if presence, err := identity.Presence(); err != nil || presence == agents.PresencePresent {
 			t.Fatalf("after the window ended the survivor by its verified identity, it still reads %q (%v)", presence, err)
