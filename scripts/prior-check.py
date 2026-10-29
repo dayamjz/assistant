@@ -15,8 +15,11 @@ the current workflow run.
     --event-name "$EVENT" --ref "$REF" --github-output "$GITHUB_OUTPUT"
 
 Outputs run=true to run the job's steps, or run=false to skip them and
-still report SUCCESS under the expanded check name. Fail closed: any API
-or parse problem sets run=true. Permissions: checks:read, actions:read.
+still report SUCCESS under the expanded check name. A prior job success
+counts only when its Test step concluded success (the suite actually
+ran); a docs-only skip leaves Test skipped and must not authorize
+skipping on main. Fail open: any API or parse problem sets run=true.
+Permissions: checks:read, actions:read.
 """
 
 from __future__ import annotations
@@ -33,6 +36,8 @@ import urllib.request
 
 API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 RUN_URL = re.compile(r"/actions/runs/(\d+)(?:/|$)")
+JOB_URL = re.compile(r"/job/(\d+)(?:/|$)")
+TEST_STEP = "Test"
 # IncompleteRead is an HTTPException, not an OSError; both must become
 # APIError so main can fail closed to run=true (#708 review).
 READ_ERRORS = (OSError, TimeoutError, http.client.HTTPException)
@@ -47,23 +52,46 @@ def run_id_from_url(html_url: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
-def decide(check_runs, workflow_event, current_run_id: int):
+def job_id_from_url(html_url: str) -> int | None:
+    match = JOB_URL.search(html_url or "")
+    return int(match.group(1)) if match else None
+
+
+def suite_ran(steps) -> bool:
+    """True when the job's Test step concluded success (suite executed)."""
+    for step in steps or []:
+        if step.get("name") == TEST_STEP and step.get("conclusion") == "success":
+            return True
+    return False
+
+
+def decide(check_runs, workflow_event, suite_ran_jobs, current_run_id: int):
     """Return (skip, reason). skip is True only for a successful check run
-    from a pull_request workflow run that is not the current one."""
+    from a pull_request workflow run that is not the current one and whose
+    Test step ran successfully (not skipped for docs-only)."""
     for run in check_runs:
         if run.get("conclusion") != "success":
             continue
         if run.get("status") not in (None, "completed"):
             continue
-        run_id = run_id_from_url(run.get("html_url") or "")
+        html_url = run.get("html_url") or ""
+        run_id = run_id_from_url(html_url)
         if run_id is None or run_id == current_run_id:
             continue
-        if workflow_event.get(run_id) == "pull_request":
-            return True, (
-                f"check run {run.get('id')} on workflow run {run_id} "
-                f"already succeeded on a pull_request for this commit"
-            )
-    return False, "no successful pull_request check run for this commit and name"
+        if workflow_event.get(run_id) != "pull_request":
+            continue
+        job_id = job_id_from_url(html_url) or run.get("id")
+        if not suite_ran_jobs.get(job_id):
+            continue
+        return True, (
+            f"check run {run.get('id')} on workflow run {run_id} "
+            f"already succeeded on a pull_request for this commit "
+            f"and its {TEST_STEP} step ran"
+        )
+    return False, (
+        "no successful pull_request check run that executed the suite "
+        "for this commit and name"
+    )
 
 
 class Client:
@@ -115,18 +143,33 @@ class Client:
             raise APIError(f"repos/{repo}/actions/runs/{run_id}: missing event")
         return event
 
+    def job_steps(self, repo: str, job_id: int):
+        body = self.get(f"repos/{repo}/actions/jobs/{job_id}")
+        if not isinstance(body, dict):
+            raise APIError(f"repos/{repo}/actions/jobs/{job_id}: expected an object")
+        return body.get("steps") or []
+
 
 def evaluate(client: Client, repo: str, sha: str, check_name: str, current_run_id: int):
     runs = client.check_runs(repo, sha, check_name)
     events = {}
+    suite = {}
     for run in runs:
         if run.get("conclusion") != "success":
             continue
-        run_id = run_id_from_url(run.get("html_url") or "")
-        if run_id is None or run_id == current_run_id or run_id in events:
+        html_url = run.get("html_url") or ""
+        run_id = run_id_from_url(html_url)
+        if run_id is None or run_id == current_run_id:
             continue
-        events[run_id] = client.workflow_event(repo, run_id)
-    return decide(runs, events, current_run_id)
+        if run_id not in events:
+            events[run_id] = client.workflow_event(repo, run_id)
+        if events[run_id] != "pull_request":
+            continue
+        job_id = job_id_from_url(html_url) or run.get("id")
+        if job_id is None or job_id in suite:
+            continue
+        suite[job_id] = suite_ran(client.job_steps(repo, job_id))
+    return decide(runs, events, suite, current_run_id)
 
 
 def write_output(path: str, run: bool, reason: str) -> None:
@@ -171,7 +214,7 @@ def probe(client: Client, repo: str, check_name: str) -> None:
         # Healthy history: every recent commit was PR-tested. Still show
         # the run path (empty check runs → do not skip) and exit 0 so the
         # suite is not blocked (#708 review).
-        skip, reason = decide([], {}, current_run_id=0)
+        skip, reason = decide([], {}, {}, current_run_id=0)
         print(
             f"prior-check probe: never-tested (no recent untested commit; "
             f"empty check runs): skip={skip} ({reason})"

@@ -49,6 +49,7 @@ class DecideTest(unittest.TestCase):
         skip, reason = prior_check.decide(
             [check_run(100, check_id=11)],
             {100: "pull_request"},
+            {11: True},
             current_run_id=999,
         )
         self.assertTrue(skip)
@@ -59,6 +60,7 @@ class DecideTest(unittest.TestCase):
         skip, reason = prior_check.decide(
             [check_run(100)],
             {100: "pull_request"},
+            {100: True},
             current_run_id=100,
         )
         self.assertFalse(skip)
@@ -68,6 +70,7 @@ class DecideTest(unittest.TestCase):
         skip, _ = prior_check.decide(
             [check_run(100)],
             {100: "push"},
+            {100: True},
             current_run_id=999,
         )
         self.assertFalse(skip)
@@ -76,6 +79,7 @@ class DecideTest(unittest.TestCase):
         skip, _ = prior_check.decide(
             [check_run(100, conclusion="failure")],
             {100: "pull_request"},
+            {100: True},
             current_run_id=999,
         )
         self.assertFalse(skip)
@@ -84,14 +88,25 @@ class DecideTest(unittest.TestCase):
         skip, reason = prior_check.decide(
             [check_run(50, check_id=1), check_run(60, check_id=2)],
             {50: "push", 60: "pull_request"},
+            {1: True, 2: True},
             current_run_id=999,
         )
         self.assertTrue(skip)
         self.assertIn("60", reason)
 
     def test_empty_runs_do_not_skip(self):
-        skip, _ = prior_check.decide([], {}, current_run_id=1)
+        skip, _ = prior_check.decide([], {}, {}, current_run_id=1)
         self.assertFalse(skip)
+
+    def test_pull_request_without_suite_does_not_skip(self):
+        skip, reason = prior_check.decide(
+            [check_run(100, check_id=11)],
+            {100: "pull_request"},
+            {11: False},
+            current_run_id=999,
+        )
+        self.assertFalse(skip)
+        self.assertIn("suite", reason)
 
 
 class FakeHTTPResponse:
@@ -109,22 +124,45 @@ class FakeHTTPResponse:
         return False
 
 
+def job_with_steps(*steps):
+    return {"steps": [{"name": name, "conclusion": conclusion} for name, conclusion in steps]}
+
+
 class EvaluateTest(unittest.TestCase):
-    def test_evaluate_reads_event_and_skips(self):
+    def _opener(self, test_conclusion):
         def opener(request, timeout=30):
             path = request.full_url.split("https://api.github.com/", 1)[1]
             if path.startswith("repos/dayamjz/assistant/commits/abc/check-runs?"):
                 return FakeHTTPResponse(json.dumps({"check_runs": [check_run(100, check_id=11)]}))
             if path == "repos/dayamjz/assistant/actions/runs/100":
                 return FakeHTTPResponse(json.dumps({"event": "pull_request"}))
+            if path == "repos/dayamjz/assistant/actions/jobs/11":
+                return FakeHTTPResponse(json.dumps(job_with_steps(
+                    ("Prior check", "success"),
+                    ("Test", test_conclusion),
+                )))
             raise urllib.error.HTTPError(request.full_url, 404, "nope", hdrs=None, fp=io.BytesIO(b"{}"))
+        return opener
 
-        client = prior_check.Client("tok", opener=opener)
+    def test_evaluate_reads_event_and_skips(self):
+        """Positive control: PR success whose Test step ran still skips."""
+        client = prior_check.Client("tok", opener=self._opener("success"))
         skip, reason = prior_check.evaluate(
             client, "dayamjz/assistant", "abc", "check (ubuntu-latest)", 999
         )
         self.assertTrue(skip)
         self.assertIn("pull_request", reason)
+        self.assertIn("Test", reason)
+
+    def test_docs_only_job_success_does_not_skip(self):
+        """A green check whose Test step was skipped (docs-only) must not
+        authorize skipping the suite on main (#708 round 4)."""
+        client = prior_check.Client("tok", opener=self._opener("skipped"))
+        skip, reason = prior_check.evaluate(
+            client, "dayamjz/assistant", "abc", "check (ubuntu-latest)", 999
+        )
+        self.assertFalse(skip)
+        self.assertIn("suite", reason.lower())
 
     def test_evaluate_api_error_surfaces(self):
         def opener(request, timeout=30):
