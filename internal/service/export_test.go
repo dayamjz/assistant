@@ -192,6 +192,17 @@ func (s *Service) SettleSlotForTest(tb testing.TB, id string) {
 	s.isolated[id] = tasks.Isolation{}
 }
 
+// RelaunchTaskForTest runs relaunchTask for this package's external tests
+// and returns its error, including a refused relaunch that settles the
+// slot (ErrRelaunchNotDue among them).
+func (s *Service) RelaunchTaskForTest(ctx context.Context, id string) error {
+	_, err := s.relaunchTask(ctx, id)
+	return err
+}
+
+// ErrRelaunchNotDue is errRelaunchNotDue for this package's external tests.
+var ErrRelaunchNotDue = errRelaunchNotDue
+
 // SetAfterPromotedLaunchStartedForTest installs afterPromotedLaunchStarted
 // for this package's external tests. It exists only in the tests, on that
 // field's terms in service.go.

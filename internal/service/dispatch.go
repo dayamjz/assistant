@@ -691,7 +691,9 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 // machine.PhraseCarryOnSlotBusy beside the entry key they typed, with no
 // task identifier (P13); claiming[id] alone is what that row knows. A
 // settled slot, which claimDispatch refuses too, is refused with
-// errSlotSettled and machine.PhraseCarryOnAlreadyStarted the same way.
+// errSlotSettled and machine.PhraseCarryOnAlreadyStarted: that row states
+// only that this service will not take the slot again, not that successor
+// work began (a refused relaunch settles the same map).
 func (s *Service) claimCarryOnSlot(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

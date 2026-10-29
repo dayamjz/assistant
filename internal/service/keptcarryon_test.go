@@ -2611,8 +2611,8 @@ func TestACarryOnAnswerRefusesWhileASteerHoldsItsSlot(t *testing.T) {
 }
 
 // A carry-on answer that finds the successor's slot already settled is
-// refused with PhraseCarryOnAlreadyStarted; answering again cannot free
-// that hold (#731 round 3).
+// refused with PhraseCarryOnAlreadyStarted ("cannot take it again");
+// answering again cannot free that hold (#731 round 3–4).
 func TestACarryOnAnswerRefusesWhenTheSuccessorSlotIsSettled(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -2669,31 +2669,85 @@ func TestACarryOnAnswerRefusesWhenTheSuccessorSlotIsSettled(t *testing.T) {
 		under.service.SettleSlotForTest(t, id)
 		release()
 		err := <-firstDone
-		started := machine.PhraseCarryOnAlreadyStarted.String()
-		line := ""
-		if err != nil {
-			line = err.Error()
+		assertCarryOnSettledLine(t, err, entry.Key(), id)
+	})
+}
+
+// assertCarryOnSettledLine holds a settled-slot refusal to the phrase that
+// is true for every settler (not "already begun"), the hold key, and the
+// absence of the task id (#731 round 4).
+func assertCarryOnSettledLine(t *testing.T, err error, key, taskID string) {
+	t.Helper()
+	started := machine.PhraseCarryOnAlreadyStarted.String()
+	line := ""
+	if err != nil {
+		line = err.Error()
+	}
+	if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(line, started) {
+		t.Fatalf("carry-on settled refusal = %v; want it refused naming %q", err, started)
+	}
+	if !strings.Contains(line, key) {
+		t.Fatalf("the settled refusal %q does not name the hold key %s", line, key)
+	}
+	if strings.Contains(line, taskID) {
+		t.Fatalf("the settled refusal names the task identifier %s: %q", taskID, line)
+	}
+	for _, falseClaim := range []string{"already begun", "nothing moved", "Answer again once that work has ended"} {
+		if strings.Contains(line, falseClaim) {
+			t.Fatalf("the settled refusal states %q, which a refused relaunch does not establish: %q", falseClaim, line)
 		}
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(line, started) {
-			t.Fatalf("carry-on with a settled successor slot = %v; want it refused naming %q", err, started)
+	}
+	for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
+		if strings.Contains(line, term) {
+			t.Fatalf("the settled refusal carries internal wording %q: %q", term, line)
 		}
-		if !strings.Contains(line, entry.Key()) {
-			t.Fatalf("the already-started refusal %q does not name the hold key %s", line, entry.Key())
+	}
+}
+
+// A failed adoption leaves the successor undispatched with zero attempts; a
+// relaunch then refused as not due settles the slot. Retrying carry-on must
+// not say the work already began (#731 round 4).
+func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	oldDir := filepath.Dir(entry.CopyPath)
+	if err := os.Chmod(oldDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(oldDir, 0o700) })
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil {
+			t.Fatalf("the carry on completed past a rename the directory refuses: %+v", out)
 		}
-		if strings.Contains(line, id) {
-			t.Fatalf("the already-started refusal names the task identifier %s: %q", id, line)
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.CarryOnClaimed() || owed.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the failed adoption the entry reads %+v, %v; want it open with its claim owed", owed, err)
 		}
-		if strings.Contains(line, "nothing moved") {
-			t.Fatalf("the already-started refusal states %q: %q", "nothing moved", line)
+		id := owed.CarriedOnTask.Or("")
+		if id == "" {
+			t.Fatal("the failed adoption left no carried-on task id")
 		}
-		if strings.Contains(line, "Answer again once that work has ended") {
-			t.Fatalf("the already-started refusal tells the person to answer again, which cannot free a settled slot: %q", line)
+		if attempts := attemptsOfTask(t, h, id); len(attempts) != 0 {
+			t.Fatalf("after the failed adoption task %s has attempts %+v; want none", id, attempts)
 		}
-		for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
-			if strings.Contains(line, term) {
-				t.Fatalf("the already-started refusal carries internal wording %q: %q", term, line)
-			}
+		if err := under.service.RelaunchTaskForTest(ctx, id); !errors.Is(err, service.ErrRelaunchNotDue) {
+			t.Fatalf("relaunch of the undispatched successor = %v; want not due", err)
 		}
+		if attempts := attemptsOfTask(t, h, id); len(attempts) != 0 {
+			t.Fatalf("the refused relaunch began an attempt: %+v", attempts)
+		}
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		assertCarryOnSettledLine(t, err, entry.Key(), id)
 	})
 }
 

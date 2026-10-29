@@ -275,11 +275,13 @@ var PhraseCarryOnSlotBusy = Phrase{
 }
 
 // PhraseCarryOnAlreadyStarted is the row for a carry-on answer refused
-// because this service has already begun the successor work and keeps that
-// hold for its lifetime. Answering again cannot free it; the person reads
-// what stands (P13).
+// because this service already keeps that successor's slot for its
+// lifetime (a settled isolated[id]). That fact alone does not say the
+// successor began: a refused relaunch settles the same way with zero
+// attempts (#731). Answering again cannot free it; the person reads what
+// stands (P13).
 var PhraseCarryOnAlreadyStarted = Phrase{
-	Outcome:     "That carry-on was not taken, because this service has already begun that work.",
+	Outcome:     "That carry-on was not taken, because this service cannot take it again.",
 	Consequence: "The entry is still open.",
 	Decision:    "Read what stands with assistant --json status.",
 }
