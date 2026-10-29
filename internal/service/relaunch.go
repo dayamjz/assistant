@@ -187,7 +187,11 @@ type relaunched struct {
 // another path, in another service, or after this one settled. A slot this
 // service already held, because it dispatched or relaunched the task's
 // earlier attempt, is taken again, which is what lets a coordinator
-// relaunch a terminal that died while this service was up.
+// relaunch a terminal that died while this service was up. A relaunch
+// that claimed its attempt returns with the slot still unsettled and
+// launch.settle set, as dispatch.go's dispatchTask does, so the slot
+// stays taken against a stop and the rest through the launch that
+// follows; a refused relaunch settles it before returning.
 //
 // Once the attempt is claimed, the session handle this service still holds
 // for the superseded attempt, if any, is released through the provider:
@@ -210,11 +214,13 @@ func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (re
 		return relaunched{}, err
 	}
 	out, err := s.relaunchClaimed(ctx, id, stopNote)
-	settle(out.launch.proof)
-	if err == nil {
-		s.releaseSuperseded(id, out.superseded)
+	if err != nil {
+		settle(out.launch.proof)
+		return out, err
 	}
-	return out, err
+	out.launch.settle = settle
+	s.releaseSuperseded(id, out.superseded)
+	return out, nil
 }
 
 // releaseSuperseded closes and forgets the session this service holds for
