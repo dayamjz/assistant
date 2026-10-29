@@ -127,7 +127,11 @@ import (
 // task's dispatch slot for that identifier before anything else, so no dispatch
 // pass cuts a fresh clone at the path the copy is about to stand at; between
 // the claim and the slot no task row exists yet, so no pass can find the task
-// to dispatch. Then, in the order intake keeps, the task is created with that
+// to dispatch. Once the row exists a pass can hold the slot while it reads that
+// the claim holds the task, and an answer, or a second answer, that finds the
+// slot claimed waits for that claim to end and takes it then
+// (awaitCarryOnSlot), rather than being refused for a pass reading the hold
+// (#707). Then, in the order intake keeps, the task is created with that
 // identifier, with the outlived task's delivery posture as the floor intake
 // records it under unless the project's, read once there, is stricter
 // (carriedPosture), the copy is moved to the task's own path and reshaped as dispatch
@@ -494,16 +498,16 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
 	}
-	settle, err := s.claimDispatch(id)
-	if err != nil {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being carried on by task %s now", ipc.ErrRefused, entry.ID, id)
+	release, err := s.awaitCarryOnSlot(ctx, id)
+	if errors.Is(err, errSlotSettled) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is not carried on: this service has already "+
+			"dispatched task %s", ipc.ErrRefused, entry.ID, id)
 	}
-	_ = settle
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
 	defer func() {
-		s.mu.Lock()
-		delete(s.isolated, id)
-		delete(s.claiming, id)
-		s.mu.Unlock()
+		release()
 		s.dispatchInBackground()
 	}()
 	// Read again under the slot: only a call holding this task's slot

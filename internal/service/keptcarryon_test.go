@@ -2287,6 +2287,124 @@ func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
 	})
 }
 
+// A carry-on answer that finds the new task's slot held by a dispatch pass
+// waits for the pass to give it back, and is then answered on what the
+// copy holds (#707, P15). The first answer is refused after the move, with
+// the kept commit lost from the moved copy; the dispatch pass that refusal
+// asks for reads that the owed claim holds the task, and the window between
+// that refusal and the slot's release is held open while the same answer
+// is given again. The second answer is shown to wait for the slot before
+// the window closes, and is then refused naming the kept commit, with the
+// entry open and its claim owed. Before, it was refused at once with
+// "kept work entry N is being carried on by task T now", for a carry on
+// that was not under way, which is what macOS CI hit when that pass fell
+// between the two answers.
+func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	lose := func() error {
+		records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = records.Close() }()
+		owed, err := records.KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		moved, err := h.TaskCopy(owed.CarriedOnTask.Or(""))
+		if err != nil {
+			return err
+		}
+		git(t, moved, "checkout", "--quiet", "--detach", "HEAD~1")
+		git(t, moved, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+		git(t, moved, "prune", "--expire=now")
+		return nil
+	}
+
+	type answered struct {
+		out machine.KeptWorkAnswered
+		err error
+	}
+	var (
+		once     sync.Once
+		inWindow = make(chan string, 1)
+		awaiting = make(chan struct{}, 1)
+		second   = make(chan answered, 1)
+		leave    = make(chan struct{})
+	)
+	held := func(id string) {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return
+		}
+		inWindow <- id
+		<-leave
+	}
+	await := func(string) {
+		select {
+		case awaiting <- struct{}{}:
+		default:
+		}
+	}
+
+	o, _ := workerOptions(t, h)
+	o = service.WithHeldDispatchWindowForTest(service.WithCarryOnInterruptForTest(t, o, lose), held, await)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); !errors.Is(err, ipc.ErrRefused) ||
+			!strings.Contains(err.Error(), kept) {
+			t.Fatalf("the answer, with %s lost after the move = %+v, %v; want it refused naming the commit", kept, out, err)
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.CarryOnClaimed() {
+			t.Fatalf("after the first answer the entry reads %+v, %v; want its claim owed", owed, err)
+		}
+		var id string
+		select {
+		case id = <-inWindow:
+		case <-ctx.Done():
+			t.Fatal("no dispatch pass held the carried-on task after the refused answer")
+		}
+		if want := owed.CarriedOnTask.Or(""); id != want {
+			close(leave)
+			t.Fatalf("the held dispatch was of task %s; want the carried-on task %s", id, want)
+		}
+
+		go func() {
+			var again machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
+			second <- answered{again, err}
+		}()
+		select {
+		case <-awaiting:
+		case got := <-second:
+			close(leave)
+			t.Fatalf("the same answer again, while a dispatch pass held task %s's slot = %+v, %v; want it to wait for the slot", id, got.out, got.err)
+		case <-ctx.Done():
+			close(leave)
+			t.Fatal("the same answer again neither waited for the slot nor returned")
+		}
+		close(leave)
+		got := <-second
+		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(got.err.Error(), kept) {
+			t.Fatalf("the same answer again, once the pass gave the slot back = %+v, %v; want it refused naming %s", got.out, got.err, kept)
+		}
+		if owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !owed.Open() || !owed.CarryOnClaimed() {
+			t.Fatalf("after the same answer again the entry reads %+v, %v; want it open with its claim owed", owed, err)
+		}
+	})
+}
+
 // A kept copy with a linked worktree is not carried on (round 47): a
 // linked worktree names the copy's repository by the path it stands at,
 // so the move would leave the worktree unable to read it, and the program

@@ -221,6 +221,11 @@ type Options struct {
 	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
 	// product never does.
 	interruptCarryOnClaim func() error
+	// heldDispatchWindow and awaitingCarryOnSlot are the Service fields
+	// betweenHeldAndRelease and awaitingCarryOnSlot, which export_test.go's
+	// WithHeldDispatchWindowForTest sets and the product never does.
+	heldDispatchWindow  func(id string)
+	awaitingCarryOnSlot func(id string)
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -383,6 +388,11 @@ type Service struct {
 	// taken and not yet settled, so a relaunch cannot retake a slot that a
 	// claim in flight holds. dispatch.go owns it beside isolated.
 	claiming map[string]bool
+	// claimEnded is closed, and forgotten, whenever a claim in claiming
+	// ends, so a caller that waits for one (awaitCarryOnSlot) wakes and reads
+	// the slot again; it is nil while nobody waits. dispatch.go owns it
+	// beside claiming, and it is read and written under mu.
+	claimEnded chan struct{}
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
@@ -428,11 +438,17 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// betweenHeldAndRelease runs in a dispatch that kept work held, after
-	// the refusal and before the slot is given back. It is nil in
-	// production and set only by this package's tests, which use it to
-	// close the entry and run another dispatch pass inside that window.
-	betweenHeldAndRelease func()
+	// betweenHeldAndRelease runs in a dispatch of the task it is given that
+	// kept work held, after the refusal and before the slot is given back.
+	// It is nil in production and set only by this package's tests, which
+	// use it to close the entry, run another dispatch pass, or answer a
+	// carry on inside that window; WithHeldDispatchWindowForTest sets it.
+	betweenHeldAndRelease func(id string)
+	// awaitingCarryOnSlot runs in a carry on of the task it is given that
+	// found the task's slot claimed, right before it waits for that claim
+	// to end. It is nil in production and set only through
+	// WithHeldDispatchWindowForTest.
+	awaitingCarryOnSlot func(id string)
 	// betweenLandingClaimAndStart runs in a landing of kept work after its
 	// claim and before it brings the commit into the gate and starts the
 	// run. It is nil in production and set only by this package's tests,
@@ -768,6 +784,8 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		afterMergeReadPass:        o.afterMergeReadPass,
+		betweenHeldAndRelease:     o.heldDispatchWindow,
+		awaitingCarryOnSlot:       o.awaitingCarryOnSlot,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		launched:                  make(map[string]launchedWorker),

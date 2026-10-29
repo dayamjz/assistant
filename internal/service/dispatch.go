@@ -463,7 +463,19 @@ func (s *Service) giveBackSlot(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.isolated, id)
+	s.endClaim(id)
+}
+
+// endClaim marks the task's claim ended and wakes every caller waiting for a
+// claim to end, which reads the slot again (awaitCarryOnSlot). Every write
+// that ends a claim in claiming goes through it, so no waiter sleeps past
+// the end of the claim it waits for. It is called with s.mu held.
+func (s *Service) endClaim(id string) {
 	delete(s.claiming, id)
+	if s.claimEnded != nil {
+		close(s.claimEnded)
+		s.claimEnded = nil
+	}
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -494,7 +506,7 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 	switch {
 	case errors.Is(err, store.ErrDispatchHeld):
 		if s.betweenHeldAndRelease != nil {
-			s.betweenHeldAndRelease()
+			s.betweenHeldAndRelease(id)
 		}
 		s.releaseHeldSlot(ctx, id)
 	case errors.As(err, &unread):
@@ -549,6 +561,50 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 	return s.takeSlot(id), nil
 }
 
+// awaitCarryOnSlot takes the task's slot for a carry on of kept work into
+// it, waiting first, until ctx ends, for a claim in flight on the slot to
+// end, and returns the function that gives the slot back. A carry on's
+// task is held by the entry it carries on until the carry on marks it
+// (store.KeptWorkHolding), so the claim a dispatch pass takes there reads
+// that hold and gives the slot back, and another carry on's ends with the
+// entry marked, withdrawn or still owed, which the caller reads again under
+// the slot. Refusing at such a claim instead refused a person's answer for
+// a pass that happened to be reading the hold, and named a carry on under
+// way that was not (#707). The wait is as long as the claim it waits for,
+// which nothing here bounds but ctx. A slot settled, which claimDispatch
+// refuses too, is refused with errSlotSettled.
+func (s *Service) awaitCarryOnSlot(ctx context.Context, id string) (func(), error) {
+	for {
+		s.mu.Lock()
+		s.slotMaps()
+		if !s.claiming[id] {
+			defer s.mu.Unlock()
+			if _, settled := s.isolated[id]; settled {
+				return nil, fmt.Errorf("%w: task %s", errSlotSettled, id)
+			}
+			s.takeSlot(id)
+			return func() { s.giveBackSlot(id) }, nil
+		}
+		if s.claimEnded == nil {
+			s.claimEnded = make(chan struct{})
+		}
+		ended := s.claimEnded
+		s.mu.Unlock()
+		if s.awaitingCarryOnSlot != nil {
+			s.awaitingCarryOnSlot(id)
+		}
+		select {
+		case <-ended:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+}
+
+// errSlotSettled reports a slot a dispatch of this service settled when it
+// ended after its claim, which claimDispatch does not take again.
+var errSlotSettled = errors.New("service: the task has already been dispatched here")
+
 // claimRelaunch takes the task's slot for a relaunch, or for a dispatch a
 // person answered retry on the no-sweep hold of, which are the two ways a
 // slot this service already holds is taken again: for a relaunch, the
@@ -592,7 +648,7 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.isolated[id] = proof
-		delete(s.claiming, id)
+		s.endClaim(id)
 	}
 }
 
