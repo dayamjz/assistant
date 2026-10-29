@@ -34,10 +34,21 @@ import (
 
 // KeptPromotionWindow is the reason an investigation's copy is kept once its
 // worker is ended at the end of promotion_window, PRD section 6's "when the
-// window passes, the worker is ended and its copy is kept". It answers to
-// #438, which ends that worker and raises the entry through internal/service;
-// nothing in this build produces it yet.
+// window passes, the worker is ended and its copy is kept". internal/service
+// produces it once it has ended that worker at the window, or read it gone,
+// and Keep accepts it only for an investigation task's copy. A copy that
+// holds nothing the default branch lacks is NothingKept, as for every other
+// reason, and no entry is written for it.
 const KeptPromotionWindow = "promotion-window-passed"
+
+// KeptPromotionWorkerEnded is the reason an investigation's copy is kept
+// when its worker ended inside promotion_window, by itself or by a stop or
+// a restart, before the window passed: the copy is kept for a promotion as
+// it is past the window, and P15's "kept work is never silent" does not wait
+// out a window that has no worker left to keep. internal/service produces
+// it, and Keep accepts it only for an investigation task's copy, as it does
+// KeptPromotionWindow.
+const KeptPromotionWorkerEnded = "promotion-worker-ended"
 
 // Kept names a copy kept because its work has not landed: its one owner, a
 // task or a run, and why it was kept. It carries nothing about what the copy
@@ -49,7 +60,7 @@ type Kept struct {
 	Task string
 	Run  string
 	// Reason is the word the entry records for why: a refusal's reason, as
-	// KeptOf gives it, or KeptPromotionWindow.
+	// KeptOf gives it, KeptPromotionWindow or KeptPromotionWorkerEnded.
 	Reason string
 	// Detail is the account the entry carries as evidence, redacted by the
 	// store before it is written.
@@ -134,11 +145,17 @@ type KeptEntry struct {
 // cleanup of the copy is what the sites in internal/service ask.
 //
 // It refuses with ErrCleanupRecord a request naming no owner or both, a
-// task whose reserved copy is not where this home puts it, and a copy that
-// is not standing.
+// task whose reserved copy is not where this home puts it, a copy that is
+// not standing, and a KeptPromotionWindow or KeptPromotionWorkerEnded keep
+// of anything but an investigation task's copy, a task promoted since its
+// caller read it among them.
 func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 	if (k.Task == "") == (k.Run == "") {
 		return KeptEntry{}, fmt.Errorf("%w: a kept copy names exactly one owner, a task or a run", ErrCleanupRecord)
+	}
+	window := k.Reason == KeptPromotionWindow || k.Reason == KeptPromotionWorkerEnded
+	if window && k.Run != "" {
+		return KeptEntry{}, fmt.Errorf("%w: run %s's copy is not kept for a promotion", ErrCleanupRecord, k.Run)
 	}
 	var path string
 	var task store.Task
@@ -148,6 +165,10 @@ func (c *Cleaner) Keep(ctx context.Context, k Kept) (KeptEntry, error) {
 		task, err = c.store.Task(ctx, k.Task)
 		if err != nil {
 			return KeptEntry{}, err
+		}
+		if window && task.Shape != store.TaskInvestigation {
+			return KeptEntry{}, fmt.Errorf("%w: task %s is a %s task, and only an investigation's copy is kept for a promotion",
+				ErrCleanupRecord, task.ID, task.Shape)
 		}
 		if path, err = c.home.TaskCopy(task.ID); err != nil {
 			return KeptEntry{}, err

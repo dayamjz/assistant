@@ -94,6 +94,10 @@ type Config struct {
 	// its caller set no deadline of its own. KeyGHDeadline says who may set it
 	// and what reads it.
 	GHDeadline time.Duration
+	// PromotionWindow is how long a reported investigation's worker is kept
+	// for a promotion, counted from when its report was stored, before it is
+	// ended. KeyPromotionWindow says who may set it and what it ends.
+	PromotionWindow time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -300,6 +304,9 @@ const (
 	DefaultRelaunchAttempts = 2
 	// DefaultStopGrace is PRD section 10's default for stop_grace.
 	DefaultStopGrace = 30 * time.Second
+	// DefaultPromotionWindow is PRD section 10's default for
+	// promotion_window, chosen there for a model provider's prompt cache.
+	DefaultPromotionWindow = time.Hour
 	// DefaultCommandTimeout is how long a stage command may run when the
 	// operator's file sets no command_timeout. Chosen, not measured: PRD
 	// section 10 makes commands.test a targeted check rather than a full
@@ -532,6 +539,18 @@ const (
 	// shutdown holds keeps the home from its next service for longer than
 	// an operator waits before reaching for SIGKILL. Chosen, not measured.
 	MaxStopGrace = 10 * time.Minute
+	// MinPromotionWindow is the shortest promotion window. The window's end
+	// is acted on at a supervisor pass, which runs no oftener than
+	// MinSupervisionBeaconInterval, so a shorter window promises a precision
+	// nothing observes, and a zero window would end the worker that wrote
+	// the report before anyone could read it. Chosen, not measured.
+	MinPromotionWindow = time.Second
+	// MaxPromotionWindow is the longest promotion window. PRD section 10's
+	// reason for the default is a prompt cache of about an hour, past which
+	// keeping the worker buys nothing a relaunch on the stored report does
+	// not, so beyond a day an idle worker holds a process and its memory for
+	// nothing. Chosen, not measured.
+	MaxPromotionWindow = 24 * time.Hour
 	// MinCommandTimeout is the shortest command timeout. Below it an
 	// ordinary lint or test command is ended before it can answer. Chosen,
 	// not measured.

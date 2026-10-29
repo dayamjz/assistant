@@ -216,10 +216,11 @@ func historyKinds(t *testing.T, h *home.Home, id string) map[string]int {
 // so the task reads Held over the report until a person answers both, and
 // then Reported from the stored report while the worker's terminal is still
 // live, because PRD section 6 has a stored report outrank the terminal. The
-// copy stands while the worker runs, and once the worker ends the service's
-// pass removes it on the scratch proof, recorded on the task (P12), never
-// because the report was filed; the task still reads Reported from the
-// report over its dead terminal and its removed copy, and never Complete.
+// copy stands while the worker runs and goes on standing through several of
+// the service's passes once the worker ends, with no removal recorded,
+// because a reported investigation's copy is kept for a promotion (P12); the
+// task reads Reported from the report over its dead terminal, and never
+// Complete. Its removal on the record of a relay is relay_unix_test.go's.
 //
 // A person's shell running the same route is refused as no task's worker,
 // from the credentials and the parent chain the service reads and not from
@@ -337,7 +338,7 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 		t.Fatalf("a refused call grew the history from %v to %v", before, after)
 	}
 
-	// The copy stands while the worker runs, and goes once it has ended.
+	// The copy stands while the worker runs, and after it has ended.
 	copyPath, err := h.TaskCopy(id)
 	if err != nil {
 		t.Fatal(err)
@@ -346,20 +347,16 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 		t.Fatalf("the copy of a running worker is gone: %v", err)
 	}
 	messageWorker(t, h, subject, id, endWorker)
-	t.Cleanup(func() {
-		if t.Failed() {
-			text, _ := os.ReadFile(h.ServiceLog())
-			t.Logf("the service log:\n%s", text)
-		}
+	waitFor(t, "the reported investigation over its dead terminal", func() bool {
+		return reportedFrom(taskOf(t, h, subject, id).State, taskstate.Dead)
 	})
-	waitFor(t, "the copy's recorded removal", func() bool { return taskOf(t, h, subject, id).State.Basis.CleanupRemoved })
-	if _, err := os.Lstat(copyPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the task records its copy removed and %s still stands: %v", copyPath, err)
+	time.Sleep(3500 * time.Millisecond)
+	if _, err := os.Stat(copyPath); err != nil {
+		t.Fatalf("the copy of a reported investigation whose worker ended is gone, so no promotion can relaunch in it: %v", err)
 	}
-	got := taskOf(t, h, subject, id)
-	if !got.State.Basis.CleanupRemoved || !reportedFrom(got.State, taskstate.Dead) {
-		t.Fatalf("with its worker ended and its copy gone the task reads %s from %s with %+v, "+
-			"want reported from the stored report over a dead terminal with the removal recorded", got.State.State, got.State.Source,
+	if got := taskOf(t, h, subject, id); got.State.Basis.CleanupRemoved || !reportedFrom(got.State, taskstate.Dead) {
+		t.Fatalf("with its worker ended the task reads %s from %s with %+v, "+
+			"want reported from the stored report over a dead terminal with its copy kept", got.State.State, got.State.Source,
 			got.State.Basis)
 	}
 }

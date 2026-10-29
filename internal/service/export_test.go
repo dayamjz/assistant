@@ -155,6 +155,18 @@ func (s *Service) SetAfterConsentRegisteredForTest(f func()) {
 	s.afterConsentRegistered = f
 }
 
+// ClaimSlotForTest takes the task's slot through claimSteer, as a stop, a
+// relaunch, a promotion or a window's end does, for this package's external
+// tests, and returns its release, failing tb when the slot is taken.
+func (s *Service) ClaimSlotForTest(tb testing.TB, id string) func() {
+	tb.Helper()
+	release, err := s.claimSteer(id)
+	if err != nil {
+		tb.Fatalf("claiming the slot of task %s: %v", id, err)
+	}
+	return release
+}
+
 // SetAfterPromotedLaunchStartedForTest installs afterPromotedLaunchStarted
 // for this package's external tests. It exists only in the tests, on that
 // field's terms in service.go.
