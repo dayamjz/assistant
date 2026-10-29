@@ -501,12 +501,12 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	}
 	release, err := s.claimCarryOnSlot(id)
 	if errors.Is(err, errSlotSettled) {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is not carried on: this service has already "+
-			"dispatched task %s", ipc.ErrRefused, entry.ID, id)
+		// Name the entry only as the person did on --hold (entry.Key), with
+		// the phrase row; no task identifier and no internal mechanic (P13).
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %s: %s", ipc.ErrRefused, entry.Key(), machine.PhraseCarryOnAlreadyStarted)
 	}
 	if errors.Is(err, errCarryOnSlotBusy) {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d was not carried on for task %s: %s",
-			ipc.ErrRefused, entry.ID, id, machine.PhraseCarryOnSlotBusy)
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %s: %s", ipc.ErrRefused, entry.Key(), machine.PhraseCarryOnSlotBusy)
 	}
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err

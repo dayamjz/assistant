@@ -262,15 +262,23 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
 }
 
-// PhraseCarryOnSlotBusy is the row for a carry-on answer that finds the new
-// task's slot already claimed in this service: a dispatch or relaunch reading
-// the hold, another carry-on, or a stop. The service cannot name which without
-// new state, so the sentence is true for all of them. The entry stays open
-// with its claim owed; the person answers again shortly (#707, #731).
+// PhraseCarryOnSlotBusy is the row for a carry-on answer that finds other
+// work on the same answer still under way in this service. The entry stays
+// open and nothing moved; the person answers again shortly (#707, #731).
+// It names no task identifier and no internal mechanic (P13).
 var PhraseCarryOnSlotBusy = Phrase{
-	Outcome:     "That carry-on was not taken, because the task is busy with a dispatch or another answer right now.",
-	Consequence: "The entry stays open with its claim owed, and nothing moved.",
+	Outcome:     "That carry-on was not taken, because other work on this answer is still under way.",
+	Consequence: "The entry is still open, and nothing moved.",
 	Decision:    "Answer again shortly.",
+}
+
+// PhraseCarryOnAlreadyStarted is the row for a carry-on answer that finds
+// this service has already begun the successor work. The entry stays open
+// and nothing moved (P13).
+var PhraseCarryOnAlreadyStarted = Phrase{
+	Outcome:     "That carry-on was not taken, because this service has already begun that work.",
+	Consequence: "The entry is still open, and nothing moved.",
+	Decision:    "Answer again once that work has ended, or read what stands with assistant --json status.",
 }
 
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept
@@ -288,5 +296,5 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseKeptWorkLosesNothing,
-		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy}
+		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }

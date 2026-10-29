@@ -2401,13 +2401,27 @@ func TestACarryOnAnswerRefusesWhileADispatchPassHoldsItsSlot(t *testing.T) {
 			t.Fatal("the same answer again neither refused nor returned")
 		}
 		busy := machine.PhraseCarryOnSlotBusy.String()
-		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(got.err.Error(), busy) {
+		line := ""
+		if got.err != nil {
+			line = got.err.Error()
+		}
+		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(line, busy) {
 			release()
 			t.Fatalf("the same answer again, while a dispatch held task %s's slot = %+v, %v; want it refused naming %q", id, got.out, got.err, busy)
 		}
-		if strings.Contains(got.err.Error(), "being carried on by task") {
+		if !strings.Contains(line, entry.Key()) {
 			release()
-			t.Fatalf("the same answer again named a carry-on under way: %v", got.err)
+			t.Fatalf("the busy refusal %q does not name the hold key %s the person typed", line, entry.Key())
+		}
+		if strings.Contains(line, id) {
+			release()
+			t.Fatalf("the busy refusal names the task identifier %s: %q", id, line)
+		}
+		for _, term := range []string{"dispatch", "claim", "slot", "settled", "being carried on by task"} {
+			if strings.Contains(line, term) {
+				release()
+				t.Fatalf("the busy refusal carries internal wording %q: %q", term, line)
+			}
 		}
 		if owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !owed.Open() || !owed.CarryOnClaimed() {
 			release()
