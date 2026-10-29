@@ -10,66 +10,17 @@ import (
 	"syscall"
 )
 
-// processList is every process identifier /proc lists, each with the parent
-// and start time its /proc/<pid>/stat held when read, so a listing that
-// meets the process gone still has the parent that reading named
-// (processesWhere, #722). A pid whose stat cannot be read is named with
-// parent and start zero, which startedOutside will not settle through.
-func processList() ([]listedProcess, error) {
+// processIDs is every process identifier /proc lists.
+func processIDs() ([]int, error) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
-	list := make([]listedProcess, 0, len(entries))
+	var pids []int
 	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 0 {
-			continue
+		if pid, err := strconv.Atoi(entry.Name()); err == nil && pid > 0 {
+			pids = append(pids, pid)
 		}
-		parent, start := statParentStart(pid)
-		list = append(list, listedProcess{PID: pid, Parent: parent, Start: start})
-	}
-	return list, nil
-}
-
-// statParentStart reads ppid and starttime from /proc/<pid>/stat. On any
-// failure it returns zeros, which startedOutside treats as unknown.
-func statParentStart(pid int) (parent int, start uint64) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return 0, 0
-	}
-	stat := string(raw)
-	end := strings.LastIndexByte(stat, ')')
-	if end < 0 {
-		return 0, 0
-	}
-	fields := strings.Fields(stat[end+1:])
-	// After the command name: state, ppid, ... starttime is field 22 of the
-	// whole stat line, which is fields[19] here (proc(5)).
-	if len(fields) < 20 {
-		return 0, 0
-	}
-	parent, err = strconv.Atoi(fields[1])
-	if err != nil {
-		return 0, 0
-	}
-	start, err = strconv.ParseUint(fields[19], 10, 64)
-	if err != nil {
-		return parent, 0
-	}
-	return parent, start
-}
-
-// processIDs is every process identifier /proc lists.
-func processIDs() ([]int, error) {
-	list, err := processList()
-	if err != nil {
-		return nil, err
-	}
-	pids := make([]int, len(list))
-	for i, p := range list {
-		pids[i] = p.PID
 	}
 	return pids, nil
 }

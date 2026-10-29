@@ -12,39 +12,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// processList is every process in the kernel's process table, each with the
-// parent the same reading named (Eproc.Ppid) and its start time, so a
-// listing that meets the process gone still has the parent that reading
-// held (processesWhere, #722).
-func processList() ([]listedProcess, error) {
+// processIDs is every process identifier in the kernel's process table.
+func processIDs() ([]int, error) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
 		return nil, err
 	}
-	list := make([]listedProcess, 0, len(procs))
+	pids := make([]int, 0, len(procs))
 	for _, p := range procs {
-		t := p.Proc.P_starttime
-		list = append(list, listedProcess{
-			PID:    int(p.Proc.P_pid),
-			Parent: int(p.Eproc.Ppid),
-			// Same microseconds-since-epoch reading agents.Identify uses
-			// (P_starttime), kept here so a gone process still has the
-			// start the snapshot held for startedOutside's order check.
-			Start: uint64(t.Sec)*1_000_000 + uint64(t.Usec),
-		})
-	}
-	return list, nil
-}
-
-// processIDs is every process identifier in the kernel's process table.
-func processIDs() ([]int, error) {
-	list, err := processList()
-	if err != nil {
-		return nil, err
-	}
-	pids := make([]int, len(list))
-	for i, p := range list {
-		pids[i] = p.PID
+		pids = append(pids, int(p.Proc.P_pid))
 	}
 	return pids, nil
 }
