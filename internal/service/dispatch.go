@@ -521,7 +521,9 @@ func (s *Service) giveBackSlot(id string) {
 // slot a claim in flight or a steer holds is left. It is for an answer that
 // decides the task is to be begun again, whose dispatch claims a new
 // attempt under the store's anchor, so it is no second launch of the
-// attempt the slot was kept for.
+// attempt the slot was kept for. keep's answer that finds a steer holding
+// notes a redispatch for that steer's release instead (noteRedispatchWhenSteerFrees),
+// so the settled slot is not left behind after the steer returns.
 func (s *Service) giveBackSettledSlot(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -529,6 +531,26 @@ func (s *Service) giveBackSettledSlot(id string) bool {
 		return false
 	}
 	delete(s.isolated, id)
+	return true
+}
+
+// noteRedispatchWhenSteerFrees records that a keep answer owed a dispatch
+// of id while a claimSteer held the task's slot, so that steer's release
+// gives the settled slot back and asks dispatchDue again. It reports
+// whether a steer held the slot; a caller that gets false still runs its
+// own dispatch. Called with the same conditions giveBackSettledSlot just
+// refused: the slot is settled under a steer (claiming and steering).
+func (s *Service) noteRedispatchWhenSteerFrees(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if !s.steering[id] {
+		return false
+	}
+	if s.redispatchWhenFree == nil {
+		s.redispatchWhenFree = make(map[string]bool)
+	}
+	s.redispatchWhenFree[id] = true
 	return true
 }
 
@@ -678,6 +700,9 @@ func (s *Service) slotMaps() {
 	}
 	if s.steering == nil {
 		s.steering = make(map[string]bool)
+	}
+	if s.redispatchWhenFree == nil {
+		s.redispatchWhenFree = make(map[string]bool)
 	}
 }
 

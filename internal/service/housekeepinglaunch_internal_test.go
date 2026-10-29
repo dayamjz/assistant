@@ -167,33 +167,21 @@ func latestRefOf(attempts []store.TaskAttempt) store.Optional[string] {
 	return store.Optional[string]{}
 }
 
-// retirementHoldOf registers the pass's retirement hold for its first
-// interval, keyed as the loop keys one, against the attempts as recorded.
-func retirementHoldOf(t *testing.T, records *store.Store, task string) (store.Hold, retireHold) {
-	t.Helper()
-	rh := retireHold{Task: task, Epoch: 1, Attempt: latestSequence(recordedAttempts(t, records, task))}
-	hold, err := records.RegisterHold(t.Context(), store.Hold{Key: rh.key(), TaskID: store.Known(task), Subject: "retire?", Detail: "d"})
-	if err != nil {
-		t.Fatalf("registering the retirement hold: %v", err)
-	}
-	return hold, rh
-}
-
 // PRD section 6's "a retire ... is refused, naming what moves it, while the
 // hold stays open" and P10, for the one thing that moves a pass without a
 // record of its own: a launch under way. The dispatch's slot stays
 // unsettled from its claim until the launch has recorded the worker's
 // session, so meanwhile the pass stays open and resolves Dispatched, which
 // is in flight, and the stop hook's reading, taken with no probe, blocks a
-// turn from ending while the worker is being created; no retirement hold is
-// offered meanwhile (TestTheRetirementHoldIsNotOfferedWhileALaunchHoldsThePassesSlot),
-// and a retire answered on a hold planted past that offer is refused as a
-// stop would be, writing nothing. Once the launch has recorded its session,
-// the same answer is refused on the probe reading the worker live. Before
-// the slot covered the launch, the answer at that point read the attempt as
-// never launched and was written, and the hook read nothing in flight while
-// the worker ran on until the launch's record was refused, the P10 window
-// the review at 3674920 reproduced with host stop.
+// turn from ending while the worker is being created. No retirement hold
+// can be offered in that window (OfferRetirementHold refuses ErrPassMoves;
+// TestTheRetirementHoldIsNotOfferedWhileALaunchHoldsThePassesSlot), so a
+// retire answer cannot be under way either: a RegisterHold row is not a
+// retirement hold (RetireHousekeepingPass refuses ErrNotRetirementHold).
+// Once the launch has recorded its session, the offer succeeds, and a
+// retire answered on that hold is refused on the probe reading the worker
+// live. Before the slot covered the launch, a planted unmarked hold let the
+// test claim a retire-while-launching refusal production cannot produce.
 func TestARetireAnsweredWhileItsPassIsLaunchingIsRefusedAndThePassStaysInFlight(t *testing.T) {
 	principles.Cite(t, principles.P10)
 	ctx := t.Context()
@@ -209,33 +197,35 @@ func TestARetireAnsweredWhileItsPassIsLaunchingIsRefusedAndThePassStaysInFlight(
 	if guard := feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()); guard.Allowed() || guard.Reason == supervisor.StopNothingInFlight {
 		t.Fatalf("with the pass's launch under way the stop hook reads %+v, want a turn blocked from ending", guard)
 	}
-	hold, rh := retirementHoldOf(t, w.records, w.task)
-	retire := machine.TaskRespondRequest{Task: w.task, Answer: machine.AnswerRetire}
-
-	answered, err := s.answerRetirement(ctx, ipc.Request{}, retire, hold, rh)
-	if !errors.Is(err, ipc.ErrRefused) || !errors.Is(err, errSteerInFlight) {
-		t.Fatalf("retire answered while the pass's launch was under way = %+v, %v, with the stop hook reading %s; "+
-			"want it refused while the launch holds the pass's slot",
-			answered.Effect, err, feed.Guard(ctx, s.home, supervisor.FreshnessFor(time.Second), time.Now()).Reason)
+	attempts := recordedAttempts(t, w.records, w.task)
+	rh := retireHold{Task: w.task, Epoch: 1, Attempt: latestSequence(attempts)}
+	inc, err := w.records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, retired, err := w.records.RetirementOf(ctx, w.task); err != nil || retired {
-		t.Fatalf("the refused answer left the pass retired %v (%v)", retired, err)
-	}
-	if h, err := w.records.Hold(ctx, hold.Key); err != nil || !h.Open() {
-		t.Fatalf("the refused answer left the retirement hold %+v, %v; want it open", h, err)
+	if _, err := w.records.OfferRetirementHold(ctx, inc, store.RetirementOffer{
+		Hold:    store.Hold{Key: rh.key(), TaskID: store.Known(w.task), Subject: "retire?", Detail: "d"},
+		Attempt: rh.Attempt, Session: latestRef(attempts), Ended: runs.Finished, Delivered: taskstate.Delivered,
+	}); !errors.Is(err, store.ErrPassMoves) {
+		t.Fatalf("OfferRetirementHold while the pass's launch is claimed and unrecorded = %v, want ErrPassMoves", err)
 	}
 
 	w.letGo()
 	out := <-w.launched
 	w.launched <- out
 	if out.err != nil {
-		t.Fatalf("the launch, with the answer refused, returned %v; want the worker recorded", out.err)
+		t.Fatalf("the launch returned %v; want the worker recorded", out.err)
 	}
 	if got := latestRef(recordedAttempts(t, w.records, w.task)); got != ref {
 		t.Fatalf("the launch recorded session %q, want %q", got, ref)
 	}
+	hold := offerRetirementHoldOf(t, w.records, w.task)
+	retire := machine.TaskRespondRequest{Task: w.task, Answer: machine.AnswerRetire}
 	if _, err := s.answerRetirement(ctx, ipc.Request{}, retire, hold, rh); !errors.Is(err, store.ErrPassMoves) {
 		t.Fatalf("retire answered with the worker recorded and live = %v, want ErrPassMoves on the probe", err)
+	}
+	if h, err := w.records.Hold(ctx, hold.Key); err != nil || !h.Open() {
+		t.Fatalf("the refused answer left the retirement hold %+v, %v; want it open", h, err)
 	}
 }
 

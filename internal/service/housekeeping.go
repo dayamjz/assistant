@@ -708,12 +708,19 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		// A launch that ended with no session left the pass's slot settled
 		// for the service's lifetime, which the dispatch passes over, so the
 		// slot is given back first (giveBackSettledSlot) and the dispatch
-		// claims the pass's next attempt.
+		// claims the pass's next attempt. A concurrent retire or stop that
+		// already holds claimSteer makes giveBackSettledSlot a no-op; noting
+		// the redispatch for that steer's release (as releasePassHeldSlot
+		// does for a keep answered while a refused dispatch still held the
+		// slot) is what keeps the begin from being lost (P6).
 		attempts, readErr := s.store.TaskAttempts(ctx, r.Task)
 		if _, launched := latestSession(attempts); readErr != nil || !launched {
-			s.giveBackSettledSlot(r.Task)
-			s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since its latest attempt has no session", r.Task, hold.Key, r.Answer)
-			s.dispatchInBackground()
+			if s.giveBackSettledSlot(r.Task) || !s.noteRedispatchWhenSteerFrees(r.Task) {
+				s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since its latest attempt has no session", r.Task, hold.Key, r.Answer)
+				s.dispatchInBackground()
+			} else {
+				s.log.Printf("housekeeping pass %s waits to dispatch after hold %s was answered %q: a steer holds its settled slot, and that steer's release begins it", r.Task, hold.Key, r.Answer)
+			}
 		}
 		return machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}, nil
 	case machine.AnswerRetire:

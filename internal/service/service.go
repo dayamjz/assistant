@@ -391,6 +391,11 @@ type Service struct {
 	// claiming that is not a dispatch or relaunch in flight, so launching
 	// can tell the two apart. steer.go writes it; dispatch.go reads it.
 	steering map[string]bool
+	// redispatchWhenFree holds tasks whose keep answer owed a dispatch
+	// while a claimSteer held the settled slot; that steer's release gives
+	// the slot back and asks dispatchDue. dispatch.go notes it; steer.go
+	// clears it on release. Memory and nothing durable, under mu.
+	redispatchWhenFree map[string]bool
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
