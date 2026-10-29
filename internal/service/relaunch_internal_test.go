@@ -756,6 +756,12 @@ func TestASecondHandoutAfterLostAckDoesNotStartASecondAttemptWhenAlreadyRelaunch
 	if out.launch.attempt != 2 || out.superseded != ref {
 		t.Fatalf("the relaunch established %+v, want attempt 2 superseding %s", out, ref)
 	}
+	// While the first relaunch's launch has not settled the slot, a second
+	// is refused as in flight; once it has, as the record stands, not due.
+	if _, err := sub.restart.relaunchTask(ctx, sub.task); !errors.Is(err, errRelaunchInFlight) {
+		t.Fatalf("a second relaunch while the first's launch holds the slot = %v, want in flight", err)
+	}
+	out.launch.settleSlot()
 	if _, err := sub.restart.relaunchTask(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
 		t.Fatalf("a second relaunch after the program already relaunched = %v, want not due", err)
 	}

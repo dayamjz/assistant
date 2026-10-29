@@ -39,10 +39,17 @@ func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 // newLaunchSubjectAs is newLaunchSubject over a task recorded with role.
 func newLaunchSubjectAs(t *testing.T, agent *standin.Agent, role string) *launchSubject {
 	t.Helper()
-	sub := newDispatchSubjectAs(t, role)
+	return launchSubjectOver(t, agent, newDispatchSubjectAs(t, role))
+}
+
+// launchSubjectOver is newLaunchSubject over a dispatch subject the caller
+// built.
+func launchSubjectOver(t *testing.T, agent *standin.Agent, sub *dispatchSubject) *launchSubject {
+	t.Helper()
 	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	sub.service.cfg = config.Defaults()
 	sub.service.registry = newRegistry()
+	sub.service.starting = make(map[branchKey]*branchGate)
 	t.Cleanup(func() {
 		for _, err := range sub.service.closeSessions() {
 			t.Errorf("closing the sessions: %v", err)
