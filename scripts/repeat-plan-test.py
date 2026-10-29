@@ -138,6 +138,32 @@ def listing_with_leftover(test, exit_code=0, diagnostic=None):
     return root, [str(script)]
 
 
+def listing_with_stdio_escapee(test):
+    """A listing that starts a setsid child which keeps the listing's stdout
+    and stderr open, prints TestProbe, and exits 0. The escapee's pid is in
+    escapee.pid; the leader's in leader.pid. Round 3's pipe readers blocked
+    on close behind that child; temp-file capture must not (#744 round 4)."""
+    root = Path(tempfile.mkdtemp(prefix="repeat-plan-stdio-escapee-"))
+    test.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
+    escapee = shlex.quote(str(root / "escapee.pid"))
+    leader = shlex.quote(str(root / "leader.pid"))
+    code = (
+        "import os, pathlib, sys, time; os.setsid(); "
+        "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(600)"
+    )
+    script = root / "list.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {leader}\n"
+        f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} {escapee} &\n"
+        f"while [ ! -s {escapee} ]; do sleep 0.05; done\n"
+        "echo TestProbe\n"
+        "exit 0\n"
+    )
+    script.chmod(0o755)
+    return root, [str(script)]
+
+
 def mid_discovery_script(test):
     """A listing command that records its pgid and sleeps, so a signal can
     reach the planner while discovery is still waiting on it."""
@@ -451,6 +477,159 @@ class PlanTest(unittest.TestCase):
         self.assertIn("nothing in it is left", message)
         if diagnostic is not None:
             self.assertIn(diagnostic, message)
+
+    def _assert_scan_cannot_tell_ends_group(self, ps_runner, reason_substr):
+        """ps_runner makes the leftover scan cannot-tell: cleanup still runs,
+        the run is refused (never a successful TestProbe pattern), and the
+        wall time stays inside discovery_bound."""
+        root, cmd = listing_with_leftover(self, exit_code=0)
+        previous = repeat_plan._ps_runner
+        repeat_plan._ps_runner = ps_runner
+        self.addCleanup(lambda: setattr(repeat_plan, "_ps_runner", previous))
+        started = time.monotonic()
+        err = None
+        try:
+            repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        except RuntimeError as exc:
+            err = exc
+        elapsed = time.monotonic() - started
+        leftover = recorded_pid(root / "leftover.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, leftover)
+        self.assertIsNotNone(leftover, "the listing never started its leftover sleep")
+        self.assertIsNotNone(leader, "the listing never recorded its process group")
+        self.assertIsNotNone(err, "cannot-tell must refuse, not return success")
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members")
+        self.assertFalse(running(leftover), f"leftover sleep {leftover} outlived discovery")
+        message = str(err)
+        self.assertIn("could not inspect its process group", message)
+        self.assertIn(reason_substr, message)
+        self.assertIn("TestProbe", message)  # diagnostics preserved
+        self.assertNotRegex(message, r"^\^\(TestProbe\)\$$")
+        self.assertLessEqual(
+            elapsed, repeat_plan.discovery_bound(STALL_TIMEOUT),
+            f"scan path exceeded discovery_bound: {elapsed:g}s",
+        )
+
+    def test_ps_permission_error_refuses_and_still_ends_the_group(self):
+        # Fail before (a5e1854): PermissionError from ps skipped end_process_group.
+        def boom(*args, **kwargs):
+            raise PermissionError("ps: Operation not permitted")
+
+        self._assert_scan_cannot_tell_ends_group(boom, "PermissionError")
+
+    def test_ps_file_not_found_refuses_and_still_ends_the_group(self):
+        # Fail before (a5e1854): FileNotFoundError from ps skipped cleanup.
+        def boom(*args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "ps")
+
+        self._assert_scan_cannot_tell_ends_group(boom, "FileNotFoundError")
+
+    def test_ps_exit_1_refuses_instead_of_treating_the_group_as_empty(self):
+        # Fail before (a5e1854): ps exit 1 became [], so leftover+exit 0 succeeded.
+        def failed_ps(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 1, "", "ps: permission denied\n")
+
+        self._assert_scan_cannot_tell_ends_group(failed_ps, "ps exited 1")
+
+    def test_ps_stall_past_deadline_refuses_within_the_bound(self):
+        # Fail before (a5e1854 / #727): the scan had no deadline; a stall
+        # deferred cleanup past discovery_bound.
+        scan_timeout = 0.2
+
+        def stalling_ps(cmd, **kwargs):
+            timeout = kwargs.get("timeout", scan_timeout)
+            time.sleep(timeout + 0.05)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+
+        previous_timeout = repeat_plan.DISCOVERY_SCAN_TIMEOUT
+        repeat_plan.DISCOVERY_SCAN_TIMEOUT = scan_timeout
+        self.addCleanup(
+            lambda: setattr(repeat_plan, "DISCOVERY_SCAN_TIMEOUT", previous_timeout))
+        # scan_process_group defaults to the module constant at call time via
+        # its default arg; pass through _ps_runner only — rebind the default
+        # by calling with the constant read inside scan via timeout= parameter
+        # from run_discovery, which uses DISCOVERY_SCAN_TIMEOUT at call time.
+        root, cmd = listing_with_leftover(self, exit_code=0)
+        previous = repeat_plan._ps_runner
+        repeat_plan._ps_runner = stalling_ps
+        self.addCleanup(lambda: setattr(repeat_plan, "_ps_runner", previous))
+        started = time.monotonic()
+        err = None
+        try:
+            repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        except RuntimeError as exc:
+            err = exc
+        elapsed = time.monotonic() - started
+        leftover = recorded_pid(root / "leftover.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, leftover)
+        self.assertIsNotNone(err, "stalled ps must refuse")
+        self.assertIn("could not inspect its process group", str(err))
+        self.assertIn("ps timed out", str(err))
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members")
+        self.assertFalse(running(leftover), f"leftover sleep {leftover} outlived discovery")
+        self.assertLessEqual(
+            elapsed, repeat_plan.discovery_bound(STALL_TIMEOUT),
+            f"stalled scan exceeded discovery_bound: {elapsed:g}s",
+        )
+
+    def test_escaped_descendant_holding_stdio_does_not_block_discovery(self):
+        # Fail before (a5e1854): closing PIPE ends blocked behind reader
+        # threads while a setsid child held stdout/stderr.
+        root, cmd = listing_with_stdio_escapee(self)
+        started = time.monotonic()
+        result = repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        elapsed = time.monotonic() - started
+        escapee = recorded_pid(root / "escapee.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, escapee)
+        self.assertIsNotNone(escapee, "the listing never started its setsid child")
+        self.assertIsNotNone(leader)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TestProbe", result.stdout)
+        self.assertTrue(running(escapee), "setsid child should outlive discovery")
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members")
+        self.assertLessEqual(
+            elapsed, repeat_plan.discovery_bound(STALL_TIMEOUT),
+            f"stdio escapee blocked past discovery_bound: {elapsed:g}s",
+        )
+
+    def test_treating_a_failed_scan_as_empty_is_caught(self):
+        # Positive control: the a5e1854 bug (failed ps → []) would accept a
+        # leftover listing. Confirm that lie returns success, and the real
+        # cannot-tell path refuses.
+        root, cmd = listing_with_leftover(self, exit_code=0)
+        real_scan = repeat_plan.scan_process_group
+
+        def lie_empty(pgid, timeout=repeat_plan.DISCOVERY_SCAN_TIMEOUT):
+            return ("none",)
+
+        repeat_plan.scan_process_group = lie_empty
+        try:
+            lied = repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        finally:
+            repeat_plan.scan_process_group = real_scan
+        leftover = recorded_pid(root / "leftover.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, leftover)
+        self.assertEqual(lied.returncode, 0, lied.stderr)
+        self.assertIn("TestProbe", lied.stdout)
+        self.assertTrue(group_empty(leader), f"cleanup still runs under the lie")
+        # Real path with ps exit 1 must refuse (the guard this control watches).
+        def failed_ps(cmd_args, **kwargs):
+            return subprocess.CompletedProcess(cmd_args, 1, "", "denied\n")
+
+        previous = repeat_plan._ps_runner
+        repeat_plan._ps_runner = failed_ps
+        self.addCleanup(lambda: setattr(repeat_plan, "_ps_runner", previous))
+        root2, cmd2 = listing_with_leftover(self, exit_code=0)
+        with self.assertRaises(RuntimeError) as ctx:
+            repeat_plan.run_discovery(cmd2, timeout=STALL_TIMEOUT)
+        leftover2 = recorded_pid(root2 / "leftover.pid")
+        self.addCleanup(end_survivor, leftover2)
+        self.assertIn("could not inspect its process group", str(ctx.exception))
+        self.assertFalse(running(leftover2))
 
     def test_discovery_ends_its_group_when_the_planner_gets_sigint(self):
         self._assert_signal_ends_discovery_group(signal.SIGINT)
