@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sort"
 	"strconv"
@@ -227,7 +228,7 @@ type procResult struct {
 	// which case stdout is empty because the output was discarded.
 	over bool
 	// startErr is the error from starting the process, and is set only when
-	// the process never ran.
+	// the process never ran for a reason other than ended.
 	startErr error
 	// waitErr is what waiting on the process reported. A failing status is
 	// reported here as an *exec.ExitError, joined to anything else the wait
@@ -239,7 +240,8 @@ type procResult struct {
 	// ended is the error of the context the invocation ran under, read once
 	// it returned: the caller's context's error, or the invocation
 	// deadline's when the caller's context carried none. It is nil when
-	// neither ended.
+	// neither ended. It is also set, with startErr nil, when that context
+	// had ended before the process could start.
 	ended error
 }
 
@@ -276,6 +278,14 @@ func runProvider(ctx context.Context, s *settings, env []string, stdin string, a
 	// left it costs at most the grace period.
 	waitErr := procgroup.Run(ctx, cmd, s.grace)
 	if cmd.Process == nil {
+		// procgroup.Run starts nothing once ctx has ended and answers its
+		// error, so that is the call ending before the provider answered, as
+		// it is when ctx ends while the provider runs, and not a command line
+		// that could not be run. Any other refusal to start is kept as
+		// itself, even where ctx ended meanwhile.
+		if ended := ctx.Err(); ended != nil && errors.Is(waitErr, ended) {
+			return procResult{code: -1, ended: ended}
+		}
 		return procResult{code: -1, startErr: waitErr}
 	}
 

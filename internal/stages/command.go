@@ -50,9 +50,10 @@ import (
 // it inherited. procgroup's package comment owns those gaps.
 const commandGrace = 5 * time.Second
 
-// errCommandTimedOut is what a result carries when the command ran past
-// commandSpec.timeout and was ended, on linux and darwin with its process
-// group.
+// errCommandTimedOut is what a result carries when commandSpec.timeout passed
+// before the command ended: it ran past the limit and was ended, on linux and
+// darwin with its process group, or the limit had passed before it could
+// start and it was not run.
 var errCommandTimedOut = errors.New("stages: the command ran past its time limit")
 
 // errOutputAbandoned is what a result carries when the command's output was
@@ -95,7 +96,10 @@ type commandSpec struct {
 	grace time.Duration
 	// timeout, when positive, is how long the command may run before it is
 	// ended with its process group and the result carries
-	// errCommandTimedOut. A stage body passes config.KeyCommandTimeout's
+	// errCommandTimedOut. It is measured from when the command holds its
+	// slot, before it is started, so a limit that passes first leaves the
+	// command not run and the result carrying errCommandTimedOut all the
+	// same. A stage body passes config.KeyCommandTimeout's
 	// value through StageDeps.stageCommand; zero adds no bound of its own to
 	// ctx's, which is what an operator's command, bounded by its caller,
 	// passes.
@@ -188,17 +192,10 @@ type commandResult struct {
 // pipe. A child that left the group keeps the other side, and keeps running;
 // commandGrace says what is and is not bounded.
 func runCommand(ctx context.Context, spec commandSpec) commandResult {
-	tail := &tailWriter{limit: spec.projection}
-	out := io.MultiWriter(spec.record, tail)
-	settle := func(res commandResult) commandResult {
-		res.tail, res.omitted = tail.projection()
-		return res
-	}
-
 	if spec.slots != nil {
 		if err := spec.slots.acquire(ctx); err != nil {
-			return settle(commandResult{code: -1,
-				err: fmt.Errorf("waiting for a free command slot: %w", err)})
+			return commandResult{code: -1,
+				err: fmt.Errorf("waiting for a free command slot: %w", err)}
 		}
 		defer spec.slots.release()
 	}
@@ -207,6 +204,21 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 		var cancel context.CancelFunc
 		runCtx, cancel = context.WithTimeout(ctx, spec.timeout)
 		defer cancel()
+	}
+	return runBounded(ctx, runCtx, spec)
+}
+
+// runBounded is runCommand once the command holds its slot: it runs spec
+// under runCtx, which is ctx itself when spec.timeout is zero and otherwise
+// ctx bounded by spec.timeout, and reports what happened as runCommand does.
+// The bound is made by runCommand and handed in so that a test can hand it
+// one that has already passed, which no timing can do reliably.
+func runBounded(ctx, runCtx context.Context, spec commandSpec) commandResult {
+	tail := &tailWriter{limit: spec.projection}
+	out := io.MultiWriter(spec.record, tail)
+	settle := func(res commandResult) commandResult {
+		res.tail, res.omitted = tail.projection()
+		return res
 	}
 
 	read, write, err := os.Pipe()
@@ -262,16 +274,26 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	// run for ever, since this process would itself be the writer the read is
 	// waiting on.
 	_ = write.Close()
+	// Whether this call's own bound ended the command is read now, when the
+	// command has ended or was never started, and not after the output is
+	// waited for: a descendant outside the group can hold the output past the
+	// bound, and the bound passing then says nothing about what ended the
+	// command. A deadline or cancellation of ctx's own is the caller's to read
+	// from ctx.
+	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	if cmd.Process == nil {
 		<-copied
-		return settle(commandResult{code: -1, err: runErr})
+		res := commandResult{code: -1, err: runErr}
+		// procgroup.Run starts nothing once runCtx has ended and answers its
+		// error, so a bound that passed before the command could start is
+		// read by the same rule as one that passed while it ran. Any other
+		// refusal to start is kept as itself, even where the bound passed
+		// meanwhile, since the bound is then not what stopped the command.
+		if timedOut && errors.Is(runErr, context.DeadlineExceeded) {
+			res.err = fmt.Errorf("%w of %s before it could start, so it was not run", errCommandTimedOut, spec.timeout)
+		}
+		return settle(res)
 	}
-	// Whether this call's own bound ended the command is read now, when the
-	// command has ended, and not after the output is waited for: a descendant
-	// outside the group can hold the output past the bound, and the bound
-	// passing then says nothing about what ended the command. A deadline or
-	// cancellation of ctx's own is the caller's to read from ctx.
-	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 
 	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
 	// A command procgroup.Run abandoned reports no status: procgroup.ErrAbandoned
