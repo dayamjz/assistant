@@ -23,11 +23,14 @@ builds them on this machine, under a deadline that ends go's process group
 """
 
 import argparse
+import errno
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 RISKY = {
@@ -95,25 +98,31 @@ def _group_present(pgid):
     return True
 
 
+# Test hooks (None in production). before_group_signal(signum, proc) runs
+# immediately before each killpg, while the leader must still be unreaped.
+# after_leader_reap(proc) runs once after proc.wait has reaped the leader.
+before_group_signal = None
+after_leader_reap = None
+
+
 def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
     """End the process group proc leads, started with start_new_session, and
     say how far that got.
 
-    Signals go to the group while the leader is unreaped (its returncode
-    unset), when its pid names that group and no other (internal/procgroup's
-    package comment says why), or while members remain after the leader was
-    reaped (communicate returned while a child stayed): SIGTERM, then
-    SIGKILL after grace whether or not anything is left. An empty group
-    after a reap is not signalled; that id may then name another. Then the
-    leader is reaped if still unreaped and the group polled with signal 0
-    until nothing answers, within one more grace. A process that left the
-    group, by setsid or setpgid of its own, is not in it: no signal here
-    reaches it, and the answer does not count it.
+    Mirrors internal/procgroup's rule: the group is signalled only while its
+    leader is unreaped (see that package's "The one rule about signalling").
+    SIGTERM, then SIGKILL after grace, every signal before the reap; then
+    proc.wait reaps the leader and the group is polled with signal 0 until
+    nothing answers, within one more grace. A leader that was already reaped
+    is not signalled (its id may name another group). A process that left
+    the group, by setsid or setpgid of its own, is not in it.
     """
     pgid = proc.pid
-    if proc.returncode is not None and not _group_present(pgid):
-        return "not signalled; its leader was already reaped and nothing was in its group"
+    if proc.returncode is not None:
+        return "not signalled; its leader was already reaped, so its id may name another group"
     for sig in (signal.SIGTERM, signal.SIGKILL):
+        if before_group_signal is not None:
+            before_group_signal(sig, proc)
         try:
             os.killpg(pgid, sig)
         except (ProcessLookupError, PermissionError):
@@ -122,11 +131,12 @@ def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
             time.sleep(grace)
     sent = f"SIGTERM, then SIGKILL {grace:g}s later"
     deadline = time.monotonic() + grace
-    if proc.returncode is None:
-        try:
-            proc.wait(timeout=grace)
-        except subprocess.TimeoutExpired:
-            return f"{sent}; its leader had not exited {grace:g}s after SIGKILL"
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return f"{sent}; its leader had not exited {grace:g}s after SIGKILL"
+    if after_leader_reap is not None:
+        after_leader_reap(proc)
     while _group_present(pgid):
         if time.monotonic() >= deadline:
             return f"{sent}; a process was still in it {grace:g}s after SIGKILL"
@@ -193,27 +203,115 @@ def _end_cleanup():
     return signum
 
 
+def _await_exit_kqueue(pid, deadline):
+    """Darwin: kqueue NOTE_EXIT, leaving pid unreaped (procgroup AwaitExit)."""
+    kq = select.kqueue()
+    try:
+        change = select.kevent(
+            pid,
+            filter=select.KQ_FILTER_PROC,
+            flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+            fflags=select.KQ_NOTE_EXIT,
+        )
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            events = kq.control([change] if change is not None else None, 1, remaining)
+            change = None
+            if not events:
+                return False
+            ev = events[0]
+            if ev.flags & select.KQ_EV_ERROR:
+                if ev.data == errno.ESRCH:
+                    return True
+                raise OSError(ev.data, "kevent")
+            if ev.fflags & select.KQ_NOTE_EXIT:
+                return True
+    finally:
+        kq.close()
+
+
+def _await_exit_waitid(pid, deadline):
+    """Linux: waitid WEXITED|WNOWAIT, leaving pid unreaped (procgroup AwaitExit)."""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        try:
+            info = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        except ChildProcessError:
+            return True
+        if info is not None:
+            return True
+        time.sleep(min(0.05, remaining))
+
+
+def await_leader_exit(pid, deadline):
+    """True if pid has exited and is still unreaped; False if deadline passed.
+
+    Mirrors internal/procgroup.AwaitExit: darwin uses kqueue NOTE_EXIT, linux
+    uses waitid WNOWAIT. Other platforms refuse rather than reap early.
+    """
+    if sys.platform == "darwin":
+        return _await_exit_kqueue(pid, deadline)
+    if hasattr(os, "waitid") and hasattr(os, "WNOWAIT"):
+        return _await_exit_waitid(pid, deadline)
+    raise RuntimeError(
+        f"discovery cannot observe a listing's exit without reaping on {sys.platform}; "
+        "need kqueue NOTE_EXIT (darwin) or waitid WNOWAIT (linux)"
+    )
+
+
+def _pids_in_group(pgid):
+    """Pids whose process group is pgid (including a zombie leader)."""
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,pgid="],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return []
+    pids = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and int(parts[1]) == pgid:
+            pids.append(int(parts[0]))
+    return pids
+
+
+def _drain_pipe(pipe, chunks):
+    try:
+        while True:
+            data = pipe.read(4096)
+            if not data:
+                return
+            chunks.append(data)
+    except ValueError:
+        return  # closed
+
+
 def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     """Run cmd (go test -list) as the leader of a new session and process
     group, and answer as subprocess.run does.
 
     subprocess.run's timeout ends only `go`, and the compiler, linker or test
-    binary it started runs on (#727). One finally ends go's process group
-    (end_process_group) on every exit of this call: success, nonzero status,
-    timeout, and any exception including a SIGINT/SIGTERM turned into
-    SystemExit by install_termination_signals. While that cleanup runs
-    (SIGTERM, grace, SIGKILL, empty check), termination signals are deferred
-    and honored only after the group is ended, so a SIGTERM during the grace
-    cannot leave the listing alive. A listing that exits while a member of
-    its group is still running fails after those members are ended
-    (discovery_error), so the leftover is not silent to the later leak-check
-    baseline (P15). That is all it ends: a descendant that started a session
-    or group of its own (setsid, setpgid) is outside the group and runs on.
-    SIGKILL of this process runs no finally and cannot be deferred. Nothing
-    in this repository ends or reports either gap: CI runs discovery only in
-    steps before scripts/ci-test.sh's, outside its Linux PID namespace, and
-    its leak check reports only what is new once its own run has begun.
-    discovery_bound(timeout) is the longest this waits on the timeout path.
+    binary it started runs on (#727). This waits for the leader's exit without
+    reaping it (await_leader_exit), then one finally ends the process group
+    while the leader is still unreaped — the same signalling rule as
+    internal/procgroup — and only then reaps: success, nonzero status, timeout,
+    and any exception including a SIGINT/SIGTERM turned into SystemExit by
+    install_termination_signals. While that cleanup runs (SIGTERM, grace,
+    SIGKILL, empty check), termination signals are deferred and honored only
+    after the group is ended. A listing that exits while another member of its
+    group is still running fails after those members are ended
+    (discovery_error). That is all it ends: a descendant that started a
+    session or group of its own (setsid, setpgid) is outside the group and
+    runs on. SIGKILL of this process runs no finally and cannot be deferred.
+    Nothing in this repository ends or reports either gap: CI runs discovery
+    only in steps before scripts/ci-test.sh's, outside its Linux PID
+    namespace, and its leak check reports only what is new once its own run
+    has begun. discovery_bound(timeout) is the longest this waits on the
+    timeout path.
     """
     proc = subprocess.Popen(
         cmd,
@@ -224,34 +322,43 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
         env=env,
         start_new_session=True,
     )
+    stdout_chunks, stderr_chunks = [], []
+    t_out = threading.Thread(target=_drain_pipe, args=(proc.stdout, stdout_chunks), daemon=True)
+    t_err = threading.Thread(target=_drain_pipe, args=(proc.stderr, stderr_chunks), daemon=True)
+    t_out.start()
+    t_err.start()
     timed_out = False
     pending = None
-    stdout = stderr = ""
     leftover_after_exit = False
     ended = ""
     deferred = None
+    deadline = time.monotonic() + timeout
     try:
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            if exc.stdout:
-                stdout = exc.stdout
-            if exc.stderr:
-                stderr = exc.stderr
+            if not await_leader_exit(proc.pid, deadline):
+                timed_out = True
         except BaseException as err:
             pending = err
     finally:
-        # Leader already reaped with members still in the group: a leftover
-        # after exit. End them here; the raise below fails the listing.
         # Defer SIGINT/SIGTERM until cleanup finishes (#744 round 2).
+        # Signal only while unreaped (#744 round 3 / procgroup).
         _begin_cleanup()
         try:
-            leftover_after_exit = proc.returncode is not None and _group_present(proc.pid)
+            if (
+                not timed_out
+                and pending is None
+                and proc.returncode is None
+            ):
+                others = [p for p in _pids_in_group(proc.pid) if p != proc.pid]
+                leftover_after_exit = bool(others)
             ended = end_process_group(proc)
+            t_out.join(timeout=5)
+            t_err.join(timeout=5)
             _close_discovery_pipes(proc)
         finally:
             deferred = _end_cleanup()
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
     if deferred is not None:
         raise SystemExit(128 + deferred)
     if pending is not None:
