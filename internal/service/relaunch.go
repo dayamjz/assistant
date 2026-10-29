@@ -197,19 +197,11 @@ type relaunched struct {
 // left alone, and a release that fails is logged; neither changes what was
 // recorded.
 func (s *Service) relaunchTask(ctx context.Context, id string) (relaunched, error) {
-	return s.relaunchTaskWith(ctx, id, "")
-}
-
-// relaunchTaskWith is relaunchTask carrying the note a retry on a stop's
-// hold gave, which steer.go's steeringNote places after the relaunch note;
-// it is added only when the superseded attempt's stop hold is answered
-// retry, the one relaunch a stop's note is for.
-func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (relaunched, error) {
 	settle, err := s.claimRelaunch(id)
 	if err != nil {
 		return relaunched{}, err
 	}
-	out, err := s.relaunchClaimed(ctx, id, stopNote)
+	out, err := s.relaunchClaimed(ctx, id)
 	settle(out.launch.proof)
 	if err == nil {
 		s.releaseSuperseded(id, out.superseded)
@@ -237,7 +229,7 @@ func (s *Service) releaseSuperseded(id, ref string) {
 }
 
 // relaunchClaimed is relaunchTask once the in-memory slot is taken.
-func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (relaunched, error) {
+func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, error) {
 	if s.terminals == nil {
 		return relaunched{}, errRelaunchUnprobed
 	}
@@ -287,9 +279,15 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 	if err != nil {
 		return relaunched{}, err
 	}
+	latest := attempts[len(attempts)-1]
+	stopNote := ""
+	if answered.stopped == boundRetry {
+		if stopNote, err = s.stopNoteOf(ctx, id, latest.Sequence); err != nil {
+			return relaunched{}, err
+		}
+	}
 
 	// The re-probe, then the sweep, then the claim.
-	latest := attempts[len(attempts)-1]
 	ref, _ := latest.SessionRef.Get()
 	if liveness := probe(ctx, ref); liveness != taskstate.Dead {
 		return relaunched{}, fmt.Errorf("%w: task %s: it reads %s", errRelaunchNotDead, id, liveness)
@@ -360,8 +358,9 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 	told := relaunchNote(attempt.Sequence, reason)
 	if answered.stopped == boundRetry {
 		// A stopped attempt's relaunch carries what steer.go says it does,
-		// read from the records the stop left; a read that fails is logged
-		// and the relaunch, already recorded, goes on with the note alone.
+		// read from the records the stop left; the note was read before the
+		// claim, and a read of the messages that fails is logged and the
+		// relaunch, already recorded, goes on without them.
 		unacknowledged, err := s.unacknowledgedOf(ctx, id, latest.Sequence)
 		if err != nil {
 			s.log.Printf("the unacknowledged messages of task %s attempt %d could not be read for its relaunch: %v", id, latest.Sequence, err)
@@ -402,6 +401,29 @@ func (s *Service) promotedReportOf(ctx context.Context, task store.Task) (store.
 		return store.TaskReport{}, false, fmt.Errorf("service: reading the stored report of promoted task %s for its relaunch: %w", task.ID, err)
 	}
 	return report, true, nil
+}
+
+// stopNoteOf is the note recorded with the retry on the stop's hold of the
+// task's attempt, the one owner of what that answer told the next worker, so
+// a relaunch the answer began and one a later start makes on the same
+// recorded retry carry the same note (#604). It is empty when that hold is
+// not answered retry or was answered with no note, which includes a retry
+// recorded only on the worker fallback's hold: that is not this hold, so it
+// adds no note here. The note is stored redacted, so it reaches the worker
+// with credentials removed, as a message's text does. A read that fails refuses the relaunch
+// before anything is claimed rather than starting a worker without the note
+// it is owed.
+func (s *Service) stopNoteOf(ctx context.Context, id string, attempt int64) (string, error) {
+	h, err := s.store.Hold(ctx, stoppedKey(id, attempt))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("service: reading the note on the stop's hold of task %s attempt %d for its relaunch: %w", id, attempt, err)
+	case h.Resolution.Or("") != machine.AnswerRetry:
+		return "", nil
+	}
+	return h.ResolutionNote.Or(""), nil
 }
 
 // promotedReportNote is the stored report a promoted task's relaunched

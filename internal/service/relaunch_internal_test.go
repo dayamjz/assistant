@@ -145,7 +145,7 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer arrived.Leave()
-			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
+			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task)
 		}()
 	}
 	wg.Wait()
@@ -486,7 +486,7 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 	}
 	// Below the slot, which the earlier relaunch holds: the table itself
 	// refuses a relaunch past the bound.
-	if _, err := sub.restart.relaunchClaimed(ctx, sub.task, ""); !errors.Is(err, errRelaunchNotDue) {
+	if _, err := sub.restart.relaunchClaimed(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
 		t.Fatalf("a relaunch past the bound answered %v, want not due", err)
 	}
 }
