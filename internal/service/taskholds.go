@@ -135,13 +135,16 @@ import (
 //
 // steer.go's task.stop registers a hold keyed by the attempt it stopped,
 // stoppedKey, once the probe read the worker dead. It is answered retry or
-// stop like the three above, and a retry may carry a note. answerStopRetry
-// asks relaunchTaskWith, the one anchored relaunch, which reads the answer
-// back through relaunchAnswersOf and starts the worker with the note and the
-// stopped attempt's unacknowledged messages; the relaunch is counted by
-// relaunch_attempts, so past the bound the bound's hold is registered at
-// once and the answer is machine.AnswerRetryAtBound. A stop is read by
-// decideReconciliation, which leaves the task alone for that attempt.
+// stop like the three above, and a retry may carry a note, recorded with the
+// resolution. answerStopRetry asks relaunchTask, the one anchored relaunch,
+// which reads the answer back through relaunchAnswersOf and the note through
+// stopNoteOf, and starts the worker with the note and the stopped attempt's
+// unacknowledged messages. Because both are read from the records, a
+// relaunch this answer does not begin, deferred to the next start or made
+// later on the bound's own retry, carries them too (#604). The relaunch is
+// counted by relaunch_attempts, so past the bound the bound's hold is
+// registered at once and the answer is machine.AnswerRetryAtBound. A stop is
+// read by decideReconciliation, which leaves the task alone for that attempt.
 //
 // # A local task's approval
 //
@@ -452,9 +455,10 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold and a
 // hold another caller answered first is store.ErrHoldResolved, each wrapped
 // in ipc.ErrRefused. None of those records anything. A note is recorded with the resolution; on a retry of a
-// stop's hold it is also what the relaunched worker is told. A retry on a
-// relaunch hold asks relaunchTask, one on a stop's hold asks
-// relaunchTaskWith with the note, through answerStopRetry, and one on the
+// stop's hold it is also what the relaunched worker is told, read from that
+// record by whichever relaunch the retry leads to. A retry on a relaunch
+// hold asks relaunchTask, one on a stop's hold asks it through
+// answerStopRetry, and one on the
 // dispatch's no-sweep hold asks redispatchTask, through answerDispatchRetry.
 // A retry that began an attempt reports AnswerRelaunched or
 // AnswerRedispatched; one refused now is not an error: the decision is
@@ -616,16 +620,17 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 }
 
 // answerStopRetry acts on a retry recorded on a stop's hold: it relaunches
-// through relaunchTaskWith, the one anchored relaunch, carrying the answer's
-// note and the stopped attempt's unacknowledged messages on steer.go's
-// terms, and launches what that proved in the background. The effects are a
-// relaunch's, with one more: a stopped task already relaunched
+// through relaunchTask, the one anchored relaunch, which carries the note
+// recorded with the answer and the stopped attempt's unacknowledged messages
+// on steer.go's terms, and launches what that proved in the background. The
+// effects are a relaunch's, with one more: a stopped task already relaunched
 // relaunch_attempts times is past the bound like every other, so the
 // bound's hold is registered for the attempt now rather than at the next
-// start, and the answer is AnswerRetryAtBound naming it. The note does not
-// survive that wait, because it is recorded nowhere, and the answer says so.
+// start, and the answer is AnswerRetryAtBound naming it. The note survives
+// that wait, because it is read from the stop's hold the answer resolved,
+// which the bound's retry leaves as it is, and the answer says so.
 func (s *Service) answerStopRetry(ctx context.Context, r machine.TaskRespondRequest, hold store.Hold, out *machine.TaskAnswered) {
-	relaunch, err := s.relaunchTaskWith(ctx, r.Task, r.Note)
+	relaunch, err := s.relaunchTask(ctx, r.Task)
 	var unswept *relaunchUnswept
 	switch {
 	case errors.As(err, &unswept):
@@ -638,7 +643,7 @@ func (s *Service) answerStopRetry(ctx context.Context, r machine.TaskRespondRequ
 			out.NotRelaunched = fmt.Sprintf("the task has been relaunched as many times as relaunch_attempts allows, so it holds on %s; "+
 				"a retry there relaunches it with its unacknowledged messages", bound.Key)
 			if r.Note != "" {
-				out.NotRelaunched += ", and without the note given here, which is not recorded"
+				out.NotRelaunched += " and the note given here, which is recorded with this answer"
 			}
 			s.log.Printf("task %s was answered %q on hold %s and was not relaunched, because it is past its relaunch bound and holds on %s",
 				r.Task, r.Answer, hold.Key, bound.Key)

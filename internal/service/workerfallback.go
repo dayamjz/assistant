@@ -248,7 +248,7 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 		var next relaunched
 		deadline := time.Now().Add(2 * time.Second)
 		for {
-			next, err = s.relaunchClaimed(ctx, task.ID, "")
+			next, err = s.relaunchClaimed(ctx, task.ID)
 			if err == nil || !errors.Is(err, errRelaunchNotDead) || ctx.Err() != nil || !time.Now().Before(deadline) {
 				break
 			}
