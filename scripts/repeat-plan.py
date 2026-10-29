@@ -99,17 +99,20 @@ def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
     """End the process group proc leads, started with start_new_session, and
     say how far that got.
 
-    Both signals go to the group only while proc is unreaped (its returncode
+    Signals go to the group while the leader is unreaped (its returncode
     unset), when its pid names that group and no other (internal/procgroup's
-    package comment says why): SIGTERM, then SIGKILL after grace whether or
-    not anything is left. Then proc is reaped and the group polled with
-    signal 0 until nothing answers, within one more grace. A process that
-    left the group, by setsid or setpgid of its own, is not in it: no signal
-    here reaches it, and the answer does not count it.
+    package comment says why), or while members remain after the leader was
+    reaped (communicate returned while a child stayed): SIGTERM, then
+    SIGKILL after grace whether or not anything is left. An empty group
+    after a reap is not signalled; that id may then name another. Then the
+    leader is reaped if still unreaped and the group polled with signal 0
+    until nothing answers, within one more grace. A process that left the
+    group, by setsid or setpgid of its own, is not in it: no signal here
+    reaches it, and the answer does not count it.
     """
     pgid = proc.pid
-    if proc.returncode is not None:
-        return "not signalled; its leader was already reaped, so its id may name another group"
+    if proc.returncode is not None and not _group_present(pgid):
+        return "not signalled; its leader was already reaped and nothing was in its group"
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try:
             os.killpg(pgid, sig)
@@ -119,10 +122,11 @@ def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
             time.sleep(grace)
     sent = f"SIGTERM, then SIGKILL {grace:g}s later"
     deadline = time.monotonic() + grace
-    try:
-        proc.wait(timeout=grace)
-    except subprocess.TimeoutExpired:
-        return f"{sent}; its leader had not exited {grace:g}s after SIGKILL"
+    if proc.returncode is None:
+        try:
+            proc.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            return f"{sent}; its leader had not exited {grace:g}s after SIGKILL"
     while _group_present(pgid):
         if time.monotonic() >= deadline:
             return f"{sent}; a process was still in it {grace:g}s after SIGKILL"
@@ -130,19 +134,30 @@ def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
     return f"{sent}; nothing in it is left"
 
 
+def _close_discovery_pipes(proc):
+    for pipe in (proc.stdout, proc.stderr):
+        if pipe is not None:
+            pipe.close()
+
+
 def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     """Run cmd (go test -list) as the leader of a new session and process
     group, and answer as subprocess.run does.
 
     subprocess.run's timeout ends only `go`, and the compiler, linker or test
-    binary it started runs on (#727). Here a timeout ends go's process group
-    (end_process_group) before raising, and the error says how far that got.
-    That is all it ends: a descendant that started a session or group of its
-    own (setsid, setpgid) is outside the group and runs on. Nothing in this
-    repository ends or reports it: CI runs discovery only in steps before
+    binary it started runs on (#727). One finally ends go's process group
+    (end_process_group) on every exit of this call: success, nonzero status,
+    timeout, and any exception including KeyboardInterrupt and a SIGTERM
+    turned into SystemExit by install_termination_signals. A listing that
+    exits while a member of its group is still running fails after those
+    members are ended, so the leftover is not silent to the later leak-check
+    baseline (P15). That is all it ends: a descendant that started a session
+    or group of its own (setsid, setpgid) is outside the group and runs on.
+    SIGKILL of this process runs no finally. Nothing in this repository ends
+    or reports either gap: CI runs discovery only in steps before
     scripts/ci-test.sh's, outside its Linux PID namespace, and its leak
     check reports only what is new once its own run has begun.
-    discovery_bound(timeout) is the longest this waits.
+    discovery_bound(timeout) is the longest this waits on the timeout path.
     """
     proc = subprocess.Popen(
         cmd,
@@ -153,26 +168,62 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
         env=env,
         start_new_session=True,
     )
+    timed_out = False
+    pending = None
+    stdout = stderr = ""
+    leftover_after_exit = False
+    ended = ""
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        except BaseException as err:
+            pending = err
+    finally:
+        # Leader already reaped with members still in the group: a leftover
+        # after exit. End them here; the raise below fails the listing.
+        leftover_after_exit = proc.returncode is not None and _group_present(proc.pid)
         ended = end_process_group(proc)
-        proc.stdout.close()
-        proc.stderr.close()
+        _close_discovery_pipes(proc)
+    if pending is not None:
+        raise pending
+    if timed_out:
         raise RuntimeError(
             f"discovery timed out after {timeout:g}s; process group {proc.pid}: {ended}. "
             f"A descendant that started a session or group of its own (setsid, setpgid) "
             f"is outside that group and is not ended: {' '.join(cmd)}"
         ) from None
+    if leftover_after_exit:
+        raise RuntimeError(
+            f"discovery's process group {proc.pid} still had members after the listing "
+            f"exited {proc.returncode}; ended them: {ended}. "
+            f"A descendant that started a session or group of its own (setsid, setpgid) "
+            f"is outside that group and is not ended: {' '.join(cmd)}"
+        )
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+def _sigterm_exits(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
+def install_termination_signals():
+    """Turn SIGTERM into SystemExit so run_discovery's finally ends the group.
+
+    Python's default SIGTERM handler exits the process without running
+    finally. SIGINT already raises KeyboardInterrupt. SIGKILL cannot be
+    caught and is a residual gap named on run_discovery.
+    """
+    signal.signal(signal.SIGTERM, _sigterm_exits)
 
 
 def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=None):
     """Top-level Test names in package from `go test -race -list` on this OS.
 
-    Real runs use run_discovery, so a timeout ends go's process group and
-    what stayed in it, not only `go` (P15, #727); run_discovery says what
-    that leaves. runner is an optional test double that returns a
+    Real runs use run_discovery, so every exit ends go's process group and
+    what stayed in it, not only `go` on a timeout (P15, #727); run_discovery
+    says what that leaves. runner is an optional test double that returns a
     CompletedProcess-like object; cwd and env are the listing's directory
     and environment. On failure the error always includes Go's exit code and
     stderr (or stdout if stderr is empty), so a CI log names the cause
@@ -243,4 +294,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    install_termination_signals()
     sys.exit(main())

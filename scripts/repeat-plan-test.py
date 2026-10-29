@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 sys.dont_write_bytecode = True
@@ -80,6 +81,55 @@ def end_survivor(pid):
     except ProcessLookupError:
         pass
     return True
+
+
+def group_empty(pgid):
+    """Whether killpg(pgid, 0) raises ProcessLookupError."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    return False
+
+
+def listing_with_leftover(test, exit_code=0):
+    """A command that starts sleep 60 in its process group, prints TestProbe,
+    and exits with exit_code. Records the sleep's pid in leftover.pid and the
+    leader's pid (the process group) in leader.pid."""
+    root = Path(tempfile.mkdtemp(prefix="repeat-plan-leftover-"))
+    test.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
+    leftover = shlex.quote(str(root / "leftover.pid"))
+    leader = shlex.quote(str(root / "leader.pid"))
+    script = root / "list.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {leader}\n"
+        f"sleep 60 </dev/null >/dev/null 2>&1 &\n"
+        f"echo $! > {leftover}\n"
+        f"while [ ! -s {leftover} ]; do sleep 0.05; done\n"
+        "echo TestProbe\n"
+        f"exit {int(exit_code)}\n"
+    )
+    script.chmod(0o755)
+    return root, [str(script)]
+
+
+def mid_discovery_script(test):
+    """A listing command that records its pgid and sleeps, so a signal can
+    reach the planner while discovery is still waiting on it."""
+    root = Path(tempfile.mkdtemp(prefix="repeat-plan-mid-"))
+    test.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
+    leader = shlex.quote(str(root / "leader.pid"))
+    script = root / "list.sh"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"echo $$ > {leader}\n"
+        "exec sleep 600\n"
+    )
+    script.chmod(0o755)
+    return root, [str(script)]
 
 
 class PlanTest(unittest.TestCase):
@@ -186,10 +236,98 @@ class PlanTest(unittest.TestCase):
         self.assertIn("(setsid, setpgid) is outside that group and is not ended", message)
 
     def test_a_reaped_leader_is_not_signalled(self):
-        # Once reaped, the leader's pid may name another group (P15).
+        # Once reaped and the group is empty, the leader's pid may name
+        # another group, so end_process_group must not signal (P15).
         proc = subprocess.Popen(["true"], start_new_session=True)
         proc.wait()
         self.assertTrue(repeat_plan.end_process_group(proc).startswith("not signalled"))
+
+    def test_discovery_ends_its_group_after_exit_0_with_a_leftover(self):
+        # Fail before (62ec5dd): run_discovery returned success and left
+        # sleep running. Now the group is empty afterwards and the leftover
+        # fails the listing loudly so the later leak-check baseline cannot
+        # hide it (#744 / #727 review, P15).
+        self._assert_leftover_after_exit(exit_code=0)
+
+    def test_discovery_ends_its_group_after_nonzero_exit_with_a_leftover(self):
+        self._assert_leftover_after_exit(exit_code=7)
+
+    def _assert_leftover_after_exit(self, exit_code):
+        root, cmd = listing_with_leftover(self, exit_code=exit_code)
+        err = None
+        try:
+            repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        except RuntimeError as exc:
+            err = exc
+        leftover = recorded_pid(root / "leftover.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, leftover)
+        self.assertIsNotNone(leftover, "the listing never started its leftover sleep")
+        self.assertIsNotNone(leader, "the listing never recorded its process group")
+        self.assertIsNotNone(err, f"run_discovery returned while leftover {leftover} could still run")
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members")
+        self.assertFalse(running(leftover), f"leftover sleep {leftover} outlived discovery")
+        message = str(err)
+        self.assertIn(f"still had members after the listing exited {exit_code}", message)
+        self.assertIn("nothing in it is left", message)
+
+    def test_discovery_ends_its_group_when_the_planner_gets_sigint(self):
+        self._assert_signal_ends_discovery_group(signal.SIGINT)
+
+    def test_discovery_ends_its_group_when_the_planner_gets_sigterm(self):
+        self._assert_signal_ends_discovery_group(signal.SIGTERM)
+
+    def _assert_signal_ends_discovery_group(self, sig):
+        # Fail before (62ec5dd): interrupting the planner left discovery's
+        # child running. A real planner subprocess installs the SIGTERM
+        # handler (when present) and runs run_discovery; after the signal,
+        # the group is empty (#744 / #727 review, P15).
+        root, cmd = mid_discovery_script(self)
+        child = subprocess.Popen(
+            [
+                sys.executable, "-c",
+                "import importlib.util;"
+                f"spec = importlib.util.spec_from_file_location('rp', {str(SCRIPT)!r});"
+                "rp = importlib.util.module_from_spec(spec); spec.loader.exec_module(rp);"
+                "getattr(rp, 'install_termination_signals', lambda: None)();"
+                f"rp.run_discovery({cmd!r}, timeout=60)",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def _reap_child():
+            if child.poll() is None:
+                child.kill()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            for pipe in (child.stdout, child.stderr):
+                if pipe is not None:
+                    pipe.close()
+            # Old planners leave the listing; end it if still around.
+            leader = recorded_pid(root / "leader.pid")
+            if leader is not None:
+                try:
+                    os.killpg(leader, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+
+        self.addCleanup(_reap_child)
+        deadline = time.monotonic() + 10
+        leader = None
+        while time.monotonic() < deadline:
+            leader = recorded_pid(root / "leader.pid")
+            if leader is not None:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(leader, "discovery never reached its listing command")
+        child.send_signal(sig)
+        try:
+            child.wait(timeout=repeat_plan.discovery_bound(STALL_TIMEOUT))
+        except subprocess.TimeoutExpired:
+            self.fail(f"planner did not exit after {sig!r}")
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members after {sig!r}")
 
     def test_every_covered_package_exists(self):
         root = SCRIPT.parent.parent
