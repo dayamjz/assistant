@@ -172,11 +172,12 @@ func TestAListingSettlesBesideAZombie(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, running, err := agents.Identify(proc.Pid)
-		if err == nil && !running && slices.Contains(pids, proc.Pid) {
+		listed := slices.Contains(pids, proc.Pid)
+		if err == nil && !running && listed {
 			break
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("process %d never read as an unreaped exited process (listed %v, running %v, %v)", proc.Pid, slices.Contains(pids, proc.Pid), running, err)
+			t.Fatalf("process %d never read as an unreaped exited process (listed %v, running %v, %v)", proc.Pid, listed, running, err)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -214,7 +215,7 @@ func (r *refusedExitsEachReading) start() *exec.Cmd {
 	return cmd
 }
 
-func (r *refusedExitsEachReading) ids() ([]int, error) {
+func (r *refusedExitsEachReading) ids() ([]listedProcess, error) {
 	r.readings++
 	previous := r.unread
 	if r.readings > 1 {
@@ -225,7 +226,7 @@ func (r *refusedExitsEachReading) ids() ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if slices.Contains(pids, previous.Process.Pid) {
+	if slices.ContainsFunc(pids, func(p listedProcess) bool { return p.PID == previous.Process.Pid }) {
 		r.ended = append(r.ended, previous.Process.Pid)
 	}
 	_ = previous.Process.Kill()
@@ -369,9 +370,9 @@ type unreadableAsExiting struct {
 
 // ids names pid alone, so how many readings the listing takes is decided
 // by that process and nothing else running beside the test.
-func (u *unreadableAsExiting) ids() ([]int, error) {
+func (u *unreadableAsExiting) ids() ([]listedProcess, error) {
 	u.readings++
-	return []int{u.pid}, nil
+	return []listedProcess{{PID: u.pid, Parent: adoptParent, Start: 1}}, nil
 }
 
 func (u *unreadableAsExiting) commandLine(pid int) (string, []string, error) {
@@ -452,9 +453,9 @@ type argumentsEmptyOnce struct {
 
 // ids names pid alone, so how many readings the listing takes is decided
 // by that process and nothing else running beside the test.
-func (a *argumentsEmptyOnce) ids() ([]int, error) {
+func (a *argumentsEmptyOnce) ids() ([]listedProcess, error) {
 	a.readings++
-	return []int{a.pid}, nil
+	return []listedProcess{{PID: a.pid, Parent: adoptParent, Start: 1}}, nil
 }
 
 func (a *argumentsEmptyOnce) commandLine(pid int) (string, []string, error) {
@@ -496,5 +497,147 @@ func TestAProcessWhoseArgumentsReadEmptyIsReadAgain(t *testing.T) {
 	}
 	if table.readings < 2 {
 		t.Fatalf("the listing read the table %d time(s); want the reading that met the empty argument list unsettled", table.readings)
+	}
+}
+
+// churnOutsideEachReading is a processTable that, in every reading, names a
+// stable parent and a new child of that parent that is already gone when
+// identified: the shape that kept every reading from settling under machine
+// churn of short-lived processes outside the listing's interest (#722). The
+// test's match decides whether the parent is refused or accepted.
+type churnOutsideEachReading struct {
+	readings int
+	parent   int
+	child    int
+}
+
+func (c *churnOutsideEachReading) ids() ([]listedProcess, error) {
+	c.readings++
+	c.parent = 7000
+	c.child = 10_000 + c.readings
+	return []listedProcess{
+		{PID: c.parent, Parent: adoptParent, Start: 100},
+		{PID: c.child, Parent: c.parent, Start: 100 + uint64(c.readings)},
+	}, nil
+}
+
+func (c *churnOutsideEachReading) identify(pid int) (agents.Identity, bool, error) {
+	switch pid {
+	case c.parent:
+		return agents.Identity{PID: pid, Start: 100}, true, nil
+	case c.child:
+		return agents.Identity{}, false, nil
+	default:
+		return agents.Identity{}, false, nil
+	}
+}
+
+func (c *churnOutsideEachReading) commandLine(pid int) (string, []string, error) {
+	if pid == c.parent {
+		return "/bin/outside-parent", []string{"outside-parent"}, nil
+	}
+	return "", nil, fmt.Errorf("process %d: gone", pid)
+}
+
+func (c *churnOutsideEachReading) environment(pid int) ([]string, error) {
+	if pid == c.parent {
+		return nil, nil
+	}
+	return nil, fmt.Errorf("process %d: gone", pid)
+}
+
+func (c *churnOutsideEachReading) foreign(int) (bool, error)   { return false, nil }
+func (c *churnOutsideEachReading) isExiting(int) (bool, error) { return false, nil }
+
+// A listing settles beside churn outside its interest (P15, #722): every
+// reading meets a short-lived process that exited before it was read whole,
+// whose parent the same reading read whole and match refused. Before, each
+// such exit unsettled the reading, and 64 of them failed the listing with
+// "no reading of the process table settled". startedOutside settles those
+// exits through the refused parent, so the listing ends. The control is
+// TestAListingStillUnsettlesForChurnUnderAMatchedParent: the same churn
+// under a parent match accepted still fails to settle, so the rule cannot
+// pass by ignoring every unread exit.
+func TestAListingSettlesBesideChurnOutsideItsInterest(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	table := &churnOutsideEachReading{}
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+	if _, err := processesWhere(table, refuseAll); err != nil {
+		t.Fatalf("a listing beside churn outside its interest: %v", err)
+	}
+	if table.readings < 1 {
+		t.Fatal("the listing read the table no times, so this shows nothing")
+	}
+}
+
+// The settle-outside rule does not drop an unread exit under a process
+// match accepted (P15, #722): the same churn as
+// TestAListingSettlesBesideChurnOutsideItsInterest, but the parent is match
+// accepted, keeps every reading from settling. Without this, startedOutside
+// could settle every gone process and the listing would pass while missing
+// what a matched process started as it exited.
+func TestAListingStillUnsettlesForChurnUnderAMatchedParent(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	table := &churnOutsideEachReading{}
+	acceptParent := func(_ processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return pid == table.parent, err
+	}
+	_, err := processesWhere(table, acceptParent)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.Readings != settleReadings {
+		t.Fatalf("a listing beside churn under a matched parent = %v; want unsettled across all %d readings", err, settleReadings)
+	}
+	if table.readings != settleReadings {
+		t.Fatalf("the listing read the table %d time(s), want %d", table.readings, settleReadings)
+	}
+}
+
+// startedOutside settles a gone process only through a parent that settled
+// outside, started no later, and is not adoptParent (#722): the cases
+// #553's started_outside holds, as a pure model of the rule so a wrong
+// parent map or a dropped launchd guard fails here.
+func TestStartedOutsideOnlySettlesThroughOutsideParents(t *testing.T) {
+	t.Parallel()
+	parents := map[int]int{
+		501: 500, // parent outside
+		502: 501, // grandchild through 501
+		503: 1,   // adoptParent
+		504: 600, // parent is matched (not outside)
+		505: 700, // parent started after child
+		506: 500, // parent outside but child's start unknown
+		507: 999, // parent not in the reading
+	}
+	starts := map[int]uint64{
+		500: 100,
+		501: 101,
+		502: 102,
+		503: 103,
+		504: 104,
+		600: 90,
+		505: 105,
+		700: 200, // later than 505
+		506: 0,   // unknown child start
+		507: 107,
+	}
+	outside := map[int]bool{500: true}
+	causes := []unsettledCause{
+		{pid: 501}, {pid: 502}, {pid: 503}, {pid: 504}, {pid: 505}, {pid: 506}, {pid: 507},
+	}
+	startedOutside(parents, starts, outside, causes)
+	var got []int
+	for _, c := range causes {
+		if outside[c.pid] {
+			got = append(got, c.pid)
+		}
+	}
+	slices.Sort(got)
+	if want := []int{501, 502}; !slices.Equal(got, want) {
+		t.Fatalf("settled outside %v, want %v (outside after: %v)", got, want, outside)
 	}
 }

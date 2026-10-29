@@ -74,7 +74,7 @@ type churns struct {
 	ended int
 }
 
-func (c *churns) ids() ([]int, error) {
+func (c *churns) ids() ([]listedProcess, error) {
 	p := exec.Command("/bin/sleep", "60")
 	if err := p.Start(); err != nil {
 		return nil, err

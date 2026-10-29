@@ -111,12 +111,22 @@ func carries(value string) func(processTable, int) (bool, error) {
 	}
 }
 
+// listedProcess is one process a processTable.ids reading names: its
+// identifier, its parent's, and its start time, as that reading of the
+// table held them. Parent and Start are recorded with the identifier so a
+// process that has exited by the listing's next read of it still has the
+// parent and start that reading named, which startedOutside uses (#722).
+type listedProcess struct {
+	PID, Parent int
+	Start       uint64
+}
+
 // processTable is the kernel's process table, one method per read the
 // listings make of it, so a test can have a real process exit between two
 // of those reads; kernel is the real one, and a test's table passes every
 // read through to it.
 type processTable interface {
-	ids() ([]int, error)
+	ids() ([]listedProcess, error)
 	identify(pid int) (agents.Identity, bool, error)
 	commandLine(pid int) (string, []string, error)
 	environment(pid int) ([]string, error)
@@ -127,7 +137,7 @@ type processTable interface {
 // kernel is the processTable the kernel answers.
 type kernel struct{}
 
-func (kernel) ids() ([]int, error) { return processIDs() }
+func (kernel) ids() ([]listedProcess, error) { return processList() }
 func (kernel) identify(pid int) (agents.Identity, bool, error) {
 	return agents.Identify(pid)
 }
@@ -140,6 +150,12 @@ func (kernel) isExiting(pid int) (bool, error)               { return exitingPro
 // table looking for a settled reading (processesWhere), so a listing ends
 // even when processes keep exiting mid-reading on a busy machine.
 const settleReadings = 64
+
+// adoptParent is the process number an orphan is reparented to (init on
+// Linux, launchd on macOS). startedOutside will not settle a process
+// outside through it, because it adopts orphans whose real parent may have
+// been one match accepted (#722, as #553's darwin_marked does).
+const adoptParent = 1
 
 // processesWhere lists every process match accepts, other than this
 // process, its ancestors and every owner sweep, each with its identity and its
@@ -177,15 +193,32 @@ const settleReadings = 64
 // refused. What a refused process starts once a reading has begun is read
 // only by a later reading whose table names it, whether the refused process
 // goes on running or exits, so its exit tells the listing nothing its
-// running would not. Every other process's exit does unsettle the reading
-// it is first read in. Without this a reading settles only when no process
+// running would not. Without this a reading settles only when no process
 // it names exits during it, and on CI, where other packages' tests start
 // and end processes beside the listing, none of 64 readings did (#569).
 //
+// Another exit does not unsettle a reading either (#722, as #553's
+// darwin_marked does for the leak check): that of a process never read
+// whole whose parent in the same reading (ids' Parent) settled outside
+// the listing's interest - match refused it, or it was passed over as
+// another user's - started no later than it, and is not adoptParent
+// (init/launchd), which adopts orphans. What a refused process starts
+// once a reading has begun is the same gap #569 names, whether the child
+// was read whole or exited first. Steady churn of short-lived processes
+// outside that interest (other packages' /usr/bin/true loops, git calls)
+// then no longer keeps every reading from settling. A gone process whose
+// parent match accepted, is adoptParent, is this process or an ancestor
+// (excluded from the listing but not outside), is not in the reading, or
+// started after it, and any process of this user's whose read failed
+// while it ran, still unsettle the reading: that is the case
+// TestAListingFindsWhatAProcessStartsAsItExitsMidListing covers, and
+// TestAListingSettlesWhileProcessesItRefusedExit's first-reading control.
+//
 // So every process of this user's running when a settled reading began was
 // read whole, as one match accepts or refuses, and a process that match
-// accepted, or that was never read whole, and that exited during an earlier
-// reading after starting another has that other read whole in a later one.
+// accepted, or that was never read whole and did not settle outside, and
+// that exited during an earlier reading after starting another has that
+// other read whole in a later one.
 //
 // When no reading settles, the error is an unsettledError naming the
 // process number that kept the most readings in a row from settling,
@@ -206,8 +239,12 @@ const settleReadings = 64
 // read keeps what it was read as; a refused process's exit is told from
 // another's by the process number the reading before read it under, so
 // another process given that number, started and ended between the two
-// readings, would be taken for it; and processes the listing never read
-// whole that keep exiting, one in every reading, still keep every reading
+// readings, would be taken for it; startedOutside takes a recorded parent
+// other than adoptParent to be the process that started this one, so a
+// record naming some other process (a debugger outside the interest
+// tracing one match accepted as it exits) would settle that process
+// outside; and a gone process whose parent match accepted, or is
+// adoptParent, or is missing from the reading, still keeps that reading
 // from settling.
 func processesWhere(table processTable, match func(processTable, int) (bool, error)) ([]Process, error) {
 	exclude := map[int]bool{}
@@ -234,17 +271,33 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	var causes []unsettledCause
 	standing := map[int]int{}
 	for range settleReadings {
-		pids, err := table.ids()
+		listed, err := table.ids()
 		if err != nil {
 			return nil, fmt.Errorf("listing processes: %w", err)
 		}
 		var found []Process
 		causes = nil
+		// outside is every process number this reading settled as not of
+		// interest: match refused, passed over as another user's, or
+		// settled outside through its parent (startedOutside). This
+		// process and its ancestors are excluded from the listing but not
+		// marked outside: their descendants may still be of interest, so
+		// an unread exit under them still unsettles (as
+		// TestAListingSettlesWhileProcessesItRefusedExit requires of a
+		// child of this process never read whole). parents and starts are
+		// what ids named for each pid in this reading.
+		outside := map[int]bool{}
+		parents, starts := map[int]int{}, map[int]uint64{}
+		for _, p := range listed {
+			parents[p.PID] = p.Parent
+			starts[p.PID] = p.Start
+		}
 		unsettle := func(pid int, err error) {
 			causes = append(causes, unsettledCause{pid: pid, err: err})
 		}
 		nowStopped, nowRefused := map[int]bool{}, map[int]bool{}
-		for _, pid := range pids {
+		for _, entry := range listed {
+			pid := entry.PID
 			if exclude[pid] {
 				continue
 			}
@@ -263,9 +316,14 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			if p, ok := read[id]; ok {
 				if p != nil {
 					found = append(found, *p)
+					// A process match accepted stays inside the interest:
+					// its children's unread exits still unsettle.
+				} else {
+					outside[pid] = true
 				}
 				if refused[id] {
 					nowRefused[pid] = true
+					outside[pid] = true
 				}
 				continue
 			}
@@ -297,6 +355,16 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 				foreign, ferr = table.foreign(pid)
 			}
 			if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
+				// A process match already refused, with its reads made,
+				// is outside: its exit tells the listing nothing its
+				// running would not (#569), even when Presence fails
+				// before the refused mark is stored below.
+				if failed == nil && !matched {
+					read[id] = nil
+					refused[id] = true
+					outside[pid] = true
+					continue
+				}
 				unsettle(pid, fmt.Errorf("%v exited before it had been read whole", id))
 				continue
 			}
@@ -321,12 +389,23 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			case failed != nil && !foreign:
 				unsettle(pid, fmt.Errorf("process %d is this user's and running, and could not be read: %w", pid, failed))
 				continue
-			}
-			if failed != nil || !matched || isSweep(args) {
+			case failed != nil && foreign:
+				// Another user's unreadable process is passed over and is
+				// outside: its children's unread exits settle through it.
+				outside[pid] = true
 				read[id] = nil
-				if failed == nil && !matched {
+				continue
+			}
+			if !matched || isSweep(args) {
+				read[id] = nil
+				if !matched {
+					// Refused processes are outside the listing's interest:
+					// their children's unread exits settle through them.
+					// A sweep is of this binary and is not listed, but what
+					// it starts still matters, so it is not marked outside.
 					refused[id] = true
 					nowRefused[pid] = true
+					outside[pid] = true
 				}
 				continue
 			}
@@ -334,6 +413,8 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			read[id] = &p
 			found = append(found, p)
 		}
+		startedOutside(parents, starts, outside, causes)
+		causes = slices.DeleteFunc(causes, func(c unsettledCause) bool { return outside[c.pid] })
 		if len(causes) == 0 {
 			return found, nil
 		}
@@ -345,6 +426,40 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		standing = nowStanding
 	}
 	return nil, longestStanding(causes, standing)
+}
+
+// startedOutside adds to outside each process in causes whose parent in
+// parents settled outside, started no later than it (starts), and is not
+// adoptParent, until no more can be added: a parent added here counts for
+// its own children. It is how a reading settles beside churn outside the
+// listing's interest (#722).
+func startedOutside(parents map[int]int, starts map[int]uint64, outside map[int]bool, causes []unsettledCause) {
+	pending := make([]int, len(causes))
+	for i, c := range causes {
+		pending[i] = c.pid
+	}
+	added := true
+	for added {
+		added = false
+		for _, pid := range pending {
+			if outside[pid] {
+				continue
+			}
+			ppid, ok := parents[pid]
+			if !ok || ppid == adoptParent || ppid == 0 || !outside[ppid] {
+				continue
+			}
+			// Parent started no later than the child: a recorded parent
+			// whose start reads later is not the process that created it
+			// (agents.Lineage). Unknown starts (zero) do not pass.
+			pStart, cStart := starts[ppid], starts[pid]
+			if pStart == 0 || cStart == 0 || pStart > cStart {
+				continue
+			}
+			outside[pid] = true
+			added = true
+		}
+	}
 }
 
 // emptyArguments reports an argument list read as nothing: none, or the one
