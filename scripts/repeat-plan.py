@@ -7,8 +7,22 @@ Run: python3 scripts/repeat-plan.py --base BASE --head HEAD [--github-output FIL
 It reads the paths a pull request changes since its merge base (changed_paths)
 and prints the plan as JSON:
 the Go packages to run with -race -count=N on both OSes, whether to repeat
-the leak check's own tests, and why. With --github-output it also writes
-the plan as step outputs (run, packages, leak_check_tests).
+the leak check's own tests, the per-OS matrix the workflow runs (including
+internal/service test-name shards), and why. With --github-output it also
+writes the plan as step outputs (run, packages, leak_check_tests, matrix).
+
+internal/service alone has outgrown one 55-minute go-test budget on a slow
+macOS runner (#726). When the plan includes it, the matrix splits that
+package across SERVICE_SHARDS jobs per OS. Each job lists tests on that OS
+with `go test -race -list` (--shard-run) so Darwin-only and Linux-only
+names are not filtered out by the other platform's discovery (#727).
+Other covered packages stay one job per OS. Coverage is the union of the
+shards on that OS; each still runs with -race, REPEAT_COUNT, and the
+per-package leak check.
+
+`go test -list` still runs TestMain; the list-only skip of the leftover
+check lives on standin.RunOwned in internal/agents/standin/owner_unix.go
+(P14, #727).
 
 RISKY is the one list of what the gate covers, each package with the
 issues that put it there: every package here produced a regression on main
@@ -17,14 +31,15 @@ package's own tests. A change to a package outside it, or to a file that is
 not Go source or test data, runs nothing. A change to the gate itself runs
 every package here, so the gate's own pull request shows it working.
 
-list_tests names a package's top-level tests as `go test -race -list`
-builds them on this machine, under a deadline that ends go's process group
-(run_discovery). plan does not list.
+Also: python3 scripts/repeat-plan.py --shard-run PACKAGE SHARD SHARDS
+[--discovery-timeout SECONDS] prints the -run regexp for one shard from a
+list taken on this machine (run_discovery).
 """
 
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -43,8 +58,16 @@ LEAK_CHECK = {
 }
 GATE = {".github/workflows/repeat.yml", "scripts/repeat-plan.py"}
 
-# The build mode scripts/ci-test.sh runs: without -race, //go:build race
-# tests are absent from the list (#727 review).
+# How many parallel jobs split ./internal/service on each OS. Chosen so a
+# slow macOS count (~2500s for the whole package) stays well under the
+# 55m go-test budget per job; see #726.
+SERVICE = "./internal/service"
+SERVICE_SHARDS = 3
+OSES = ("ubuntu-latest", "macos-latest")
+
+# Same build mode as scripts/ci-test.sh / the shard jobs: without -race,
+# //go:build race tests are absent from every shard and the union no longer
+# covers the race suite (#727 review).
 LIST_FLAGS = ("-race",)
 
 
@@ -64,6 +87,24 @@ def changed_paths(base, head):
     out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}"],
                          capture_output=True, text=True, check=True, timeout=120).stdout
     return [path for path in out.split("\0") if path]
+
+
+def partition_tests(tests, shards):
+    """Split sorted test names across shards by round-robin so neighboring
+    names (and serial clusters) do not land in one job."""
+    if shards < 1:
+        raise ValueError(f"shards must be at least 1, not {shards}")
+    ordered = sorted(tests)
+    return [[name for i, name in enumerate(ordered) if i % shards == shard]
+            for shard in range(shards)]
+
+
+def run_pattern(tests):
+    """A go test -run regexp that selects exactly these top-level tests
+    (and their subtests: one slash-free element matches the root only)."""
+    if not tests:
+        raise ValueError("run_pattern needs at least one test")
+    return "^(%s)$" % "|".join(re.escape(name) for name in tests)
 
 
 # How long discovery's `go test -list` may run before its process group is
@@ -139,9 +180,9 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     (end_process_group) before raising, and the error says how far that got.
     That is all it ends: a descendant that started a session or group of its
     own (setsid, setpgid) is outside the group and runs on. Nothing in this
-    repository ends or reports it: CI runs discovery only in steps before
-    scripts/ci-test.sh's, outside its Linux PID namespace, and its leak
-    check reports only what is new once its own run has begun.
+    repository ends or reports it: the workflows run discovery in a step
+    before scripts/ci-test.sh's, outside its Linux PID namespace, and its
+    leak check reports only what is new once its own run has begun.
     discovery_bound(timeout) is the longest this waits.
     """
     proc = subprocess.Popen(
@@ -194,7 +235,67 @@ def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=No
     return names
 
 
-def plan(paths):
+def shard_run_pattern(package, shard, shards, timeout=DISCOVERY_TIMEOUT):
+    """The -run regexp for one partition of package's tests on this OS,
+    listed within timeout (list_tests)."""
+    if shard < 0 or shard >= shards:
+        raise ValueError(f"shard {shard} is out of range for {shards} shards")
+    parts = partition_tests(list_tests(package, timeout=timeout), shards)
+    chosen = parts[shard]
+    if not chosen:
+        raise ValueError(f"shard {shard}/{shards} is empty for {package}")
+    return run_pattern(chosen)
+
+
+def matrix(packages, leak):
+    """The workflow's strategy.matrix.include: one entry per job.
+
+    ./internal/service becomes SERVICE_SHARDS entries per OS with shard
+    indexes; each run job lists tests on that OS (--shard-run) so a
+    Darwin-only or Linux-only test is not dropped by the other platform's
+    discovery. Every other planned package shares one entry per OS. The
+    leak check's own tests run on the first entry of each OS that has work.
+    """
+    pkgs = packages.split() if packages else []
+    others = [p for p in pkgs if p != SERVICE]
+    has_service = SERVICE in pkgs
+    include = []
+    for os_name in OSES:
+        leak_here = leak
+        if has_service:
+            for i in range(SERVICE_SHARDS):
+                include.append({
+                    "os": os_name,
+                    "name": f"service-{i}",
+                    "packages": SERVICE,
+                    "shard": str(i),
+                    "shards": str(SERVICE_SHARDS),
+                    "leak_check_tests": "true" if leak_here else "false",
+                })
+                leak_here = False
+        if others:
+            include.append({
+                "os": os_name,
+                "name": "other",
+                "packages": " ".join(others),
+                "shard": "",
+                "shards": "",
+                "leak_check_tests": "true" if leak_here else "false",
+            })
+            leak_here = False
+        if not pkgs and leak:
+            include.append({
+                "os": os_name,
+                "name": "leak",
+                "packages": "",
+                "shard": "",
+                "shards": "",
+                "leak_check_tests": "true",
+            })
+    return {"include": include}
+
+
+def plan(paths, with_shard_runs=False):
     packages, why, leak = set(), [], False
     for path in paths:
         path = path.strip()
@@ -215,10 +316,19 @@ def plan(paths):
             packages.add(package)
             why.append(f"{path}: {package} ({RISKY[package]})")
     ordered = sorted(packages)
+    packages_str = " ".join(f"./{p}" for p in ordered)
+    if with_shard_runs and SERVICE in packages_str.split():
+        # Listing is per OS job (--shard-run), not here: the plan runs on
+        # Ubuntu and cannot discover Darwin-only tests (#727).
+        why.append(
+            f"{SERVICE}: split across {SERVICE_SHARDS} test-name shards per OS "
+            f"(each OS lists its own tests; #726 #727)"
+        )
     return {
         "run": bool(ordered or leak),
-        "packages": " ".join(f"./{p}" for p in ordered),
+        "packages": packages_str,
         "leak_check_tests": leak,
+        "matrix": matrix(packages_str, leak),
         "why": why,
     }
 
@@ -228,17 +338,38 @@ def main(argv=None):
     parser.add_argument("--github-output", metavar="FILE", help="also append the plan as step outputs here")
     parser.add_argument("--base", help="the pull request's base commit (with --head)")
     parser.add_argument("--head", help="the pull request's head commit (with --base)")
+    parser.add_argument("--with-shard-runs", action="store_true",
+                        help="record in why that service shards list per OS (matrix always shards)")
+    parser.add_argument("--shard-run", nargs=3, metavar=("PACKAGE", "SHARD", "SHARDS"),
+                        help="print the -run regexp for one test-name shard on this OS and exit")
+    parser.add_argument("--discovery-timeout", type=float, default=DISCOVERY_TIMEOUT, metavar="SECONDS",
+                        help="how long --shard-run's listing may run before its process group is ended")
     args = parser.parse_args(argv)
+    if args.shard_run is not None:
+        package, shard_s, shards_s = args.shard_run
+        try:
+            shard, shards = int(shard_s), int(shards_s)
+        except ValueError:
+            parser.error("--shard-run SHARD and SHARDS must be integers")
+        if not 0 < args.discovery_timeout < float("inf"):
+            parser.error("--discovery-timeout must be a positive number of seconds")
+        try:
+            print(shard_run_pattern(package, shard, shards, args.discovery_timeout), end="")
+        except (ValueError, RuntimeError) as err:
+            print(f"repeat-plan: {err}", file=sys.stderr)
+            return 1
+        return 0
     if bool(args.base) != bool(args.head):
         parser.error("--base and --head go together")
     paths = changed_paths(args.base, args.head) if args.base else sys.stdin
-    result = plan(paths)
+    result = plan(paths, with_shard_runs=args.with_shard_runs)
     print(json.dumps(result, indent=2))
     if args.github_output:
         with open(args.github_output, "a", encoding="utf-8") as out:
             out.write(f"run={str(result['run']).lower()}\n")
             out.write(f"packages={result['packages']}\n")
             out.write(f"leak_check_tests={str(result['leak_check_tests']).lower()}\n")
+            out.write(f"matrix={json.dumps(result['matrix'], separators=(',', ':'))}\n")
     return 0
 
 
