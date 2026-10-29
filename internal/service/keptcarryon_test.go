@@ -2268,9 +2268,23 @@ func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
 	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, lose), func(under serviceUnderTest) {
 		ctx := t.Context()
 		for _, when := range []string{"the answer", "the same answer again"} {
+			// A concurrent dispatch can hold the new task's slot and refuse
+			// with PhraseCarryOnSlotBusy; answer again until the lost-commit
+			// refusal, bounded by the test's deadline (#707, #731).
+			deadline := time.Now().Add(30 * time.Second)
 			var out machine.KeptWorkAnswered
-			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+			var err error
+			for {
+				err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+				if errors.Is(err, ipc.ErrRefused) && strings.Contains(err.Error(), kept) {
+					break
+				}
+				if errors.Is(err, ipc.ErrRefused) && strings.Contains(err.Error(), machine.PhraseCarryOnSlotBusy.String()) {
+					if !time.Now().Before(deadline) {
+						t.Fatalf("%s kept getting the slot-busy refusal past the deadline = %v", when, err)
+					}
+					continue
+				}
 				t.Fatalf("%s, with %s lost after the move = %+v, %v; want it refused naming the commit", when, kept, out, err)
 			}
 			owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
@@ -2288,18 +2302,12 @@ func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
 }
 
 // A carry-on answer that finds the new task's slot held by a dispatch pass
-// waits for the pass to give it back, and is then answered on what the
-// copy holds (#707, P15). The first answer is refused after the move, with
-// the kept commit lost from the moved copy; the dispatch pass that refusal
-// asks for reads that the owed claim holds the task, and the window between
-// that refusal and the slot's release is held open while the same answer
-// is given again. The second answer is shown to wait for the slot before
-// the window closes, and is then refused naming the kept commit, with the
-// entry open and its claim owed. Before, it was refused at once with
-// "kept work entry N is being carried on by task T now", for a carry on
-// that was not under way, which is what macOS CI hit when that pass fell
-// between the two answers.
-func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
+// is refused at once with PhraseCarryOnSlotBusy, never with "being carried
+// on by task T now" for a carry-on that is not under way (#707, #731, P15).
+// The first answer is refused after the move with the kept commit lost; the
+// dispatch that refusal asks for is held open between its held refusal and
+// the slot's release while the same answer is given again.
+func TestACarryOnAnswerRefusesWhileADispatchPassHoldsItsSlot(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
@@ -2337,7 +2345,6 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 		once     sync.Once
 		letGo    sync.Once
 		inWindow = make(chan string, 1)
-		awaiting = make(chan struct{}, 1)
 		second   = make(chan answered, 1)
 		leave    = make(chan struct{})
 	)
@@ -2352,15 +2359,9 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 		inWindow <- id
 		<-leave
 	}
-	await := func(string) {
-		select {
-		case awaiting <- struct{}{}:
-		default:
-		}
-	}
 
 	o, _ := workerOptions(t, h)
-	o = service.WithHeldDispatchWindowForTest(service.WithCarryOnInterruptForTest(t, o, lose), held, await)
+	o = service.WithHeldDispatchWindowForTest(service.WithCarryOnInterruptForTest(t, o, lose), held)
 	withServiceOptions(t, o, func(under serviceUnderTest) {
 		defer release()
 		ctx := t.Context()
@@ -2389,23 +2390,30 @@ func TestACarryOnAnswerWaitsForADispatchPassReadingItsHold(t *testing.T) {
 			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
 			second <- answered{again, err}
 		}()
+		var got answered
 		select {
-		case <-awaiting:
-		case got := <-second:
+		case got = <-second:
+		case <-time.After(2 * time.Second):
 			release()
-			t.Fatalf("the same answer again, while a dispatch pass held task %s's slot = %+v, %v; want it to wait for the slot", id, got.out, got.err)
+			t.Fatal("the same answer again still waited while a dispatch held the slot; want an immediate busy refusal")
 		case <-ctx.Done():
 			release()
-			t.Fatal("the same answer again neither waited for the slot nor returned")
+			t.Fatal("the same answer again neither refused nor returned")
 		}
-		release()
-		got := <-second
-		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(got.err.Error(), kept) {
-			t.Fatalf("the same answer again, once the pass gave the slot back = %+v, %v; want it refused naming %s", got.out, got.err, kept)
+		busy := machine.PhraseCarryOnSlotBusy.String()
+		if !errors.Is(got.err, ipc.ErrRefused) || !strings.Contains(got.err.Error(), busy) {
+			release()
+			t.Fatalf("the same answer again, while a dispatch held task %s's slot = %+v, %v; want it refused naming %q", id, got.out, got.err, busy)
+		}
+		if strings.Contains(got.err.Error(), "being carried on by task") {
+			release()
+			t.Fatalf("the same answer again named a carry-on under way: %v", got.err)
 		}
 		if owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !owed.Open() || !owed.CarryOnClaimed() {
-			t.Fatalf("after the same answer again the entry reads %+v, %v; want it open with its claim owed", owed, err)
+			release()
+			t.Fatalf("after the busy refusal the entry reads %+v, %v; want it open with its claim owed", owed, err)
 		}
+		release()
 	})
 }
 

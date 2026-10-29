@@ -73,13 +73,12 @@ func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) 
 	return o
 }
 
-// WithHeldDispatchWindowForTest returns o with two seams set, for this
-// package's external tests: held runs in a dispatch of the task it is given
-// that kept work held, after the refusal and before the task's slot is given
-// back, and awaiting runs in a carry on of the task it is given that found
-// the task's slot claimed, right before it waits for that claim to end.
-func WithHeldDispatchWindowForTest(o Options, held, awaiting func(id string)) Options {
-	o.heldDispatchWindow, o.awaitingCarryOnSlot = held, awaiting
+// WithHeldDispatchWindowForTest returns o with the seam that runs in a
+// dispatch of the task it is given that kept work held, after the refusal
+// and before the task's slot is given back, for this package's external
+// tests.
+func WithHeldDispatchWindowForTest(o Options, held func(id string)) Options {
+	o.heldDispatchWindow = held
 	return o
 }
 

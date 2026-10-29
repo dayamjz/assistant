@@ -500,19 +500,13 @@ func (s *Service) giveBackSlot(id string) {
 	s.endClaim(id)
 }
 
-// endClaim marks the task's claim ended and wakes every caller waiting for a
-// claim to end, which reads the slot again (awaitCarryOnSlot). Every write
-// that ends a claim in claiming goes through it, so no waiter sleeps past
-// the end of the claim it waits for. A claimSteer entry is cleared from
-// steering here too, which is empty for a dispatch or relaunch. It is
-// called with s.mu held.
+// endClaim marks the task's claim ended. Every write that ends a claim in
+// claiming goes through it. A claimSteer entry is cleared from steering
+// here too, which is empty for a dispatch or relaunch. It is called with
+// s.mu held.
 func (s *Service) endClaim(id string) {
 	delete(s.claiming, id)
 	delete(s.steering, id)
-	if s.claimEnded != nil {
-		close(s.claimEnded)
-		s.claimEnded = nil
-	}
 }
 
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
@@ -604,45 +598,36 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 	return s.takeSlot(id), nil
 }
 
-// awaitCarryOnSlot takes the task's slot for a carry on of kept work into
-// it, waiting first, until ctx ends, for a claim in flight on the slot to
-// end, and returns the function that gives the slot back. A carry on's
-// task is held by the entry it carries on until the carry on marks it
-// (store.KeptWorkHolding), so the claim a dispatch pass takes there reads
-// that hold and gives the slot back, and another carry on's ends with the
-// entry marked, withdrawn or still owed, which the caller reads again under
-// the slot. Refusing at such a claim instead refused a person's answer for
-// a pass that happened to be reading the hold, and named a carry on under
-// way that was not (#707). The wait is as long as the claim it waits for,
-// which nothing here bounds but ctx. A slot settled, which claimDispatch
-// refuses too, is refused with errSlotSettled.
-func (s *Service) awaitCarryOnSlot(ctx context.Context, id string) (func(), error) {
-	for {
-		s.mu.Lock()
-		s.slotMaps()
-		if !s.claiming[id] {
-			defer s.mu.Unlock()
-			if _, settled := s.isolated[id]; settled {
-				return nil, fmt.Errorf("%w: task %s", errSlotSettled, id)
-			}
-			s.takeSlot(id)
-			return func() { s.giveBackSlot(id) }, nil
-		}
-		if s.claimEnded == nil {
-			s.claimEnded = make(chan struct{})
-		}
-		ended := s.claimEnded
-		s.mu.Unlock()
-		if s.awaitingCarryOnSlot != nil {
-			s.awaitingCarryOnSlot(id)
-		}
-		select {
-		case <-ended:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
+// claimCarryOnSlot takes the task's slot for a carry on of kept work into
+// it, or refuses at once when a claim already holds the slot, and returns
+// the function that gives the slot back. A carry on's task is held by the
+// entry it carries on until the carry on marks it (store.KeptWorkHolding),
+// so a dispatch pass can hold that slot while it reads the hold; another
+// carry on, a relaunch or a stop can hold it too. Naming any of those as
+// "a carry on under way" was false when a dispatch only read the hold
+// (#707). Waiting for the claim to end had no server-side deadline on the
+// IPC handler's context (P15, #731). The refusal uses
+// machine.PhraseCarryOnSlotBusy, which is true for every holder this map
+// records. A slot settled, which claimDispatch refuses too, is refused
+// with errSlotSettled.
+func (s *Service) claimCarryOnSlot(id string) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if s.claiming[id] {
+		return nil, errCarryOnSlotBusy
 	}
+	if _, settled := s.isolated[id]; settled {
+		return nil, fmt.Errorf("%w: task %s", errSlotSettled, id)
+	}
+	s.takeSlot(id)
+	return func() { s.giveBackSlot(id) }, nil
 }
+
+// errCarryOnSlotBusy reports a carry-on answer that found the task's slot
+// claimed in this service. completeCarryOn wraps it as ipc.ErrRefused with
+// machine.PhraseCarryOnSlotBusy.
+var errCarryOnSlotBusy = errors.New("service: the task's slot is claimed here")
 
 // errSlotSettled reports a slot a dispatch of this service settled when it
 // ended after its claim, which claimDispatch does not take again.
