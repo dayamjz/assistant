@@ -86,6 +86,19 @@ const (
 	TerminalPoll = terminalPoll
 )
 
+// RequireHerdrVersion exposes requireHerdrVersion for tests of the version pin.
+var RequireHerdrVersion = requireHerdrVersion
+
+// WriteHerdrFiles exposes writeHerdrFiles for tests of the configuration and
+// run-once launch file.
+var WriteHerdrFiles = writeHerdrFiles
+
+// HerdrServerEnv exposes herdrServerEnv for tests of ambient herdr stripping.
+var HerdrServerEnv = herdrServerEnv
+
+// HerdrRequiredVersion is the herdr release the mechanism pins.
+const HerdrRequiredVersion = herdrRequiredVersion
+
 // InterruptAfterWriteForTest makes w, a worker this package started as a
 // process, call f with each later send's text once its bytes are written and
 // before the send is told, so a test can put the process's end inside that

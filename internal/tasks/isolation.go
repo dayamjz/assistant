@@ -10,6 +10,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -192,7 +193,7 @@ func Expect(h *home.Home, id string, shape store.TaskShape, gatePath, primary, b
 // secondCheck is the shell line Expect documents, built from the expectation
 // and nothing else.
 func secondCheck(e Expectation) string {
-	q := shellQuote
+	q := procgroup.ShellQuote
 	clauses := []string{
 		`test "$(git rev-parse --show-toplevel)" = "$(git -C ` + q(e.Copy) + ` rev-parse --show-toplevel)"`,
 		`test "$(git rev-parse --absolute-git-dir)" = "$(git rev-parse --show-toplevel)/.git"`,
@@ -217,12 +218,6 @@ func secondCheck(e Expectation) string {
 		clauses = append(clauses, `test -z "$(git remote)"`)
 	}
 	return strings.Join(clauses, " && ")
-}
-
-// shellQuote wraps s in single quotes for a POSIX shell, closing and
-// reopening around any single quote in it.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func (e Expectation) validate() error {
