@@ -30,7 +30,7 @@ import select
 import signal
 import subprocess
 import sys
-import threading
+import tempfile
 import time
 
 RISKY = {
@@ -70,19 +70,22 @@ def changed_paths(base, head):
 
 
 # How long discovery's `go test -list` may run before its process group is
-# ended, and how long that group gets after SIGTERM before SIGKILL and after
-# SIGKILL to be gone. A bound around discovery exceeds discovery_bound.
+# ended, how long the leftover scan (ps) may take inside that bound, and how
+# long that group gets after SIGTERM before SIGKILL and after SIGKILL to be
+# gone. A bound around discovery exceeds discovery_bound.
 DISCOVERY_TIMEOUT = 300.0
+DISCOVERY_SCAN_TIMEOUT = 5.0
 DISCOVERY_KILL_GRACE = 2.0
 
 
 def discovery_bound(timeout=DISCOVERY_TIMEOUT):
-    """The longest run_discovery waits with this timeout: the timeout, then
-    end_process_group's two graces. Polling and the interpreter's own time
-    are not in it, so a bound around discovery exceeds this by a margin of
-    its own; one that does not can kill the planner first and leave go's
-    group running with nothing to end it (#727)."""
-    return timeout + 2 * DISCOVERY_KILL_GRACE
+    """The longest run_discovery waits with this timeout: the listing timeout,
+    then the leftover scan's own deadline, then end_process_group's two
+    graces. Polling and the interpreter's own time are not in it, so a bound
+    around discovery exceeds this by a margin of its own; one that does not
+    can kill the planner first and leave go's group running with nothing to
+    end it (#727)."""
+    return timeout + DISCOVERY_SCAN_TIMEOUT + 2 * DISCOVERY_KILL_GRACE
 
 
 def _group_present(pgid):
@@ -144,25 +147,24 @@ def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
     return f"{sent}; nothing in it is left"
 
 
-def _close_discovery_pipes(proc):
-    for pipe in (proc.stdout, proc.stderr):
-        if pipe is not None:
-            pipe.close()
-
-
-def discovery_error(cmd, *, status, stdout="", stderr="", ended=None, leftover=False, pgid=None):
-    """Every discovery failure message. status is 'timed out after Ns' or
-    'exited N'. Always includes the command, that status, stderr (or stdout
-    if stderr is empty), and when the group had members what end_process_group
-    reported. No raise site formats its own message (#744 round 2)."""
+def discovery_error(cmd, *, status, stdout="", stderr="", ended=None, leftover=False,
+                    leftover_pids=None, pgid=None):
+    """Every discovery failure message. status is 'timed out after Ns',
+    'exited N', or 'could not inspect its process group (...)'. Always
+    includes the command, that status, stderr (or stdout if stderr is empty),
+    and when the group had members what end_process_group reported. No raise
+    site formats its own message (#744 round 2)."""
     detail = (stderr or "").strip() or (stdout or "").strip() or "(no output)"
     cmd_s = " ".join(map(str, cmd))
     parts = [f"discovery {status}: {detail}"]
     if ended is not None:
         if leftover:
+            who = (
+                f" (pids {list(leftover_pids)})" if leftover_pids is not None else ""
+            )
             parts.append(
-                f"process group {pgid} still had members after the listing {status}; "
-                f"ended them: {ended}"
+                f"process group {pgid} still had members after the listing {status}"
+                f"{who}; ended them: {ended}"
             )
         else:
             parts.append(f"process group {pgid}: {ended}")
@@ -263,31 +265,69 @@ def await_leader_exit(pid, deadline):
     )
 
 
-def _pids_in_group(pgid):
-    """Pids whose process group is pgid (including a zombie leader)."""
-    result = subprocess.run(
-        ["ps", "-axo", "pid=,pgid="],
-        capture_output=True, text=True, check=False,
-    )
+# Test hook: replace to inject launch failures, non-zero exits, or stalls for
+# the leftover scan. Production leaves this None so scan_process_group uses
+# subprocess.run.
+_ps_runner = None
+
+
+def scan_process_group(pgid, timeout=None):
+    """Who is in process group pgid: ('none',), ('some', pids), or
+    ('cannot-tell', reason).
+
+    Launch failure (PermissionError, FileNotFoundError, other OSError),
+    non-zero exit, unparseable output, and deadline expiry are cannot-tell.
+    The scan's deadline is inside discovery_bound; a cannot-tell refuses the
+    run rather than treating a failed inspection as an empty group (#744).
+    """
+    if timeout is None:
+        timeout = DISCOVERY_SCAN_TIMEOUT
+    runner = _ps_runner if _ps_runner is not None else subprocess.run
+    try:
+        result = runner(
+            ["ps", "-axo", "pid=,pgid="],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return ("cannot-tell", "ps: FileNotFoundError")
+    except PermissionError:
+        return ("cannot-tell", "ps: PermissionError")
+    except subprocess.TimeoutExpired:
+        return ("cannot-tell", f"ps timed out after {timeout:g}s")
+    except OSError as err:
+        return ("cannot-tell", f"ps: {type(err).__name__}: {err}")
     if result.returncode != 0:
-        return []
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            return ("cannot-tell", f"ps exited {result.returncode}: {detail}")
+        return ("cannot-tell", f"ps exited {result.returncode}")
     pids = []
     for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
         parts = line.split()
-        if len(parts) == 2 and int(parts[1]) == pgid:
-            pids.append(int(parts[0]))
-    return pids
+        if len(parts) != 2:
+            return ("cannot-tell", f"unparseable ps line: {line!r}")
+        try:
+            pid_i, pgid_i = int(parts[0]), int(parts[1])
+        except ValueError:
+            return ("cannot-tell", f"unparseable ps line: {line!r}")
+        if pgid_i == pgid:
+            pids.append(pid_i)
+    others = [p for p in pids if p != pgid]
+    if not others:
+        return ("none",)
+    return ("some", others)
 
 
-def _drain_pipe(pipe, chunks):
-    try:
-        while True:
-            data = pipe.read(4096)
-            if not data:
-                return
-            chunks.append(data)
-    except ValueError:
-        return  # closed
+def _read_capture(file_obj):
+    """Bytes written to a discovery capture file, as text."""
+    file_obj.seek(0)
+    return file_obj.read().decode("utf-8", errors="replace")
 
 
 def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
@@ -302,87 +342,105 @@ def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
     and any exception including a SIGINT/SIGTERM turned into SystemExit by
     install_termination_signals. While that cleanup runs (SIGTERM, grace,
     SIGKILL, empty check), termination signals are deferred and honored only
-    after the group is ended. A listing that exits while another member of its
-    group is still running fails after those members are ended
-    (discovery_error). That is all it ends: a descendant that started a
-    session or group of its own (setsid, setpgid) is outside the group and
-    runs on. SIGKILL of this process runs no finally and cannot be deferred.
-    Nothing in this repository ends or reports either gap: CI runs discovery
-    only in steps before scripts/ci-test.sh's, outside its Linux PID
-    namespace, and its leak check reports only what is new once its own run
-    has begun. discovery_bound(timeout) is the longest this waits on the
-    timeout path.
+    after the group is ended. Group cleanup lives in a finally that the leftover
+    scan cannot bypass: a launch error, non-zero exit, unparseable listing, or
+    scan deadline is cannot-tell and refuses the run after the group is ended.
+    Listing stdout and stderr go to temp files read after the leader is reaped,
+    so an escaped descendant that still holds those files cannot block the
+    planner. A listing that exits while another member of its group is still
+    running fails after those members are ended (discovery_error). That is all
+    it ends: a descendant that started a session or group of its own (setsid,
+    setpgid) is outside the group and runs on. SIGKILL of this process runs no
+    finally and cannot be deferred. Nothing in this repository ends or reports
+    either gap: CI runs discovery only in steps before scripts/ci-test.sh's,
+    outside its Linux PID namespace, and its leak check reports only what is
+    new once its own run has begun. discovery_bound(timeout) is the longest
+    this waits on the timeout path (listing + scan + two graces).
     """
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=cwd,
-        env=env,
-        start_new_session=True,
-    )
-    stdout_chunks, stderr_chunks = [], []
-    t_out = threading.Thread(target=_drain_pipe, args=(proc.stdout, stdout_chunks), daemon=True)
-    t_err = threading.Thread(target=_drain_pipe, args=(proc.stderr, stderr_chunks), daemon=True)
-    t_out.start()
-    t_err.start()
-    timed_out = False
-    pending = None
-    leftover_after_exit = False
-    ended = ""
-    deferred = None
-    deadline = time.monotonic() + timeout
+    out_f = tempfile.TemporaryFile()
+    err_f = tempfile.TemporaryFile()
     try:
-        try:
-            if not await_leader_exit(proc.pid, deadline):
-                timed_out = True
-        except BaseException as err:
-            pending = err
-    finally:
-        # Defer SIGINT/SIGTERM until cleanup finishes (#744 round 2).
-        # Signal only while unreaped (#744 round 3 / procgroup).
-        _begin_cleanup()
-        try:
-            if (
-                not timed_out
-                and pending is None
-                and proc.returncode is None
-            ):
-                others = [p for p in _pids_in_group(proc.pid) if p != proc.pid]
-                leftover_after_exit = bool(others)
-            ended = end_process_group(proc)
-            t_out.join(timeout=5)
-            t_err.join(timeout=5)
-            _close_discovery_pipes(proc)
-        finally:
-            deferred = _end_cleanup()
-    stdout = "".join(stdout_chunks)
-    stderr = "".join(stderr_chunks)
-    if deferred is not None:
-        raise SystemExit(128 + deferred)
-    if pending is not None:
-        raise pending
-    if timed_out:
-        raise discovery_error(
+        proc = subprocess.Popen(
             cmd,
-            status=f"timed out after {timeout:g}s",
-            stdout=stdout,
-            stderr=stderr,
-            ended=ended,
-            pgid=proc.pid,
-        ) from None
-    if leftover_after_exit:
-        raise discovery_error(
-            cmd,
-            status=f"exited {proc.returncode}",
-            stdout=stdout,
-            stderr=stderr,
-            ended=ended,
-            leftover=True,
-            pgid=proc.pid,
+            stdout=out_f,
+            stderr=err_f,
+            cwd=cwd,
+            env=env,
+            start_new_session=True,
         )
-    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        timed_out = False
+        pending = None
+        scan = None
+        ended = ""
+        deferred = None
+        deadline = time.monotonic() + timeout
+        try:
+            try:
+                if not await_leader_exit(proc.pid, deadline):
+                    timed_out = True
+            except BaseException as err:
+                pending = err
+        finally:
+            # Defer SIGINT/SIGTERM until cleanup finishes (#744 round 2).
+            # Signal only while unreaped (#744 round 3 / procgroup).
+            # Scan cannot skip end_process_group (#744 round 4).
+            _begin_cleanup()
+            try:
+                try:
+                    if (
+                        not timed_out
+                        and pending is None
+                        and proc.returncode is None
+                    ):
+                        scan = scan_process_group(proc.pid)
+                except BaseException as scan_err:
+                    scan = (
+                        "cannot-tell",
+                        f"{type(scan_err).__name__}: {scan_err}",
+                    )
+                finally:
+                    ended = end_process_group(proc)
+            finally:
+                deferred = _end_cleanup()
+        stdout = _read_capture(out_f)
+        stderr = _read_capture(err_f)
+        if deferred is not None:
+            raise SystemExit(128 + deferred)
+        if pending is not None:
+            raise pending
+        if timed_out:
+            raise discovery_error(
+                cmd,
+                status=f"timed out after {timeout:g}s",
+                stdout=stdout,
+                stderr=stderr,
+                ended=ended,
+                pgid=proc.pid,
+            ) from None
+        if scan is not None and scan[0] == "cannot-tell":
+            raise discovery_error(
+                cmd,
+                status=f"could not inspect its process group ({scan[1]})",
+                stdout=stdout,
+                stderr=stderr,
+                ended=ended,
+                pgid=proc.pid,
+            )
+        if scan is not None and scan[0] == "some":
+            raise discovery_error(
+                cmd,
+                status=f"exited {proc.returncode}",
+                stdout=stdout,
+                stderr=stderr,
+                ended=ended,
+                leftover=True,
+                leftover_pids=scan[1],
+                pgid=proc.pid,
+            )
+        return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+    finally:
+        out_f.close()
+        err_f.close()
 
 
 def install_termination_signals():
