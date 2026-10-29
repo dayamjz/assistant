@@ -527,7 +527,11 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // starts another and exits while the table is read makes the listing read
 // it again, and the process it started is listed. A
 // listing that still finds a process after sweepRounds of them fails the
-// package, naming and ending what it found, so the check ends.
+// package, so the check ends: it stops what that listing found and every
+// process descended from it before naming any, then names and kills that
+// whole set (endStarting), listing again after the stop for what a child
+// it could not see started as it exited, so what it names is what it ends,
+// and nothing in the set starts a process once named.
 //
 // What it does not see: a process running another executable that was
 // started with an environment without OwnerVar, unless it is a tmux the
@@ -535,16 +539,21 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // ownership was recorded, or whose environment the read cannot find, which
 // on some macOS machines is a whole program's (carrying); what such a
 // process starts once the check's last listing has begun, whether it goes
-// on running or exits (processesWhere); a process of
+// on running or exits (processesWhere), unless it descends from a process
+// that listing found, which the last round stops with it, or is found by a
+// listing that round makes once it has stopped them (endStarting); a
+// process of
 // another user's whose command line cannot be read (processesWhere), and
 // what it starts; and anything at all
 // once this binary is gone, so the binary AtTerminal ran again outliving a
 // killed outer one is watchOuter's to end, and a terminal server outliving
 // a killed owner the owner sweep's, and no check in that run reports
-// either. A failed check ends what it names as one set (endAll), so each
-// process it names has been sent its own SIGTERM before any child of its it
-// names is sent one; what that ending starts all the same, within what
-// endAll does not cover, it leaves to the sweep.
+// either. A check that fails on processes still running EndGrace after a
+// listing ends what it names as one set (endAll), so each process it names
+// has been sent its own SIGTERM before any child of its it names is sent
+// one; what that ending starts all the same, within what endAll does not
+// cover, it leaves to the sweep, as it does what endStarting does not
+// cover.
 func leftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -562,10 +571,14 @@ func leftAfterTests() bool {
 			return true
 		}
 		if listing == sweepRounds {
-			for _, p := range listed {
-				fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
+			list := func() ([]Process, error) { return leftRunning(kernel{}, self, value) }
+			if err := endStarting(listed, list, nil, func(frozen []Process) {
+				for _, p := range frozen {
+					fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
+				}
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "FAIL: could not list again for what the processes still being started had started: %v\n", err)
 			}
-			endAll(listed)
 			return false
 		}
 		if left := stayed(listed, EndGrace); len(left) > 0 {

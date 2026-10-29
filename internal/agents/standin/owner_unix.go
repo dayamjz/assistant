@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -533,6 +534,158 @@ func endSet(ps []Process, send func(Process, syscall.Signal) bool) {
 		wg.Go(func() { p.killUnlessGone() })
 	}
 	wg.Wait()
+}
+
+// endStarting ends ps, the processes a check found still being started once
+// it stopped following them, so that none of them, and nothing they
+// started that list or the process tree can find, runs again. It stops
+// every process in ps and every process descended from one (freeze); then
+// it lists again with list and stops what that finds that is not yet
+// stopped, with its descendants, until a listing finds nothing new or
+// sweepRounds listings have; it hands the whole stopped set to named before
+// any is ended, and then kills each, waiting up to EndGrace for each to go,
+// all at once. stopped, when not nil, is called each time a batch has been
+// read as stopped and before its children are read, which is where a
+// sender can be descheduled. The error is list's, after which the set
+// stopped so far is still named and killed.
+//
+// The order is what makes the set named the set ended. A process sent
+// SIGTERM runs on while it handles it, and so does a child of its the
+// listing could not see, a shell whose environment the read cannot find
+// (carrying), which can run its EXIT trap on its own timer in the meantime
+// and start a process nothing names (#645). A stopped process runs nothing,
+// so once a process is read as stopped every child it started is already
+// in the process table, and it is killed rather than sent SIGTERM because a
+// stopped process handles no signal but SIGKILL until it is continued, and
+// a continued one could start another before its SIGTERM is handled. A
+// child is stopped only after its parent, so while it still runs it can
+// start a process and exit, and the process it started, its parent gone,
+// descends from nothing in the set (#712's review): listing again after the
+// tree is stopped finds that process when the listing can see it, and
+// stops it with what it started.
+//
+// What it does not cover: a process that descends from nothing in the set,
+// because its parent exited before it was stopped, and that list does not
+// find, a shell whose environment cannot be read for one, is not stopped,
+// and neither is what it starts; nor is what a process list finds starts
+// once more than sweepRounds listings have found one new; a process not
+// read as stopped within EndGrace is killed with the rest, but what it
+// starts in the meantime is not looked for; a process table that cannot be
+// read is read as holding no children; and a check killed between the stop
+// and the kill leaves the set stopped, for the owner sweep to end.
+func endStarting(ps []Process, list func() ([]Process, error), stopped func([]Process), named func([]Process)) error {
+	sent := map[agents.Identity]bool{}
+	frozen := freeze(ps, sent, stopped)
+	var err error
+	for range sweepRounds {
+		var listed []Process
+		if listed, err = list(); err != nil {
+			break
+		}
+		listed = slices.DeleteFunc(listed, func(p Process) bool { return sent[p.Identity] })
+		if len(listed) == 0 {
+			break
+		}
+		frozen = append(frozen, freeze(listed, sent, stopped)...)
+	}
+	named(frozen)
+	var wg sync.WaitGroup
+	for _, p := range frozen {
+		if p.signal(syscall.SIGKILL) {
+			wg.Go(func() { p.GoneWithin(EndGrace) })
+		}
+	}
+	wg.Wait()
+	return err
+}
+
+// freeze stops every process in ps not in sent, parents first
+// (parentsFirst), and every process descended from one, records each in
+// sent, and returns them in the order it stopped them. It reads the
+// children of a process only once that process reads as stopped, so it
+// reads every child that process started, and it reads children again of
+// each newly stopped process until it finds none new; stopped, when not
+// nil, is called with each batch read as stopped before its children are
+// read. A process signal reads as gone is left out, and one not read as
+// stopped within EndGrace is kept in the set but its children are not
+// read, since it may still be starting them.
+func freeze(ps []Process, sent map[agents.Identity]bool, stopped func([]Process)) []Process {
+	var frozen []Process
+	next := parentsFirst(ps)
+	for len(next) > 0 {
+		var signalled []Process
+		for _, p := range next {
+			if sent[p.Identity] || p.PID == os.Getpid() {
+				continue
+			}
+			sent[p.Identity] = true
+			if p.signal(syscall.SIGSTOP) {
+				signalled = append(signalled, p)
+			}
+		}
+		var batch []Process
+		for _, p := range signalled {
+			frozen = append(frozen, p)
+			if p.stoppedWithin(EndGrace) {
+				batch = append(batch, p)
+			}
+		}
+		if stopped != nil && len(batch) > 0 {
+			stopped(batch)
+		}
+		next = childrenOf(batch)
+	}
+	return frozen
+}
+
+// stoppedWithin reports whether p reads as stopped (stoppedProcess) within
+// wait, and false once it reads as gone.
+func (p Process) stoppedWithin(wait time.Duration) bool {
+	deadline := time.Now().Add(wait)
+	for {
+		if presence, err := p.Presence(); err == nil && presence != agents.PresencePresent {
+			return false
+		}
+		if stopped, err := stoppedProcess(p.PID); err == nil && stopped {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// childrenOf is every running process whose parent, as the kernel records
+// it (agents.ReadLineage), is one in ps and started no later than it, each
+// with its arguments when they can be read. A process whose lineage cannot
+// be read is not one of them.
+func childrenOf(ps []Process) []Process {
+	if len(ps) == 0 {
+		return nil
+	}
+	byPID := map[int]Process{}
+	for _, p := range ps {
+		byPID[p.PID] = p
+	}
+	pids, err := processIDs()
+	if err != nil {
+		return nil
+	}
+	var children []Process
+	for _, pid := range pids {
+		lineage, found, err := agents.ReadLineage(pid)
+		if err != nil || !found {
+			continue
+		}
+		parent, ok := byPID[lineage.Parent]
+		if !ok || parent.Identity == lineage.Identity || parent.Start > lineage.Start {
+			continue
+		}
+		_, args, _ := commandLine(pid)
+		children = append(children, Process{Identity: lineage.Identity, Args: args})
+	}
+	return children
 }
 
 // parentsFirst is ps ordered so that each process comes after the one in ps
