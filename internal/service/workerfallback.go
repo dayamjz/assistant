@@ -37,7 +37,7 @@ func (s *Service) selectWorkerChoice(ctx context.Context, roleName string, role 
 	return selection, nil
 }
 func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt int64) (agents.Selection, config.Role, error) {
-	role, err := s.cfg.Roles.ForTask(task.Role)
+	role, err := s.cfg.Roles.ForRecorded(task.Role)
 	if err != nil {
 		return agents.Selection{}, role, err
 	}
@@ -86,7 +86,7 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 // existing relaunch bound. It never launches beside the primary. A restart
 // reads the sealed selection instead of replaying a quota event from a log.
 func (s *Service) watchWorkerFallback(task store.Task, attempt int64, host session.Host, worker *session.Session, adapter string) {
-	role, err := s.cfg.Roles.ForTask(task.Role)
+	role, err := s.cfg.Roles.ForRecorded(task.Role)
 	if err != nil || role.Fallback == nil || (adapter != role.Agent && adapter != role.Fallback.Agent) || s.stopCtx == nil {
 		return
 	}

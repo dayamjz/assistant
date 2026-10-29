@@ -28,12 +28,15 @@ const (
 	// knowledgeReadNamespace holds a launch's read of the curated
 	// knowledge (knowledge.go's knowledgeRef).
 	knowledgeReadNamespace = "refs/assistant/knowledge/"
+	// housekeepingReadNamespace holds a housekeeping pass's intake read of
+	// the trusted scope (housekeeping.go).
+	housekeepingReadNamespace = "refs/assistant/trusted/housekeeping/"
 )
 
 // readNamespaces is every namespace a read's reference lives under, the
 // list sweepReadRefs removes from at recovery.
 var readNamespaces = []string{
-	dispatchReadNamespace, postureReadNamespace, consentReadNamespace, knowledgeReadNamespace,
+	dispatchReadNamespace, postureReadNamespace, consentReadNamespace, knowledgeReadNamespace, housekeepingReadNamespace,
 }
 
 // readRef names the reference one read fetches into: under namespace, named

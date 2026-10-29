@@ -143,15 +143,28 @@ func (r Roles) ForHousekeeping() Role {
 	return r[RoleFix]
 }
 
-// ForRecorded resolves the role a task recorded at intake: ForHousekeeping
-// for the housekeeping role, which only intake of a housekeeping pass
-// records, and ForTask for every other name, so the role ForTask refuses a
-// create resolves for the one record that may name it.
+// ForRecorded resolves the role a task recorded at intake, which is what a
+// launch reads (internal/service's launch.go and workerfallback.go):
+// ForHousekeeping for the housekeeping role, which only intake of a
+// housekeeping pass records, and ForTask for every other name, so the role
+// ForTask refuses a create resolves for the one record that may name it.
 func (r Roles) ForRecorded(name string) (Role, error) {
 	if TaskRoleName(name) == RoleHousekeeping {
 		return r.ForHousekeeping(), nil
 	}
 	return r.ForTask(name)
+}
+
+// CarriedRole is the role a task carried on from a task recorded under
+// name is created with: name itself, except housekeeping, which the program
+// assigns only to a housekeeping pass and ForTask refuses for every other
+// task. A carry on creates an ordinary task, never a pass, so a pass's work
+// is carried on under the worker role, the empty name.
+func CarriedRole(name string) string {
+	if TaskRoleName(name) == RoleHousekeeping {
+		return ""
+	}
+	return name
 }
 
 // TaskRoleName is the role name a task's recorded role runs under: the name

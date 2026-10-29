@@ -169,3 +169,22 @@ func TestTheHousekeepingRoleIsAssignedAndResolvesToTheFixer(t *testing.T) {
 		t.Errorf("ForRecorded(fix) = %v, want ErrTaskRole", err)
 	}
 }
+
+// A carry on creates an ordinary task, never a pass, so the role it is
+// created with is the outlived task's own, except a pass's reserved
+// housekeeping role, which becomes the worker role ForTask accepts; every
+// other name, configured or not, is carried as recorded.
+func TestACarriedOnPassRunsUnderTheWorkerRole(t *testing.T) {
+	t.Parallel()
+	if got := CarriedRole(RoleHousekeeping); got != "" {
+		t.Fatalf("CarriedRole(%q) = %q, want the worker role", RoleHousekeeping, got)
+	}
+	if _, err := (Roles{}).ForTask(CarriedRole(RoleHousekeeping)); err != nil {
+		t.Fatalf("ForTask refuses the role a pass is carried on under: %v", err)
+	}
+	for _, name := range []string{"", "worker", "docs", "removed-since"} {
+		if got := CarriedRole(name); got != name {
+			t.Fatalf("CarriedRole(%q) = %q, want it carried as recorded", name, got)
+		}
+	}
+}
