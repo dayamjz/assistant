@@ -73,7 +73,8 @@ paths: ["internal/tasks/**"]
   `kept_test.go` places every reason for both.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
   as this build takes it, the preview (removal on a confirmed discard is
-  deferred to AGE-486, on the branch feat/age-407-discard), and `Loss` is
+  still deferred to the rest of AGE-486; the journal and set-aside
+  mechanism landed in #678 and #679), and `Loss` is
   also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose: the commits that anything the
   removal destroys names reaches (HEAD, a reference, a root reference such
