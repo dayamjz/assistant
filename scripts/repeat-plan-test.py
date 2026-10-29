@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import subprocess
@@ -26,8 +27,26 @@ def run(*paths, output=None):
     return json.loads(result.stdout)
 
 
+# Room a bound around --shard-run leaves above discovery_bound for the
+# interpreter to start, import the planner and print.
+SHARD_RUN_MARGIN = 30.0
 # Discovery's timeout, scaled down, for a listing that stalls.
 STALL_TIMEOUT = 5.0
+
+
+def shard_run(package, shard, shards, discovery_timeout=None, **kwargs):
+    """--shard-run as the workflow's Shard filter step runs it, under a bound
+    above discovery_bound(discovery_timeout), so a stalled listing ends with
+    discovery's own error and its group ended, not with this bound killing
+    the planner while go's group runs on (#727). discovery_timeout defaults
+    to DISCOVERY_TIMEOUT."""
+    if discovery_timeout is None:
+        discovery_timeout = repeat_plan.DISCOVERY_TIMEOUT
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--shard-run", package, str(shard), str(shards),
+         "--discovery-timeout", str(discovery_timeout)],
+        capture_output=True, text=True,
+        timeout=repeat_plan.discovery_bound(discovery_timeout) + SHARD_RUN_MARGIN, **kwargs)
 
 
 def stalled_listing(test, escapee=False):
@@ -199,7 +218,106 @@ class PlanTest(unittest.TestCase):
     def test_step_outputs(self):
         with tempfile.NamedTemporaryFile("r", suffix=".txt") as out:
             run("internal/service/a.go", output=out.name)
-            self.assertEqual(Path(out.name).read_text(), "run=true\npackages=./internal/service\nleak_check_tests=false\n")
+            text = Path(out.name).read_text()
+            self.assertTrue(text.startswith("run=true\npackages=./internal/service\nleak_check_tests=false\nmatrix="), text)
+            matrix = json.loads(text.split("matrix=", 1)[1])
+            self.assertEqual(len(matrix["include"]), 2 * repeat_plan.SERVICE_SHARDS)
+
+    def test_a_service_change_shards_on_both_oses(self):
+        # internal/service alone outgrew one macOS budget (#726); the matrix
+        # splits it so each job keeps -race, REPEAT_COUNT, and the leak check.
+        plan = run("internal/service/dispatch_internal_test.go")
+        include = plan["matrix"]["include"]
+        self.assertEqual({e["os"] for e in include}, set(repeat_plan.OSES))
+        by_os = {}
+        for entry in include:
+            by_os.setdefault(entry["os"], []).append(entry)
+        for os_name, entries in by_os.items():
+            self.assertEqual([e["name"] for e in entries],
+                             [f"service-{i}" for i in range(repeat_plan.SERVICE_SHARDS)], os_name)
+            self.assertEqual({e["packages"] for e in entries}, {"./internal/service"})
+            self.assertEqual([e["shard"] for e in entries],
+                             [str(i) for i in range(repeat_plan.SERVICE_SHARDS)])
+            self.assertEqual({e["shards"] for e in entries}, {str(repeat_plan.SERVICE_SHARDS)})
+            self.assertEqual([e["leak_check_tests"] for e in entries],
+                             ["false"] * repeat_plan.SERVICE_SHARDS)
+
+    def test_other_packages_stay_one_job_per_os(self):
+        plan = run("internal/agents/sweep_darwin.go")
+        include = plan["matrix"]["include"]
+        self.assertEqual(len(include), len(repeat_plan.OSES))
+        for entry in include:
+            self.assertEqual(entry["name"], "other")
+            self.assertEqual(entry["packages"], "./internal/agents")
+            self.assertEqual(entry["shard"], "")
+
+    def test_service_and_others_split_leak_onto_the_first_service_shard(self):
+        plan = run(".github/workflows/repeat.yml")
+        include = plan["matrix"]["include"]
+        for os_name in repeat_plan.OSES:
+            rows = [e for e in include if e["os"] == os_name]
+            service = [e for e in rows if e["packages"] == "./internal/service"]
+            other = [e for e in rows if e["name"] == "other"]
+            self.assertEqual(len(service), repeat_plan.SERVICE_SHARDS)
+            self.assertEqual(len(other), 1)
+            self.assertIn("./internal/agents", other[0]["packages"].split())
+            self.assertNotIn("./internal/service", other[0]["packages"].split())
+            self.assertEqual(service[0]["leak_check_tests"], "true")
+            self.assertTrue(all(e["leak_check_tests"] == "false" for e in service[1:] + other))
+
+    def test_leak_only_still_runs_on_both_oses(self):
+        plan = run("scripts/leak-check.py")
+        include = plan["matrix"]["include"]
+        self.assertEqual(len(include), len(repeat_plan.OSES))
+        for entry in include:
+            self.assertEqual(entry["name"], "leak")
+            self.assertEqual(entry["packages"], "")
+            self.assertEqual(entry["leak_check_tests"], "true")
+
+    def test_partition_round_robins_and_covers_every_name(self):
+        names = [f"Test{c}" for c in "ABCDEF"]
+        parts = repeat_plan.partition_tests(names, 3)
+        self.assertEqual(parts, [["TestA", "TestD"], ["TestB", "TestE"], ["TestC", "TestF"]])
+        self.assertEqual(sorted(n for part in parts for n in part), names)
+
+    def test_run_pattern_selects_exactly_the_named_tests(self):
+        self.assertEqual(repeat_plan.run_pattern(["TestA", "TestB_C"]), "^(TestA|TestB_C)$")
+
+    def test_every_covered_package_exists(self):
+        root = SCRIPT.parent.parent
+        for package in repeat_plan.RISKY:
+            self.assertTrue(list((root / package).glob("*.go")), f"{package} has no Go files")
+
+    def test_with_shard_runs_records_per_os_listing_in_why(self):
+        # Patterns are not baked on Ubuntu: each OS job lists (#727).
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--with-shard-runs"],
+            input="internal/service/dispatch_internal_test.go\n",
+            capture_output=True, text=True, check=True, timeout=60,
+        )
+        plan = json.loads(result.stdout)
+        self.assertTrue(any("each OS lists" in line for line in plan["why"]), plan["why"])
+        for entry in plan["matrix"]["include"]:
+            self.assertEqual(entry["shards"], str(repeat_plan.SERVICE_SHARDS))
+            self.assertRegex(entry["shard"], r"^[0-2]$")
+
+    def test_ubuntu_discovered_patterns_omit_a_darwin_only_name(self):
+        # Fail before: baking Ubuntu's list into macOS shards drops Darwin-only
+        # tests (#727 review). Each OS must partition its own list.
+        linux = ["TestLinuxOnly", "TestShared"]
+        darwin = ["TestDarwinOnly", "TestShared"]
+        linux_patterns = [repeat_plan.run_pattern(part)
+                          for part in repeat_plan.partition_tests(linux, 2)]
+        darwin_patterns = [repeat_plan.run_pattern(part)
+                           for part in repeat_plan.partition_tests(darwin, 2)]
+
+        def covered(name, patterns):
+            return any(re.fullmatch(pat, name) for pat in patterns)
+
+        self.assertFalse(covered("TestDarwinOnly", linux_patterns))
+        self.assertTrue(covered("TestDarwinOnly", darwin_patterns))
+        self.assertTrue(covered("TestShared", linux_patterns))
+        self.assertTrue(covered("TestShared", darwin_patterns))
 
     def test_list_tests_failure_keeps_go_stderr_and_exit_code(self):
         # A silent CalledProcessError hid the runner's process-table error (#727).
@@ -220,8 +338,8 @@ class PlanTest(unittest.TestCase):
         self.assertIn("-race", message)
 
     def test_list_tests_includes_a_race_only_test(self):
-        # Discovery without -race omits //go:build race tests, so a list taken
-        # that way misses tests scripts/ci-test.sh runs (#727 review).
+        # Discovery without -race omits //go:build race tests; shards would
+        # then pass while the unfiltered race suite failed (#727 review).
         root = Path(tempfile.mkdtemp(prefix="repeat-plan-race-"))
         self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
         (root / "go.mod").write_text("module example.com/racelist\n\ngo 1.25.0\n")
@@ -243,11 +361,12 @@ class PlanTest(unittest.TestCase):
         self.assertIn("TestRaceOnly", names)
 
     def test_a_discovery_timeout_ends_its_group_and_says_what_it_does_not(self):
-        # Discovery ends its process group, a member that ignores SIGTERM
-        # included, and says nothing in it is left only once the group is
-        # gone. A process the stalled wrapper started with setsid is outside
-        # the group: it runs on, and the error says so, so the error claims
-        # no more than the group end does (#727 review, P15).
+        # Fail before (2371a6d): the error and docstring claimed discovery
+        # ended its whole tree, while a process the stalled wrapper started
+        # with setsid ran on, and the error read "(still present)" for a
+        # group with nothing left in it but its unreaped leader. Discovery
+        # ends its process group, a member that ignores SIGTERM included, and
+        # says that a process outside the group is not ended (#727, P15).
         root, env = stalled_listing(self, escapee=True)
         with self.assertRaises(RuntimeError) as ctx:
             repeat_plan.list_tests(".", cwd=root, timeout=STALL_TIMEOUT, env=env)
@@ -630,10 +749,47 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(group_empty(stall), f"process group {stall} still had members")
         self.assertFalse(running(stall), f"stalled wrapper {stall} outlived deferred-SIGTERM cleanup")
 
-    def test_every_covered_package_exists(self):
-        root = SCRIPT.parent.parent
-        for package in repeat_plan.RISKY:
-            self.assertTrue(list((root / package).glob("*.go")), f"{package} has no Go files")
+    def test_a_bound_around_shard_run_outlasts_discovery_and_its_cleanup(self):
+        # Fail before (2371a6d): the bound around --shard-run equalled
+        # discovery's deadline (300s each), so on a stalled listing it killed
+        # the planner first and go's group ran on. With discovery's timeout
+        # scaled down, shard_run's bound, derived from discovery_bound, lets
+        # discovery's own timeout end the group (#727, P15).
+        root, env = stalled_listing(self)
+        try:
+            result = shard_run(".", 0, 1, discovery_timeout=STALL_TIMEOUT, cwd=root, env=env)
+        except subprocess.TimeoutExpired as expired:
+            result = expired
+        finally:
+            stall = recorded_pid(root / "stall.pid")
+            survived = end_survivor(stall)
+        self.assertIsNotNone(stall, "the listing never reached its stalled wrapper")
+        self.assertFalse(survived, f"stalled wrapper {stall} outlived the bound around --shard-run")
+        self.assertIsInstance(result, subprocess.CompletedProcess,
+                              "the bound around --shard-run fired before discovery's own timeout")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("discovery timed out", result.stderr)
+        self.assertEqual(result.stdout, "")
+
+    def test_shard_run_partitions_real_service_tests(self):
+        # --shard-run partitions list_tests on this OS; --with-shard-runs only
+        # records that split in why (it does not embed a partition).
+        listed = sorted(repeat_plan.list_tests("./internal/service"))
+        self.assertGreater(len(listed), repeat_plan.SERVICE_SHARDS)
+        patterns = []
+        for i in range(repeat_plan.SERVICE_SHARDS):
+            result = shard_run("./internal/service", i, repeat_plan.SERVICE_SHARDS)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            patterns.append(result.stdout)
+        for name in listed:
+            expect = listed.index(name) % repeat_plan.SERVICE_SHARDS
+            hits = [i for i, pat in enumerate(patterns) if re.fullmatch(pat, name)]
+            self.assertEqual(hits, [expect], name)
+        # A listing error must fail the shard step, never yield an empty pattern.
+        failed = shard_run("./internal/no-such-package", 0, 3)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertTrue(failed.stderr.strip())
+        self.assertEqual(failed.stdout, "")
 
 
 def git(repo, *args):

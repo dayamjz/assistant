@@ -9,7 +9,9 @@ name: Repeat
 # The required check is the one job named "repeat". It passes when the plan
 # runs nothing, so it can be required of every pull request; the per-OS jobs
 # are not required by name, because a matrix job skipped as a whole reports
-# a name GitHub never expands.
+# a name GitHub never expands. Matrix names include a shard label
+# (service-N or other) so internal/service can split across jobs (#726)
+# without changing the required check name.
 #
 # What it does not cover: a test in another package that a change breaks
 # (#569: a standin change failed a cli test). The daily stress run, which
@@ -39,6 +41,7 @@ jobs:
       run: ${{ steps.plan.outputs.run }}
       packages: ${{ steps.plan.outputs.packages }}
       leak_check_tests: ${{ steps.plan.outputs.leak_check_tests }}
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,23 +51,27 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
-        run: python3 scripts/repeat-plan.py --base "$BASE" --head "$HEAD" --github-output "$GITHUB_OUTPUT"
+        run: python3 scripts/repeat-plan.py --base "$BASE" --head "$HEAD" --with-shard-runs --github-output "$GITHUB_OUTPUT"
 
   run:
-    name: run (${{ matrix.os }})
+    name: run (${{ matrix.os }}, ${{ matrix.name }})
     needs: plan
     if: needs.plan.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # The Test step's CI_TEST_TIMEOUT (55m), plus the Shard filter step's
+    # longest listing (discovery_bound = listing timeout + leftover-scan
+    # deadline + two kill graces ≈ 309s), plus the 5m this job left for
+    # setup before that step existed. Under that sum the job can be
+    # cancelled while go test's own bound has yet to fire.
+    timeout-minutes: 66
     strategy:
       fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/test-env
       - name: Repeat the leak check's tests
-        if: needs.plan.outputs.leak_check_tests == 'true'
+        if: matrix.leak_check_tests == 'true'
         shell: bash
         run: |
           failed=0
@@ -75,14 +82,24 @@ jobs:
           done
           echo "leak-check-test.py failed $failed of $REPEAT_COUNT runs"
           [ "$failed" -eq 0 ]
+      # List on this OS so Darwin-only / Linux-only tests are not filtered out
+      # by the other platform's discovery (#727).
+      - name: Shard filter
+        if: matrix.shard != ''
+        shell: bash
+        run: |
+          pattern=$(python3 scripts/repeat-plan.py --shard-run "${{ matrix.packages }}" "${{ matrix.shard }}" "${{ matrix.shards }}")
+          echo "CI_TEST_RUN=$pattern" >> "$GITHUB_ENV"
+          echo "shard ${{ matrix.shard }}/${{ matrix.shards }}: ${#pattern}-byte -run pattern"
       - name: Test
-        if: needs.plan.outputs.packages != ''
+        if: matrix.packages != ''
         shell: bash
         env:
-          CI_TEST_PACKAGES: ${{ needs.plan.outputs.packages }}
+          CI_TEST_PACKAGES: ${{ matrix.packages }}
           CI_TEST_COUNT: ${{ env.REPEAT_COUNT }}
           # go test's bound is per package binary, and -count runs every
-          # test that many times inside one binary.
+          # test that many times inside one binary. Shards keep each
+          # internal/service job under this on a slow macOS runner (#726).
           CI_TEST_TIMEOUT: 55m
         run: bash scripts/ci-test.sh
 
