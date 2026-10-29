@@ -127,17 +127,22 @@ import (
 // task's dispatch slot for that identifier before anything else, so no dispatch
 // pass cuts a fresh clone at the path the copy is about to stand at; between
 // the claim and the slot no task row exists yet, so no pass can find the task
-// to dispatch. Then, in the order intake keeps, the task is created with that
-// identifier, with the outlived task's delivery posture as the floor intake
-// records it under unless the project's, read once there, is stricter
-// (carriedPosture), the copy is moved to the task's own path and reshaped as dispatch
-// shapes a fresh clone, the note is appended to the instructions file, and the
-// entry is answered carry-on and marked in one write
-// (store.MarkKeptWorkCarriedOn), which is when it closes. An intake that
-// refuses the task, a role the configuration no longer has among the ways, has
-// created nothing and moved nothing, so the claim is withdrawn
-// (store.WithdrawKeptWorkCarryOn, refused by the store once the task's row
-// exists) and the answer is refused naming why, with the entry open as it was.
+// to dispatch. Once the row exists a pass can hold the slot while it reads that
+// the claim holds the task; an answer that finds claiming[id] set is
+// refused at once with machine.PhraseCarryOnSlotBusy (claimCarryOnSlot),
+// which states only what that fact establishes and never names a
+// carry-on under way that is not (#707, #731). Then, in the order
+// intake keeps, the task is created with that identifier, with the outlived
+// task's delivery posture as the floor intake records it under unless the
+// project's, read once there, is stricter (carriedPosture), the copy is moved
+// to the task's own path and reshaped as dispatch shapes a fresh clone, the
+// note is appended to the instructions file, and the entry is answered
+// carry-on and marked in one write (store.MarkKeptWorkCarriedOn), which is
+// when it closes. An intake that refuses the task, a role the configuration no
+// longer has among the ways, has created nothing and moved nothing, so the
+// claim is withdrawn (store.WithdrawKeptWorkCarryOn, refused by the store once
+// the task's row exists) and the answer is refused naming why, with the entry
+// open as it was.
 // The completion carries out the claim the entry holds, read again under the
 // task's dispatch slot, never one the answer read before it: a claim another
 // call withdrew, and a retry claimed again for another task in between, is
@@ -494,16 +499,20 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
 	}
-	settle, err := s.claimDispatch(id)
-	if err != nil {
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: kept work entry %d is being carried on by task %s now", ipc.ErrRefused, entry.ID, id)
+	release, err := s.claimCarryOnSlot(id)
+	if errors.Is(err, errSlotSettled) {
+		// Name the entry only as the person did on --hold (entry.Key), with
+		// the phrase row; no task identifier and no internal mechanic (P13).
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %s: %s", ipc.ErrRefused, entry.Key(), machine.PhraseCarryOnAlreadyStarted)
 	}
-	_ = settle
+	if errors.Is(err, errCarryOnSlotBusy) {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %s: %s", ipc.ErrRefused, entry.Key(), machine.PhraseCarryOnSlotBusy)
+	}
+	if err != nil {
+		return machine.KeptWorkAnswered{}, err
+	}
 	defer func() {
-		s.mu.Lock()
-		delete(s.isolated, id)
-		delete(s.claiming, id)
-		s.mu.Unlock()
+		release()
 		s.dispatchInBackground()
 	}()
 	// Read again under the slot: only a call holding this task's slot

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -2278,9 +2279,23 @@ func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
 	withServiceOptions(t, service.WithCarryOnInterruptForTest(t, o, lose), func(under serviceUnderTest) {
 		ctx := t.Context()
 		for _, when := range []string{"the answer", "the same answer again"} {
+			// A concurrent dispatch can hold the new task's slot and refuse
+			// with PhraseCarryOnSlotBusy; answer again until the lost-commit
+			// refusal, bounded by the test's deadline (#707, #731).
+			deadline := time.Now().Add(30 * time.Second)
 			var out machine.KeptWorkAnswered
-			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
-			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), kept) {
+			var err error
+			for {
+				err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+				if errors.Is(err, ipc.ErrRefused) && strings.Contains(err.Error(), kept) {
+					break
+				}
+				if errors.Is(err, ipc.ErrRefused) && strings.Contains(err.Error(), machine.PhraseCarryOnSlotBusy.String()) {
+					if !time.Now().Before(deadline) {
+						t.Fatalf("%s kept getting the slot-busy refusal past the deadline = %v", when, err)
+					}
+					continue
+				}
 				t.Fatalf("%s, with %s lost after the move = %+v, %v; want it refused naming the commit", when, kept, out, err)
 			}
 			owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
@@ -2295,6 +2310,555 @@ func TestACarryOnClosesNoEntryOverWorkLostAfterTheMove(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A carry-on answer that finds the new task's slot held by a dispatch pass
+// is refused at once with PhraseCarryOnSlotBusy, never with "being carried
+// on by task T now" for a carry-on that is not under way (#707, #731, P15).
+// The first answer is refused after the move with the kept commit lost; the
+// dispatch that refusal asks for is held open between its held refusal and
+// the slot's release while the same answer is given again.
+func TestACarryOnAnswerRefusesWhileADispatchPassHoldsItsSlot(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	kept := git(t, entry.CopyPath, "rev-parse", "HEAD")
+	lose := func() error {
+		records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = records.Close() }()
+		owed, err := records.KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		moved, err := h.TaskCopy(owed.CarriedOnTask.Or(""))
+		if err != nil {
+			return err
+		}
+		git(t, moved, "checkout", "--quiet", "--detach", "HEAD~1")
+		git(t, moved, "reflog", "expire", "--expire=now", "--expire-unreachable=now", "--all")
+		git(t, moved, "prune", "--expire=now")
+		return nil
+	}
+
+	type answered struct {
+		out machine.KeptWorkAnswered
+		err error
+	}
+	var (
+		once     sync.Once
+		letGo    sync.Once
+		inWindow = make(chan string, 1)
+		second   = make(chan answered, 1)
+		leave    = make(chan struct{})
+	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
+	held := func(id string) {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return
+		}
+		inWindow <- id
+		<-leave
+	}
+
+	o, _ := workerOptions(t, h)
+	o = service.WithHeldDispatchWindowForTest(service.WithCarryOnInterruptForTest(t, o, lose), held)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); !errors.Is(err, ipc.ErrRefused) ||
+			!strings.Contains(err.Error(), kept) {
+			t.Fatalf("the answer, with %s lost after the move = %+v, %v; want it refused naming the commit", kept, out, err)
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.CarryOnClaimed() {
+			t.Fatalf("after the first answer the entry reads %+v, %v; want its claim owed", owed, err)
+		}
+		var id string
+		select {
+		case id = <-inWindow:
+		case <-ctx.Done():
+			t.Fatal("no dispatch pass held the carried-on task after the refused answer")
+		}
+		if want := owed.CarriedOnTask.Or(""); id != want {
+			release()
+			t.Fatalf("the held dispatch was of task %s; want the carried-on task %s", id, want)
+		}
+
+		go func() {
+			var again machine.KeptWorkAnswered
+			err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
+			second <- answered{again, err}
+		}()
+		var got answered
+		select {
+		case got = <-second:
+		case <-time.After(2 * time.Second):
+			release()
+			t.Fatal("the same answer again still waited while a dispatch held the slot; want an immediate busy refusal")
+		case <-ctx.Done():
+			release()
+			t.Fatal("the same answer again neither refused nor returned")
+		}
+		assertCarryOnSlotBusyLine(t, got.err, entry.Key(), id)
+		if owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !owed.Open() || !owed.CarryOnClaimed() {
+			release()
+			t.Fatalf("after the busy refusal the entry reads %+v, %v; want it open with its claim owed", owed, err)
+		}
+		release()
+	})
+}
+
+// assertCarryOnSlotBusyLine holds a busy refusal to the phrase row that is
+// true for every claiming[id] holder, the hold key, and the absence of the
+// task id and of the false sentences 81a26ce printed (#731 round 3).
+func assertCarryOnSlotBusyLine(t *testing.T, err error, key, taskID string) {
+	t.Helper()
+	busy := machine.PhraseCarryOnSlotBusy.String()
+	line := ""
+	if err != nil {
+		line = err.Error()
+	}
+	if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(line, busy) {
+		t.Fatalf("carry-on busy refusal = %v; want it refused naming %q", err, busy)
+	}
+	if !strings.Contains(line, key) {
+		t.Fatalf("the busy refusal %q does not name the hold key %s the person typed", line, key)
+	}
+	if strings.Contains(line, taskID) {
+		t.Fatalf("the busy refusal names the task identifier %s: %q", taskID, line)
+	}
+	for _, falseClaim := range []string{"nothing moved", "other work on this answer"} {
+		if strings.Contains(line, falseClaim) {
+			t.Fatalf("the busy refusal states %q, which is not true for every claiming holder: %q", falseClaim, line)
+		}
+	}
+	for _, term := range []string{"dispatch", "claim", "slot", "settled", "being carried on by task"} {
+		if strings.Contains(line, term) {
+			t.Fatalf("the busy refusal carries internal wording %q: %q", term, line)
+		}
+	}
+}
+
+// A carry-on answer that finds claiming[id] held by another carry-on that
+// already moved the copy is refused with PhraseCarryOnSlotBusy; the row
+// must stay true though the copy has moved (#731 round 3).
+func TestACarryOnAnswerRefusesWhileAnotherCarryOnHoldsItsSlotAfterTheMove(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		once     sync.Once
+		letGo    sync.Once
+		inWindow = make(chan struct{}, 1)
+		second   = make(chan error, 1)
+		leave    = make(chan struct{})
+	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnInterruptForTest(t, o, func() error {
+		once.Do(func() { inWindow <- struct{}{} })
+		<-leave
+		return fmt.Errorf("test: first carry-on held after the move")
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
+		ctx := t.Context()
+		firstDone := make(chan error, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			firstDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}()
+		select {
+		case <-inWindow:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its post-move seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never reached its post-move seam")
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.CarryOnClaimed() {
+			release()
+			t.Fatalf("after the move the entry reads %+v, %v; want its claim owed", owed, err)
+		}
+		id := owed.CarriedOnTask.Or("")
+		moved, err := h.TaskCopy(id)
+		if err != nil {
+			release()
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(moved + "/.git"); err != nil {
+			release()
+			t.Fatalf("the first answer has not moved the copy yet: %v", err)
+		}
+		go func() {
+			var again machine.KeptWorkAnswered
+			second <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
+		}()
+		var got error
+		select {
+		case got = <-second:
+		case <-time.After(2 * time.Second):
+			release()
+			t.Fatal("the same answer again still waited while another carry-on held the slot")
+		case <-ctx.Done():
+			release()
+			t.Fatal("the same answer again neither refused nor returned")
+		}
+		assertCarryOnSlotBusyLine(t, got, entry.Key(), id)
+		release()
+		<-firstDone
+	})
+}
+
+// A carry-on answer that finds claiming[id] held by a steer (stop, promote,
+// window end) is refused with PhraseCarryOnSlotBusy (#731 round 3).
+func TestACarryOnAnswerRefusesWhileASteerHoldsItsSlot(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		once    sync.Once
+		letGo   sync.Once
+		claimed = make(chan string, 1)
+		second  = make(chan error, 1)
+		leave   = make(chan struct{})
+	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			// A later answer must reach claimCarryOnSlot, not wait on this seam.
+			return nil
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		claimed <- owed.CarriedOnTask.Or("")
+		<-leave
+		return fmt.Errorf("test: first carry-on held after its claim")
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
+		ctx := t.Context()
+		firstDone := make(chan error, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			firstDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}()
+		var id string
+		select {
+		case id = <-claimed:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its claim seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never reached its claim seam")
+		}
+		if id == "" {
+			release()
+			t.Fatal("the claim seam saw no carried-on task id")
+		}
+		free := under.service.ClaimSlotForTest(t, id)
+		go func() {
+			var again machine.KeptWorkAnswered
+			second <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
+		}()
+		var got error
+		select {
+		case got = <-second:
+		case <-time.After(2 * time.Second):
+			free()
+			release()
+			t.Fatal("the same answer again still waited while a steer held the slot")
+		case <-ctx.Done():
+			free()
+			release()
+			t.Fatal("the same answer again neither refused nor returned")
+		}
+		assertCarryOnSlotBusyLine(t, got, entry.Key(), id)
+		free()
+		release()
+		<-firstDone
+	})
+}
+
+// A carry-on answer that finds the successor's slot already settled is
+// refused with PhraseCarryOnAlreadyStarted ("cannot take it again");
+// answering again cannot free that hold (#731 round 3–4).
+func TestACarryOnAnswerRefusesWhenTheSuccessorSlotIsSettled(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		once    sync.Once
+		letGo   sync.Once
+		claimed = make(chan string, 1)
+		leave   = make(chan struct{})
+	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return nil
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		claimed <- owed.CarriedOnTask.Or("")
+		<-leave
+		return nil
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
+		ctx := t.Context()
+		firstDone := make(chan error, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			firstDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}()
+		var id string
+		select {
+		case id = <-claimed:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its claim seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never reached its claim seam")
+		}
+		if id == "" {
+			release()
+			t.Fatal("the claim seam saw no carried-on task id")
+		}
+		under.service.SettleSlotForTest(t, id)
+		release()
+		err := <-firstDone
+		assertCarryOnSettledLine(t, err, entry.Key(), id)
+	})
+}
+
+// assertCarryOnSettledLine holds a settled-slot refusal to the phrase that
+// is true for every settler (not "already begun"), the hold key, and the
+// absence of the task id (#731 round 4).
+func assertCarryOnSettledLine(t *testing.T, err error, key, taskID string) {
+	t.Helper()
+	started := machine.PhraseCarryOnAlreadyStarted.String()
+	line := ""
+	if err != nil {
+		line = err.Error()
+	}
+	if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(line, started) {
+		t.Fatalf("carry-on settled refusal = %v; want it refused naming %q", err, started)
+	}
+	if !strings.Contains(line, key) {
+		t.Fatalf("the settled refusal %q does not name the hold key %s", line, key)
+	}
+	if strings.Contains(line, taskID) {
+		t.Fatalf("the settled refusal names the task identifier %s: %q", taskID, line)
+	}
+	for _, falseClaim := range []string{"already begun", "nothing moved", "Answer again once that work has ended"} {
+		if strings.Contains(line, falseClaim) {
+			t.Fatalf("the settled refusal states %q, which a refused relaunch does not establish: %q", falseClaim, line)
+		}
+	}
+	for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
+		if strings.Contains(line, term) {
+			t.Fatalf("the settled refusal carries internal wording %q: %q", term, line)
+		}
+	}
+}
+
+// A failed adoption leaves the successor undispatched with zero attempts; a
+// relaunch then refused as not due settles the slot. Retrying carry-on must
+// not say the work already began (#731 round 4).
+func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	oldDir := filepath.Dir(entry.CopyPath)
+	if err := os.Chmod(oldDir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(oldDir, 0o700) })
+
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		ctx := t.Context()
+		var out machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out); err == nil {
+			t.Fatalf("the carry on completed past a rename the directory refuses: %+v", out)
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !owed.CarryOnClaimed() || owed.CarriedOnAt.IsKnown() {
+			t.Fatalf("after the failed adoption the entry reads %+v, %v; want it open with its claim owed", owed, err)
+		}
+		id := owed.CarriedOnTask.Or("")
+		if id == "" {
+			t.Fatal("the failed adoption left no carried-on task id")
+		}
+		if attempts := attemptsOfTask(t, h, id); len(attempts) != 0 {
+			t.Fatalf("after the failed adoption task %s has attempts %+v; want none", id, attempts)
+		}
+		if err := under.service.RelaunchTaskForTest(ctx, id); !errors.Is(err, service.ErrRelaunchNotDue) {
+			t.Fatalf("relaunch of the undispatched successor = %v; want not due", err)
+		}
+		if attempts := attemptsOfTask(t, h, id); len(attempts) != 0 {
+			t.Fatalf("the refused relaunch began an attempt: %+v", attempts)
+		}
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		assertCarryOnSettledLine(t, err, entry.Key(), id)
+	})
+}
+
+// completeCarryOn's busy and already-started refusals reach a person through
+// the CLI renderer as the hold key and the phrase row, with no task
+// identifier. This drives both refusals with the task id the test created,
+// prints them through cli.FormatFailure (what render writes on stderr), and
+// shows each guard fails when production interpolates that id (#731 round 3, P13).
+func TestCarryOnSlotRefusalsPrintThroughTheCLIRendererWithoutTaskIdentifiers(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P13)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		once    sync.Once
+		letGo   sync.Once
+		claimed = make(chan string, 1)
+		leave   = make(chan struct{})
+	)
+	release := func() { letGo.Do(func() { close(leave) }) }
+	t.Cleanup(release)
+	o, _ := workerOptions(t, h)
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			return nil
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		claimed <- owed.CarriedOnTask.Or("")
+		<-leave
+		return fmt.Errorf("test: hold the first answer after its claim")
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer release()
+		ctx := t.Context()
+		firstDone := make(chan error, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			firstDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}()
+		var id string
+		select {
+		case id = <-claimed:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its claim seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never reached its claim seam")
+		}
+		if id == "" {
+			release()
+			t.Fatal("the claim seam saw no carried-on task id")
+		}
+
+		t.Run("busy", func(t *testing.T) {
+			free := under.service.ClaimSlotForTest(t, id)
+			defer free()
+			assertCarryOnRefusalThroughCLI(t, under, old, entry, id, machine.PhraseCarryOnSlotBusy)
+		})
+		t.Run("already started", func(t *testing.T) {
+			under.service.SettleSlotForTest(t, id)
+			assertCarryOnRefusalThroughCLI(t, under, old, entry, id, machine.PhraseCarryOnAlreadyStarted)
+		})
+		release()
+		<-firstDone
+	})
+}
+
+// assertCarryOnRefusalThroughCLI drives completeCarryOn for a slot refusal
+// and holds cli.FormatFailure to the phrase, the hold key, and the absence
+// of the task id, with a positive control that fails when the id is wrapped in.
+func assertCarryOnRefusalThroughCLI(t *testing.T, under serviceUnderTest, old string, entry store.KeptWork, id string, phrase machine.Phrase) {
+	t.Helper()
+	var out machine.KeptWorkAnswered
+	err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+	if err == nil {
+		t.Fatal("completeCarryOn answered; want a slot refusal")
+	}
+	if !strings.Contains(err.Error(), phrase.String()) {
+		t.Fatalf("completeCarryOn = %v; want the phrase row", err)
+	}
+	if strings.Contains(err.Error(), id) {
+		t.Fatalf("completeCarryOn interpolated the task id %s: %v", id, err)
+	}
+	bad := fmt.Errorf("%w: %s: task %s: %s", ipc.ErrRefused, entry.Key(), id, phrase)
+	if !strings.Contains(cli.FormatFailure(bad), id) {
+		t.Fatalf("positive control: FormatFailure of an error that interpolates task %s omitted it", id)
+	}
+	printed := cli.FormatFailure(err)
+	if !strings.Contains(printed, phrase.String()) {
+		t.Fatalf("FormatFailure %q, want the phrase row", printed)
+	}
+	if !strings.Contains(printed, entry.Key()) {
+		t.Fatalf("FormatFailure %q, want the hold key %s", printed, entry.Key())
+	}
+	if strings.Contains(printed, id) {
+		t.Fatalf("FormatFailure printed the task identifier %s:\n%s", id, printed)
+	}
+	for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
+		if strings.Contains(printed, term) {
+			t.Fatalf("FormatFailure printed internal wording %q:\n%s", term, printed)
+		}
+	}
 }
 
 // A kept copy with a linked worktree is not carried on (round 47): a

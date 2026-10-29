@@ -512,7 +512,16 @@ func (s *Service) giveBackSlot(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.isolated, id)
+	s.endClaim(id)
+}
+
+// endClaim marks the task's claim ended. Every write that ends a claim in
+// claiming goes through it. A claimSteer entry is cleared from steering
+// here too, which is empty for a dispatch or relaunch. It is called with
+// s.mu held.
+func (s *Service) endClaim(id string) {
 	delete(s.claiming, id)
+	delete(s.steering, id)
 }
 
 // giveBackSettledSlotLocked frees a settled slot with s.mu already held. A
@@ -592,12 +601,12 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 	switch {
 	case errors.Is(err, store.ErrDispatchHeld):
 		if s.betweenHeldAndRelease != nil {
-			s.betweenHeldAndRelease()
+			s.betweenHeldAndRelease(id)
 		}
 		s.releaseHeldSlot(ctx, id)
 	case errors.Is(err, store.ErrPassHeld):
 		if s.betweenHeldAndRelease != nil {
-			s.betweenHeldAndRelease()
+			s.betweenHeldAndRelease(id)
 		}
 		s.releasePassHeldSlot(ctx, id)
 	case errors.As(err, &unread):
@@ -670,6 +679,44 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 	return s.takeSlot(id), nil
 }
 
+// claimCarryOnSlot takes the task's slot for a carry on of kept work into
+// it, or refuses at once when claiming[id] is set, and returns the function
+// that gives the slot back. A carry on's task is held by the entry it
+// carries on until the carry on marks it (store.KeptWorkHolding), so a
+// pass can hold that slot while it only reads the hold; another carry on,
+// a relaunch or a stop can hold it too. Naming any of those as a carry on
+// under way was false when a pass only read the hold (#707). Waiting for
+// claiming[id] to clear had no server-side deadline on the IPC handler's
+// context (P15, #731). The refusal reaches a person as
+// machine.PhraseCarryOnSlotBusy beside the entry key they typed, with no
+// task identifier (P13); claiming[id] alone is what that row knows. A
+// settled slot, which claimDispatch refuses too, is refused with
+// errSlotSettled and machine.PhraseCarryOnAlreadyStarted: that row states
+// only that this service will not take the slot again, not that successor
+// work began (a refused relaunch settles the same map).
+func (s *Service) claimCarryOnSlot(id string) (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if s.claiming[id] {
+		return nil, errCarryOnSlotBusy
+	}
+	if _, settled := s.isolated[id]; settled {
+		return nil, fmt.Errorf("%w: task %s", errSlotSettled, id)
+	}
+	s.takeSlot(id)
+	return func() { s.giveBackSlot(id) }, nil
+}
+
+// errCarryOnSlotBusy reports a carry-on answer that found the task's slot
+// claimed in this service. completeCarryOn wraps it as ipc.ErrRefused with
+// machine.PhraseCarryOnSlotBusy.
+var errCarryOnSlotBusy = errors.New("service: the task's slot is claimed here")
+
+// errSlotSettled reports a slot a dispatch of this service settled when it
+// ended after its claim, which claimDispatch does not take again.
+var errSlotSettled = errors.New("service: the task has already been dispatched here")
+
 // claimRelaunch takes the task's slot for a relaunch, or for a dispatch a
 // person answered retry on the no-sweep hold of, which are the two ways a
 // slot this service already holds is taken again: for a relaunch, the
@@ -719,7 +766,7 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.isolated[id] = proof
-		delete(s.claiming, id)
+		s.endClaim(id)
 	}
 }
 

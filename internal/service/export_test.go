@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 )
 
 // SecondCheckHeading is the heading dispatch appends the second check to a
@@ -71,6 +72,15 @@ func WithCarryOnInterruptForTest(tb testing.TB, o Options, f func() error) Optio
 // this one ran, and an error f returns ends the answer there.
 func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) Options {
 	o.carryOnTest, o.interruptCarryOnClaim = tb, f
+	return o
+}
+
+// WithHeldDispatchWindowForTest returns o with the seam that runs in a
+// dispatch of the task it is given that kept work or a housekeeping pass's
+// retirement hold held, after the refusal and before the task's slot is
+// given back, for this package's external tests.
+func WithHeldDispatchWindowForTest(o Options, held func(id string)) Options {
+	o.heldDispatchWindow = held
 	return o
 }
 
@@ -167,6 +177,31 @@ func (s *Service) ClaimSlotForTest(tb testing.TB, id string) func() {
 	}
 	return release
 }
+
+// SettleSlotForTest marks the task's slot settled with no claim in flight,
+// as a finished dispatch of this service leaves it, for this package's
+// external tests of a carry-on that finds errSlotSettled.
+func (s *Service) SettleSlotForTest(tb testing.TB, id string) {
+	tb.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if s.claiming[id] {
+		tb.Fatalf("settling the slot of task %s: a claim is still in flight", id)
+	}
+	s.isolated[id] = tasks.Isolation{}
+}
+
+// RelaunchTaskForTest runs relaunchTask for this package's external tests
+// and returns its error, including a refused relaunch that settles the
+// slot (ErrRelaunchNotDue among them).
+func (s *Service) RelaunchTaskForTest(ctx context.Context, id string) error {
+	_, err := s.relaunchTask(ctx, id)
+	return err
+}
+
+// ErrRelaunchNotDue is errRelaunchNotDue for this package's external tests.
+var ErrRelaunchNotDue = errRelaunchNotDue
 
 // SetAfterPromotedLaunchStartedForTest installs afterPromotedLaunchStarted
 // for this package's external tests. It exists only in the tests, on that

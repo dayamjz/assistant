@@ -262,6 +262,30 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
 }
 
+// PhraseCarryOnSlotBusy is the row for a carry-on answer refused because
+// this service already holds that successor's in-flight work
+// (claiming[id]). The mechanism does not say which write that is, so the
+// row states only what every holder shares: the answer was not taken and
+// the entry stays open; the person answers again shortly (#707, #731). It
+// names no task identifier and no internal mechanic (P13).
+var PhraseCarryOnSlotBusy = Phrase{
+	Outcome:     "That carry-on was not taken, because this service cannot take it right now.",
+	Consequence: "The entry is still open.",
+	Decision:    "Answer again shortly.",
+}
+
+// PhraseCarryOnAlreadyStarted is the row for a carry-on answer refused
+// because this service already keeps that successor's slot for its
+// lifetime (a settled isolated[id]). That fact alone does not say the
+// successor began: a refused relaunch settles the same way with zero
+// attempts (#731). Answering again cannot free it; the person reads what
+// stands (P13).
+var PhraseCarryOnAlreadyStarted = Phrase{
+	Outcome:     "That carry-on was not taken, because this service cannot take it again.",
+	Consequence: "The entry is still open.",
+	Decision:    "Read what stands with assistant --json status.",
+}
+
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept
 // work entry: one row per effect.
 func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
@@ -277,5 +301,5 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseKeptWorkLosesNothing,
-		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal}
+		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }

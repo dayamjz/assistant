@@ -99,7 +99,7 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 	entry := keepWorkIn(t, subject.records)
 
 	inWindow := false
-	subject.service.betweenHeldAndRelease = func() {
+	subject.service.betweenHeldAndRelease = func(string) {
 		inWindow = true
 		subject.service.betweenHeldAndRelease = nil
 		if _, err := subject.records.ClaimKeptWorkLanding(ctx, entry.ID, store.ResolvedByMachineInterface()); err != nil {
@@ -160,7 +160,7 @@ func TestAHoldThatCouldNotBeReadKeepsNoSlotFromTheClosingPass(t *testing.T) {
 			endPass()
 		}
 	}
-	s.betweenHeldAndRelease = func() {
+	s.betweenHeldAndRelease = func(string) {
 		s.betweenHeldAndRelease = nil
 		endDispatch()
 	}
