@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -43,6 +44,21 @@ type pushTree struct {
 	// groups is every process group a member leads, and every group passed
 	// in to the reading.
 	groups map[int]bool
+	// placed is where the reading found each member: its parent and its
+	// group.
+	placed map[int]agents.Lineage
+}
+
+// describe writes one line per member: its identifier, its parent and group
+// as the reading found them, and its arguments. It is read from the kernel
+// rather than from a program, so it says the same where no program can be
+// started, as under the per-package leak check's sandbox on macOS, which
+// refuses ps.
+func (tree pushTree) describe(w io.Writer) {
+	for _, proc := range tree.members {
+		l := tree.placed[proc.PID]
+		fmt.Fprintf(w, "  process %d (parent %d, group %d): %s\n", proc.PID, l.Parent, l.Group, strings.Join(proc.Args, " "))
+	}
 }
 
 // readPushTree reads the process table once and returns the push rooted at
@@ -55,7 +71,7 @@ type pushTree struct {
 // own by a member after the reading, whose parent then ends, is found by no
 // later reading, which is the gap giveUp names.
 func readPushTree(root int, known map[int]bool) (pushTree, error) {
-	tree := pushTree{root: root, groups: maps.Clone(known)}
+	tree := pushTree{root: root, groups: maps.Clone(known), placed: map[int]agents.Lineage{}}
 	if tree.groups == nil {
 		tree.groups = map[int]bool{}
 	}
@@ -91,6 +107,7 @@ func readPushTree(root int, known map[int]bool) (pushTree, error) {
 	for _, proc := range listed {
 		if in[proc.PID] {
 			tree.members = append(tree.members, proc)
+			tree.placed[proc.PID] = lineage[proc.PID]
 		}
 	}
 	return tree, nil
@@ -164,6 +181,7 @@ func (p *boundedPush) giveUp() string {
 	fmt.Fprintf(&said, "git push was process %d. When it was given up on, the gate's receive command had started: %t; "+
 		"git receive-pack had started: %t; gate hooks running: %d; other processes it had started: %d.\n",
 		root, len(receivers) > 0, receivePack, len(hooks), others)
+	tree.describe(&said)
 	said.WriteString(psLines(append([]int{root}, pids(tree.members)...)))
 
 	quit(hooks)
@@ -273,10 +291,11 @@ func pids(ps []standin.Process) []int {
 	return out
 }
 
-// psLines is ps's account of the processes pids name: parent, group,
-// state, and how long each has run, beside its command line. ps is bounded,
-// since a launch stall would hold it too, and what it could not say is said
-// instead.
+// psLines is ps's account of the processes pids name: what it adds to
+// pushTree.describe is each one's state and how long it has run. ps is
+// bounded, since a launch stall would hold it too, and where it cannot run,
+// as under the per-package leak check's sandbox on macOS, what it could not
+// say is said instead.
 func psLines(pids []int) string {
 	ids := make([]string, 0, len(pids))
 	for _, pid := range pids {
@@ -493,8 +512,13 @@ func TestAPushGivenUpOnInAGitOtherThanReceivePackEndsThatGit(t *testing.T) {
 	}
 	seesRunning(t, push, stalled, "the parked rev-parse")
 	said := push.giveUp()
-	if !strings.Contains(said, "other processes it had started: 1") {
-		t.Fatalf("giving up did not count the parked rev-parse among what the push had started:\n%s", said)
+	// How many other processes that is depends on the platform: git push
+	// runs the receive command through a shell that stays on Linux and not on
+	// macOS. The parked git is named by its identifier in the listing either
+	// way.
+	if !strings.Contains(said, fmt.Sprintf("  process %d (parent ", stalled.PID)) {
+		t.Fatalf("giving up did not list the parked rev-parse, process %d, among what the push had started:\n%s",
+			stalled.PID, said)
 	}
 	if !(standin.Process{Identity: stalled}).GoneWithin(standin.EndGrace) {
 		t.Fatalf("the push was given up on and the rev-parse it was waiting on, process %d, is still running:\n%s",
