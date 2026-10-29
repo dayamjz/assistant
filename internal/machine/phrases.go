@@ -832,6 +832,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseWorkerStopped
 	case AnswerLanded:
 		return phraseLandedLocallyNow
+	case AnswerRetired:
+		return phraseRetired
 	}
 	return HoldPhrase(a.Hold)
 }

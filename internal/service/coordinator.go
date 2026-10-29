@@ -481,6 +481,7 @@ func refusalOf(err error) error {
 		errors.Is(err, tasks.ErrLayoutUnsupported),
 		errors.Is(err, tasks.ErrKeptWorkUnheld),
 		errors.Is(err, store.ErrNotRelayable),
+		errors.Is(err, store.ErrPassRetired),
 		errors.Is(err, store.ErrTaskRelayed),
 		errors.Is(err, errRelaunchNotDue),
 		errors.Is(err, errRelaunchNotDead),

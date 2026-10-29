@@ -93,8 +93,10 @@ import (
 //   - Detection is at a pass, so a closure lands up to one interval after
 //     the screen changed or the worker died, and a pass that cannot take the
 //     task's slot defers it one interval more.
-//   - A housekeeping pass's retirement is not built, so its probe closes
-//     nothing here.
+//   - A housekeeping pass's retirement closes its stall holds on the probe
+//     it takes reading the worker dead, through closeStallsOnDead, as a stop
+//     does (housekeeping.go); a pass the probe reads otherwise is not retired
+//     and its hold stands.
 
 // approvedStallSurface is the surface number of the latest stall hold of the
 // task's current attempt and current screen that was answered approve, or

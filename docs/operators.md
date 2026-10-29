@@ -552,7 +552,31 @@ interval the coordinator's wake names it and what it waits on, each interval.
 While something still moves it (a run not ended, a worker that reads live or
 cannot be read), it is in flight whatever its state says, so its worker is
 watched like any running task, and the coordinator escalates a long run or a
-hang to you; nothing retires it. When nothing moves it, nothing here ends it yet.
+hang to you; nothing retires it. When nothing moves it, you are asked whether
+to retire it:
+
+```sh
+assistant --task ID --answer retire   # release its claim so the next pass can start
+assistant --task ID --answer keep     # leave it open; asked again after another interval
+```
+
+`retire` is refused, with the decision left open, if a run of the pass
+started or its worker was begun again since you were asked. It closes no pull
+request, moves no branch and discards nothing; it answers `stop` on the pass's
+decisions that would begin its worker again, and its copy is asked the
+cleanup decision, so work not yet landed is kept for you (see Kept work).
+The program retires no pass on its own. A pass whose run rebased to nothing,
+because the default branch already holds the correction, lands from the
+run's nothing-to-deliver record as any delivery task does (see Nothing left
+to deliver above) and needs no retirement; one whose run left nothing to
+push without that record is asked about the same way once nothing moves
+it. A retired pass is never begun again or promoted, and `retire` answered while a
+launch of the pass is under way is refused, with the decision left open,
+until that worker is recorded, which the next answer then reads live. It
+stops counting as work in flight: the stop guard and the catch-up read
+wait on it only while a run of its branch has not ended or a wake about it
+is not yet acknowledged. With the interval zero, no wake and no retirement
+decision is raised about any pass.
 
 What reaches you is what reaches you of any task: the pass's pull request,
 its decisions, and a blocker the coordinator escalates. The due wake and a

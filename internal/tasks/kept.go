@@ -96,6 +96,29 @@ func KeptOf(r *CleanupRefusal) (Kept, bool) {
 	return Kept{Task: r.Task, Run: r.Run, Reason: string(r.Reason), Detail: detail}, true
 }
 
+// KeptOnRetirement is KeptOf for the copy of a retired housekeeping pass,
+// PRD section 6's "retiring asks section 6's cleanup decision for the
+// pass's copy on P12's terms" with P15's "kept work is never silent". An
+// unlanded refusal is kept as KeptOf keeps it. A refusal for a report not
+// stored or a decision of it not registered is kept too: Unlanded leaves
+// those to a later cleanup, which for a retired pass only answers the same,
+// because retirement means nothing will store its report or register its
+// holds, so the copy stands for whatever work it holds. Keep then records
+// the entry, or nothing when the copy holds nothing the default branch
+// lacks. Every other reason, a terminal not read dead, a copy that changed
+// or is missing, a shape that moved, is no fact about the copy's work and
+// answers false.
+func KeptOnRetirement(r *CleanupRefusal) (Kept, bool) {
+	if r == nil {
+		return Kept{}, false
+	}
+	switch r.Reason {
+	case ReasonReportUnstored, ReasonHoldUnregistered:
+		return Kept{Task: r.Task, Run: r.Run, Reason: string(r.Reason), Detail: r.Detail}, true
+	}
+	return KeptOf(r)
+}
+
 // KeptEntry is what Keep did: the entry as it stands, and whether this call
 // wrote it or established it, or that the copy holds nothing to keep.
 type KeptEntry struct {

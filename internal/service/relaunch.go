@@ -115,6 +115,14 @@ const relaunchedKind = "relaunched"
 // Nothing is recorded.
 var errRelaunchNotDue = errors.New("service: the task is not one reconciliation relaunches")
 
+// errRelaunchRetired reports a relaunch asked of a housekeeping pass whose
+// retirement is recorded, PRD section 11's "a retired pass is never
+// relaunched", whoever asks: reconciliation, a coordinator, or a retry on a
+// hold left open. It is decided before the sweep and again by the store's
+// attempt claim, which refuses it with store.ErrPassRetired, which it
+// wraps. Nothing is recorded.
+var errRelaunchRetired = fmt.Errorf("service: %w", store.ErrPassRetired)
+
 // errRelaunchUnprobed reports a relaunch asked of a Service with no
 // Terminals, which Open never produces and this package's tests build by
 // hand. A relaunch rests on a dead reading this service made itself, and a
@@ -190,8 +198,8 @@ type relaunched struct {
 // relaunch a terminal that died while this service was up. A relaunch
 // that claimed its attempt returns with the slot still unsettled and
 // launch.settle set, as dispatch.go's dispatchTask does, so the slot
-// stays taken against a stop and the rest through the launch that
-// follows; a refused relaunch settles it before returning.
+// stays taken against a stop, a retirement and the rest through the launch
+// that follows; a refused relaunch settles it before returning.
 //
 // Once the attempt is claimed, the session handle this service still holds
 // for the superseded attempt, if any, is released through the provider:
@@ -256,6 +264,16 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	}
 	if !found {
 		return relaunched{}, fmt.Errorf("service: task %s: %w", id, store.ErrNotFound)
+	}
+	if r.Record.Housekeeping {
+		retirement, retired, err := s.store.RetirementOf(ctx, id)
+		if err != nil {
+			return relaunched{}, err
+		}
+		if retired {
+			return relaunched{}, fmt.Errorf("%w: housekeeping pass %s was retired at %s, which released its claim on its repository, and no worker starts in its copy again",
+				errRelaunchRetired, id, retirement.RecordedAt.UTC().Format(time.RFC3339))
+		}
 	}
 	attempts, err := s.store.TaskAttempts(ctx, id)
 	if err != nil {

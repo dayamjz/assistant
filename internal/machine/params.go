@@ -297,6 +297,16 @@ const (
 	// fast-forwards the local default branch to the commit the worker
 	// pushed, anchored to the tip it read when it offered the change.
 	AnswerApprove = "approve"
+	// AnswerRetire answers a housekeeping pass's retirement hold: the
+	// program writes the pass's retirement record, which releases its
+	// claim on its repository, if nothing moves the pass when the answer
+	// is applied, and answers stop on every open hold of the pass whose
+	// retry would relaunch its worker. Otherwise the answer is refused and
+	// the hold stays open.
+	AnswerRetire = "retire"
+	// AnswerKeep answers a retirement hold by leaving the pass open; the
+	// hold is offered again at most once per housekeeping.interval.
+	AnswerKeep = "keep"
 )
 
 // TaskMessageRequest sends a message to a running task's worker, PRD

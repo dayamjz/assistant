@@ -391,6 +391,11 @@ type Service struct {
 	// claiming that is not a dispatch or relaunch in flight, so launching
 	// can tell the two apart. steer.go writes it; dispatch.go reads it.
 	steering map[string]bool
+	// redispatchWhenFree holds tasks whose keep answer owed a dispatch
+	// while a claimSteer held the settled slot; that steer's release gives
+	// the slot back and asks dispatchDue. dispatch.go notes it; steer.go
+	// clears it on release. Memory and nothing durable, under mu.
+	redispatchWhenFree map[string]bool
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
@@ -442,10 +447,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// betweenHeldAndRelease runs in a dispatch that kept work held, after
-	// the refusal and before the slot is given back. It is nil in
-	// production and set only by this package's tests, which use it to
-	// close the entry and run another dispatch pass inside that window.
+	// betweenHeldAndRelease runs in a dispatch that kept work or a
+	// housekeeping pass's retirement hold held, after the refusal and before
+	// the slot is given back. It is nil in production and set only by this
+	// package's tests, which use it to close the entry or answer the hold,
+	// and run another dispatch pass, inside that window.
 	betweenHeldAndRelease func()
 	// betweenLandingClaimAndStart runs in a landing of kept work after its
 	// claim and before it brings the commit into the gate and starts the

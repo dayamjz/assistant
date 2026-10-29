@@ -244,6 +244,14 @@ func (s *Store) SetAttemptSession(ctx context.Context, taskID string, sequence i
 		if recorded.IsKnown() {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptSessionRecorded)
 		}
+		var ended Optional[string]
+		if err := tx.QueryRowContext(ctx, `SELECT launch_ended_at FROM task_attempt WHERE task_id = ? AND sequence = ?`, taskID, sequence).
+			Scan(&ended); err != nil {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
+		}
+		if ended.IsKnown() {
+			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, ErrAttemptLaunchEnded)
+		}
 		if err := exclusionTx(ctx, tx, taskID, recordsSession, ""); err != nil {
 			return fmt.Errorf("store: task %s attempt %d: %w", taskID, sequence, err)
 		}
