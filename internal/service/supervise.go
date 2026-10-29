@@ -44,10 +44,17 @@ import (
 // one failure the loop acts on is ErrStaleIncarnation, on which the
 // incarnation returns.
 //
-// Which tasks a pass watches is supervisor.StateInFlight's table plus the
-// tasks with a queued wake or an open stall hold, which is the set PRD
-// section 5's "work is in flight" names with section 6's "a held stall stays
-// watched". One detection is made for every task, watched or not, in
+// Which tasks a pass watches is supervisor.TaskInFlight's rule with each
+// task's supervisor.RegardOf, plus the tasks with a queued wake: a task
+// whose state is in flight on supervisor.StateInFlight's table, a task with
+// an open stall hold or a housekeeping pass that something moves
+// (supervisor.PassMoves) whatever it resolves, and a retired pass nothing
+// moves only for a queued wake. That is the set PRD section 5's "work is in
+// flight" names with section 6's "a held stall stays watched", its
+// housekeeping's "a pass therefore counts as in flight while something
+// moves it, whatever it resolves", and its "a retired pass is not in flight
+// by its state alone". A pass something moves has its terminal read
+// whatever it resolves too, a Reported one included. One detection is made for every task, watched or not, in
 // two halves: an open hold record naming it or one of its runs, and an
 // attributed run whose record stands held. A run's own hold is not a hold
 // record: a run halted at a stage moves to held through internal/runs and
@@ -297,6 +304,20 @@ type supervisionHooks struct {
 	// now replaces the clock the loop and the watchdog read, so a window
 	// can elapse under a test without waiting for it.
 	now func() time.Time
+	// afterHousekeepingCheck is called with a repository's due check's
+	// report once the check, which runs off the loop's goroutine, has
+	// written what it wrote (housekeeping.go).
+	afterHousekeepingCheck func(repository string, report taskReport)
+	// afterDueRead is called with the repository of a due check that has
+	// read its default branch and its trusted configuration, before the
+	// check writes its wake or its marker, so a test can create a pass in
+	// between (housekeeping.go).
+	afterDueRead func(repository string)
+	// beforeRetirementOffer is called with a pass the loop read open and
+	// decided to offer the retirement hold, after that read and before the
+	// registration, so a test can move the pass in between
+	// (housekeeping.go).
+	beforeRetirementOffer func(task string)
 	// afterPass is called, after its writes, with the report of every pass
 	// the loop makes on its own: an incarnation's first pass and each
 	// pass at the interval. A kicked pass's report goes to its kick
@@ -375,6 +396,11 @@ type passReport struct {
 	// KeptWork is the pass over the open kept work no task names, keyed by
 	// entry, on keptworkwake.go's terms; nil when there is none.
 	KeptWork map[int64]taskReport
+	// Housekeeping is the pass over each repository's housekeeping, keyed
+	// by repository, on housekeeping.go's terms; nil when nothing was
+	// written. A due check that runs off the loop's goroutine reports
+	// through its own hook instead.
+	Housekeeping map[string]taskReport
 }
 
 // taskReport is one task's part of a pass.
@@ -547,6 +573,14 @@ func (s *Service) passAndReport(c *incarnation, reply chan<- passReport) (replac
 			}
 		}
 	}
+	for repository, hr := range report.Housekeeping {
+		if hr.Err != nil {
+			s.log.Printf("supervisor incarnation %d could not record its pass over the housekeeping of repository %s: %v", c.inc.Epoch(), repository, hr.Err)
+			if errors.Is(hr.Err, store.ErrStaleIncarnation) {
+				replaced = true
+			}
+		}
+	}
 	for entry, kr := range report.KeptWork {
 		if kr.Err != nil {
 			s.log.Printf("supervisor incarnation %d could not record its pass over kept work entry %d: %v", c.inc.Epoch(), entry, kr.Err)
@@ -620,8 +654,10 @@ func (s *Service) pass(c *incarnation) passReport {
 	// standing one's subordinate probed, its gone surfaced on the queue's
 	// second shape, and the bound's hold registered for one past it.
 	report.Delegations = s.superviseDelegations(c, now)
-	// The kept work no task names last, on keptworkwake.go's terms.
+	// The kept work no task names, on keptworkwake.go's terms.
 	report.KeptWork = s.superviseUntaskedKeptWork(c, untasked)
+	// Each repository's housekeeping last, on housekeeping.go's terms.
+	report.Housekeeping = s.superviseHousekeeping(c, observed, now)
 	return report
 }
 
@@ -630,9 +666,13 @@ func (s *Service) pass(c *incarnation) passReport {
 func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map[string]session.Observation,
 	queued bool, unread []store.Message, kept []store.KeptWork, now time.Time, providerWideSurfaced *bool) taskReport {
 	id := o.Snapshot.Task.ID
-	inFlight, decided := supervisor.StateInFlight(o.State.State)
+	inFlight, decided := supervisor.TaskInFlight(o.State.State, 0, supervisor.RegardOf(o))
 	stalls := supervisor.OpenStallHolds(o)
-	obs := observation{observed: o, watched: inFlight || !decided || queued || len(stalls) > 0, unread: unread, kept: kept}
+	// A housekeeping pass something moves is in flight whatever it
+	// resolves, and its terminal is read whatever it resolves too, PRD
+	// section 6's housekeeping; housekeeping.go owns the rest of it.
+	moving := supervisor.PassMoves(o)
+	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread, kept: kept}
 	var err error
 	ctx, cancel := s.sup.bound(c.ctx)
 	obs.markers, obs.has, err = s.store.WakeMarkers(ctx, id)
@@ -665,6 +705,7 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 		obs.ref, _ = o.Snapshot.Attempts[n-1].SessionRef.Get()
 	}
 	obs.terminal, _ = supervisor.TerminalWatched(o.State.State)
+	obs.terminal = obs.terminal || moving
 	if obs.watched && obs.terminal && obs.ref != "" {
 		obs.screen, obs.gone = s.readTerminal(c, obs.ref, probes[obs.ref])
 	}

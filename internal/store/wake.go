@@ -788,20 +788,19 @@ func drainWakesTx(ctx context.Context, tx *sql.Tx, limit int, h WakeHandout) ([]
 // Drained is one drain of every shape the queue has, handed out under one
 // handout in one transaction.
 type Drained struct {
-	Wakes         []Wake
-	DomainWakes   []DomainWake
-	KeptWorkWakes []KeptWorkWake
+	Wakes             []Wake
+	DomainWakes       []DomainWake
+	KeptWorkWakes     []KeptWorkWake
+	HousekeepingWakes []HousekeepingWake
 }
 
-// DrainAll is DrainWakes, DrainDomainWakes and the kept-work wakes' drain
-// under one handout in one transaction: the task rows, then the domain
-// rows, then the kept-work rows, each bounded by limit, and the last two
-// none on a subordinate's route. Every shape is handed out or none is, so
+// DrainAll is DrainWakes, DrainDomainWakes, the kept-work wakes' and the
+// housekeeping wakes' drains under one handout in one transaction: the task
+// rows, then the domain rows, then the kept-work rows, then the
+// housekeeping rows, each bounded by limit, and the last three none on a
+// subordinate's route. Every shape is handed out or none is, so
 // a drain whose later half fails, or whose context ends between two, leaves
-// no row handed out that its caller was not given. The fourth shape, the
-// housekeeping wake, is not drained here, so nothing hands one out to a
-// caller that cannot return it; it is offered (OfferedHousekeepingWakes)
-// and acknowledged with the rest (AcknowledgeAll).
+// no row handed out that its caller was not given.
 func (s *Store) DrainAll(ctx context.Context, limit int, h WakeHandout) (Drained, error) {
 	if limit < 1 {
 		return Drained{}, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
@@ -824,7 +823,13 @@ func (s *Store) DrainAll(ctx context.Context, limit int, h WakeHandout) (Drained
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		out.KeptWorkWakes, err = drainKeptWorkWakesTx(ctx, tx, limit, h)
+		if out.KeptWorkWakes, err = drainKeptWorkWakesTx(ctx, tx, limit, h); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		out.HousekeepingWakes, err = drainHousekeepingWakesTx(ctx, tx, limit, h)
 		return err
 	})
 	if err != nil {

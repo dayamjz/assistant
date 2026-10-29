@@ -26,6 +26,13 @@ jobs:
     # Speeding the suite (for example -parallel on macOS) is a separate
     # change that needs the repeat gate before it lands.
     timeout-minutes: 50
+    # checks:read lists this commit's check runs; actions:read reads a
+    # prior run's event (pull_request vs push). Only the prior-check step
+    # uses them; the suite itself needs neither.
+    permissions:
+      contents: read
+      checks: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -55,12 +62,48 @@ jobs:
         if: steps.docs.outputs.docs_only == 'true'
         run: echo "${{ steps.docs.outputs.reason }}"
 
+      # On a push to main, skip the suite when a pull request already ran
+      # this same check successfully on this commit (batch landings
+      # fast-forward that SHA). The job still runs and reports SUCCESS
+      # under check (<os>): a matrix job skipped as a whole would leave
+      # the required check missing (see repeat.yml). Fail closed: an
+      # unreadable history sets run=true. scripts/prior-check.py owns it.
+      - name: Prior check
+        id: prior
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/prior-check.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$GITHUB_SHA" \
+            --check-name "check (${{ matrix.os }})" \
+            --run-id "$GITHUB_RUN_ID" \
+            --event-name "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Already checked on a pull request
+        if: steps.prior.outputs.run != 'true'
+        run: echo "${{ steps.prior.outputs.reason }}"
+
+      # Both paths against the live API on a pull request (ubuntu only):
+      # one commit a PR already tested must skip; one recent commit with
+      # no such check must run. The push-to-main path is what skips for
+      # real; this probe is what the pull request shows in its log.
+      # Suite steps below require prior.run and not docs_only, so the two
+      # skips compose: each hides only what it owns.
+      - name: Prior check probe
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/prior-check.py --repo "$GITHUB_REPOSITORY" --check-name "check (ubuntu-latest)" --probe
+
       # Go, tmux and tini: what scripts/ci-test.sh runs the suite with.
-      - if: steps.docs.outputs.docs_only != 'true'
+      - if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         uses: ./.github/actions/test-env
 
       - name: Verify formatting
-        if: steps.docs.outputs.docs_only != 'true'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -70,13 +113,13 @@ jobs:
           fi
 
       - name: Verify go.mod is tidy
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
       - name: Vet
-        if: steps.docs.outputs.docs_only != 'true'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         run: go vet ./...
 
       # Cross-compiled, so it needs no Windows runner. It checks that every
@@ -84,20 +127,20 @@ jobs:
       # A test file with no build constraint calling a helper from a
       # _unix_test.go file reached main twice before this step existed.
       - name: Vet for Windows
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: GOOS=windows go vet ./...
 
       # `make lint` must refuse a missing or wrong-major golangci-lint instead
       # of degrading to `go vet` alone, which would make `make check` green
       # with no lint having run. This proves those refusals still fire.
       - name: Lint guard
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: make lint-guard-test
 
       # The leftover guard's own tests. The Test step then proves the guard
       # fails on planted leftovers before it trusts the real comparison.
       - name: Leak guard tests
-        if: steps.docs.outputs.docs_only != 'true'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         run: python3 scripts/leak-check-test.py -v
 
       # The flake ledger's tests (scripts/flake-ledger.py, which the CI lanes
@@ -105,37 +148,43 @@ jobs:
       # network but a server they run on 127.0.0.1; nothing in the ledger
       # depends on the platform beyond SIGALRM, which both runners have.
       - name: Flake ledger tests
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: python3 scripts/flake-ledger-test.py -v
 
       # The CI test script's own tests (scripts/ci-test-test.py): the values
       # it refuses before anything runs.
       - name: CI test script tests
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: python3 scripts/ci-test-test.py -v
 
       # The repeat gate's plan (scripts/repeat-plan.py): which packages a
       # pull request's change makes .github/workflows/repeat.yml run.
       - name: Repeat plan tests
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: python3 scripts/repeat-plan-test.py -v
 
       # docs-only.py: macOS skips the suite when a pull request changes only
       # docs/** or *.md.
       - name: Docs-only tests
-        if: steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
         run: python3 scripts/docs-only-test.py -v
+
+      # prior-check.py: skip the suite on a push to main when a pull request
+      # already ran this check on the same commit.
+      - name: Prior check tests
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && matrix.os == 'ubuntu-latest'
+        run: python3 scripts/prior-check-test.py -v
 
       # The race suite in CI's test environment. scripts/ci-test.sh owns that
       # environment (Linux's PID namespace, macOS's TMPDIR, the leak check
       # around the run and per package) and says why each part is there.
       - name: Test
-        if: steps.docs.outputs.docs_only != 'true'
+        if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         shell: bash
         run: bash scripts/ci-test.sh
 
       - name: Skipped tests
-        if: always() && steps.docs.outputs.docs_only != 'true'
+        if: always() && steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         shell: bash
         run: |
           if [ ! -f test.log ]; then
@@ -151,7 +200,7 @@ jobs:
       # names the packages test.log never reported, still running or not yet
       # started, and the flake ledger attaches them to the job's timeout.
       - name: Unfinished packages
-        if: always() && steps.docs.outputs.docs_only != 'true'
+        if: always() && steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
         shell: bash
         run: bash scripts/ci-test.sh unfinished
 

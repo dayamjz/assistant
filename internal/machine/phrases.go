@@ -832,6 +832,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseWorkerStopped
 	case AnswerLanded:
 		return phraseLandedLocallyNow
+	case AnswerRetired:
+		return phraseRetired
 	}
 	return HoldPhrase(a.Hold)
 }
@@ -2056,6 +2058,7 @@ func TablePhrases() []Phrase {
 		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
+	out = append(out, housekeepingRows()...)
 	out = append(out, keptAnswerRows()...)
 	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)

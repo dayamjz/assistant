@@ -1,8 +1,11 @@
 package cli_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,8 +217,9 @@ func TestAPushReturnsWhileTheRunItStartedIsStillInsideAStage(t *testing.T) {
 	// that waits for the run: the stage body is held open for the whole of
 	// this call, so a push that waited would never return at all and would
 	// take the whole test binary's deadline rather than reporting anything.
-	if out, err := gitWithin(t.Context(), 30*time.Second, subject, "push", gate.RemoteName, "work"); err != nil {
-		t.Fatalf("the push did not return while the run it started was inside a stage body: %v\n%s", err, out)
+	if out, err := startBoundedPush(t, h, "", gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")).
+		within(30 * time.Second); err != nil {
+		t.Fatalf("the push did not return while the run it started was inside a stage body: %v\ngit's output:\n%s", err, out)
 	}
 
 	// The push is over. The run it started is inside the stage body, which is
@@ -535,16 +539,169 @@ func tryGit(dir string, args ...string) (string, error) {
 	return gitCommand(context.Background(), dir, args...)
 }
 
-// gitWithin is tryGit under a deadline, for a test whose regression would be a
-// git invocation that never returns rather than one that fails.
-func gitWithin(ctx context.Context, within time.Duration, dir string, args ...string) (string, error) {
-	bounded, cancel := context.WithTimeout(ctx, within)
-	defer cancel()
-	out, err := gitCommand(bounded, dir, args...)
-	if bounded.Err() != nil {
-		return out, bounded.Err()
+// boundedPush is a git push a test bounds, for a test whose regression would
+// be a push that never returns rather than one that fails.
+//
+// Its invariant, which everything else about the push's cleanup answers to:
+// when the test that started the push ends, every process of the push that
+// giving up finds (giveUp) has been ended and read as gone, and the push's
+// output has reached its end, which it does only once no process holds it;
+// otherwise the test fails, naming what still runs, what could not be read,
+// or that the output is still held. endWithTest holds it, and
+// startBoundedPush registers that as the test's cleanup, so it runs however
+// the test ends: with git push waited for, whatever the wait answered; with
+// the push given up on at a bound (within) or by the test; with git push
+// still running when the test returns or fails; and when the test panics,
+// since testing runs a test's cleanups before it reports a panic. That git
+// push has been waited for is never a reason to skip it, since what git push
+// started can outlive git push. What giving up finds, and what it cannot,
+// is pushRecord's to say; a test binary killed outright runs no cleanup at
+// all, which leaves the package's owner check and CI's leak check.
+type boundedPush struct {
+	// h is the home whose gate the push is into.
+	h   *home.Home
+	cmd *exec.Cmd
+	out *pushOutput
+	// done is closed once git push has been waited for, and err is then
+	// what the wait answered.
+	done chan struct{}
+	err  error
+	// ended is closed once the push's output has stopped arriving, and
+	// readErr is then why when that was not its end: a failed read.
+	ended   chan struct{}
+	readErr error
+}
+
+// heldOutputGrace is how long a push's output is given to reach its end once
+// git push has ended, or once giving up has ended what it found of the push,
+// before a process the push started is taken to be holding it.
+const heldOutputGrace = 5 * time.Second
+
+// startBoundedPush starts cmd, a git push into h's gate built with gitCmd
+// and a context that never ends, and not yet started, and registers
+// endWithTest as the test's cleanup. cue, when not empty, is text whose
+// arrival in git's output closes the output's cued.
+//
+// git push starts leading a process group of its own (inOwnGroup), so what
+// it starts and does not move to another group stays in that group once git
+// push has ended, which is where giving up finds it. Its output goes to a
+// pipe this test owns rather than to one exec.Cmd makes and closes on its
+// own once git push has ended, so the pipe's end says that no process of
+// the push still holds it.
+func startBoundedPush(t *testing.T, h *home.Home, cue string, cmd *exec.Cmd) *boundedPush {
+	t.Helper()
+	out := &pushOutput{cue: cue, cued: make(chan struct{})}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("making the pipe git's output goes to: %v", err)
 	}
-	return out, err
+	cmd.Stdout, cmd.Stderr = writer, writer
+	inOwnGroup(cmd)
+	err = cmd.Start()
+	_ = writer.Close()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("starting %s: %v", strings.Join(cmd.Args, " "), err)
+	}
+	p := &boundedPush{h: h, cmd: cmd, out: out, done: make(chan struct{}), ended: make(chan struct{})}
+	go func() {
+		_, p.readErr = io.Copy(out, reader)
+		_ = reader.Close()
+		close(p.ended)
+	}()
+	go func() {
+		p.err = cmd.Wait()
+		close(p.done)
+	}()
+	t.Cleanup(func() { p.endWithTest(t, p.giveUp()) })
+	return p
+}
+
+// endWithTest holds boundedPush's invariant for tb's test with gave, the pass
+// of giving up made as the test ends: a verdict that the push is not shown
+// ended fails the test, naming what is left and with what git wrote, and a
+// pass that found any of the push says in the test's log what it ended.
+func (p *boundedPush) endWithTest(tb testing.TB, gave gaveUp) {
+	tb.Helper()
+	switch {
+	case gave.notEnded != nil:
+		tb.Errorf("when the test ended, giving up on its push did not show the push ended: %v\n%s\ngit's output:\n%s",
+			gave.notEnded, gave.said, p.out.String())
+	case gave.found:
+		tb.Logf("when the test ended, giving up on its push ended what it found of it:\n%s", gave.said)
+	}
+}
+
+// gaveUp is what one pass of giving up on a push found.
+type gaveUp struct {
+	// said is what the push was doing when it was given up on, for a
+	// failure.
+	said string
+	// notEnded is nil only when the pass read the whole of the push, none of
+	// what it read still runs, and the push's output reached its end: every
+	// reading of the pass succeeded, every process giving up has attributed
+	// to the push reads as gone once the push was ended, and nothing holds
+	// the push's output. Otherwise it names what still runs, what could not
+	// be read, that the output is held, or more than one, so a cleanup that
+	// could not read the push is never taken for one that left nothing.
+	notEnded error
+	// found is whether the pass's readings attributed any process to the
+	// push.
+	found bool
+}
+
+// within waits up to bound for git push to end, and then up to
+// heldOutputGrace for its output to, and returns git's output and what git
+// answered. A push still running at the bound, or whose output something
+// else still held, is given up on, and the error then carries what giving up
+// found. The output is read after giving up, so it is the push's final
+// output, with what giving up had the push's processes write, such as the
+// stacks SIGQUIT has the receive command write. Whatever within answers,
+// the test's cleanup gives up on the push once more (endWithTest).
+func (p *boundedPush) within(bound time.Duration) (string, error) {
+	select {
+	case <-p.done:
+	case <-time.After(bound):
+		gave := p.giveUp()
+		return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s",
+			bound, gave.said)
+	}
+	select {
+	case <-p.ended:
+		return p.out.String(), p.err
+	case <-time.After(heldOutputGrace):
+	}
+	gave := p.giveUp()
+	return p.out.String(), fmt.Errorf("git push ended (%v), and something it started still held its output %s later, so "+
+		"the push was given up on:\n%s", p.err, heldOutputGrace, gave.said)
+}
+
+// pushOutput is a push's standard output and standard error as one buffer,
+// which closes cued once cue has arrived in it.
+type pushOutput struct {
+	cue  string
+	cued chan struct{}
+	mu   sync.Mutex
+	buf  bytes.Buffer
+	said bool
+}
+
+func (o *pushOutput) Write(b []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, err := o.buf.Write(b)
+	if !o.said && o.cue != "" && strings.Contains(o.buf.String(), o.cue) {
+		o.said = true
+		close(o.cued)
+	}
+	return n, err
+}
+
+// String is everything the push has written so far.
+func (o *pushOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
 }
 
 // gitCommand runs git in the environment these tests give it, and owns that
@@ -552,6 +709,13 @@ func gitWithin(ctx context.Context, within time.Duration, dir string, args ...st
 // assembling its own, so a bounded call and an unbounded one cannot differ in
 // what git reads.
 func gitCommand(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := gitCmd(ctx, dir, args...).CombinedOutput()
+	return string(out), err
+}
+
+// gitCmd is the git command gitCommand runs, not yet started, for a caller
+// that watches it run.
+func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	// Without a wait delay, killing git on the deadline still leaves this call
@@ -569,8 +733,7 @@ func gitCommand(ctx context.Context, dir string, args ...string) (string, error)
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
 	)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	return cmd
 }
 
 // listRuns is the repository's runs, newest first, read through the command

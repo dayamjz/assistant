@@ -138,6 +138,46 @@ func (s *Store) BeginDispatchAttempt(ctx context.Context, taskID string, expecte
 // launch is a new attempt.
 var ErrAttemptLaunchClaimed = errors.New("store: the attempt's launch is already claimed")
 
+// ErrAttemptLaunchEnded is returned by SetAttemptSession, wrapped, for an
+// attempt whose launch EndAttemptLaunch recorded as ended with no session.
+var ErrAttemptLaunchEnded = errors.New("store: the attempt's launch ended with no session recorded")
+
+// EndAttemptLaunch records, once, that the attempt's claimed launch ended
+// with no session recorded: the launcher's Create failed, or its session
+// could not be recorded and it ended the worker. From then on the
+// launch-retirement exclusion (housekeepinglaunch.go) no longer reads the
+// attempt as a launch under way, so PRD section 6's "its latest attempt
+// never had a session" holds of it, and SetAttemptSession refuses the
+// attempt with ErrAttemptLaunchEnded. An attempt whose launch is not
+// claimed is refused, one whose session is recorded is
+// ErrAttemptSessionRecorded and one that does not exist ErrNotFound, all
+// wrapped; an end already recorded is answered nil.
+func (s *Store) EndAttemptLaunch(ctx context.Context, taskID string, sequence int64) error {
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var claimed, session, ended Optional[string]
+		if err := tx.QueryRowContext(ctx,
+			`SELECT launch_claimed_at, session_ref, launch_ended_at FROM task_attempt WHERE task_id = ? AND sequence = ?`, taskID, sequence).
+			Scan(&claimed, &session, &ended); err != nil {
+			return errNoRows(err)
+		}
+		switch {
+		case ended.IsKnown():
+			return nil
+		case session.IsKnown():
+			return ErrAttemptSessionRecorded
+		case !claimed.IsKnown():
+			return errors.New("its launch was never claimed, so it has no launch to end")
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE task_attempt SET launch_ended_at = ? WHERE task_id = ? AND sequence = ?`,
+			encodeTime(nowUTC()), taskID, sequence)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("store: ending the launch of task %s attempt %d: %w", taskID, sequence, err)
+	}
+	return nil
+}
+
 // ClaimAttemptLaunch records that the attempt's worker is about to be
 // started, once, in a transaction that first asks keptWorkHoldingTx: a task
 // kept work holds is refused with a *DispatchHeldError and nothing is

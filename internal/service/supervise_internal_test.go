@@ -90,6 +90,15 @@ func (s *scriptedTerminals) dead(ref string) {
 	s.liveness[ref] = session.Observation{Liveness: taskstate.Dead, Reason: session.ReasonExited}
 }
 
+// forget makes the terminal unknown to the script again, so its probe reads
+// Unobserved.
+func (s *scriptedTerminals) forget(ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.liveness, ref)
+	delete(s.text, ref)
+}
+
 func (s *scriptedTerminals) failing(ref string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

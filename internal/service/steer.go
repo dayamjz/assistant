@@ -103,8 +103,10 @@ import (
 // # What a relaunch after a stop carries
 //
 // A relaunch whose superseded attempt's stop hold was answered retry is
-// started with the relaunch note, then the note the answer gave, when it is
-// the answer that relaunches, then the text of every message to that attempt
+// started with the relaunch note, then the note the answer gave, read from
+// the hold it is recorded on, whichever relaunch it is: the answer's own, or
+// one a later start or the bound's retry makes on that recorded answer
+// (#604), then the text of every message to that attempt
 // the worker never acknowledged, read from the records, oldest first, each
 // under its identifier so the new worker can acknowledge it. That is no
 // resend: the stopped worker is gone, and the text reaches a new worker as
@@ -135,9 +137,9 @@ import (
 //   - A stopped worker's terminal is dead, so the supervisor loop surfaces a
 //     terminal-gone wake about it beside the hold-opened one; a retry's
 //     relaunch acknowledges the former as the program, as every relaunch does.
-//   - A note given with a retry the relaunch bound defers is not recorded,
-//     so the relaunch the bound's own retry makes later carries the messages
-//     and not the note; the answer says so.
+//   - The note a relaunch carries is the one recorded, with credentials
+//     removed, as a message's text is, so a credential the coordinator meant
+//     the worker to have does not reach it through a note either.
 //   - No method reads a message record back; the record travels in
 //     task.message's answer, and an unacknowledged one surfaces as a wake.
 
@@ -327,6 +329,13 @@ func (s *Service) sendMessage(ctx context.Context, id, ref, text string) error {
 // returns the function that releases it. A slot a dispatch or a relaunch
 // holds unsettled, which it does through the launch that follows it
 // (dispatch.go), or another stop holds, is errSteerInFlight.
+//
+// After a keep resolves a retirement hold, either the settled slot is freed
+// and the pass redispatched, or a holder of the steer is recorded as owing
+// that redispatch, and the check and the record are one critical section
+// (freeSettledSlotForKeep). The release here runs that owed redispatch: it
+// gives the settled slot back and asks dispatchDue, so no refuse-and-release
+// of this claim can fall between keep's check and its record.
 func (s *Service) claimSteer(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -338,8 +347,16 @@ func (s *Service) claimSteer(id string) (func(), error) {
 	s.steering[id] = true
 	return func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		s.endClaim(id)
+		need := s.redispatchWhenFree[id]
+		delete(s.redispatchWhenFree, id)
+		if need {
+			s.giveBackSettledSlotLocked(id)
+		}
+		s.mu.Unlock()
+		if need {
+			s.dispatchInBackground()
+		}
 	}, nil
 }
 

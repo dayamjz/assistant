@@ -160,7 +160,9 @@ type Inputs struct {
 	// Advancing is whether the service is executing the newest of Runs now:
 	// its own fact about the slot a run advances in, which no record holds.
 	// It is recorded in Basis as asked and used only for Progress, and there
-	// only when the run tier answered Validating; it moves no state, so a
+	// only when the run tier answered Validating or a housekeeping pass
+	// resolved Held from the hold tier while its newest run has not settled
+	// (Resolution.Progress's first and third cases); it moves no state, so a
 	// caller that cannot answer passes false and loses nothing but Progress.
 	Advancing bool
 }
@@ -181,8 +183,14 @@ type Resolution struct {
 	// Progress is whether the answer rests on positive evidence that work is
 	// proceeding, which PRD section 6's supervisor absorbs a wake on and
 	// nothing else. It is derived here and nowhere else, and it is true in
-	// exactly two cases: Validating from SourceRun with Inputs.Advancing, and
-	// Running from SourceProcess with a Live terminal. Every other answer is
+	// exactly three cases: Validating from SourceRun with Inputs.Advancing,
+	// Running from SourceProcess with a Live terminal, and a housekeeping
+	// pass that resolves Held from SourceHold while its newest run has not
+	// settled and Inputs.Advancing says the service is advancing it. The
+	// third is PRD section 6's housekeeping: the hold tier sits above the
+	// run tier, so a promoted pass with an open report decision resolves
+	// Held while its run validates, and the run's stage is still positive
+	// evidence for that pass's terminal. Every other answer is
 	// no progress, including a run the service says it is advancing while
 	// the record says it has settled: the record decided the state, and a
 	// slot that disagrees with it is not evidence. A terminal record is
@@ -270,6 +278,8 @@ type Basis struct {
 	Process Liveness `json:"process"`
 	// Advancing is Inputs.Advancing as it was asked, whether or not the
 	// answer used it: it is recorded so a reader can see what Progress
-	// rested on, and it is used only for Validating from the run tier.
+	// rested on, and it is used only for Validating from the run tier and for
+	// a housekeeping pass Held from the hold tier while its newest run has not
+	// settled (Resolution.Progress's first and third cases).
 	Advancing bool `json:"advancing"`
 }

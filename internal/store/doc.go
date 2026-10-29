@@ -409,10 +409,8 @@
 // wake queued (ErrHousekeepingWakeQueued) and takes the acknowledged rows,
 // their notifications and the marker after the repository row.
 // untaskedShape is the one implementation of the offer, the handout, the
-// count and the acknowledgement for the three shapes about no task;
-// AcknowledgeAll takes all four shapes in one transaction, and DrainAll the
-// first three, so no housekeeping wake is handed out to a caller that cannot
-// return it. A
+// count and the acknowledgement for the three shapes about no task, and
+// DrainAll and AcknowledgeAll take all four shapes in one transaction. A
 // kept-work wake and its notification go only with a closed run entry
 // whose run is gone, which only ForgetRepository removes, and it refuses
 // while the wake is unacknowledged (ErrKeptWorkWakeQueued).
@@ -434,7 +432,10 @@
 // launch-retirement exclusion, the one guard every attempt claim, the
 // launch's claim, the record of a session, the offer and the retirement ask
 // in their own transactions: no hold is offered while the latest attempt's
-// launch is claimed and its session is not recorded (ErrPassMoves), no
+// launch is claimed and its session is not recorded (ErrPassMoves), unless
+// its launcher recorded the launch's end with none (migration 69's
+// launch_ended_at, EndAttemptLaunch, after which SetAttemptSession refuses
+// the attempt with ErrAttemptLaunchEnded), no
 // attempt or launch is claimed and no session recorded while the hold is
 // open (ErrPassHeld) or once the pass is retired (ErrPassRetired), and a
 // retirement answers only the pass's retirement hold; its file comment

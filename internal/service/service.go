@@ -352,6 +352,9 @@ type Service struct {
 	// home and code host; cleanup.go says which of its entries this service
 	// calls and from where.
 	cleaner *tasks.Cleaner
+	// housekeeping is what housekeeping.go remembers between passes, none
+	// of it a record's fact.
+	housekeeping housekeepingState
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
 	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
@@ -392,6 +395,11 @@ type Service struct {
 	// claiming that is not a dispatch or relaunch in flight, so launching
 	// can tell the two apart. steer.go writes it; dispatch.go reads it.
 	steering map[string]bool
+	// redispatchWhenFree holds tasks whose keep answer owed a dispatch
+	// while a claimSteer held the settled slot; that steer's release gives
+	// the slot back and asks dispatchDue. dispatch.go notes it; steer.go
+	// clears it on release. Memory and nothing durable, under mu.
+	redispatchWhenFree map[string]bool
 	// launched holds, per task, the session host and terminal session
 	// launch.go started for the latest attempt this service launched: one
 	// session per attempt, one dispatch per task per service, and a
@@ -444,10 +452,11 @@ type Service struct {
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
 	// betweenHeldAndRelease runs in a dispatch of the task it is given that
-	// kept work held, after the refusal and before the slot is given back.
-	// It is nil in production and set only by this package's tests, which
-	// use it to close the entry, run another dispatch pass, or answer a
-	// carry on inside that window; WithHeldDispatchWindowForTest sets it.
+	// kept work or a housekeeping pass's retirement hold held, after the
+	// refusal and before the slot is given back. It is nil in production and
+	// set only by this package's tests, which use it to close the entry,
+	// answer the hold or a carry on, and run another dispatch pass, inside
+	// that window; WithHeldDispatchWindowForTest sets it.
 	betweenHeldAndRelease func(id string)
 	// betweenLandingClaimAndStart runs in a landing of kept work after its
 	// claim and before it brings the commit into the gate and starts the

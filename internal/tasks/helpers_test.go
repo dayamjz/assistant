@@ -40,6 +40,10 @@ type fixture struct {
 	// mutex in the shape of internal/service's branch gate, so a test here
 	// establishes what the queue does under one without opening a service.
 	exclusion *keyedExclusion
+	// scope is what the housekeeping scope reader answers, the trusted
+	// housekeeping.paths, and scopeErr, when set, fails it instead.
+	scope    config.PatternSet
+	scopeErr error
 }
 
 // keyedExclusion is one mutex per repository and branch.
@@ -97,7 +101,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
 	f := &fixture{home: h, store: s, inGate: map[string]bool{}, exclusion: &keyedExclusion{locks: map[string]*sync.Mutex{}},
-		posture: config.DeliveryGated}
+		posture: config.DeliveryGated, scope: config.Defaults().HousekeepingPaths}
 	f.queue, err = New(Deps{
 		Home: h, Store: s, Reader: taskstate.NewReader(s, nil, nil),
 		Exclude: f.exclusion.hold,
@@ -110,6 +114,9 @@ func newFixture(t *testing.T) *fixture {
 		Posture: func(context.Context, store.Repository, string) (config.Delivery, error) {
 			f.postureAsked.Add(1)
 			return f.posture, f.postureErr
+		},
+		Housekeeping: func(context.Context, store.Repository, string) (config.PatternSet, error) {
+			return f.scope, f.scopeErr
 		},
 		GitDeadline: vcs.DefaultInvocationDeadline,
 	})

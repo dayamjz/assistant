@@ -342,11 +342,12 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // has settled the record of its session (dispatched.settle), a worker
 // fallback at the launch included, which is handed the slot unsettled and
 // settles it after the backup's launch (dispatched.handSlot), so nothing
-// that takes the task's slot, a stop or a relaunch, interleaves with a
-// worker being created and not yet recorded, and a reader of that state
-// (launching) can tell a launch in flight from a settled slot. What came of
-// the launch is logged, and a refusal of the launch's own assertion is
-// recorded the way dispatch's is.
+// that takes the task's slot, a stop, a relaunch or a housekeeping pass's
+// retirement, interleaves with a worker being created and not yet
+// recorded, and the offer of a pass's retirement hold, which reads the
+// slot through launching, is skipped meanwhile. What came of the launch is
+// logged, and a refusal of the launch's own assertion is recorded the way
+// dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	if !s.intake.TryRLock() {
 		s.log.Printf("dispatching was left to the task intake in flight, which dispatches once it has returned")
@@ -364,6 +365,17 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		}
 		if _, held := s.isolationOf(r.Record.ID); held {
 			continue
+		}
+		if r.Record.Housekeeping {
+			// A pass retired before its dispatch is never begun: its claim
+			// on its repository is released, and the store's claim would
+			// refuse it anyway (store.ErrPassRetired).
+			if _, retired, err := s.store.RetirementOf(ctx, r.Record.ID); err != nil || retired {
+				if err != nil {
+					s.log.Printf("dispatching: whether housekeeping pass %s is retired could not be read: %v", r.Record.ID, err)
+				}
+				continue
+			}
 		}
 		// The slot is taken for the service's lifetime, so a task that is a
 		// relaunch question is passed over before the slot rather than
@@ -390,6 +402,9 @@ func (s *Service) dispatchDue(ctx context.Context) {
 			continue
 		case errors.Is(err, errTaskUnplaced):
 			s.log.Printf("task %s stays queued: %v", r.Record.ID, err)
+			continue
+		case errors.Is(err, store.ErrPassHeld):
+			s.log.Printf("housekeeping pass %s was not dispatched, and is once its retirement hold is answered keep: %v", r.Record.ID, err)
 			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
@@ -509,6 +524,49 @@ func (s *Service) endClaim(id string) {
 	delete(s.steering, id)
 }
 
+// giveBackSettledSlotLocked frees a settled slot with s.mu already held. A
+// slot a claim in flight or a steer holds is left. claimSteer's release
+// calls it after clearing that steer; keep uses freeSettledSlotForKeep.
+func (s *Service) giveBackSettledSlotLocked(id string) bool {
+	if _, held := s.isolated[id]; !held || s.claiming[id] {
+		return false
+	}
+	delete(s.isolated, id)
+	return true
+}
+
+// freeSettledSlotForKeep is what keep does about the task's slot after it
+// resolves a retirement hold when the latest attempt has no session.
+//
+// After a keep resolves a retirement hold, either the settled slot is freed
+// and the pass redispatched, or a holder of the steer is recorded as owing
+// that redispatch, and the check and the record are one critical section
+// under the same lock claimSteer and its release take. No release can fall
+// between them. It reports whether the caller should dispatch now; false
+// means the steer's release will give the slot back and ask dispatchDue.
+func (s *Service) freeSettledSlotForKeep(id string) (dispatchNow bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	_, held := s.isolated[id]
+	if !held {
+		return true
+	}
+	if s.steering[id] {
+		s.redispatchWhenFree[id] = true
+		return false
+	}
+	if s.claiming[id] {
+		// A launch claim in flight still owns the slot; asking dispatch
+		// now loses nothing: dispatchDue passes the claim over, and the
+		// keep+retirement hold case cannot reach a launch claim (the open
+		// hold refused it).
+		return true
+	}
+	delete(s.isolated, id)
+	return true
+}
+
 // redispatchTask is dispatchTask for a retry answered on the hold a dispatch
 // over an unsweepable standing copy raised. It takes the task's slot through
 // claimRelaunch, because the refusal that raised the hold settled the slot
@@ -530,8 +588,11 @@ func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, er
 // launch: for a dispatch kept work held it gives the slot back through
 // releaseHeldSlot, for one that ended before it could read the hold
 // (*holdUnread) it gives the slot back and asks nothing, this file's
-// opening comment says why for both; every other failure is
-// settleOrRelease's; and a dispatch that proved its copy
+// opening comment says why for both; a dispatch refused because the pass's
+// retirement hold is open (store.ErrPassHeld), at its claim or by reading
+// the pass Held on that hold, claimed nothing, so its slot is given back
+// through releasePassHeldSlot; every
+// other failure is settleOrRelease's; and a dispatch that proved its copy
 // keeps the slot unsettled and is returned with d.settle set, for
 // launchTask to settle with the proof once the launch's record is settled,
 // on the file comment's terms.
@@ -543,6 +604,11 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 			s.betweenHeldAndRelease(id)
 		}
 		s.releaseHeldSlot(ctx, id)
+	case errors.Is(err, store.ErrPassHeld):
+		if s.betweenHeldAndRelease != nil {
+			s.betweenHeldAndRelease(id)
+		}
+		s.releasePassHeldSlot(ctx, id)
 	case errors.As(err, &unread):
 		s.giveBackSlot(id)
 	case err != nil:
@@ -576,6 +642,21 @@ func (s *Service) releaseHeldSlot(ctx context.Context, id string) {
 	s.giveBackSlot(id)
 	holding, err := s.store.KeptWorkHolding(ctx, id)
 	if err != nil || len(holding) == 0 {
+		s.dispatchInBackground()
+	}
+}
+
+// releasePassHeldSlot gives back the slot of a housekeeping pass whose
+// dispatch its open retirement hold refused, and then reads the hold again
+// (store.RetirementHoldOpen): when it is answered, or the read fails, it
+// asks dispatchDue again through dispatchInBackground. A keep answer runs
+// that dispatch itself, but one answered while this slot was taken passed
+// the taken slot over; reading after the slot is given back means either
+// this read sees the answer, or the answer's own dispatch finds the slot
+// free. That is releaseHeldSlot's order, for the retirement hold.
+func (s *Service) releasePassHeldSlot(ctx context.Context, id string) {
+	s.giveBackSlot(id)
+	if _, open, err := s.store.RetirementHoldOpen(ctx, id); err != nil || !open {
 		s.dispatchInBackground()
 	}
 }
@@ -668,6 +749,9 @@ func (s *Service) slotMaps() {
 	if s.steering == nil {
 		s.steering = make(map[string]bool)
 	}
+	if s.redispatchWhenFree == nil {
+		s.redispatchWhenFree = make(map[string]bool)
+	}
 }
 
 // takeSlot marks the task's slot taken and unsettled and returns the
@@ -688,7 +772,8 @@ func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 // claimed, and not by claimSteer, which marks what it holds in steering
 // and can hold nothing while a claim in flight does. A stop or a cleanup
 // ask holding the slot, and a dispatch that ended without a proof and
-// settled, do not read as a launch. It is for a reader that must not act
+// settled, do not read as a launch. It is what the offer of a housekeeping
+// pass's retirement hold reads (housekeeping.go), so that offer is skipped
 // while a worker may be created and not yet recorded, and not otherwise.
 func (s *Service) launching(id string) bool {
 	s.mu.Lock()
@@ -716,6 +801,20 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		return dispatched{}, &holdUnread{err: err}
 	}
 	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
+		if resolved.Record.Housekeeping {
+			// A pass offered its retirement hold after a dispatcher selected
+			// it resolves Held from that hold: the hold's refusal, which
+			// claims nothing and gives the slot back, not a pass with
+			// nothing to dispatch, whose slot would be kept and so passed
+			// over by the dispatch a keep answer runs.
+			key, open, err := s.store.RetirementHoldOpen(ctx, id)
+			if err != nil {
+				return dispatched{}, &holdUnread{err: err}
+			}
+			if open {
+				return dispatched{}, fmt.Errorf("%w: task %s holds on %s", store.ErrPassHeld, id, key)
+			}
+		}
 		return dispatched{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
 			resolved.State.State, resolved.State.Source)
 	}

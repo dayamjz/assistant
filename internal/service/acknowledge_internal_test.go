@@ -133,8 +133,7 @@ func TestACombinedDrainThatFailsHandsOutNothing(t *testing.T) {
 
 // A drain hands out no row it does not return (the review of #683 at
 // f8a04ed): with a housekeeping wake queued, the drain wakes.list and
-// wakes.wait answer with returns no housekeeping wake in this build, since
-// the wire carries none, so the store must not hand it out either; a row
+// wakes.wait answer with returns it, and only then is it handed out; a row
 // handed out and never returned would be offered to nobody else while the
 // handout's stream is held, and nobody could acknowledge it. The task wake
 // drained beside it is the positive control that the drain ran.
@@ -165,7 +164,9 @@ func TestADrainHandsOutNoHousekeepingWakeItDoesNotReturn(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("the housekeeping wakes are %+v, %v; want the one appended", rows, err)
 	}
-	if rows[0].HandedOutAt.IsKnown() {
-		t.Fatalf("the drain handed out housekeeping wake %d, which it did not return: %+v", rows[0].ID, rows[0])
+	returned := len(drained.HousekeepingWakes) == 1 && drained.HousekeepingWakes[0].ID == rows[0].ID
+	if rows[0].HandedOutAt.IsKnown() != returned || !returned {
+		t.Fatalf("the drain returned %+v and the row reads handed out %v; want it returned and handed out together",
+			drained.HousekeepingWakes, rows[0].HandedOutAt.IsKnown())
 	}
 }

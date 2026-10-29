@@ -105,3 +105,18 @@ func foreignProcess(pid int) (bool, error) {
 // a read of a running one that fails keeps a listing unsettled; a process
 // still exiting is not told apart here, so it reports false.
 func exitingProcess(int) (bool, error) { return false, nil }
+
+// sstop is SSTOP from the platform's sys/proc.h, the process state of one
+// a signal has stopped. It is spelled here because x/sys does not export it.
+const sstop = 4
+
+// stoppedProcess reports whether pid is stopped by a signal: its state in
+// the process table (Proc.P_stat) is sstop. A process that is stopped runs
+// none of its code, so it starts no process until it is continued.
+func stoppedProcess(pid int) (bool, error) {
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		return false, err
+	}
+	return k.Proc.P_stat == sstop, nil
+}

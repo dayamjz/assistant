@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -751,9 +752,8 @@ func TestNoLaunchProceedsWhileARetirementHoldIsOpen(t *testing.T) {
 
 // PRD section 8's housekeeping-due wake is the queue's fourth shape: about a
 // repository, appended once per marker under the incarnation fence with the
-// due-check marker in its own transaction, acknowledged and claimed for
-// the private channel on the other shapes' terms, never handed out by a
-// drain that has nobody to return it to, the first
+// due-check marker in its own transaction, drained, acknowledged and
+// claimed for the private channel on the other shapes' terms, the first
 // coordinator's alone, and it holds its repository's records until
 // acknowledged.
 func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
@@ -806,12 +806,9 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	if _, err := s.ClaimHousekeepingNotification(ctx, first.Wake.ID); !errors.Is(err, ErrNotificationClaimed) {
 		t.Fatalf("a second claim = %v, want ErrNotificationClaimed", err)
 	}
-	// The drain does not hand the row out: no caller can return it yet.
-	if _, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 1 || rows[0].HandedOutAt.IsKnown() {
-		t.Fatalf("after a drain the housekeeping wakes are %+v, %v, want the row queued and not handed out", rows, err)
+	drained, err := s.DrainAll(ctx, 10, WakeHandout{To: AcknowledgedByCoordinator(), Under: "attach-1"})
+	if err != nil || len(drained.HousekeepingWakes) != 1 || drained.HousekeepingWakes[0].ID != first.Wake.ID {
+		t.Fatalf("the drain = %+v, %v, want the housekeeping row", drained, err)
 	}
 	if err := s.AcknowledgeAll(ctx, nil, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
@@ -886,6 +883,84 @@ func TestADueChecksWritesAreRefusedOnceThePassesMoved(t *testing.T) {
 	}
 	if rows, err := s.HousekeepingWakes(ctx); err != nil || len(rows) != 3 {
 		t.Fatalf("the wakes are %+v, %v, want the three written ones", rows, err)
+	}
+}
+
+// A run's tasks are the snapshot's attribution inverted: the tasks whose
+// snapshot lists the run, so a run of a branch a pass used is the pass's
+// only until another task's attempt takes the branch, a run no task's
+// attempt precedes is nobody's, and a run from before a task's latest
+// relaunch is no longer that task's, exactly as its snapshot reads it.
+func TestARunsTasksAreTheTasksWhoseSnapshotListsIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	// owners is TasksOfRun's answer, checked against each named task's own
+	// snapshot so the inverse is held to the reading it inverts.
+	owners := func(run Run) []string {
+		t.Helper()
+		got, err := s.TasksOfRun(ctx, run)
+		if err != nil {
+			t.Fatalf("the tasks of run %s: %v", run.ID, err)
+		}
+		var ids []string
+		for _, task := range got {
+			ids = append(ids, task.ID)
+		}
+		for _, id := range []string{"taskhkrunofa", "taskhkrunofb"} {
+			snap, err := s.TaskSnapshot(ctx, id)
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := slices.ContainsFunc(snap.Runs, func(r Run) bool { return r.ID == run.ID })
+			if listed != slices.Contains(ids, id) {
+				t.Fatalf("run %s: TasksOfRun says %v, but task %s's snapshot lists it: %v", run.ID, ids, id, listed)
+			}
+		}
+		return ids
+	}
+	_, run := promotedPassWithRun(t, s, "taskhkrunofa", "housekeeping/one", RunPassed)
+	if got := owners(run); !slices.Equal(got, []string{"taskhkrunofa"}) {
+		t.Fatalf("the tasks of the pass's run = %v; want the pass", got)
+	}
+	tick()
+	if _, err := s.CreateTask(ctx, Task{ID: "taskhkrunofb", Shape: TaskDelivery, Project: "one", Mode: "interactive",
+		WorktreePath: "/w/taskhkrunofb", RepositoryID: Known("repo-1"), Branch: Known("housekeeping/one")},
+		Disposition{Observed: newestOnBranch(t, s, "repo-1", "housekeeping/one")}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	beginAttempt(t, s, "taskhkrunofb", 0)
+	tick()
+	later, err := s.CreateRun(ctx, Run{ID: "run-later", RepositoryID: "repo-1", Branch: "housekeeping/one", SubmittedHead: "cccc",
+		Base: "bbbb", Intent: "validate", IntentSource: "task", Build: testBuild(), ConfigDigest: "cfg-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := owners(later); !slices.Equal(got, []string{"taskhkrunofb"}) {
+		t.Fatalf("the tasks of a run after the ordinary task took the branch = %v; want that task", got)
+	}
+	if got := owners(run); !slices.Equal(got, []string{"taskhkrunofa"}) {
+		t.Fatalf("the tasks of the pass's earlier run = %v; still want the pass", got)
+	}
+	// A relaunch of the ordinary task moves its cutoff past run-later, so
+	// its snapshot no longer reads that run as its, and neither does the
+	// inverse: the newest attempt before a run is not what decides.
+	tick()
+	beginAttempt(t, s, "taskhkrunofb", 1)
+	if got := owners(later); len(got) != 0 {
+		t.Fatalf("the tasks of a run from before the only later task's relaunch = %v; want none", got)
+	}
+	stray, err := s.CreateRun(ctx, Run{ID: "run-stray", RepositoryID: "repo-1", Branch: "nobodys", SubmittedHead: "dddd",
+		Base: "bbbb", Intent: "validate", IntentSource: "person", Build: testBuild(), ConfigDigest: "cfg-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := owners(stray); len(got) != 0 {
+		t.Fatalf("the tasks of a run on a branch no task works on = %v; want none", got)
 	}
 }
 

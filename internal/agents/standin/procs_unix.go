@@ -172,20 +172,32 @@ const settleReadings = 64
 // process it already read whole, until a reading settles or settleReadings
 // have run, which is an error naming what left the last reading unsettled.
 //
+// Invariant: a settled reading has read whole every live process of this
+// user's that could match, and every process that exited unread is one the
+// listing had already read whole and match refused in an earlier reading
+// (or read as not running then too). Match is by executable and arguments,
+// not by ancestry: a refused parent does not make its child outside the
+// listing (#735 r1; the parent-outside shortcut of #553's leak check does
+// not apply here).
+//
 // One exit does not unsettle a reading: that of a process the reading
 // before read as running and as one this listing had read whole and match
 // refused. What a refused process starts once a reading has begun is read
 // only by a later reading whose table names it, whether the refused process
 // goes on running or exits, so its exit tells the listing nothing its
 // running would not. Every other process's exit does unsettle the reading
-// it is first read in. Without this a reading settles only when no process
-// it names exits during it, and on CI, where other packages' tests start
-// and end processes beside the listing, none of 64 readings did (#569).
+// it is first read in, including one never read whole whose parent match
+// refused: that child may itself match. Without the refused-exit exception
+// a reading settles only when no process it names exits during it, and on
+// CI, where other packages' tests start and end processes beside the
+// listing, none of 64 readings did (#569).
 //
 // So every process of this user's running when a settled reading began was
 // read whole, as one match accepts or refuses, and a process that match
 // accepted, or that was never read whole, and that exited during an earlier
 // reading after starting another has that other read whole in a later one.
+// Processes never read whole that keep exiting, one in every reading, still
+// keep every reading from settling (#722; see Decision needed in the PR).
 //
 // When no reading settles, the error is an unsettledError naming the
 // process number that kept the most readings in a row from settling,
@@ -527,7 +539,11 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // starts another and exits while the table is read makes the listing read
 // it again, and the process it started is listed. A
 // listing that still finds a process after sweepRounds of them fails the
-// package, naming and ending what it found, so the check ends.
+// package, so the check ends: it stops what that listing found and every
+// process descended from it before naming any, then names and kills that
+// whole set (endStarting), listing again after the stop for what a child
+// it could not see started as it exited, so what it names is what it ends,
+// and nothing in the set starts a process once named.
 //
 // What it does not see: a process running another executable that was
 // started with an environment without OwnerVar, unless it is a tmux the
@@ -535,16 +551,21 @@ func stayed(ps []Process, grace time.Duration) []Process {
 // ownership was recorded, or whose environment the read cannot find, which
 // on some macOS machines is a whole program's (carrying); what such a
 // process starts once the check's last listing has begun, whether it goes
-// on running or exits (processesWhere); a process of
+// on running or exits (processesWhere), unless it descends from a process
+// that listing found, which the last round stops with it, or is found by a
+// listing that round makes once it has stopped them (endStarting); a
+// process of
 // another user's whose command line cannot be read (processesWhere), and
 // what it starts; and anything at all
 // once this binary is gone, so the binary AtTerminal ran again outliving a
 // killed outer one is watchOuter's to end, and a terminal server outliving
 // a killed owner the owner sweep's, and no check in that run reports
-// either. A failed check ends what it names as one set (endAll), so each
-// process it names has been sent its own SIGTERM before any child of its it
-// names is sent one; what that ending starts all the same, within what
-// endAll does not cover, it leaves to the sweep.
+// either. A check that fails on processes still running EndGrace after a
+// listing ends what it names as one set (endAll), so each process it names
+// has been sent its own SIGTERM before any child of its it names is sent
+// one; what that ending starts all the same, within what endAll does not
+// cover, it leaves to the sweep, as it does what endStarting does not
+// cover.
 func leftAfterTests() bool {
 	self, err := os.Executable()
 	if err != nil {
@@ -562,10 +583,14 @@ func leftAfterTests() bool {
 			return true
 		}
 		if listing == sweepRounds {
-			for _, p := range listed {
-				fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
+			list := func() ([]Process, error) { return leftRunning(kernel{}, self, value) }
+			if err := endStarting(listed, list, nil, func(frozen []Process) {
+				for _, p := range frozen {
+					fmt.Fprintf(os.Stderr, "FAIL: %s was started by a process this package's tests left, and processes were still being started %d listings after the tests finished\n", p, sweepRounds)
+				}
+			}); err != nil {
+				fmt.Fprintf(os.Stderr, "FAIL: could not list again for what the processes still being started had started: %v\n", err)
 			}
-			endAll(listed)
 			return false
 		}
 		if left := stayed(listed, EndGrace); len(left) > 0 {

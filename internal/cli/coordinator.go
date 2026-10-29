@@ -174,8 +174,10 @@ func coordinatorCommand(action string) string {
 // and which combinations it refuses are intake's too, answered as
 // ipc.ErrInvalidRequest and so as incorrect usage. The one thing decided
 // here is where the instructions come from: --instructions or
-// --instructions-file, exactly one, because a command line that gave both
+// --instructions-file, at most one, because a command line that gave both
 // would leave which one the worker reads to an order nobody wrote down.
+// --housekeeping is the housekeeping mark, and its instructions are the
+// coordinator's notes, which intake puts after the program's part.
 func coordinatorCreate(ctx context.Context, in *invocation) (any, error) {
 	var request machine.TaskCreateRequest
 	var instructions, instructionsFile string
@@ -190,6 +192,8 @@ func coordinatorCreate(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&request.Overlaps, "overlaps", "", "a task this one overlaps, or empty for a claim of independence")
 		set.StringVar(&request.Delivery, "delivery", "", `"gated" or "local" in place of the project's posture, never lighter than it`)
 		set.StringVar(&request.Role, "role", "", "the configured role the worker runs under; empty means worker")
+		set.BoolVar(&request.Housekeeping, "housekeeping", false,
+			"create the repository's housekeeping pass; the instructions are your notes after the program's part")
 	})
 	if err != nil {
 		return nil, err
@@ -441,22 +445,31 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		// A wake about a domain or a kept work entry no task names is
-		// numbered apart from a task's and is named with its shape's
-		// prefix, machine's, which a drain's phrase names it with, so the
-		// three cannot be confused by number.
+		// A wake about a domain, a kept work entry no task names, or a
+		// repository's housekeeping is numbered apart from a task's and is
+		// named with its shape's prefix, machine's, which a drain's phrase
+		// names it with, so the shapes cannot be confused by number.
 		text, domain := strings.CutPrefix(arg, machine.DomainWakePrefix)
 		text, kept := strings.CutPrefix(text, machine.KeptWorkWakePrefix)
+		text, housekeeping := strings.CutPrefix(text, machine.HousekeepingWakePrefix)
 		id, err := strconv.ParseInt(text, 10, 64)
-		if err != nil || (domain && kept) {
-			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain or %sNUMBER for one about kept work no task names, and %q is not one",
-				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, printable(arg))
+		prefixes := 0
+		for _, had := range []bool{domain, kept, housekeeping} {
+			if had {
+				prefixes++
+			}
+		}
+		if err != nil || prefixes > 1 {
+			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain, %sNUMBER for one about kept work no task names, or %sNUMBER for one about a repository's housekeeping, and %q is not one",
+				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, machine.HousekeepingWakePrefix, printable(arg))
 		}
 		switch {
 		case domain:
 			request.DomainWakes = append(request.DomainWakes, id)
 		case kept:
 			request.KeptWorkWakes = append(request.KeptWorkWakes, id)
+		case housekeeping:
+			request.HousekeepingWakes = append(request.HousekeepingWakes, id)
 		default:
 			request.Wakes = append(request.Wakes, id)
 		}

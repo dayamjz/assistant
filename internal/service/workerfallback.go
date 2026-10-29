@@ -37,7 +37,7 @@ func (s *Service) selectWorkerChoice(ctx context.Context, roleName string, role 
 	return selection, nil
 }
 func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt int64) (agents.Selection, config.Role, error) {
-	role, err := s.cfg.Roles.ForTask(task.Role)
+	role, err := s.cfg.Roles.ForRecorded(task.Role)
 	if err != nil {
 		return agents.Selection{}, role, err
 	}
@@ -86,7 +86,7 @@ func (s *Service) routeTaskWorker(ctx context.Context, task store.Task, attempt 
 // existing relaunch bound. It never launches beside the primary. A restart
 // reads the sealed selection instead of replaying a quota event from a log.
 func (s *Service) watchWorkerFallback(task store.Task, attempt int64, host session.Host, worker *session.Session, adapter string) {
-	role, err := s.cfg.Roles.ForTask(task.Role)
+	role, err := s.cfg.Roles.ForRecorded(task.Role)
 	if err != nil || role.Fallback == nil || (adapter != role.Agent && adapter != role.Fallback.Agent) || s.stopCtx == nil {
 		return
 	}
@@ -248,7 +248,7 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 		var next relaunched
 		deadline := time.Now().Add(2 * time.Second)
 		for {
-			next, err = s.relaunchClaimed(ctx, task.ID, "")
+			next, err = s.relaunchClaimed(ctx, task.ID)
 			if err == nil || !errors.Is(err, errRelaunchNotDead) || ctx.Err() != nil || !time.Now().Before(deadline) {
 				break
 			}
@@ -272,6 +272,18 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 				task.ID, role.Agent, role.Fallback.Agent, err)
 			return nil, err
 		}
+		if errors.Is(err, store.ErrPassHeld) {
+			// A housekeeping pass offered its retirement hold since the
+			// first launch, by an offer this slot did not order: its claim
+			// refuses the backup's attempt as it refuses any attempt of a
+			// held pass, on kept work's terms above, and the slot is given
+			// back so the dispatch a keep answer runs finds the pass.
+			kept = true
+			s.releasePassHeldSlot(ctx, task.ID)
+			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because its retirement hold is open: %v",
+				task.ID, role.Agent, role.Fallback.Agent, err)
+			return nil, err
+		}
 		// A sweep that did not clear, a terminal that did not read dead, and
 		// a task the relaunch table leaves alone have not asked the backup.
 		// Holding here would resolve the task as held, and the next start
@@ -292,9 +304,10 @@ func (s *Service) switchWorker(ctx context.Context, task store.Task, attempt int
 	s.log.Printf("task %s worker fallback from %s to %s: %s", task.ID, role.Agent, role.Fallback.Agent, failure)
 	launched, err := s.launchTask(ctx, launch)
 	if err != nil {
-		if errors.Is(err, store.ErrDispatchHeld) {
-			// The launch claim refused the backup for kept work and gave
-			// the slot back itself; the same stance as above.
+		if errors.Is(err, store.ErrDispatchHeld) || errors.Is(err, store.ErrPassHeld) {
+			// The launch's claim or record refused the backup for kept
+			// work or a pass's retirement hold and gave the slot back
+			// itself; the same stance as above.
 			kept = true
 			s.log.Printf("task %s worker fallback from %s to %s was recorded and the backup was not started, because kept work holds the task: %v",
 				task.ID, role.Agent, role.Fallback.Agent, err)

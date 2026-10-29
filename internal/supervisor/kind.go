@@ -93,6 +93,18 @@ const (
 	// so it is never a subordinate's. PRD section 5's flowchart does not
 	// draw it; section 6 is where it is specified.
 	KindStallClosed Kind = "stall-closed"
+	// KindHousekeepingDue is PRD section 6's housekeeping due: a
+	// repository whose housekeeping.interval has passed since its newest
+	// pass was created, or that never had one, and whose default branch,
+	// read at a fresh fetch, stands past the last pass's base; or whose
+	// due check could not read what it needs, naming what; or whose open
+	// pass has been open for a whole interval, naming it and what it waits
+	// on, again each interval. It is carried by internal/store's
+	// housekeeping wake, the queue's fourth shape, because it is about a
+	// repository and not a task. It is always actionable, and it is in no
+	// domain, so it reaches the first coordinator and never a subordinate.
+	// Acknowledging it creates nothing: the coordinator creates a pass.
+	KindHousekeepingDue Kind = "housekeeping-due"
 )
 
 // Class is how the flowchart decides a kind.
@@ -167,6 +179,7 @@ var kinds = []Row{
 	{Kind: KindSubordinateEscalated, Class: ClassActionable, Produced: true, Subordinate: false},
 	{Kind: KindKeptWork, Class: ClassActionable, Produced: true, Subordinate: false},
 	{Kind: KindStallClosed, Class: ClassActionable, Produced: true, Subordinate: false},
+	{Kind: KindHousekeepingDue, Class: ClassActionable, Produced: true, Subordinate: false},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a

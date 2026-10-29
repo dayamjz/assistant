@@ -260,9 +260,12 @@ func tmuxOwnerTests(dir, mode string) int {
 // exits (macOS's /bin/sh, which is bash, runs the EXIT trap on a signal
 // that ends it otherwise). Its sleep ending first would run the shell on to
 // its EXIT trap all the same, which ending the three from goroutines of
-// their own let happen (#558); the check ends them as one set (endAll),
-// each before its children, so this process and then the shell have been
-// sent SIGTERM before the sleep is, and an ended chain starts nothing more.
+// their own let happen (#558); so would the sleep's two seconds running out
+// while this process, sent SIGTERM, had yet to kill the shell, which the
+// check could not see to end on some macOS machines (#645). The check's
+// last round therefore stops this process, the shell and the sleep before
+// it names or ends any (endStarting), and an ended chain starts nothing
+// more.
 func trapExitMain() int {
 	self, err := os.Executable()
 	if err != nil {
@@ -725,7 +728,12 @@ func TestRunOwnedFailsAPackageWhoseExitingProcessStartsAnother(t *testing.T) {
 // goes on (P15): the check names the last one, the process still being
 // started, and ends it, so the chain starts nothing more. The owner leaves
 // the first of sweepRounds such processes, so its check's last listing finds
-// the last of them.
+// the last of them, or, when that listing comes late, the process its
+// shell's trap had already started, which it then names and ends instead.
+// Each process lives two seconds, of which the race detector's sleep as the
+// one before it exits takes about one, so the check's SIGTERM once raced
+// the last one's shell for the rest; the check now stops what it found,
+// its unseen children included, before it names or ends any (#645).
 func TestRunOwnedFailsAPackageWhoseProcessesKeepStartingOthers(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)

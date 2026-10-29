@@ -25,12 +25,15 @@ import (
 // next service of the home and not this one. Empty, the default, starts
 // nothing: no goroutine, no command, no record.
 //
-// For each wake the supervisor loop appends, of any of the queue's three
+// For each wake the supervisor loop appends, of any of the queue's four
 // shapes, the command is run once with the wake's row on standard input: one
 // line of the JSON store.Wake encodes to for a wake about a task, of the
-// JSON store.DomainWake encodes to for a wake about a domain, or of the JSON
+// JSON store.DomainWake encodes to for a wake about a domain, of the JSON
 // store.KeptWorkWake encodes to for a wake about a kept work entry no task
-// names, and then end of file. A task or domain wake's row is as the record
+// names, or of the JSON store.HousekeepingWake encodes to for a wake about a
+// repository's housekeeping, which names the repository in "repository",
+// the pass it follows in "pass" and what it names, stored redacted, in
+// "detail", and then end of file. A task or domain wake's row is as the record
 // holds it when it is offered; a kept-work wake's is too, except that its
 // project and branch are first passed through internal/redact, as described
 // below, so a credential the redactor recognizes in either reaches the
@@ -207,7 +210,8 @@ func (s *Service) startNotifier(hooks supervisionHooks) {
 }
 
 // notifyPending offers every pending wake to the command, oldest first,
-// task wakes, then domain wakes, then kept-work wakes, until a read of each
+// task wakes, then domain wakes, then kept-work wakes, then housekeeping
+// wakes, until a read of each
 // finds none or ctx
 // ends, and reports true. It reports false, having logged why once, when
 // the store refused a read or a claim, which ends the pass at that wake.
@@ -234,7 +238,14 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 			}
 			return false
 		}
-		if len(pending)+len(pendingDomain)+len(pendingKept) == 0 {
+		pendingHousekeeping, err := s.store.PendingHousekeepingNotifications(ctx, notifyBatch)
+		if err != nil {
+			if ctx.Err() == nil {
+				s.log.Printf("could not read the housekeeping wakes to notify: %v", err)
+			}
+			return false
+		}
+		if len(pending)+len(pendingDomain)+len(pendingKept)+len(pendingHousekeeping) == 0 {
 			return true
 		}
 		for _, w := range pending {
@@ -258,6 +269,14 @@ func (s *Service) notifyPending(ctx context.Context, line string, bound time.Dur
 				return true
 			}
 			if !s.notifyOne(ctx, line, bound, keptWorkNotice(s.store, w)) {
+				return false
+			}
+		}
+		for _, w := range pendingHousekeeping {
+			if ctx.Err() != nil {
+				return true
+			}
+			if !s.notifyOne(ctx, line, bound, housekeepingNotice(s.store, w)) {
 				return false
 			}
 		}
@@ -316,6 +335,27 @@ func keptWorkNotice(records *store.Store, w store.KeptWorkWake) notice {
 		claim: func(ctx context.Context) error { _, err := records.ClaimKeptWorkNotification(ctx, w.ID); return err },
 		settle: func(ctx context.Context, n store.NotificationSettlement) error {
 			_, err := records.SettleKeptWorkNotification(ctx, w.ID, n)
+			return err
+		},
+	}
+}
+
+// housekeepingNotice is a housekeeping wake's notice: its row, which names
+// the repository, the pass it follows and what it names, as
+// store.HousekeepingWake encodes it, claimed and settled in
+// housekeeping_notification. The detail was redacted before it was stored,
+// and every other field is an identifier, a closed word, a time or the
+// loop's redacted marker.
+func housekeepingNotice(records *store.Store, w store.HousekeepingWake) notice {
+	return notice{
+		label: fmt.Sprintf("housekeeping wake %d about repository %s", w.ID, w.Repository),
+		row:   w,
+		claim: func(ctx context.Context) error {
+			_, err := records.ClaimHousekeepingNotification(ctx, w.ID)
+			return err
+		},
+		settle: func(ctx context.Context, n store.NotificationSettlement) error {
+			_, err := records.SettleHousekeepingNotification(ctx, w.ID, n)
 			return err
 		},
 	}

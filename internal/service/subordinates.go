@@ -1130,6 +1130,24 @@ func (s *Service) publishKeptWorkWake(w store.KeptWorkWake) {
 	}
 }
 
+// publishHousekeepingWake pushes a housekeeping wake the loop appended to
+// the coordinator's wake stream, on publishKeptWorkWake's terms, as
+// ipc.TypeHousekeepingWakeQueued. Only the coordinator's stream carries it:
+// the wake is about a repository and so in no domain.
+func (s *Service) publishHousekeepingWake(w store.HousekeepingWake) {
+	if s.wakes == nil {
+		return
+	}
+	payload, err := json.Marshal(w)
+	if err != nil {
+		s.log.Printf("could not encode housekeeping wake %d about repository %s: %v", w.ID, w.Repository, err)
+		return
+	}
+	if err := s.wakes.Publish(ipc.Event{Type: ipc.TypeHousekeepingWakeQueued, Revision: uint64(w.ID), Payload: payload}); err != nil {
+		s.log.Printf("could not push housekeeping wake %d about repository %s: %v", w.ID, w.Repository, err)
+	}
+}
+
 // publishDomainWake pushes a domain wake the loop appended to the
 // coordinator's wake stream, on publishWake's terms, as
 // ipc.TypeDomainWakeQueued with the row's own identifier as its revision.

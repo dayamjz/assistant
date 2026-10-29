@@ -101,6 +101,11 @@ const (
 	// terms with the kept-work wake row as its payload and that row's own
 	// identifier as its revision. It is state, as TypeWakeQueued is.
 	TypeKeptWorkWakeQueued Type = "kept-work-wake.queued"
+	// TypeHousekeepingWakeQueued is a housekeeping wake about a repository,
+	// the queue's fourth shape, pushed on TypeKeptWorkWakeQueued's terms
+	// with the housekeeping wake row as its payload and that row's own
+	// identifier as its revision. It is state, as TypeWakeQueued is.
+	TypeHousekeepingWakeQueued Type = "housekeeping-wake.queued"
 
 	// TypeGap says the stream discarded something. It is produced by this
 	// package rather than published, and a consumer that receives one must
@@ -114,20 +119,21 @@ const (
 
 // classes is the one place a type's class is written down.
 var classes = map[Type]Class{
-	TypeLogLine:            ClassActivity,
-	TypeAgentOutput:        ClassActivity,
-	TypeHeartbeat:          ClassActivity,
-	TypeRunState:           ClassState,
-	TypeStageState:         ClassState,
-	TypeFindings:           ClassState,
-	TypeHoldState:          ClassState,
-	TypeTaskState:          ClassState,
-	TypeTaskEvent:          ClassState,
-	TypeWakeQueued:         ClassState,
-	TypeDomainWakeQueued:   ClassState,
-	TypeKeptWorkWakeQueued: ClassState,
-	TypeGap:                ClassControl,
-	TypeServiceStopping:    ClassControl,
+	TypeLogLine:                ClassActivity,
+	TypeAgentOutput:            ClassActivity,
+	TypeHeartbeat:              ClassActivity,
+	TypeRunState:               ClassState,
+	TypeStageState:             ClassState,
+	TypeFindings:               ClassState,
+	TypeHoldState:              ClassState,
+	TypeTaskState:              ClassState,
+	TypeTaskEvent:              ClassState,
+	TypeWakeQueued:             ClassState,
+	TypeDomainWakeQueued:       ClassState,
+	TypeKeptWorkWakeQueued:     ClassState,
+	TypeHousekeepingWakeQueued: ClassState,
+	TypeGap:                    ClassControl,
+	TypeServiceStopping:        ClassControl,
 }
 
 // Classify reports the class of a type. A type this build does not recognize

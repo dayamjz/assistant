@@ -539,7 +539,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	instructionsText := s.carryOnInstructions(plan.old)
 	if _, err := s.store.Task(ctx, id); errors.Is(err, store.ErrNotFound) {
 		if _, err := s.queue.Create(ctx, tasks.Request{
-			ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: plan.old.Role,
+			ID: id, Shape: string(plan.old.Shape), Project: plan.old.Project, Mode: plan.old.Mode, Role: config.CarriedRole(plan.old.Role),
 			Domain: plan.old.Domain, Repository: plan.repository.ID, Branch: plan.branch, DeliveryFloor: carriedPosture(plan),
 			Instructions: instructionsText,
 		}); err != nil {

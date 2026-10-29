@@ -26,5 +26,6 @@ paths: ["internal/agents/**"]
 Read `doc.go` before changing the P4 split, the capability declarations, the
 worker, the sweep or `EndGroup`, and for the residual gaps. `grant.go` owns
 what a started agent may do, `terminal.go` and `claudeterminal.go` the
-terminal worker's terms, and `capability.go` how the stand-in's model and an
-installed-CLI probe meet.
+terminal worker's terms, `herdr.go` the herdr host's files and version pin
+(the worker start lands beside them), and `capability.go` how the stand-in's
+model and an installed-CLI probe meet.

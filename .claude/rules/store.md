@@ -48,16 +48,19 @@ paths: ["internal/store/**"]
   is the launch-retirement exclusion, asked by every attempt claim,
   `ClaimAttemptLaunch`, `SetAttemptSession`, the offer and the retirement
   in their own transactions: no hold is offered while the latest attempt's
-  launch is claimed and its session unrecorded (`ErrPassMoves`), no attempt
+  launch is claimed and its session unrecorded (`ErrPassMoves`) unless its
+  launcher recorded the launch's end with none (`EndAttemptLaunch`,
+  attemptLaunchEndMigration (69), after which no session is recorded for
+  it, `ErrAttemptLaunchEnded`), no attempt
   or launch is claimed and no session recorded while the hold is open
   (`ErrPassHeld`) or once the pass is retired (`ErrPassRetired`), and a
   retirement answers only the marked hold. A new write that begins a
   worker or ends a pass asks it too, never a check of its own.
   housekeepingWakesMigration (66) is the queue's fourth shape
   `housekeeping_wake` about a repository (`AppendHousekeepingWake` is its
-  one append; `untaskedShape` serves its offer and acknowledgement;
-  `AcknowledgeAll` takes it with every other shape in one transaction and
-  `DrainAll` does not hand it out; `ForgetRepository` refuses a repository with one
+  one append; `untaskedShape` serves its offer, handout and
+  acknowledgement; `DrainAll` and `AcknowledgeAll` take every shape in one
+  transaction; `ForgetRepository` refuses a repository with one
   queued); housekeepingNotificationMigration (67) is its notification
   twin `housekeeping_notification`, one `notificationShape` with the
   other three; housekeepingMarkerMigration (68) is `housekeeping_marker`,

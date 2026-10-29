@@ -297,6 +297,16 @@ const (
 	// fast-forwards the local default branch to the commit the worker
 	// pushed, anchored to the tip it read when it offered the change.
 	AnswerApprove = "approve"
+	// AnswerRetire answers a housekeeping pass's retirement hold: the
+	// program writes the pass's retirement record, which releases its
+	// claim on its repository, if nothing moves the pass when the answer
+	// is applied, and answers stop on every open hold of the pass whose
+	// retry would relaunch its worker. Otherwise the answer is refused and
+	// the hold stays open.
+	AnswerRetire = "retire"
+	// AnswerKeep answers a retirement hold by leaving the pass open; the
+	// hold is offered again at most once per housekeeping.interval.
+	AnswerKeep = "keep"
 )
 
 // TaskMessageRequest sends a message to a running task's worker, PRD
@@ -502,8 +512,18 @@ type TaskCreateRequest struct {
 	Delivery string `json:"delivery,omitempty"`
 	// Role is the configured role the worker runs under. Empty means the
 	// worker role. An unknown role, and review or fix, are refused and no
-	// task is created.
+	// task is created. The housekeeping role is the program's, and so
+	// refused here too.
 	Role string `json:"role,omitempty"`
+	// Housekeeping is PRD section 9's housekeeping mark: the request is
+	// for a housekeeping pass of Repository, an investigation under the
+	// housekeeping role, with Instructions as the coordinator's notes after
+	// the program's part, which may then be empty. A marked request naming
+	// a role, a shape other than investigation, a branch or a posture is
+	// refused, and so is one for a repository whose trusted
+	// housekeeping.paths is empty or that has a pass open. A subordinate
+	// coordinator is refused the mark.
+	Housekeeping bool `json:"housekeeping,omitempty"`
 }
 
 // TaskPromoteRequest promotes an investigation task to delivery in place.
@@ -631,6 +651,11 @@ type AcknowledgeRequest struct {
 	// its. Acknowledging one closes the wake and answers nothing about the
 	// entry.
 	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the identifiers of the queued rows about a
+	// repository's housekeeping the caller acted on, numbered apart from
+	// every other shape, on the same terms. A subordinate coordinator may
+	// name none. Acknowledging one creates nothing and answers nothing.
+	HousekeepingWakes []int64 `json:"housekeeping_wakes,omitempty"`
 }
 
 // The prefixes a wake of the queue's second and third shapes is named with
@@ -638,21 +663,25 @@ type AcknowledgeRequest struct {
 // rows apart from the others, so a task wake, a domain wake and a kept-work
 // wake can share a number: a bare number is always a task wake, one with
 // DomainWakePrefix always a domain wake, and one with KeptWorkWakePrefix
-// always a wake about a kept work entry no task names. A task's own wake
-// about work kept in its copy is a task wake and takes no prefix.
+// always a wake about a kept work entry no task names, and one with
+// HousekeepingWakePrefix always a housekeeping wake about a repository. A
+// task's own wake about work kept in its copy is a task wake and takes no
+// prefix.
 // AcknowledgeNames writes them and internal/cli's acknowledge command reads
 // them, so the two cannot drift.
 const (
-	DomainWakePrefix   = "d"
-	KeptWorkWakePrefix = "k"
+	DomainWakePrefix       = "d"
+	KeptWorkWakePrefix     = "k"
+	HousekeepingWakePrefix = "h"
 )
 
 // AcknowledgeNames is every row of the drain w, named as the acknowledge
 // command line takes it: the task wakes by their numbers, then the domain
-// wakes and the kept-work wakes with their shape's prefix, each shape
+// wakes, the kept-work wakes and the housekeeping wakes with their shape's
+// prefix, each shape
 // oldest first, as w holds them.
 func AcknowledgeNames(w Wakes) []string {
-	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes))
+	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes)+len(w.HousekeepingWakes))
 	for _, row := range w.Wakes {
 		names = append(names, strconv.FormatInt(row.ID, 10))
 	}
@@ -661,6 +690,9 @@ func AcknowledgeNames(w Wakes) []string {
 	}
 	for _, row := range w.KeptWorkWakes {
 		names = append(names, KeptWorkWakePrefix+strconv.FormatInt(row.ID, 10))
+	}
+	for _, row := range w.HousekeepingWakes {
+		names = append(names, HousekeepingWakePrefix+strconv.FormatInt(row.ID, 10))
 	}
 	return names
 }
