@@ -445,22 +445,31 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	}
 	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
-		// A wake about a domain or a kept work entry no task names is
-		// numbered apart from a task's and is named with its shape's
-		// prefix, machine's, which a drain's phrase names it with, so the
-		// three cannot be confused by number.
+		// A wake about a domain, a kept work entry no task names, or a
+		// repository's housekeeping is numbered apart from a task's and is
+		// named with its shape's prefix, machine's, which a drain's phrase
+		// names it with, so the shapes cannot be confused by number.
 		text, domain := strings.CutPrefix(arg, machine.DomainWakePrefix)
 		text, kept := strings.CutPrefix(text, machine.KeptWorkWakePrefix)
+		text, housekeeping := strings.CutPrefix(text, machine.HousekeepingWakePrefix)
 		id, err := strconv.ParseInt(text, 10, 64)
-		if err != nil || (domain && kept) {
-			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain or %sNUMBER for one about kept work no task names, and %q is not one",
-				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, printable(arg))
+		prefixes := 0
+		for _, had := range []bool{domain, kept, housekeeping} {
+			if had {
+				prefixes++
+			}
+		}
+		if err != nil || prefixes > 1 {
+			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain, %sNUMBER for one about kept work no task names, or %sNUMBER for one about a repository's housekeeping, and %q is not one",
+				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, machine.HousekeepingWakePrefix, printable(arg))
 		}
 		switch {
 		case domain:
 			request.DomainWakes = append(request.DomainWakes, id)
 		case kept:
 			request.KeptWorkWakes = append(request.KeptWorkWakes, id)
+		case housekeeping:
+			request.HousekeepingWakes = append(request.HousekeepingWakes, id)
 		default:
 			request.Wakes = append(request.Wakes, id)
 		}

@@ -1190,6 +1190,10 @@ type Wakes struct {
 	// wakes about a kept work entry no task names, on DomainWakes' terms
 	// and numbered apart from both.
 	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the rows of the queue's fourth shape handed
+	// out, the housekeeping wakes about a repository, on DomainWakes' terms
+	// and numbered apart from every other shape.
+	HousekeepingWakes []store.HousekeepingWake `json:"housekeeping_wakes,omitempty"`
 }
 
 // QueuedWakes is the answer to a person's reading of the wake queue: every
@@ -1206,6 +1210,10 @@ type QueuedWakes struct {
 	// names, oldest first under the same limit, on Wakes.KeptWorkWakes'
 	// terms.
 	KeptWorkWakes []store.KeptWorkWake `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the queued housekeeping wakes about a
+	// repository, oldest first under the same limit, on
+	// Wakes.HousekeepingWakes' terms.
+	HousekeepingWakes []store.HousekeepingWake `json:"housekeeping_wakes,omitempty"`
 }
 
 // QueuedWake is one queued row and the project of the task it is about,
@@ -1232,6 +1240,9 @@ type Acknowledged struct {
 	// KeptWorkWakes are the kept-work wake identifiers the batch closed, as
 	// the request named them.
 	KeptWorkWakes []int64 `json:"kept_work_wakes,omitempty"`
+	// HousekeepingWakes are the housekeeping wake identifiers the batch
+	// closed, as the request named them.
+	HousekeepingWakes []int64 `json:"housekeeping_wakes,omitempty"`
 	// By is who the rows record as having acknowledged them, rendered the
 	// way internal/store renders the closed set.
 	By string `json:"by"`

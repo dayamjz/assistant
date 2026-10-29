@@ -428,11 +428,15 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	}
 	var domainWakes []store.DomainWake
 	var keptWorkWakes []store.KeptWorkWake
+	var housekeepingWakes []store.HousekeepingWake
 	if !p.isSubordinate {
 		if domainWakes, err = s.store.QueuedDomainWakes(ctx, limit); err != nil {
 			return machine.QueuedWakes{}, err
 		}
 		if keptWorkWakes, err = s.store.QueuedKeptWorkWakes(ctx, limit); err != nil {
+			return machine.QueuedWakes{}, err
+		}
+		if housekeepingWakes, err = s.store.QueuedHousekeepingWakes(ctx, limit); err != nil {
 			return machine.QueuedWakes{}, err
 		}
 	}
@@ -452,6 +456,7 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	}
 	out.DomainWakes = domainWakes
 	out.KeptWorkWakes = keptWorkWakes
+	out.HousekeepingWakes = housekeepingWakes
 	return out, nil
 }
 
@@ -483,7 +488,7 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 	if err != nil {
 		return machine.Acknowledged{}, err
 	}
-	if len(r.Wakes)+len(r.DomainWakes)+len(r.KeptWorkWakes) == 0 {
+	if len(r.Wakes)+len(r.DomainWakes)+len(r.KeptWorkWakes)+len(r.HousekeepingWakes) == 0 {
 		return machine.Acknowledged{}, fmt.Errorf("%w: an acknowledgement names no wakes", ipc.ErrInvalidRequest)
 	}
 	if p.isSubordinate && len(r.DomainWakes) > 0 {
@@ -496,6 +501,12 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 		// A wake about a kept work entry no task names is in no domain, so
 		// the first coordinator alone acts on one.
 		return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and a wake about kept work no task names is the first coordinator's to close",
+			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
+	}
+	if p.isSubordinate && len(r.HousekeepingWakes) > 0 {
+		// A housekeeping wake is about a repository and in no domain, so
+		// the first coordinator alone acts on one.
+		return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and a wake about a repository's housekeeping is the first coordinator's alone",
 			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
 	}
 	if p.isSubordinate {
@@ -536,10 +547,11 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 	// The shapes are one batch, all or nothing: store.AcknowledgeAll
 	// checks every row of each before it writes any, in one transaction,
 	// so a refused row of one shape leaves every row named open too.
-	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, nil, by); err != nil {
+	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, r.HousekeepingWakes, by); err != nil {
 		return machine.Acknowledged{}, refusal(err)
 	}
-	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes, By: by.String()}, nil
+	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes,
+		HousekeepingWakes: r.HousekeepingWakes, By: by.String()}, nil
 }
 
 // assertSupervision is PRD section 5's arm verification over this home,

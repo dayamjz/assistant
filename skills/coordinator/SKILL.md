@@ -80,6 +80,60 @@ filed and it reads `reported`; one whose report raised decisions reads
 the service's next release, a run finishing or a restart, rather than at
 your answer.
 
+## Housekeeping passes
+
+A housekeeping pass keeps one repository's agent context true: the files its
+trusted `housekeeping.paths` names (by default the `AGENTS.md`, `CLAUDE.md`,
+`.claude/rules/**`, `.cursor/rules/**`, `README.md` and
+`assistant-knowledge.md` files). You create every pass; the program never
+does.
+
+```sh
+assistant coordinator create --housekeeping --project NAME \
+  --repository REPO_ID --instructions-file notes.md
+```
+
+- The program writes the first part of the pass's instructions: the scope,
+  the base of the last pass and when it was created, the decisions earlier
+  passes raised that are still open, and the rules. Your instructions follow
+  it as notes: the person's decisions and standing instructions since the
+  last pass, and anything you noticed may be stale. They are claims the
+  worker checks, not facts. Notes may be empty.
+- A pass is created as an investigation under the `housekeeping` role, which
+  resolves to the `roles` table's `housekeeping` row or else its `fix` row.
+  Do not pass `--shape` other than `investigation`, `--role`, `--branch`,
+  `--delivery` or `--overlaps`; each is refused as incorrect usage. No other
+  task may name the `housekeeping` role.
+- A repository has at most one open pass. A create while one is open is
+  refused naming the open pass, and so is one for a repository whose trusted
+  `housekeeping.paths` is empty. A subordinate coordinator is refused the
+  flag.
+- Read its report. When it lists factual drift, promote it in place
+  (`assistant coordinator promote`); setting the interval or asking for a
+  pass is the person's standing request to correct factual drift in those
+  files and nothing else. A report with no drift and no decision is recorded
+  as relayed with nothing said to the person. Its decisions (a question
+  about a rule, a principle or a specification) are holds for the person.
+- Every run of a promoted pass's branch, the one its push starts and a
+  person's push or rerun of it alike, holds at review with an `ask` for
+  every path its commits touched outside `housekeeping.paths`.
+- With the operator's global `housekeeping.interval` set, the program raises
+  a `housekeeping-due` wake about a repository once the interval has passed
+  since its newest pass was created, or it never had one, and its default
+  branch has moved past that pass's base; a check that could not read what it
+  needs raises it too, naming what. It is listed under `housekeeping_wakes`,
+  with `repository`, `pass` (the pass it follows) and `detail`, numbered
+  apart from every other shape and acknowledged as `hNUMBER`. Acknowledging
+  it creates nothing: create the pass with your notes, or do nothing. A due
+  wake whose `pass` is not the repository's newest pass, or that names none
+  while one exists, was raised before that pass was created: acknowledge it
+  and create nothing.
+
+- A pass open for a whole interval raises the same wake naming it and what it
+  waits on, again each interval. When something still moves it (a run not
+  ended, a worker that reads live or cannot be read), escalate it to the
+  person as a blocker; it is never retired on its own.
+
 ## Read the fleet
 
 ```sh
@@ -260,8 +314,9 @@ assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
   ack; `handouts` only counts deliveries. Read the task before every act.
 - Act on each wake, then acknowledge it by its `id` - every id you acted on,
   including one you decided needs nothing further after reading the task.
-  A row of `domain_wakes` or `kept_work_wakes` is numbered apart from the
-  task wakes, so name it `dNUMBER` or `kNUMBER`: a bare number always names
+  A row of `domain_wakes`, `kept_work_wakes` or `housekeeping_wakes` is
+  numbered apart from the task wakes, so name it `dNUMBER`, `kNUMBER` or
+  `hNUMBER`: a bare number always names
   a task's wake, and would close a different wake or none.
   Acknowledging is the only thing that records a wake as handled, and a wake
   keeps its task counted as in flight until you do.
@@ -413,7 +468,7 @@ are written into its domain, and it holds `create`, `tasks`, `message`,
 `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
 `listen` and `supervision` over that domain's tasks alone, with `tasks`
 listing the domain alone and `listen` its own domain's stream. It is refused
-`promote`, `answer`, both delegation subcommands, marking the catch-up read,
+`promote`, `answer`, `create --housekeeping`, both delegation subcommands, marking the catch-up read,
 the run commands, `sync`, and the service's stop and restart, with code
 `subordinate`; a task outside its domain is refused with `outside-domain`.
 Its grant denies editing and git and allows the `assistant coordinator`

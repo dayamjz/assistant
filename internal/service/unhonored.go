@@ -35,10 +35,7 @@ var unhonoredKeys = []config.Key{
 
 // refusalUnhonored refuses the operator's configuration when it asks for
 // something this build would not do, naming the key: a key of
-// unhonoredKeys that global set, a housekeeping.interval that is not zero,
-// or the herdr session provider. Nothing in this build runs a housekeeping
-// due check, so an interval would read as recurring passes nobody is asked
-// for; zero, the default, asks for none and is read. This build
+// unhonoredKeys that global set, or the herdr session provider. This build
 // has no herdr provider, and sessionHost starts every provider but tmux on
 // pipes, so a home that named herdr would have its workers started some
 // other way than the one the operator chose; the refusal is what stops that,
@@ -47,10 +44,6 @@ var unhonoredKeys = []config.Key{
 func refusalUnhonored(global config.Layer, cfg config.Config) error {
 	if k, set := unhonoredSet(global); set {
 		return fmt.Errorf("%w: %s is set, and this build places every worker on this machine and by none of these settings yet; remove it from the file", errUnhonored, k)
-	}
-	if cfg.HousekeepingInterval != 0 {
-		return fmt.Errorf("%w: %s is %s, and this build runs no housekeeping due check yet, so no pass would ever be found due; remove it from the file or set it to 0",
-			errUnhonored, config.KeyHousekeepingInterval, cfg.HousekeepingInterval)
 	}
 	if cfg.SessionProvider == config.SessionProviderHerdr {
 		return fmt.Errorf("%w: %s is %q, and this build has no %s provider yet; set it to %q or %q",

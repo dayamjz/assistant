@@ -12,20 +12,21 @@ import (
 // than quietly changing what may be discarded.
 func TestClassifyIsWrittenDownHere(t *testing.T) {
 	expected := map[ipc.Type]ipc.Class{
-		"log.line":              ipc.ClassActivity,
-		"agent.output":          ipc.ClassActivity,
-		"stage.heartbeat":       ipc.ClassActivity,
-		"run.state":             ipc.ClassState,
-		"stage.state":           ipc.ClassState,
-		"run.findings":          ipc.ClassState,
-		"hold.state":            ipc.ClassState,
-		"task.state":            ipc.ClassState,
-		"task.event":            ipc.ClassState,
-		"wake.queued":           ipc.ClassState,
-		"domain-wake.queued":    ipc.ClassState,
-		"kept-work-wake.queued": ipc.ClassState,
-		"stream.gap":            ipc.ClassControl,
-		"service.stopping":      ipc.ClassControl,
+		"log.line":                 ipc.ClassActivity,
+		"agent.output":             ipc.ClassActivity,
+		"stage.heartbeat":          ipc.ClassActivity,
+		"run.state":                ipc.ClassState,
+		"stage.state":              ipc.ClassState,
+		"run.findings":             ipc.ClassState,
+		"hold.state":               ipc.ClassState,
+		"task.state":               ipc.ClassState,
+		"task.event":               ipc.ClassState,
+		"wake.queued":              ipc.ClassState,
+		"domain-wake.queued":       ipc.ClassState,
+		"kept-work-wake.queued":    ipc.ClassState,
+		"housekeeping-wake.queued": ipc.ClassState,
+		"stream.gap":               ipc.ClassControl,
+		"service.stopping":         ipc.ClassControl,
 	}
 	for typ, want := range expected {
 		if got := ipc.Classify(typ); got != want {

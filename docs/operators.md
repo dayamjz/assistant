@@ -502,6 +502,62 @@ with `assistant coordinator message ID --text ...`, which is recorded,
 delivered under a number and acknowledged by the worker; nothing a message
 says reaches another task or the file.
 
+## Keeping a repository's agent context true
+
+A repository's agent context is the files that tell a coding agent how the
+project works. A **housekeeping pass** is a task that keeps them true: it reads
+what merged since the last pass, reports each claim it finds false with the
+file or command that proves it, and, once the coordinator promotes it,
+corrects that factual drift through the gate like any other change. It never
+rewords a rule, a principle or a specification: each such question becomes a
+decision for you.
+
+Two keys set it up:
+
+- `housekeeping.paths`, read only from the default branch's `assistant.json`,
+  is the scope: the files a pass keeps true and the only ones it may change.
+  The default is `AGENTS.md`, `CLAUDE.md`, `.claude/rules/**`,
+  `.cursor/rules/**`, `README.md` and `assistant-knowledge.md`. A pattern
+  with no slash names that file at any depth, so `AGENTS.md` covers every
+  `AGENTS.md` in a subdirectory too. A
+  list replaces the default rather than adding to it, and an empty list turns
+  housekeeping off for the repository. A pushed branch's value has no effect.
+- `housekeeping.interval`, in `config.yaml` only, is how long after one pass
+  of a repository was created the next may fall due: zero (the default, so
+  nothing is ever due) or between `1h` and `168h`. A repository file naming it
+  is refused when it is read.
+
+The coordinator creates every pass, with `assistant coordinator create
+--housekeeping --repository ID`, its notes as the instructions; the program
+writes the first part of the instructions itself (the scope, the last pass's
+base and when it was created, and the decisions earlier passes left open).
+A pass is an investigation under the `housekeeping` role, which runs on your
+`roles` table's `housekeeping` row, or its `fix` row when it names none. A
+repository has at most one open pass, so a second create is refused naming
+the open one. The run a promoted pass's push starts, and any run of its
+branch, holds at review with an `ask` for every path its commits touched
+outside `housekeeping.paths`.
+
+With the interval set, the supervisor checks each repository once per
+interval: it fetches the default branch and raises a `housekeeping-due` wake
+for the coordinator when no pass was ever created, or when the newest pass was
+created at least an interval ago and the default branch stands past that
+pass's base. A check that cannot fetch the branch or read its configuration
+raises the same wake naming what it could not read. Because the check runs
+once per interval, a default branch that moves just after a check that found
+it unmoved is seen at the next check, up to an interval later.
+
+An open pass never blocks silently. Once it has been open for a whole
+interval the coordinator's wake names it and what it waits on, each interval.
+While something still moves it (a run not ended, a worker that reads live or
+cannot be read), it is in flight whatever its state says, so its worker is
+watched like any running task, and the coordinator escalates a long run or a
+hang to you; nothing retires it. When nothing moves it, nothing here ends it yet.
+
+What reaches you is what reaches you of any task: the pass's pull request,
+its decisions, and a blocker the coordinator escalates. The due wake and a
+report that found nothing do not.
+
 ## Catching up on a fleet
 
 `assistant watch` starts with one read of the fleet and then follows the

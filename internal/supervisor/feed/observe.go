@@ -58,10 +58,12 @@ func Observe(ctx context.Context, h *home.Home) (supervisor.Observation, error) 
 }
 
 // InFlightFrom is the in-flight reading over a store: every task's resolved
-// state through reader, whether each has an open stall hold, read off the
-// snapshot the state was resolved from by supervisor.StallHeld, and the
-// queued wakes through s, handed to supervisor.InFlightOf. Either read failing is InFlightUnknown with the
-// error. The two reads are not one transaction, so a wake acknowledged
+// state through reader, how each one's state counts, read off the
+// observation by supervisor.RegardOf (in flight whatever it resolves for an
+// open stall hold or a housekeeping pass something moves, and never on its
+// state for a retired pass nothing moves), and the queued wakes of every
+// shape through s, handed to supervisor.InFlightOf. Either read failing is
+// InFlightUnknown with the error. The two reads are not one transaction, so a wake acknowledged
 // between them can be counted and a task created between them missed; both
 // errors are toward in flight, which is the safe direction, and a caller that
 // needs the two as of one instant has no accessor here for it.
@@ -79,10 +81,10 @@ func InFlightFrom(ctx context.Context, s *store.Store, reader *taskstate.Reader)
 		return supervisor.InFlightUnknown, err
 	}
 	states := make(map[string]taskstate.State, len(resolved))
-	stallHeld := make(map[string]bool, len(resolved))
+	regard := make(map[string]supervisor.Regard, len(resolved))
 	for _, o := range resolved {
 		states[o.Snapshot.Task.ID] = o.State.State
-		stallHeld[o.Snapshot.Task.ID] = supervisor.StallHeld(o)
+		regard[o.Snapshot.Task.ID] = supervisor.RegardOf(o)
 	}
 	domainWakes, err := s.UnacknowledgedDomainWakes(ctx)
 	if err != nil {
@@ -92,7 +94,11 @@ func InFlightFrom(ctx context.Context, s *store.Store, reader *taskstate.Reader)
 	if err != nil {
 		return supervisor.InFlightUnknown, err
 	}
-	return supervisor.InFlightOf(states, unacknowledged, stallHeld, domainWakes+keptWorkWakes), nil
+	housekeepingWakes, err := s.UnacknowledgedHousekeepingWakes(ctx)
+	if err != nil {
+		return supervisor.InFlightUnknown, err
+	}
+	return supervisor.InFlightOf(states, unacknowledged, regard, domainWakes+keptWorkWakes+housekeepingWakes), nil
 }
 
 // Guard is the pull guard over a home: Observe, then supervisor.GuardOf at
