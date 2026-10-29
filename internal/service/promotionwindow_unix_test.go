@@ -163,21 +163,17 @@ func TestAReportedWorkerAnEarlierServiceLeftIsEndedPastThePromotionWindow(t *tes
 	}
 
 	inv.serve(t, func(running serviceUnderTest) {
-		deadline := time.Now().Add(launchWait)
-		for {
-			presence, err := identity.Presence()
-			if err == nil && presence != agents.PresencePresent {
-				break
-			}
-			if !time.Now().Before(deadline) {
-				t.Fatalf("the survivor still reads %q (%v) long past its promotion window", presence, err)
-			}
-			time.Sleep(20 * time.Millisecond)
+		// The window's own log line is the evidence it ended the survivor.
+		// Waiting for the process to go first also accepts a worker that
+		// exited because the abandoned session's stdin was closed (#732).
+		if presence, err := identity.Presence(); err != nil || presence != agents.PresencePresent {
+			t.Fatalf("the survivor reads %q (%v) as the next service opens, before its promotion window could end it", presence, err)
+		}
+		waitLog(t, inv.home, "by its verified identity")
+		if presence, err := identity.Presence(); err != nil || presence == agents.PresencePresent {
+			t.Fatalf("after the window ended the survivor by its verified identity, it still reads %q (%v)", presence, err)
 		}
 		waitState(t, running.client, inv.task, "read Reported over its ended survivor", reportedFromTheReport(taskstate.Dead))
-		if log := serviceLog(t, inv.home); !strings.Contains(log, "by its verified identity") {
-			t.Fatalf("the service log does not say the survivor was ended by its verified identity:\n%s", log)
-		}
 		inv.copyStands(t, "after the survivor was ended for the window")
 	})
 }
