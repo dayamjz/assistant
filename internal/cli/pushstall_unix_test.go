@@ -69,20 +69,28 @@ func (tree pushTree) describe(w io.Writer) {
 // read is left out, and one whose identifier was given to another process
 // meanwhile is read as that process; a process started in a group of its
 // own by a member after the reading, whose parent then ends, is found by no
-// later reading, which is the gap giveUp names.
-func readPushTree(root int, known map[int]bool) (pushTree, error) {
+// later reading, which is the gap giveUp names. A listing that fails, and a
+// listed process whose parent and group cannot be read, are the error, so
+// a reading that could not place a process never answers as one that
+// placed every process; what it did place is returned beside the error.
+func readPushTree(reads table, root int, known map[int]bool) (pushTree, error) {
 	tree := pushTree{root: root, groups: maps.Clone(known), placed: map[int]agents.Lineage{}}
 	if tree.groups == nil {
 		tree.groups = map[int]bool{}
 	}
-	listed, err := standin.ProcessesMatching(func([]string) bool { return true })
+	listed, err := reads.list(func([]string) bool { return true })
 	if err != nil {
 		return tree, err
 	}
 	ours := syscall.Getpgrp()
 	lineage := make(map[int]agents.Lineage, len(listed))
+	var unread []error
 	for _, proc := range listed {
-		if l, found, err := agents.ReadLineage(proc.PID); err == nil && found && l.Identity == proc.Identity {
+		l, found, err := reads.lineage(proc.PID)
+		switch {
+		case err != nil:
+			unread = append(unread, fmt.Errorf("reading where %v is: %w", proc, err))
+		case found && l.Identity == proc.Identity:
 			lineage[proc.PID] = l
 		}
 	}
@@ -110,24 +118,47 @@ func readPushTree(root int, known map[int]bool) (pushTree, error) {
 			tree.placed[proc.PID] = lineage[proc.PID]
 		}
 	}
-	return tree, nil
+	return tree, errors.Join(unread...)
 }
 
 // stillRunning is every process of the push that is still running: what a
 // fresh reading finds from root in groups, and every one of recorded whose
-// identity still names a running process.
-func stillRunning(root int, groups map[int]bool, recorded []standin.Process) ([]standin.Process, error) {
-	now, err := readPushTree(root, groups)
+// identity still names a running process. The error is every read that
+// failed, the reading's and each presence that could not be read, and what
+// was found running is returned beside it, so a caller can say both.
+func stillRunning(reads table, root int, groups map[int]bool, recorded []standin.Process) ([]standin.Process, error) {
+	now, err := readPushTree(reads, root, groups)
+	unread := []error{err}
 	left := now.members
 	for _, proc := range recorded {
 		if slices.ContainsFunc(left, func(l standin.Process) bool { return l.Identity == proc.Identity }) {
 			continue
 		}
-		if presence, perr := proc.Presence(); perr == nil && presence == agents.PresencePresent {
+		presence, perr := proc.Presence()
+		switch {
+		case perr != nil:
+			unread = append(unread, fmt.Errorf("reading whether %v still runs: %w", proc, perr))
+		case presence == agents.PresencePresent:
 			left = append(left, proc)
 		}
 	}
-	return left, err
+	return left, errors.Join(unread...)
+}
+
+// notEndedBy is the verdict on a push that giving up has ended, from the
+// reading made afterwards: nil only when that reading succeeded and found
+// none of the push running. A reading that failed is never read as finding
+// nothing; whatever it did find running is named beside the failure.
+func notEndedBy(left []standin.Process, err error) error {
+	switch {
+	case err != nil && len(left) > 0:
+		return fmt.Errorf("%s %v, and what else is left could not be read: %w", stillRunningAfterGivingUp, left, err)
+	case err != nil:
+		return fmt.Errorf("what is left of the push could not be read, so it is not shown ended: %w", err)
+	case len(left) > 0:
+		return fmt.Errorf("%s %v", stillRunningAfterGivingUp, left)
+	}
+	return nil
 }
 
 // giveUp ends a push still running at its bound, and returns what it found
@@ -148,19 +179,39 @@ func stillRunning(root int, groups map[int]bool, recorded []standin.Process) ([]
 // The push's processes are its pushTree, read before the signals and again
 // after them, so a process that lost its parent to one is still found
 // through its group. Every one of them, and git push, is then ended
-// (endPushProcess), and the push is read once more: whatever is still
-// running is named in the answer, so a test that fails on it fails naming
-// the process. What this does not reach is a process a member started in a
+// (endPushProcess), and the push is read once more. That reading is the
+// verdict, gaveUp.notEnded (notEndedBy): nil only when it succeeded and
+// found nothing of the push running, so a test that fails on it fails naming
+// what is still running, the reading that failed, or both. A reading before
+// the end that fails is said and does not stop the end, since the verdict
+// is read afterwards whatever the earlier readings found. What this does not reach is a process a member started in a
 // group of its own after the last reading and before that member ended,
 // which no reading can place under git push once its parent is gone.
-func (p *boundedPush) giveUp() string {
+func (p *boundedPush) giveUp() gaveUp { return p.giveUpReading(kernelTable) }
+
+// table is the two reads of the process table a push's reading makes: the
+// listing, as standin.ProcessesMatching makes it, and where a process is,
+// as agents.ReadLineage reads it. kernelTable is the real one; a test makes
+// one of them fail to show a reading that failed is not read as one that
+// found nothing.
+type table struct {
+	list    func(match func(args []string) bool) ([]standin.Process, error)
+	lineage func(pid int) (agents.Lineage, bool, error)
+}
+
+// kernelTable reads the process table the kernel keeps.
+var kernelTable = table{list: standin.ProcessesMatching, lineage: agents.ReadLineage}
+
+// giveUpReading is giveUp with every reading of the process table made
+// through reads.
+func (p *boundedPush) giveUpReading(reads table) gaveUp {
 	var said strings.Builder
 	root := p.cmd.Process.Pid
 	self, err := os.Executable()
 	if err != nil {
 		fmt.Fprintf(&said, "resolving this binary: %v\n", err)
 	}
-	tree, err := readPushTree(root, nil)
+	tree, err := readPushTree(reads, root, nil)
 	if err != nil {
 		fmt.Fprintf(&said, "reading what the push started: %v\n", err)
 	}
@@ -200,7 +251,7 @@ func (p *boundedPush) giveUp() string {
 	}
 
 	members := tree.members
-	if again, err := readPushTree(root, tree.groups); err != nil {
+	if again, err := readPushTree(reads, root, tree.groups); err != nil {
 		fmt.Fprintf(&said, "reading what the push started, after the signals: %v\n", err)
 	} else {
 		for _, proc := range again.members {
@@ -217,12 +268,11 @@ func (p *boundedPush) giveUp() string {
 	ended.Wait()
 	_ = p.cmd.Process.Kill()
 	<-p.done
-	if left, err := stillRunning(root, tree.groups, members); err != nil {
-		fmt.Fprintf(&said, "reading what is left of the push: %v\n", err)
-	} else if len(left) > 0 {
-		fmt.Fprintf(&said, "%s %v\n", stillRunningAfterGivingUp, left)
+	notEnded := notEndedBy(stillRunning(reads, root, tree.groups, members))
+	if notEnded != nil {
+		fmt.Fprintf(&said, "%v\n", notEnded)
 	}
-	return said.String()
+	return gaveUp{said: said.String(), notEnded: notEnded}
 }
 
 // stillRunningAfterGivingUp opens the line giveUp writes naming what of a
@@ -338,10 +388,10 @@ func TestAPushGivenUpOnSaysWhatItWasDoingAndLeavesNothingRunning(t *testing.T) {
 	case <-push.done:
 		t.Fatalf("the push ended (%v) without waiting for the held copies lock:\n%s", push.err, push.out.String())
 	case <-time.After(30 * time.Second):
-		_ = push.giveUp()
 		t.Fatalf("the push's receive command never said it was waiting:\n%s", push.out.String())
 	}
-	said := push.giveUp()
+	gave := push.giveUp()
+	said := gave.said
 	out := push.out.String()
 	if !strings.Contains(said, "the gate's receive command had started: true") {
 		t.Fatalf("giving up did not find the receive command that said it was waiting:\n%s\n%s", said, out)
@@ -350,8 +400,8 @@ func TestAPushGivenUpOnSaysWhatItWasDoingAndLeavesNothingRunning(t *testing.T) {
 		t.Fatalf("the receive command's stacks, which name its wait for the copies lock, are not in the push's "+
 			"output:\n%s\n%s", said, out)
 	}
-	if strings.Contains(said, stillRunningAfterGivingUp) {
-		t.Fatalf("the push was given up on and left some of it running:\n%s", said)
+	if gave.notEnded != nil {
+		t.Fatalf("the push was given up on and is not shown ended: %v\n%s", gave.notEnded, said)
 	}
 }
 
@@ -393,7 +443,6 @@ func TestAPushGivenUpOnInsideAHookLeavesNothingOfItRunning(t *testing.T) {
 	case <-push.done:
 		t.Fatalf("the push ended (%v) without reaching the held hook:\n%s", push.err, push.out.String())
 	case <-time.After(30 * time.Second):
-		_ = push.giveUp()
 		t.Fatalf("the held hook never said it had started:\n%s", push.out.String())
 	}
 	written, err := os.ReadFile(marker)
@@ -413,7 +462,8 @@ func TestAPushGivenUpOnInsideAHookLeavesNothingOfItRunning(t *testing.T) {
 		t.Fatalf("the held hook's copy of the reference updates is not in the push's temporary directory "+
 			"(%d entries, %v), so the check that giving up removes it would see nothing", len(entries), err)
 	}
-	said := push.giveUp()
+	gave := push.giveUp()
+	said := gave.said
 	out := push.out.String()
 	if entries, err := os.ReadDir(scratch); err != nil || len(entries) != 0 {
 		t.Fatalf("giving up on the push left %v in its temporary directory (%v):\n%s", entries, err, said)
@@ -428,8 +478,8 @@ func TestAPushGivenUpOnInsideAHookLeavesNothingOfItRunning(t *testing.T) {
 	if !(standin.Process{Identity: id}).GoneWithin(standin.EndGrace) {
 		t.Fatalf("the push was given up on and its hook, process %d, is still running:\n%s", pid, said)
 	}
-	if strings.Contains(said, stillRunningAfterGivingUp) {
-		t.Fatalf("the push was given up on and left some of it running:\n%s", said)
+	if gave.notEnded != nil {
+		t.Fatalf("the push was given up on and is not shown ended: %v\n%s", gave.notEnded, said)
 	}
 }
 
@@ -507,11 +557,11 @@ func TestAPushGivenUpOnInAGitOtherThanReceivePackEndsThatGit(t *testing.T) {
 	case <-push.done:
 		t.Fatalf("the push ended (%v) without reaching the parked rev-parse:\n%s", push.err, push.out.String())
 	case <-time.After(30 * time.Second):
-		_ = push.giveUp()
 		t.Fatalf("the receive command's rev-parse never parked:\n%s", push.out.String())
 	}
 	seesRunning(t, push, stalled, "the parked rev-parse")
-	said := push.giveUp()
+	gave := push.giveUp()
+	said := gave.said
 	// How many other processes that is depends on the platform: git push
 	// runs the receive command through a shell that stays on Linux and not on
 	// macOS. The parked git is named by its identifier in the listing either
@@ -524,8 +574,8 @@ func TestAPushGivenUpOnInAGitOtherThanReceivePackEndsThatGit(t *testing.T) {
 		t.Fatalf("the push was given up on and the rev-parse it was waiting on, process %d, is still running:\n%s",
 			stalled.PID, said)
 	}
-	if strings.Contains(said, stillRunningAfterGivingUp) {
-		t.Fatalf("the push was given up on and left some of it running:\n%s", said)
+	if gave.notEnded != nil {
+		t.Fatalf("the push was given up on and is not shown ended: %v\n%s", gave.notEnded, said)
 	}
 }
 
@@ -536,12 +586,96 @@ func TestAPushGivenUpOnInAGitOtherThanReceivePackEndsThatGit(t *testing.T) {
 // process outlived the push.
 func seesRunning(t *testing.T, push *boundedPush, id agents.Identity, what string) {
 	t.Helper()
-	running, err := stillRunning(push.cmd.Process.Pid, nil, nil)
+	running, err := stillRunning(kernelTable, push.cmd.Process.Pid, nil, nil)
 	if err != nil {
 		t.Fatalf("reading what the push started: %v", err)
 	}
 	if !slices.ContainsFunc(running, func(p standin.Process) bool { return p.Identity == id }) {
 		t.Fatalf("%s, process %d, is running and is not among what the push started, %v, so the check that "+
 			"giving up ended it would pass without seeing it", what, id.PID, running)
+	}
+}
+
+// A push whose cleanup cannot be read afterwards is not one giving up
+// ended. The receive command's rev-parse is parked and kept out of every
+// reading, so it outlives the cleanup, and every reading once git push has
+// ended fails, as one that cannot settle does. Giving up must then report
+// the push as not shown ended, naming the failed reading. A failed reading
+// that did find the survivor names it beside the failure, and a reading
+// that succeeds names the survivor while it runs and passes once it is gone,
+// which is the positive control: the verdict passes a clean reading and
+// nothing else.
+func TestAPushWhoseCleanupCannotBeReadIsNotReportedEnded(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	initializeGate(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "a change\n")
+
+	execPath, parked := parkGitAt(t, "--is-bare-repository")
+	cmd := gitCmd(context.Background(), subject, "push", gate.RemoteName, "work")
+	cmd.Env = append(cmd.Env, "GIT_EXEC_PATH="+execPath)
+	push := startBoundedPush(t, h, "", cmd)
+	var survivor agents.Identity
+	select {
+	case survivor = <-parked:
+	case <-push.done:
+		t.Fatalf("the push ended (%v) without reaching the parked rev-parse:\n%s", push.err, push.out.String())
+	case <-time.After(30 * time.Second):
+		t.Fatalf("the receive command's rev-parse never parked:\n%s", push.out.String())
+	}
+	kept := standin.Process{Identity: survivor}
+	t.Cleanup(func() { kept.End() })
+	unsettled := errors.New("the process table did not settle (injected)")
+	hiding := table{lineage: agents.ReadLineage, list: func(match func([]string) bool) ([]standin.Process, error) {
+		select {
+		case <-push.done:
+			return nil, unsettled
+		default:
+		}
+		all, err := standin.ProcessesMatching(match)
+		return slices.DeleteFunc(all, func(p standin.Process) bool { return p.Identity == survivor }), err
+	}}
+	unlisted := table{lineage: agents.ReadLineage,
+		list: func(func([]string) bool) ([]standin.Process, error) { return nil, unsettled }}
+	unplaced := table{list: standin.ProcessesMatching,
+		lineage: func(int) (agents.Lineage, bool, error) { return agents.Lineage{}, false, unsettled }}
+
+	gave := push.giveUpReading(hiding)
+	if presence, err := kept.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the hidden rev-parse, process %d, did not outlive the cleanup (%v, %v), so this shows nothing",
+			survivor.PID, presence, err)
+	}
+	if gave.notEnded == nil || !errors.Is(gave.notEnded, unsettled) {
+		t.Fatalf("giving up could not read what was left of the push, and process %d still runs, yet its verdict is "+
+			"%v:\n%s", survivor.PID, gave.notEnded, gave.said)
+	}
+
+	root := push.cmd.Process.Pid
+	recorded := []standin.Process{kept}
+	notEnded := notEndedBy(stillRunning(unlisted, root, nil, recorded))
+	if !errors.Is(notEnded, unsettled) || !strings.Contains(notEnded.Error(), strconv.Itoa(survivor.PID)) {
+		t.Fatalf("a failed listing with process %d recorded and running answered %v; want the failure and the "+
+			"process both", survivor.PID, notEnded)
+	}
+	if notEnded := notEndedBy(stillRunning(unplaced, root, nil, nil)); !errors.Is(notEnded, unsettled) {
+		t.Fatalf("a reading that could not place the processes it listed answered %v; want that failure", notEnded)
+	}
+	// An identity with no start time is one agents.Identity.Presence refuses
+	// to read, which is how a presence read fails here without a fake.
+	unreadable := []standin.Process{{Identity: agents.Identity{PID: survivor.PID}}}
+	if notEnded := notEndedBy(stillRunning(kernelTable, root, nil, unreadable)); notEnded == nil ||
+		!errors.Is(notEnded, agents.ErrIdentityUnreadable) {
+		t.Fatalf("a reading that could not tell whether a recorded process still runs answered %v; want that failure",
+			notEnded)
+	}
+	notEnded = notEndedBy(stillRunning(kernelTable, root, nil, recorded))
+	if notEnded == nil || !strings.Contains(notEnded.Error(), strconv.Itoa(survivor.PID)) {
+		t.Fatalf("a reading made while process %d runs answered %v; want it named", survivor.PID, notEnded)
+	}
+	kept.End()
+	if notEnded := notEndedBy(stillRunning(kernelTable, root, nil, recorded)); notEnded != nil {
+		t.Fatalf("a reading made once process %d was ended answered %v; want nothing left", survivor.PID, notEnded)
 	}
 }

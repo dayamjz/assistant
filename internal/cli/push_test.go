@@ -575,10 +575,25 @@ func startBoundedPush(t *testing.T, h *home.Home, cue string, cmd *exec.Cmd) *bo
 		select {
 		case <-p.done:
 		default:
-			_ = p.giveUp()
+			if gave := p.giveUp(); gave.notEnded != nil {
+				t.Errorf("the push was still running when the test ended, and giving up on it did not end it: %v\n%s",
+					gave.notEnded, gave.said)
+			}
 		}
 	})
 	return p
+}
+
+// gaveUp is what giving up on a push found.
+type gaveUp struct {
+	// said is what the push was doing when it was given up on, for a
+	// failure.
+	said string
+	// notEnded is nil only when a reading made after the push was ended
+	// succeeded and found none of it running. Otherwise it names what that
+	// reading found still running, the reading that failed, or both, so a
+	// cleanup nothing could read is never taken for one that left nothing.
+	notEnded error
 }
 
 // within waits up to bound for the push to end and returns git's output and
@@ -590,8 +605,10 @@ func (p *boundedPush) within(bound time.Duration) (string, error) {
 		return p.out.String(), p.err
 	case <-time.After(bound):
 	}
-	said := p.giveUp()
-	return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s", bound, said)
+	// said carries the verdict on ending the push as well, since the push
+	// is a failure here either way.
+	return p.out.String(), fmt.Errorf("git was still running %s after the push started, and was given up on:\n%s",
+		bound, p.giveUp().said)
 }
 
 // pushOutput is a push's standard output and standard error as one buffer,
