@@ -196,3 +196,4 @@ func TestAPromotionWindowKeepRecordsWorkAndNotAnUnchangedCopy(t *testing.T) {
 			t.Fatalf("keeping a copy whose worker ended inside the window answered %+v (%v), want an entry holding %s", got, err, head)
 		}
 	})
+}
