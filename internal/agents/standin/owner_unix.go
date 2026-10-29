@@ -4,6 +4,7 @@ package standin
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -107,7 +108,9 @@ func awaitGone(owner agents.Identity) {
 //
 // It records this process as the owner of every process the tests start
 // (ownProcesses), runs run, and then runs leftAfterTests, and it is run's
-// status unless that was 0 and the check failed, which is 1. A failure to
+// status unless that was 0 and the check failed, which is 1. A binary
+// started only to list test names (testListOnly) runs run and nothing else:
+// it records no owner and runs no check, and is run's status. A failure to
 // record ownership is printed and is 1, with run not run. Because the check
 // runs here, after run returns, and nowhere else, a package cannot record
 // ownership and leave the check unwired: Tmux refuses a test anywhere but
@@ -139,6 +142,17 @@ func awaitGone(owner agents.Identity) {
 // the only path it removes, so what a test leaves under os.TempDir or
 // anywhere else stays.
 func RunOwned(run func() int) int {
+	// go test -list still invokes TestMain. The leftover-process check needs a
+	// readable process table; on a bare CI runner outside the suite's PID
+	// namespace it fails on unreadable /proc entries of the same user (#727,
+	// #722). When testing's test.list flag has a non-empty value, this process
+	// lists only and skips the check; an empty or missing value still runs
+	// tests, so the check stays on. testListOnly asks Go's flag parser for
+	// that value (last occurrence wins, parsing stops at --), because RunOwned
+	// runs before m.Run would parse.
+	if testListOnly() {
+		return run()
+	}
 	if err := ownProcesses(); err != nil {
 		fmt.Fprintln(os.Stderr, "recording this test binary as the owner of what its tests start:", err)
 		return 1
@@ -160,6 +174,24 @@ func RunOwned(run func() int) int {
 		}
 	}
 	return code
+}
+
+// testListOnly reports whether this process was started only to print matching
+// test names. It reads testing's test.list through Go's flag parser: if the
+// flags are not yet parsed it parses them (the documented rule for a TestMain
+// that depends on testing flags before m.Run), then takes flag.Lookup("test.list").
+// A missing flag or an empty value means tests still run, so the leftover-process
+// check stays on (#727). Last occurrence wins, -test.list regexp and
+// --test.list=regexp are the same flag, and a token after -- is not a flag.
+func testListOnly() bool {
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	f := flag.Lookup("test.list")
+	if f == nil {
+		return false
+	}
+	return f.Value.String() != ""
 }
 
 // stopStarting has this binary start no further process through Go, for

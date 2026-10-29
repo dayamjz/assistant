@@ -4,10 +4,12 @@ package standin
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -373,5 +375,131 @@ func TestEndingWhatKeepsStartingFindsWhatAnExitingChildStarted(t *testing.T) {
 	}
 	if presence, err := second.Presence(); err != nil || presence == agents.PresencePresent {
 		t.Errorf("%v reads %v (%v) once endStarting returned; want it ended", second, presence, err)
+	}
+}
+
+// TestTestListArgvMatchesGoParsing is the gate for RunOwned's list-only skip
+// matching Go's flag parser rather than a hand scan of os.Args (#727 round 3).
+// A scan that trusted the first -test.list= token skipped the leftover check
+// on -test.list=^Test -test.list= and on -- -test.list=^Test while tests still
+// ran, leaving a child alive (P15). Nested RunOwned deadlocks on ForkLock, so
+// each row re-execs this package binary the way go test starts it.
+func TestTestListArgvMatchesGoParsing(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	if os.Getenv("STANDIN_LIST_ARGV_PROBE") == "1" {
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(exe)
+		cmd.Env = append(os.Environ(), "STANDIN_TEST_HOLD_OPEN=1")
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(os.Stderr, "CHILD=%d\n", cmd.Process.Pid)
+		return
+	}
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name     string
+		args     []string
+		listOnly bool
+	}{
+		{
+			name: "last empty wins",
+			args: []string{
+				"-test.run=^TestTestListArgvMatchesGoParsing$",
+				"-test.list=^Test",
+				"-test.list=",
+				"-test.count=1",
+				"-test.v=true",
+			},
+		},
+		{
+			name: "token after terminator",
+			args: []string{
+				"-test.run=^TestTestListArgvMatchesGoParsing$",
+				"-test.count=1",
+				"-test.v=true",
+				"--",
+				"-test.list=^Test",
+			},
+		},
+		{
+			name: "empty list still runs",
+			args: []string{
+				"-test.run=^TestTestListArgvMatchesGoParsing$",
+				"-test.list=",
+				"-test.count=1",
+				"-test.v=true",
+			},
+		},
+		{
+			name:     "equals list",
+			args:     []string{"-test.list=^Test"},
+			listOnly: true,
+		},
+		{
+			name:     "space list",
+			args:     []string{"-test.list", "^Test"},
+			listOnly: true,
+		},
+		{
+			name:     "long equals list",
+			args:     []string{"--test.list=^Test"},
+			listOnly: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(exe, tc.args...)
+			if !tc.listOnly {
+				cmd.Env = append(os.Environ(), "STANDIN_LIST_ARGV_PROBE=1")
+			} else {
+				cmd.Env = os.Environ()
+			}
+			out, err := cmd.CombinedOutput()
+			text := string(out)
+			var child int
+			for _, line := range strings.Split(text, "\n") {
+				if rest, ok := strings.CutPrefix(line, "CHILD="); ok {
+					if pid, convErr := strconv.Atoi(rest); convErr == nil {
+						child = pid
+						_ = syscall.Kill(pid, syscall.SIGKILL)
+					}
+				}
+			}
+			if tc.listOnly {
+				if err != nil {
+					t.Fatalf("list-only argv %v: want exit 0, got %v\n%s", tc.args, err, text)
+				}
+				if !strings.Contains(text, "TestTestListArgvMatchesGoParsing") {
+					t.Fatalf("list-only argv %v: want listed test name, got:\n%s", tc.args, text)
+				}
+				if strings.Contains(text, "CHILD=") || strings.Contains(text, "FAIL:") {
+					t.Fatalf("list-only argv %v: leftover check ran or a test body ran:\n%s", tc.args, text)
+				}
+				return
+			}
+			// A probe that fails during setup (nonzero exit, no child) must
+			// not pass: only CHILD=<pid> plus the leftover check's own FAIL
+			// for that pid proves the check ran (#727 round 4).
+			if child == 0 {
+				t.Fatalf("argv %v: probe did not print CHILD=<pid>; setup failed before planting:\n%s", tc.args, text)
+			}
+			wantFail := fmt.Sprintf("FAIL: process %d (", child)
+			if !strings.Contains(text, wantFail) || !strings.Contains(text, "was started by this package's tests and was still running") {
+				t.Fatalf("argv %v: want leftover check naming planted child %d, got err=%v:\n%s", tc.args, child, err, text)
+			}
+			if err == nil {
+				t.Fatalf("argv %v exited 0 after leaving child %d; want the leftover check to fail:\n%s", tc.args, child, text)
+			}
+		})
 	}
 }

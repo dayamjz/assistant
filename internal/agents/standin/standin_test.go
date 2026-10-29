@@ -24,6 +24,12 @@ import (
 // one (tmuxOwnerMain), and otherwise owns what its own tests start, since
 // some start tmux servers.
 func TestMain(m *testing.M) {
+	// A sibling process of this binary for leftover-check probes: same
+	// executable is what ProcessesOf lists (#727 empty -test.list=).
+	if os.Getenv("STANDIN_TEST_HOLD_OPEN") == "1" {
+		time.Sleep(60 * time.Second)
+		os.Exit(0)
+	}
 	// Before any mode that calls RunOwned, including the tmux-owner child,
 	// so the wrapper it installs is stamped with this package's tag.
 	if err := RegisterTempTag(); err != nil {
