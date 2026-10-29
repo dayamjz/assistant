@@ -265,9 +265,9 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 // meets a refusal its own answer puts on processes the test did not place
 // in the copy by restarting the service, and the relaunch is then read from
 // the restarted service. A retry deferred on a sweep that cleared fails the
-// test: no sweep explains it. The restart's relaunch does not carry the
-// answer's note, which PRD section 6 says it carries (#604), so a deferred
-// retry still fails the test, on the note, until that is settled.
+// test: no sweep explains it. The restart's relaunch carries the answer's
+// note from its record, as the answer's own does (#604), so either path is
+// held to the same lines.
 func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P6)
@@ -354,7 +354,6 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 		if answered.Hold.Key != stopped.Hold.Key {
 			t.Fatalf("the retry answered %+v, want the answer on the stop's hold %s", answered, stopped.Hold.Key)
 		}
-		deferred := false
 		switch {
 		case answered.Effect == machine.AnswerRelaunched:
 			if answered.Relaunch == nil || answered.Relaunch.Attempt != 2 || answered.Relaunch.Superseded != stoppedRef {
@@ -369,7 +368,6 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 			if !restarted {
 				t.Fatalf("the retry was deferred (%s) though the sweep it asked of the copy cleared", answered.NotRelaunched)
 			}
-			deferred = true
 		default:
 			t.Fatalf("the retry answered %+v having asked %d sweep(s) of the copy, want attempt 2 relaunched over %s",
 				answered, w.sweeps.Of(sweptPath)-swept, stoppedRef)
@@ -393,9 +391,6 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 		} {
 			if n := linesCarrying(t, agent, text); n != want {
 				t.Errorf("%q reached the workers on %d lines, want %d", text, n, want)
-				if deferred {
-					t.Log("the retry was deferred to a restart, whose relaunch does not carry the answer's note (#604)")
-				}
 			}
 		}
 		if got, err := os.ReadFile(work); err != nil || string(got) != "the worker's unfinished change\n" {
@@ -430,18 +425,138 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 	})
 }
 
+// PRD section 6's relaunch after a stop carries the answer's note, and P14:
+// the note has one owner, the stop's hold it is recorded on, so a relaunch
+// deferred past the answer reads it from there rather than losing it with the
+// request (#604). The worker is messaged and stopped, and the retry with a
+// note is answered while the task's slot is taken, as a dispatch, a relaunch
+// or a stop in flight takes it, so the answer is recorded and the relaunch is
+// deferred, beginning nothing. The next start relaunches on the recorded
+// retry, and the new worker reads the note, once, beside the message the
+// stopped worker never acknowledged. The relaunch bound defers a retry the
+// same way: past relaunch_attempts a stop's retry with a note holds on the
+// bound's hold, and the relaunch that hold's retry makes carries that note.
+func TestAStopsRetryNoteSurvivesARelaunchDeferredToTheNextStart(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	const unestablished = "a relaunch after a stop deferred to the next start"
+	service.RequireSweepClearsHere(t, unestablished)
+	streamWorker(t, "task/stop-deferred", steerConfig, func(w launched, agent *standin.Agent) {
+		running, task := w.running, w.task
+		const message, note = "stay on scope and keep the tests", "narrow it to the lexer"
+
+		var sent machine.TaskMessaged
+		if err := running.client.Call(t.Context(), ipc.MethodTaskMessage,
+			machine.TaskMessageRequest{Task: task, Text: message}, &sent); err != nil {
+			t.Fatalf("messaging the worker: %v", err)
+		}
+		waitCapture(t, w.provider, w.session, "heard: stay on scope")
+		stoppedRef := w.session.Reference().String()
+		var stopped machine.TaskStopped
+		if err := running.client.Call(t.Context(), ipc.MethodTaskStop, machine.TaskRequest{Task: task}, &stopped); err != nil {
+			t.Fatalf("stopping the worker: %v", err)
+		}
+
+		release := running.service.ClaimSlotForTest(t, task)
+		var answered machine.TaskAnswered
+		err := running.client.Call(t.Context(), ipc.MethodTaskRespond,
+			machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry, Note: note}, &answered)
+		release()
+		if err != nil {
+			t.Fatalf("answering the stop's hold retry: %v", err)
+		}
+		if answered.Hold.Key != stopped.Hold.Key || answered.Effect != machine.AnswerRetryDeferred || answered.Relaunch != nil {
+			t.Fatalf("the retry answered %+v, want the stop's hold %s answered and the relaunch deferred", answered, stopped.Hold.Key)
+		}
+		if attempts := attemptsOf(t, w.home, task); len(attempts) != 1 {
+			t.Fatalf("the deferred retry left attempts %+v, want one", attempts)
+		}
+		if n := linesCarrying(t, agent, note); n != 0 {
+			t.Fatalf("the note reached a worker on %d lines before any relaunch", n)
+		}
+
+		sweptPath, err := w.home.TaskCopy(task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := w.sweeps.Of(sweptPath)
+		running = w.reopen()
+		if n := w.sweeps.Of(sweptPath); n != before+1 {
+			t.Fatalf("the next start asked %d sweep(s) of the copy, want the relaunch's one", n-before)
+		}
+		w.sweeps.UntilClear(t, unestablished, sweptPath, func() { running = w.reopen() })
+
+		provider, relaunchedSession := waitRelaunched(t, running, w.home, task, stoppedRef)
+		waitCapture(t, provider, relaunchedSession, "the stop note was read")
+		for text, want := range map[string]int{message: 2, note: 1} {
+			if n := linesCarrying(t, agent, text); n != want {
+				t.Errorf("%q reached the workers on %d lines, want %d", text, n, want)
+			}
+		}
+
+		// The relaunch bound defers too: relaunch_attempts is one, so attempt
+		// 2's stop answered retry with a note holds on the bound's hold, and
+		// the bound's own retry relaunches with that note.
+		const atBoundNote = "and keep the lexer's tests"
+		secondRef := relaunchedSession.Reference().String()
+		var stoppedAgain machine.TaskStopped
+		if err := running.client.Call(t.Context(), ipc.MethodTaskStop, machine.TaskRequest{Task: task}, &stoppedAgain); err != nil ||
+			stoppedAgain.Attempt != 2 {
+			t.Fatalf("stopping attempt 2 answered %+v (%v)", stoppedAgain, err)
+		}
+		var atBound machine.TaskAnswered
+		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond,
+			machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry, Note: atBoundNote}, &atBound); err != nil {
+			t.Fatalf("answering attempt 2's stop retry: %v", err)
+		}
+		if atBound.Effect != machine.AnswerRetryAtBound || !strings.Contains(atBound.NotRelaunched, "the note given here, which is recorded") {
+			t.Fatalf("the retry past the bound answered %+v, want the bound's hold named and the note said to be kept", atBound)
+		}
+		bound := machine.TaskRespondRequest{Task: task, Hold: listedTask(t, running.client, task).Basis.Hold, Answer: machine.AnswerRetry}
+		if !strings.Contains(bound.Hold, "relaunch-bound/2") {
+			t.Fatalf("past the bound the task holds on %q, want the bound's hold for attempt 2", bound.Hold)
+		}
+		before = w.sweeps.Of(sweptPath)
+		var retried machine.TaskAnswered
+		if err := running.client.Call(t.Context(), ipc.MethodTaskRespond, bound, &retried); err != nil {
+			t.Fatalf("answering the bound's hold retry: %v", err)
+		}
+		switch {
+		case retried.Effect == machine.AnswerRelaunched:
+		case retried.Effect == machine.AnswerRetryDeferred && w.sweeps.Of(sweptPath) == before+1:
+			w.sweeps.UntilClear(t, unestablished, sweptPath, func() { running = w.reopen() })
+		default:
+			t.Fatalf("the bound's retry answered %+v having asked %d sweep(s) of the copy, want attempt 3 relaunched",
+				retried, w.sweeps.Of(sweptPath)-before)
+		}
+		provider, relaunchedSession = waitRelaunchedAs(t, running, w.home, task, secondRef, 3)
+		waitCapture(t, provider, relaunchedSession, "the stop note was read")
+		if n := linesCarrying(t, agent, atBoundNote); n != 1 {
+			t.Errorf("%q reached the workers on %d lines, want 1", atBoundNote, n)
+		}
+	})
+}
+
 // waitRelaunched waits for the task's second attempt to record a session
 // other than the superseded one, and returns the provider and the session
 // the service holds for it.
 func waitRelaunched(t *testing.T, running serviceUnderTest, h *home.Home, task, superseded string) (session.Provider, *session.Session) {
 	t.Helper()
+	return waitRelaunchedAs(t, running, h, task, superseded, 2)
+}
+
+// waitRelaunchedAs is waitRelaunched for the task's attempt numbered want,
+// which must be its latest.
+func waitRelaunchedAs(t *testing.T, running serviceUnderTest, h *home.Home, task, superseded string,
+	want int) (session.Provider, *session.Session) {
+	t.Helper()
 	deadline := time.Now().Add(launchWait)
 	for {
 		attempts := attemptsOf(t, h, task)
-		if len(attempts) != 2 {
-			t.Fatalf("after the relaunch the task has attempts %+v, want two", attempts)
+		if len(attempts) != want {
+			t.Fatalf("after the relaunch the task has attempts %+v, want %d", attempts, want)
 		}
-		if ref, ok := attempts[1].SessionRef.Get(); ok {
+		if ref, ok := attempts[want-1].SessionRef.Get(); ok {
 			if ref == superseded {
 				t.Fatalf("the relaunched attempt records the superseded session %s", ref)
 			}

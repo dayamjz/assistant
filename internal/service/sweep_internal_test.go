@@ -261,7 +261,7 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer arrived.Leave()
-			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
+			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task)
 		}()
 	}
 	wg.Wait()
@@ -301,7 +301,7 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitLiveness(t, provider, launched.Reference().String(), taskstate.Dead)
-	_, err = sub.restart.relaunchClaimed(ctx, sub.task, "")
+	_, err = sub.restart.relaunchClaimed(ctx, sub.task)
 	var unproven *relaunchUnswept
 	if !errors.As(err, &unproven) || unproven.Hold.Key != relaunchUnsweptKey(sub.task, 2) || !unproven.Hold.Open() {
 		t.Fatalf("a relaunch of the retried attempt answered %v, want it held on a new hold for attempt 2", err)

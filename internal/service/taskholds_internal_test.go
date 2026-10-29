@@ -33,7 +33,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 	sub.restart.cfg.RelaunchAttempts = 0
 
 	// Unanswered, the bound refuses the relaunch and records nothing.
-	if _, err := sub.restart.relaunchClaimed(ctx, sub.task, ""); !errors.Is(err, errRelaunchNotDue) {
+	if _, err := sub.restart.relaunchClaimed(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
 		t.Fatalf("a relaunch past the bound with no answer answered %v, want not due", err)
 	}
 	attempts, err := sub.records.TaskAttempts(ctx, sub.task)
@@ -46,7 +46,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Open, the hold is still no allowance.
-	if _, err := sub.restart.relaunchClaimed(ctx, sub.task, ""); !errors.Is(err, errRelaunchNotDue) {
+	if _, err := sub.restart.relaunchClaimed(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
 		t.Fatalf("a relaunch past the bound with the hold open answered %v, want not due", err)
 	}
 	if _, err := sub.records.ResolveHold(ctx, hold.Key, machine.AnswerRetry, store.ResolvedByMachineInterface()); err != nil {
@@ -63,7 +63,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			defer arrived.Leave()
-			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task, "")
+			outs[i], errs[i] = sub.restart.relaunchClaimed(ctx, sub.task)
 		}()
 	}
 	wg.Wait()
@@ -101,7 +101,7 @@ func TestARetryPastTheBoundBeginsOneAttemptAndNoMore(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitLiveness(t, provider, launched.Reference().String(), taskstate.Dead)
-	if _, err := sub.restart.relaunchClaimed(ctx, sub.task, ""); !errors.Is(err, errRelaunchNotDue) {
+	if _, err := sub.restart.relaunchClaimed(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
 		t.Fatalf("a relaunch of the retried attempt answered %v, want not due: the allowance was the first attempt's", err)
 	}
 	if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 2 {
