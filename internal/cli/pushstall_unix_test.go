@@ -217,18 +217,27 @@ func describe(w io.Writer, ps []recorded) {
 
 // end ends every process the record holds that no end has reached yet, all
 // at once, and returns a line for each that it could not answer as ended.
-// A process that led its process group when it was read is ended with that
-// group through agents.EndGroup, which signals nothing until the leader's
-// identity is read to name a running process, then sends the group SIGTERM
-// and, once standin.EndGrace has passed with a process still in it,
-// SIGKILL. A group whose leader is gone is therefore not signalled, and what
-// is left in it is ended process by process, as readings attribute it
-// through the group. Any other process is ended through
-// standin.Process.End, which reads its identity before each signal, so the
-// group git push shares with this test is never signalled. SIGTERM comes
-// first because the gate's hook script removes the temporary file it copies
-// the reference updates into from a trap on SIGTERM and on exit, which
-// SIGKILL never runs.
+// git push is never one of them: read leaves it out, and giveUp kills it
+// through its exec.Cmd.
+//
+// A process that led its process group when it was read (placed.Group is
+// its own identifier) is ended with that group through agents.EndGroup,
+// which signals nothing unless the leader's identity still reads as a
+// running process, and then sends the group SIGTERM and, once
+// standin.EndGrace has passed with a process still in it, SIGKILL. So a
+// group whose leader is gone is not signalled, and what is left in it is
+// ended one process at a time, as readings attribute it through the group.
+// Every other process is ended through standin.Process.End: SIGTERM to that
+// process alone and, once standin.EndGrace has passed with it still
+// running, SIGKILL, to its group when it leads one by then and to it alone
+// otherwise. Its identity is read before each signal, which narrows, and
+// does not close, the chance of signalling another process later given the
+// same identifier. git push's own group (inOwnGroup) is therefore never
+// signalled as a group: its leader, git push, is never a recorded process,
+// and no other process leads it, so what is in it is ended one process at a
+// time. SIGTERM comes first because the gate's hook script removes the
+// temporary file it copies the reference updates into from a trap on
+// SIGTERM and on exit, which SIGKILL never runs.
 //
 // A read the end makes that fails sends nothing. The end decides nothing
 // either way: the verdict reads again whether each process still runs.
@@ -924,6 +933,21 @@ func seesRunning(t *testing.T, push *boundedPush, what string, match func(standi
 	return id
 }
 
+// readGone is nil only when id was read as naming no running process, and
+// otherwise says why not: it still runs, or whether it does could not be
+// read. A check that a process has been ended asks it, so that a failed read
+// is never taken for a process found gone.
+func readGone(id agents.Identity) error {
+	presence, err := id.Presence()
+	switch {
+	case err != nil:
+		return fmt.Errorf("whether process %d still runs could not be read: %w", id.PID, err)
+	case presence == agents.PresencePresent:
+		return fmt.Errorf("process %d still runs", id.PID)
+	}
+	return nil
+}
+
 // isProcess picks the process id names.
 func isProcess(id agents.Identity) func(standin.Process) bool {
 	return func(p standin.Process) bool { return p.Identity == id }
@@ -1267,10 +1291,9 @@ func TestAPushThatEndsLeavingAProcessRunningHasItEndedWithItsTest(t *testing.T) 
 			if !passed {
 				t.Fatalf("the push's own test failed")
 			}
-			if presence, err := left.Presence(); err != nil || presence != agents.PresencePresent {
-				return
+			if err := readGone(left); err != nil {
+				t.Fatalf("the pre-push hook's sleep, after the test that pushed ended: %v", err)
 			}
-			t.Fatalf("the pre-push hook's sleep, process %d, is still running after the test that pushed ended", left.PID)
 		})
 	}
 }
@@ -1434,8 +1457,8 @@ func TestAPushWhoseOutputOutlivesGitIsGivenUpOnByWithin(t *testing.T) {
 	if !strings.Contains(err.Error(), fmt.Sprintf("  process %d (parent ", left.PID)) {
 		t.Fatalf("within's answer does not name the sleep, process %d, that held the output:\n%v", left.PID, err)
 	}
-	if presence, err := left.Presence(); err != nil || presence == agents.PresencePresent {
-		t.Fatalf("the sleep, process %d, is %v (%v) once within has given the push up", left.PID, presence, err)
+	if err := readGone(left); err != nil {
+		t.Fatalf("the sleep, once within has given the push up: %v", err)
 	}
 }
 
@@ -1473,8 +1496,8 @@ func TestAPushStillRunningWhenItsTestEndsIsEndedWithIt(t *testing.T) {
 	}) {
 		t.Fatalf("the push's own test failed")
 	}
-	if presence, err := held.Presence(); err != nil || presence == agents.PresencePresent {
-		t.Fatalf("the parked rev-parse, process %d, is %v (%v) after the test that pushed ended", held.PID, presence, err)
+	if err := readGone(held); err != nil {
+		t.Fatalf("the parked rev-parse, after the test that pushed ended: %v", err)
 	}
 }
 
@@ -1531,7 +1554,28 @@ func TestTheEndOfAPushsTestFailsItOnlyWhenThePushIsNotShownEnded(t *testing.T) {
 	if len(passing.errors) != 0 {
 		t.Fatalf("a pass that read the push and ended it failed the test: %q", passing.errors)
 	}
-	if presence, err := stalled.Presence(); err != nil || presence == agents.PresencePresent {
-		t.Fatalf("the parked rev-parse, process %d, is %v (%v) after the second pass", stalled.PID, presence, err)
+	if err := readGone(stalled); err != nil {
+		t.Fatalf("the parked rev-parse, after the second pass: %v", err)
+	}
+}
+
+// readGone, which the checks here that a process was ended ask, is nil only
+// for a process read as gone (review round 5): a running process and one
+// whose presence cannot be read each fail it. The positive control is the
+// same process once it has been ended.
+func TestReadGoneIsNilOnlyForAProcessReadAsGone(t *testing.T) {
+	t.Parallel()
+	running := startBystander(t)
+	if err := readGone(running); err == nil {
+		t.Fatalf("readGone passed process %d while it runs", running.PID)
+	}
+	// An identity with no start time is one agents.Identity.Presence refuses
+	// to read, which is how a presence read fails here without a fake.
+	if err := readGone(agents.Identity{PID: running.PID}); !errors.Is(err, agents.ErrIdentityUnreadable) {
+		t.Fatalf("readGone answered %v for a process whose presence cannot be read; want that failure", err)
+	}
+	standin.Process{Identity: running}.End()
+	if err := readGone(running); err != nil {
+		t.Fatalf("readGone failed process %d once it was ended: %v", running.PID, err)
 	}
 }
