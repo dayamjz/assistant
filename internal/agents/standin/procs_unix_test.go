@@ -635,8 +635,14 @@ func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
 	if err := holder.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = holder.Process.Kill(); _ = holder.Wait() })
 	var sleepPID int
+	t.Cleanup(func() {
+		if sleepPID > 0 {
+			_ = syscall.Kill(sleepPID, syscall.SIGKILL)
+		}
+		_ = holder.Process.Kill()
+		_ = holder.Wait()
+	})
 	if _, err := fmt.Fscan(bufio.NewReader(out), &sleepPID); err != nil || sleepPID <= 0 {
 		t.Fatalf("the shell did not print its sleep's pid: %v, %d", err, sleepPID)
 	}
