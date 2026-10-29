@@ -102,8 +102,9 @@ func TestWriteHerdrFilesNamesTheLaunchFileAndRunsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading launch: %v", err)
 	}
-	if !strings.Contains(string(body), "exec \""+agent+"\" \"--flag\" \"value\"") {
-		t.Errorf("launch %q does not exec the agent with its args", body)
+	wantExec := "exec " + procgroup.ShellQuote(agent) + " " + procgroup.ShellQuote("--flag") + " " + procgroup.ShellQuote("value")
+	if !strings.Contains(string(body), wantExec) {
+		t.Errorf("launch %q does not exec the agent with shell-quoted args", body)
 	}
 	info, err := os.Stat(launch)
 	if err != nil || info.Mode()&0o111 == 0 {
@@ -124,6 +125,58 @@ func TestWriteHerdrFilesNamesTheLaunchFileAndRunsOnce(t *testing.T) {
 	}
 	if got, err := os.ReadFile(marker); err != nil || string(got) != "ran\n" {
 		t.Fatalf("after second run marker = %q (%v), want still one ran (run-once)", got, err)
+	}
+}
+
+// The launch file reaches the agent with each argument byte for byte when a
+// real shell runs it: $VAR, $(cmd), backticks, quotes, backslash, newline,
+// a leading dash and an empty string are not expanded or split. That is the
+// contract writeHerdrFiles states; strconv.Quote does not keep it.
+func TestWriteHerdrFilesPassesArgsThroughTheShellUnexpanded(t *testing.T) {
+	root := t.TempDir()
+	agent := filepath.Join(root, "agent")
+	argvFile := filepath.Join(root, "argv")
+	if err := procgroup.WriteProgram(agent, []byte("#!/bin/sh\nprintf '%s\\0' \"$@\" > \"$ARGV_FILE\"\n"), 0o755); err != nil {
+		t.Fatalf("WriteProgram agent: %v", err)
+	}
+	want := []string{
+		"$PR720_LITERAL",
+		"$(printf injected)",
+		"`printf tick`",
+		`it's`,
+		`say "hi"`,
+		`back\slash`,
+		"line\nbreak",
+		"-leading",
+		"",
+	}
+	h := agents.Herdr{Binary: "/usr/bin/true", Session: "quote", Root: filepath.Join(root, "worker")}
+	if err := agents.WriteHerdrFiles(h, agent, want); err != nil {
+		t.Fatalf("WriteHerdrFiles: %v", err)
+	}
+	cmd := exec.Command("/bin/sh", filepath.Join(h.Root, "launch"))
+	cmd.Env = append(os.Environ(),
+		"ARGV_FILE="+argvFile,
+		"PR720_LITERAL=expanded",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("running the launch file through /bin/sh: %v (%s)", err, out)
+	}
+	raw, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("reading argv: %v", err)
+	}
+	got := strings.Split(string(raw), "\x00")
+	if len(got) > 0 && got[len(got)-1] == "" {
+		got = got[:len(got)-1]
+	}
+	if len(got) != len(want) {
+		t.Fatalf("agent received %d args %q, want %d %q", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("arg %d = %q, want %q (shell expanded or altered it)", i, got[i], want[i])
+		}
 	}
 }
 

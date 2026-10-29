@@ -181,6 +181,8 @@ repository more than one round of review.
   something runs, tests included, is written by `procgroup.WriteProgram`
   (#539); the guard's `LoadWrites` test fails the build on any other mode it
   finds with an execute bit, or one it cannot read, outside `WriteExceptions`.
+  A word a POSIX shell will parse from a program this module wrote is quoted
+  with `procgroup.ShellQuote`, never a second quoter at a call site.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.

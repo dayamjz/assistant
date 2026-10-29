@@ -143,7 +143,10 @@ func requireHerdrVersion(ctx context.Context, binary string) error {
 // writeHerdrFiles writes the per-worker configuration and run-once launch
 // file under h.Root. The configuration names the launch file as the pane's
 // program; the launch file replaces itself with bin and args on first run
-// and exits without starting anything on a later run.
+// and exits without starting anything on a later run. Words on that launch
+// line are quoted with procgroup.ShellQuote so a POSIX shell that runs the
+// file passes each of bin and args to exec byte for byte: $VAR, $(cmd),
+// backticks, quotes, newlines and an empty string are not expanded or split.
 func writeHerdrFiles(h Herdr, bin string, args []string) error {
 	if err := h.Validate(); err != nil {
 		return err
@@ -160,10 +163,10 @@ func writeHerdrFiles(h Herdr, bin string, args []string) error {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "#!/bin/sh\nif [ -f %s ]; then\n  exit 0\nfi\n: > %s\nexec %s",
-		strconv.Quote(h.oncePath()), strconv.Quote(h.oncePath()), strconv.Quote(bin))
+		procgroup.ShellQuote(h.oncePath()), procgroup.ShellQuote(h.oncePath()), procgroup.ShellQuote(bin))
 	for _, a := range args {
 		b.WriteByte(' ')
-		b.WriteString(strconv.Quote(a))
+		b.WriteString(procgroup.ShellQuote(a))
 	}
 	b.WriteByte('\n')
 	if err := procgroup.WriteProgram(h.launchPath(), []byte(b.String()), 0o755); err != nil {
