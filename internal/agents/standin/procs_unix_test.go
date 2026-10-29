@@ -522,6 +522,7 @@ func TestAListingFindsWhatAMatchingProcessUnderARefusedShellStartsAsItExits(t *t
 	shell := exec.Command("/bin/sh", "-c",
 		`env "`+OwnerVar+`=`+value+`" "`+forkRecordVar+`=`+record+`" "$1" -test.run=^$ `+forkOnSignalArg+` & wait $!`,
 		"sh", self)
+	shell.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := shell.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -531,16 +532,21 @@ func TestAListingFindsWhatAMatchingProcessUnderARefusedShellStartsAsItExits(t *t
 	}
 	var child agents.Identity
 	var midPID int
+	// End everything this fixture starts even when the test fails: the shell,
+	// its mid child, and the process mid starts on SIGUSR1 (P15). Killing
+	// only the shell leaves mid/child running; the group Setpgid made is the
+	// belt when midPID or child is still unknown.
 	t.Cleanup(func() {
-		_ = shell.Process.Kill()
-		_ = shell.Wait()
+		if child.PID != 0 {
+			_ = syscall.Kill(child.PID, syscall.SIGKILL)
+		}
 		if midPID != 0 {
 			_ = syscall.Kill(midPID, syscall.SIGKILL)
 		}
-		if child.PID != 0 {
-			if presence, err := child.Presence(); err == nil && presence == agents.PresencePresent {
-				_ = syscall.Kill(child.PID, syscall.SIGKILL)
-			}
+		if shell.Process != nil {
+			_ = syscall.Kill(-shell.Process.Pid, syscall.SIGKILL)
+			_ = shell.Process.Kill()
+			_ = shell.Wait()
 		}
 	})
 	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
@@ -568,13 +574,28 @@ func TestAListingFindsWhatAMatchingProcessUnderARefusedShellStartsAsItExits(t *t
 				continue
 			}
 			pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
-			if id, found, err := agents.Identify(pid); err == nil && found {
+			if id, ok, err := agents.Identify(pid); err == nil && ok {
 				child = id
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if child.PID == 0 {
+			t.Error("the mid process recorded no child")
+			return
+		}
+		// Wait until mid is gone before the listing continues, as
+		// TestAListingFindsWhatAProcessStartsAsItExitsMidListing Waits its
+		// parent: otherwise on Linux mid is still Present after the child
+		// is born, the reading records mid as matched and settles without
+		// the child (ids ran before the birth). Ubuntu CI, run 40933801603.
+		for time.Now().Before(deadline) {
+			if _, running, err := agents.Identify(midPID); err == nil && !running {
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
-		t.Error("the mid process recorded no child")
+		t.Errorf("mid %d was still running after starting %v", midPID, child)
 	}}
 	foundList, err := processesWhere(table, carries(value))
 	if err != nil {
@@ -628,6 +649,7 @@ func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	holder := exec.Command("/bin/sh", "-c", `sleep 60 & echo $!; wait $!`)
+	holder.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	out, err := holder.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -636,12 +658,17 @@ func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	var sleepPID int
+	// End the shell and its sleep even when the test fails before sleepPID
+	// is known (P15): the group Setpgid made is signalled as a whole.
 	t.Cleanup(func() {
 		if sleepPID > 0 {
 			_ = syscall.Kill(sleepPID, syscall.SIGKILL)
 		}
-		_ = holder.Process.Kill()
-		_ = holder.Wait()
+		if holder.Process != nil {
+			_ = syscall.Kill(-holder.Process.Pid, syscall.SIGKILL)
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}
 	})
 	if _, err := fmt.Fscan(bufio.NewReader(out), &sleepPID); err != nil || sleepPID <= 0 {
 		t.Fatalf("the shell did not print its sleep's pid: %v, %d", err, sleepPID)
