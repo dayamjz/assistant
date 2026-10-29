@@ -43,14 +43,15 @@ import (
 // again when a landed task's terminal is next observed Dead, from the
 // supervisor's pass and from task.stop.
 //
-// An investigation task's copy is cleaned up once its report is stored. The
-// report arrives from the task's worker over its route, as task.event's
-// report kind, which workers.go hands to route.go's fileReport, and
-// storeTaskReport stores it through internal/tasks and then asks for the
-// cleanup. The worker that filed it is usually still running then, so that
-// first ask is refused with the live terminal and keeps the copy; landed.go's
-// pass asks again once the terminal is observed Dead, on the terms it states
-// for a reported investigation, and that is the ask that removes the copy.
+// An investigation task's copy is not cleaned up when its report is
+// stored. The report arrives from the task's worker over its route, as
+// task.event's report kind, which workers.go hands to route.go's
+// fileReport, and storeTaskReport stores it through internal/tasks; the
+// copy is then kept for a promotion, whose relaunch after promotion_window
+// is in that same copy, on landed.go's terms for a reported investigation.
+// Its cleanup is asked once the coordinator records its findings relayed,
+// which moves the task into the terminal tier, through settleLanded and
+// the supervisor's pass.
 //
 // Both task-copy sites hand internal/tasks the terminal's liveness as the
 // service's task reader resolved it, Basis.Process of the resolution the
@@ -82,7 +83,10 @@ import (
 // stay on disk as a log line. Every site above hands such a refusal to
 // keepWork, the one place a kept copy becomes a kept work entry
 // (store.KeptWork, written by internal/tasks' Keep); recovery reaches it too,
-// through reclaimAtRecovery, for a finished run whose copy still stands. What
+// through reclaimAtRecovery, for a finished run whose copy still stands, and
+// so does landed.go's endWindow, for a reported investigation's copy kept
+// once its worker is ended, past promotion_window or inside it, which is
+// not a refusal. What
 // surfaces the entry is the supervisor loop, as a kept-work wake about the
 // task the entry's owner is or is attributed to, or about the entry itself
 // when no task names it, and the status and catch-up reads, which list
@@ -100,17 +104,20 @@ import (
 // rather than at the next release. An answer is keptanswer.go's, and it asks
 // for a dispatch the same way.
 
-// keepWork records the kept work entry for a kept copy and logs what came of
-// it. It is the one call a site makes for a copy kept because its work has
-// not landed, and the call meant for an investigation's copy kept past
-// promotion_window, with tasks.KeptPromotionWindow as the reason, which
-// #438 adds. A write
+// keepWork records the kept work entry for a kept copy, logs what came of
+// it, and reports whether the keep was settled: an entry recorded, found or
+// established, or a copy read as holding nothing the default branch lacks.
+// It is the one call a site
+// makes for a copy kept because its work has not landed, and the call
+// landed.go's endWindow makes for an investigation's copy kept once its
+// worker is ended, with tasks.KeptPromotionWindow or
+// tasks.KeptPromotionWorkerEnded as the reason. A write
 // that failed is logged and refuses nothing, because the copy is kept either
 // way and the next cleanup of it asks again; an entry already recorded for
 // the copy and its commits is logged as such and written again nowhere; and
 // a copy internal/tasks reads as holding nothing the default branch lacks
 // is logged and records no entry, because nothing in it is at risk.
-func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
+func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) bool {
 	owner := "task " + kept.Task
 	if kept.Run != "" {
 		owner = "run " + kept.Run
@@ -119,6 +126,7 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	switch {
 	case err != nil:
 		s.log.Printf("the isolated copy of %s is kept and its kept work entry could not be recorded: %v", owner, err)
+		return false
 	case got.NothingKept:
 		s.log.Printf("the isolated copy of %s holds nothing the default branch at %s lacks, so no kept work entry is recorded",
 			owner, got.Against)
@@ -130,6 +138,7 @@ func (s *Service) keepWork(ctx context.Context, kept tasks.Kept) {
 	default:
 		s.log.Printf("the isolated copy of %s is already kept work entry %d", owner, got.Entry.ID)
 	}
+	return true
 }
 
 // releaseStaleRemovals releases every repository removal reservation whose
@@ -323,12 +332,10 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 
 // storeTaskReport stores an investigation task's report through
 // internal/tasks, publishes the holds it registered and the history entry
-// that claims Reported at internal/taskstate's event tier, asks for its
-// copy's cleanup, and then releases what is queued behind the task, through
-// releaseInBackground. It returns what the store refused; the cleanup's
-// answer goes to the log on this file's terms, and a task whose terminal
-// could not be read after the report was stored is a cleanup not asked for
-// rather than one asked with a stated liveness.
+// that claims Reported at internal/taskstate's event tier, and then
+// releases what is queued behind the task, through releaseInBackground. It
+// returns what the store refused. It asks no cleanup of the task's copy,
+// which is kept for a promotion on this file's terms.
 //
 // The release follows the stored report and not the history entry or a log
 // line (P8): it is asked only once StoreReport has returned the row, which
@@ -350,14 +357,6 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 		s.publishHoldState(h)
 	}
 	s.publishTaskEvent(stored.Event)
-	resolved, err := s.tasks().Resolved(ctx, taskID)
-	if err != nil {
-		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)
-		s.releaseInBackground()
-		return stored, nil
-	}
-	done, err := s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: resolved.State.Basis.Process})
-	s.logCleanup(ctx, done, err)
 	s.releaseInBackground()
 	return stored, nil
 }

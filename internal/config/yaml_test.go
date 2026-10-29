@@ -45,6 +45,7 @@ stall_inspection_count: 5
 stall_hold_count: 4
 relaunch_attempts: 3
 stop_grace: 45s
+promotion_window: 2h
 command_timeout: 45m
 git_deadline: 20m
 gh_deadline: 3m
@@ -107,6 +108,7 @@ const wholeSchemaJSON = `{
 	"stall_hold_count": 4,
 	"relaunch_attempts": 3,
 	"stop_grace": "45s",
+	"promotion_window": "2h",
 	"command_timeout": "45m",
 	"git_deadline": "20m",
 	"gh_deadline": "3m",
