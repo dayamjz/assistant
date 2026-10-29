@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -116,6 +117,61 @@ func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, erro
 	return out, nil
 }
 
+// TasksOfRun is every task whose TaskSnapshot attributes the run to it, as
+// of one point in time: the task naming the run, and each task of the run's
+// repository and branch whose snapshot reads the run as its by the branch.
+// It is that reading inverted and decided by the same code (runsOf), so the
+// two cannot disagree. It is empty for a run no task's snapshot attributes,
+// a person's run of their own branch among them, and it can name more than
+// one task, as the snapshots can: a task naming the run and another reading
+// it by the branch, or two tasks whose latest attempts began at the same
+// instant. internal/service reads it to decide whether a run is a
+// housekeeping pass's (PRD section 6), so a run of a branch a retired pass
+// used, started after another task's attempt took the branch, is that
+// task's and not the pass's.
+func (s *Store) TasksOfRun(ctx context.Context, run Run) ([]Task, error) {
+	var out []Task
+	err := s.snapshotTx(ctx, func(q querier) error {
+		rows, err := q.QueryContext(ctx, taskColumns+` FROM task WHERE run_id = ? OR (repository_id = ? AND branch = ?)
+			ORDER BY created_at DESC, id DESC`, run.ID, run.RepositoryID, run.Branch)
+		if err != nil {
+			return err
+		}
+		var candidates []Task
+		for rows.Next() {
+			t, err := scanTask(rows)
+			if err != nil {
+				_ = rows.Close()
+				return err
+			}
+			candidates = append(candidates, t)
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, t := range candidates {
+			attempts, err := taskAttemptsOf(ctx, q, t.ID)
+			if err != nil {
+				return err
+			}
+			runs, err := runsOf(ctx, q, t, attempts)
+			if err != nil {
+				return err
+			}
+			if slices.ContainsFunc(runs, func(r Run) bool { return r.ID == run.ID }) {
+				out = append(out, t)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the tasks run %s is attributed to: %w", run.ID, err)
+	}
+	return out, nil
+}
+
 // TaskSnapshots reads every task as TaskSnapshot does, newest task first, all
 // as of one point in time.
 func (s *Store) TaskSnapshots(ctx context.Context) ([]TaskSnapshot, error) {
@@ -174,15 +230,13 @@ func (s *Store) snapshotTx(ctx context.Context, fn func(q querier) error) error 
 	return fn(tx)
 }
 
-func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error) {
-	snap := TaskSnapshot{Task: task}
-
-	attempts, err := taskAttemptsOf(ctx, q, task.ID)
-	if err != nil {
-		return TaskSnapshot{}, err
-	}
-	snap.Attempts = attempts
-
+// runsOf is the one statement of which runs are a task's, TaskSnapshot's
+// attribution on its doc comment's terms, read inside q's transaction:
+// TaskSnapshot reads a task's runs through it and TasksOfRun inverts it, so
+// the two cannot disagree. attempts is the task's attempts in sequence
+// order. The runs are newest first.
+func runsOf(ctx context.Context, q querier, task Task, attempts []TaskAttempt) ([]Run, error) {
+	var out []Run
 	// A task with no attempt is attributed nothing by its branch, so only the
 	// run it names is read. With one, a NULL on either side of an equality is
 	// not true, so a task with no branch still matches no run by branch.
@@ -200,21 +254,38 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 	}
 	rows, err := q.QueryContext(ctx, query+` ORDER BY created_at DESC, id DESC`, args...)
 	if err != nil {
-		return TaskSnapshot{}, err
+		return nil, err
 	}
 	for rows.Next() {
 		r, err := scanRun(rows)
 		if err != nil {
 			_ = rows.Close()
-			return TaskSnapshot{}, err
+			return nil, err
 		}
-		snap.Runs = append(snap.Runs, r)
+		out = append(out, r)
 	}
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error) {
+	snap := TaskSnapshot{Task: task}
+
+	attempts, err := taskAttemptsOf(ctx, q, task.ID)
+	if err != nil {
 		return TaskSnapshot{}, err
 	}
+	snap.Attempts = attempts
+
+	runs, err := runsOf(ctx, q, task, attempts)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snap.Runs = runs
 
 	// One read per attributed run, skipping a run with no record, inside the
 	// same transaction as the runs and through the column list and scanner
@@ -281,8 +352,8 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		snap.Retirement = Known(retirement)
 	}
 
-	query = holdColumns + ` FROM hold WHERE task_id = ?`
-	args = []any{task.ID}
+	query := holdColumns + ` FROM hold WHERE task_id = ?`
+	args := []any{task.ID}
 	if len(snap.Runs) > 0 {
 		marks := make([]string, len(snap.Runs))
 		for i, r := range snap.Runs {
@@ -291,7 +362,7 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		}
 		query += ` OR run_id IN (` + strings.Join(marks, ",") + `)`
 	}
-	rows, err = q.QueryContext(ctx, query+` ORDER BY opened_at, key`, args...)
+	rows, err := q.QueryContext(ctx, query+` ORDER BY opened_at, key`, args...)
 	if err != nil {
 		return TaskSnapshot{}, err
 	}

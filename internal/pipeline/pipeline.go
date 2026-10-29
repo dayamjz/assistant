@@ -420,6 +420,10 @@ type Start struct {
 	// so the pull request and checks stages skip after push. Begin sets it
 	// from forge.ClassifyRemote; a caller does not invent it.
 	NoCodeHost bool
+	// HousekeepingPass says the run is of a housekeeping pass's branch, on
+	// KeyHousekeepingPass's terms, whoever pushed it. internal/service sets
+	// it at begin from the task records; a caller does not invent it.
+	HousekeepingPass bool
 }
 
 // NewState returns the initial state for a run. It refuses a start that does
@@ -458,5 +462,6 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		string(KeyIntentSupplied):   graph.BoolValue(s.IntentSupplied),
 		string(KeySkip):             graph.ListValue(skip...),
 		string(KeyNoCodeHost):       graph.BoolValue(s.NoCodeHost),
+		string(KeyHousekeepingPass): graph.BoolValue(s.HousekeepingPass),
 	})
 }
