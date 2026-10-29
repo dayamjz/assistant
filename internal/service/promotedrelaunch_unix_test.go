@@ -3,6 +3,7 @@
 package service_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,11 +102,39 @@ func (inv investigation) reportedAfter(t *testing.T, running serviceUnderTest, b
 	}
 	w := launched{running: running, home: inv.home, repository: inv.repository, task: inv.task,
 		group: session.Reference().PID, provider: provider, session: session}
-	if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: filedReport}); code != "" {
-		t.Fatalf("the worker's report was refused with %q", code)
-	}
-	waitState(t, running.client, inv.task, "read Reported from its report", reportedFromTheReport(taskstate.Live))
+	fileReportAsWorker(t, w)
+	// Under a one-second promotion_window the worker may already be ended
+	// by the first read, so either terminal reading is the report tier's
+	// answer.
+	waitState(t, running.client, inv.task, "read Reported from its report", func(r taskstate.Resolution) bool {
+		return reportedFromTheReport(taskstate.Live)(r) || reportedFromTheReport(taskstate.Dead)(r)
+	})
 	return w
+}
+
+// fileReportAsWorker has the task's worker file filedReport over its route,
+// as task.event's report kind, and does not wait to read the worker's answer
+// back. Under a short promotion_window the stored report starts the window,
+// and the window's end can end the worker before that answer is read (CI run
+// 40615559323 read the capture after the session was closed). Whether the
+// report was stored is read from the task's resolution instead, by the
+// waitState that follows in reportedAfter; a refused report never resolves
+// Reported and fails there.
+func fileReportAsWorker(t *testing.T, w launched) {
+	t.Helper()
+	body, err := json.Marshal(machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: filedReport})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "params.json")
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	command := fmt.Sprintf(": call %d; %s \"$(cat %s)\"", shellCalls.Add(1),
+		shellQuote(testCommand(t), callVerb, w.running.service.Socket(), string(ipc.MethodTaskEvent)), shellQuote(file))
+	if err := w.provider.Send(t.Context(), w.session, shellMarker+command); err != nil {
+		t.Fatalf("sending the worker its report: %v", err)
+	}
 }
 
 // promote promotes the task from this process, outside every worker group.
@@ -114,16 +143,25 @@ func (inv investigation) promote(t *testing.T, running serviceUnderTest, branch 
 	return inv.promoteWith(t, running, branch, "Cache each parse.")
 }
 
-// promoteWith is promote with the intent stated.
+// promoteWith is promote with the intent stated. A promotion refused as in
+// flight is asked again, on promoteTask's terms: the supervisor's pass holds
+// the task's slot while it ends a worker or keeps or removes a copy, and a
+// test that saw the outcome of that work can ask before the pass has given
+// the slot back (CI run 40645974701).
 func (inv investigation) promoteWith(t *testing.T, running serviceUnderTest, branch, intent string) machine.TaskPromoted {
 	t.Helper()
 	var promoted machine.TaskPromoted
-	if err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
-		Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
-	}, &promoted); err != nil {
-		t.Fatalf("task.promote: %v", err)
+	for deadline := time.Now().Add(launchWait); ; time.Sleep(50 * time.Millisecond) {
+		err := running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
+			Task: inv.task, Repository: inv.repository.ID, Branch: branch, Intent: intent,
+		}, &promoted)
+		if err == nil {
+			return promoted
+		}
+		if !strings.Contains(err.Error(), "in flight") || !time.Now().Before(deadline) {
+			t.Fatalf("task.promote: %v", err)
+		}
 	}
-	return promoted
 }
 
 // copyStands fails the test unless the task's copy is still a directory.
