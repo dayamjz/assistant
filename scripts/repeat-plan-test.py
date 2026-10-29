@@ -3,7 +3,10 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -20,6 +23,63 @@ def run(*paths, output=None):
     args = [sys.executable, str(SCRIPT)] + (["--github-output", output] if output else [])
     result = subprocess.run(args, input="\n".join(paths) + "\n", capture_output=True, text=True, check=True)
     return json.loads(result.stdout)
+
+
+# Discovery's timeout, scaled down, for a listing that stalls.
+STALL_TIMEOUT = 5.0
+
+
+def stalled_listing(test, escapee=False):
+    """A module whose `go test -list` stalls in a -toolexec wrapper, and the
+    environment that selects it. The wrapper ignores SIGTERM, so only SIGKILL
+    to its group ends it, and records its pid in stall.pid; with escapee it
+    first starts a process in a session of its own, outside that group,
+    which records its pid in escapee.pid."""
+    root = Path(tempfile.mkdtemp(prefix="repeat-plan-stall-"))
+    test.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
+    (root / "go.mod").write_text("module example.com/stalllist\n\ngo 1.25.0\n")
+    (root / "x_test.go").write_text(
+        'package stalllist\n\nimport "testing"\n\nfunc TestA(t *testing.T) {}\n'
+    )
+    lines = ["#!/bin/sh", "trap '' TERM"]
+    if escapee:
+        record = shlex.quote(str(root / "escapee.pid"))
+        code = ("import os, pathlib, sys, time; os.setsid(); "
+                "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(600)")
+        lines += [f"{shlex.quote(sys.executable)} -c {shlex.quote(code)} {record} "
+                  "</dev/null >/dev/null 2>&1 &",
+                  f"while [ ! -s {record} ]; do sleep 0.1; done"]
+    lines += [f"echo $$ > {shlex.quote(str(root / 'stall.pid'))}", "exec sleep 600"]
+    wrapper = root / "stall-toolexec"
+    wrapper.write_text("\n".join(lines) + "\n")
+    wrapper.chmod(0o755)
+    return root, dict(os.environ, GOFLAGS=f"-toolexec={wrapper}")
+
+
+def recorded_pid(path):
+    """The pid a stalled listing's process wrote to path, or None if it never
+    got that far."""
+    return int(path.read_text().strip()) if path.exists() else None
+
+
+def running(pid):
+    """Whether pid is still there; signal 0 signals nothing."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def end_survivor(pid):
+    """SIGKILL pid if it is still running, and say whether it was."""
+    if pid is None or not running(pid):
+        return False
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    return True
 
 
 class PlanTest(unittest.TestCase):
@@ -61,6 +121,75 @@ class PlanTest(unittest.TestCase):
         with tempfile.NamedTemporaryFile("r", suffix=".txt") as out:
             run("internal/service/a.go", output=out.name)
             self.assertEqual(Path(out.name).read_text(), "run=true\npackages=./internal/service\nleak_check_tests=false\n")
+
+    def test_list_tests_failure_keeps_go_stderr_and_exit_code(self):
+        # A silent CalledProcessError hid the runner's process-table error (#727).
+        class result:
+            returncode = 1
+            stderr = "listing processes: permission denied\n"
+            stdout = ""
+
+        def fake_run(cmd, **kwargs):
+            self.assertIn("-race", cmd)
+            return result
+
+        with self.assertRaises(RuntimeError) as ctx:
+            repeat_plan.list_tests("./internal/service", runner=fake_run)
+        message = str(ctx.exception)
+        self.assertIn("exited 1", message)
+        self.assertIn("permission denied", message)
+        self.assertIn("-race", message)
+
+    def test_list_tests_includes_a_race_only_test(self):
+        # Discovery without -race omits //go:build race tests, so a list taken
+        # that way misses tests scripts/ci-test.sh runs (#727 review).
+        root = Path(tempfile.mkdtemp(prefix="repeat-plan-race-"))
+        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
+        (root / "go.mod").write_text("module example.com/racelist\n\ngo 1.25.0\n")
+        (root / "plain_test.go").write_text(
+            'package racelist\n\nimport "testing"\n\nfunc TestPlain(t *testing.T) {}\n'
+        )
+        (root / "race_test.go").write_text(
+            '//go:build race\n\npackage racelist\n\nimport "testing"\n\n'
+            "func TestRaceOnly(t *testing.T) {}\n"
+        )
+        without = repeat_plan.run_discovery(["go", "test", "-list", "^Test", "."], cwd=root)
+        self.assertEqual(without.returncode, 0, without.stderr)
+        without_names = {line for line in without.stdout.splitlines() if line.startswith("Test")}
+        self.assertIn("TestPlain", without_names)
+        self.assertNotIn("TestRaceOnly", without_names)
+
+        names = set(repeat_plan.list_tests(".", cwd=root))
+        self.assertIn("TestPlain", names)
+        self.assertIn("TestRaceOnly", names)
+
+    def test_a_discovery_timeout_ends_its_group_and_says_what_it_does_not(self):
+        # Discovery ends its process group, a member that ignores SIGTERM
+        # included, and says nothing in it is left only once the group is
+        # gone. A process the stalled wrapper started with setsid is outside
+        # the group: it runs on, and the error says so, so the error claims
+        # no more than the group end does (#727 review, P15).
+        root, env = stalled_listing(self, escapee=True)
+        with self.assertRaises(RuntimeError) as ctx:
+            repeat_plan.list_tests(".", cwd=root, timeout=STALL_TIMEOUT, env=env)
+        escapee = recorded_pid(root / "escapee.pid")
+        if escapee is not None:
+            self.addCleanup(end_survivor, escapee)
+        stall = recorded_pid(root / "stall.pid")
+        self.assertIsNotNone(stall, "the listing never reached its stalled wrapper")
+        self.assertFalse(end_survivor(stall), f"stalled wrapper {stall} outlived discovery's timeout")
+        self.assertIsNotNone(escapee, "the wrapper never started its setsid process")
+        self.assertTrue(running(escapee), "the setsid process the error says is not ended has ended")
+        message = str(ctx.exception)
+        self.assertIn("discovery timed out", message)
+        self.assertIn("nothing in it is left", message)
+        self.assertIn("(setsid, setpgid) is outside that group and is not ended", message)
+
+    def test_a_reaped_leader_is_not_signalled(self):
+        # Once reaped, the leader's pid may name another group (P15).
+        proc = subprocess.Popen(["true"], start_new_session=True)
+        proc.wait()
+        self.assertTrue(repeat_plan.end_process_group(proc).startswith("not signalled"))
 
     def test_every_covered_package_exists(self):
         root = SCRIPT.parent.parent

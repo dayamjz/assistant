@@ -16,13 +16,19 @@ or a flake in the week before the gate existed, almost always in that
 package's own tests. A change to a package outside it, or to a file that is
 not Go source or test data, runs nothing. A change to the gate itself runs
 every package here, so the gate's own pull request shows it working.
+
+list_tests names a package's top-level tests as `go test -race -list`
+builds them on this machine, under a deadline that ends go's process group
+(run_discovery). plan does not list.
 """
 
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
+import time
 
 RISKY = {
     "internal/agents/standin": "#549 #558 #561 failed in its own tests after a change to it; #569 #459",
@@ -36,6 +42,10 @@ LEAK_CHECK = {
     "scripts/leak-check-test.py": "#553",
 }
 GATE = {".github/workflows/repeat.yml", "scripts/repeat-plan.py"}
+
+# The build mode scripts/ci-test.sh runs: without -race, //go:build race
+# tests are absent from the list (#727 review).
+LIST_FLAGS = ("-race",)
 
 
 def package_of(path):
@@ -54,6 +64,134 @@ def changed_paths(base, head):
     out = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", f"{base}...{head}"],
                          capture_output=True, text=True, check=True, timeout=120).stdout
     return [path for path in out.split("\0") if path]
+
+
+# How long discovery's `go test -list` may run before its process group is
+# ended, and how long that group gets after SIGTERM before SIGKILL and after
+# SIGKILL to be gone. A bound around discovery exceeds discovery_bound.
+DISCOVERY_TIMEOUT = 300.0
+DISCOVERY_KILL_GRACE = 2.0
+
+
+def discovery_bound(timeout=DISCOVERY_TIMEOUT):
+    """The longest run_discovery waits with this timeout: the timeout, then
+    end_process_group's two graces. Polling and the interpreter's own time
+    are not in it, so a bound around discovery exceeds this by a margin of
+    its own; one that does not can kill the planner first and leave go's
+    group running with nothing to end it (#727)."""
+    return timeout + 2 * DISCOVERY_KILL_GRACE
+
+
+def _group_present(pgid):
+    """Whether any process is in group pgid. Signal 0 signals nothing; kill(2)
+    answers ESRCH when no process is in the group and EPERM when one is there
+    that this user may not signal."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def end_process_group(proc, grace=DISCOVERY_KILL_GRACE):
+    """End the process group proc leads, started with start_new_session, and
+    say how far that got.
+
+    Both signals go to the group only while proc is unreaped (its returncode
+    unset), when its pid names that group and no other (internal/procgroup's
+    package comment says why): SIGTERM, then SIGKILL after grace whether or
+    not anything is left. Then proc is reaped and the group polled with
+    signal 0 until nothing answers, within one more grace. A process that
+    left the group, by setsid or setpgid of its own, is not in it: no signal
+    here reaches it, and the answer does not count it.
+    """
+    pgid = proc.pid
+    if proc.returncode is not None:
+        return "not signalled; its leader was already reaped, so its id may name another group"
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass  # What is left is read below.
+        if sig == signal.SIGTERM:
+            time.sleep(grace)
+    sent = f"SIGTERM, then SIGKILL {grace:g}s later"
+    deadline = time.monotonic() + grace
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return f"{sent}; its leader had not exited {grace:g}s after SIGKILL"
+    while _group_present(pgid):
+        if time.monotonic() >= deadline:
+            return f"{sent}; a process was still in it {grace:g}s after SIGKILL"
+        time.sleep(0.05)
+    return f"{sent}; nothing in it is left"
+
+
+def run_discovery(cmd, timeout=DISCOVERY_TIMEOUT, cwd=None, env=None):
+    """Run cmd (go test -list) as the leader of a new session and process
+    group, and answer as subprocess.run does.
+
+    subprocess.run's timeout ends only `go`, and the compiler, linker or test
+    binary it started runs on (#727). Here a timeout ends go's process group
+    (end_process_group) before raising, and the error says how far that got.
+    That is all it ends: a descendant that started a session or group of its
+    own (setsid, setpgid) is outside the group and runs on. Nothing in this
+    repository ends or reports it: CI runs discovery only in steps before
+    scripts/ci-test.sh's, outside its Linux PID namespace, and its leak
+    check reports only what is new once its own run has begun.
+    discovery_bound(timeout) is the longest this waits.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=cwd,
+        env=env,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        ended = end_process_group(proc)
+        proc.stdout.close()
+        proc.stderr.close()
+        raise RuntimeError(
+            f"discovery timed out after {timeout:g}s; process group {proc.pid}: {ended}. "
+            f"A descendant that started a session or group of its own (setsid, setpgid) "
+            f"is outside that group and is not ended: {' '.join(cmd)}"
+        ) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+def list_tests(package, runner=None, cwd=None, timeout=DISCOVERY_TIMEOUT, env=None):
+    """Top-level Test names in package from `go test -race -list` on this OS.
+
+    Real runs use run_discovery, so a timeout ends go's process group and
+    what stayed in it, not only `go` (P15, #727); run_discovery says what
+    that leaves. runner is an optional test double that returns a
+    CompletedProcess-like object; cwd and env are the listing's directory
+    and environment. On failure the error always includes Go's exit code and
+    stderr (or stdout if stderr is empty), so a CI log names the cause
+    rather than only CalledProcessError (#727).
+    """
+    cmd = ["go", "test", *LIST_FLAGS, "-list", "^Test", package]
+    if runner is not None:
+        proc = runner(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
+    else:
+        proc = run_discovery(cmd, timeout=timeout, cwd=cwd, env=env)
+    if proc.returncode != 0:
+        detail = (proc.stderr or "").strip() or (proc.stdout or "").strip() or "(no output)"
+        raise RuntimeError(
+            f"{' '.join(cmd)} exited {proc.returncode}: {detail}"
+        )
+    names = [line for line in proc.stdout.splitlines() if line.startswith("Test")]
+    if not names:
+        raise RuntimeError(f"{' '.join(cmd)} printed no Test names")
+    return names
 
 
 def plan(paths):
