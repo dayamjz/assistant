@@ -498,3 +498,288 @@ func TestAProcessWhoseArgumentsReadEmptyIsReadAgain(t *testing.T) {
 		t.Fatalf("the listing read the table %d time(s); want the reading that met the empty argument list unsettled", table.readings)
 	}
 }
+
+// A matching process whose parent is a refused shell, and that starts
+// another matching process as it exits mid-listing, is found on a later
+// reading (P15, #735 r1 finding 1): match is not ancestry, so the shell's
+// refusal must not settle the matching process's unread exit. The parent
+// here is a real /bin/sh that only waits; the mid process is this binary
+// started as the shell's child with the owner identity, and exitMidRead
+// ends it after the environment match. With the parent-outside shortcut
+// the first reading settled empty while the child ran. The control is that
+// the mid exit fired inside the listing and the child was still running.
+func TestAListingFindsWhatAMatchingProcessUnderARefusedShellStartsAsItExits(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := fmt.Sprintf("refused-shell-%d-%d", os.Getpid(), time.Now().UnixNano())
+	record := filepath.Join(t.TempDir(), "child")
+	// Shell stays as parent: it starts mid with the owner identity in mid's
+	// environment only (env), so carrying refuses the shell and accepts mid.
+	shell := exec.Command("/bin/sh", "-c",
+		`env "`+OwnerVar+`=`+value+`" "`+forkRecordVar+`=`+record+`" "$1" -test.run=^$ `+forkOnSignalArg+` & wait $!`,
+		"sh", self)
+	shell.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := shell.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shell.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var child agents.Identity
+	var midPID int
+	// End everything this fixture starts even when the test fails: the shell,
+	// its mid child, and the process mid starts on SIGUSR1 (P15). Killing
+	// only the shell leaves mid/child running; the group Setpgid made is the
+	// belt when midPID or child is still unknown.
+	t.Cleanup(func() {
+		if child.PID != 0 {
+			_ = syscall.Kill(child.PID, syscall.SIGKILL)
+		}
+		if midPID != 0 {
+			_ = syscall.Kill(midPID, syscall.SIGKILL)
+		}
+		if shell.Process != nil {
+			_ = syscall.Kill(-shell.Process.Pid, syscall.SIGKILL)
+			_ = shell.Process.Kill()
+			_ = shell.Wait()
+		}
+	})
+	if line, err := bufio.NewReader(out).ReadString('\n'); err != nil || line != "ready\n" {
+		t.Fatalf("the mid process said %q (%v) before it was ready", line, err)
+	}
+	// Mid is the shell's child: the one carrying the owner identity.
+	listed, err := carrying(value)
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("finding the mid process under the shell: %v, %v", listed, err)
+	}
+	midPID = listed[0].PID
+	lineage, found, err := agents.ReadLineage(midPID)
+	if err != nil || !found || lineage.Parent != shell.Process.Pid {
+		t.Fatalf("mid %d parent is %v (found %v, %v), want shell %d so the refused parent is real",
+			midPID, lineage.Parent, found, err, shell.Process.Pid)
+	}
+
+	table := &exitMidRead{pid: midPID, exit: func() {
+		_ = syscall.Kill(midPID, syscall.SIGUSR1)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			raw, err := os.ReadFile(record)
+			if err != nil {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			pid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+			if id, ok, err := agents.Identify(pid); err == nil && ok {
+				child = id
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if child.PID == 0 {
+			t.Error("the mid process recorded no child")
+			return
+		}
+		// Wait until mid is gone before the listing continues, as
+		// TestAListingFindsWhatAProcessStartsAsItExitsMidListing Waits its
+		// parent: otherwise on Linux mid is still Present after the child
+		// is born, the reading records mid as matched and settles without
+		// the child (ids ran before the birth). Ubuntu CI, run 40933801603.
+		for time.Now().Before(deadline) {
+			if _, running, err := agents.Identify(midPID); err == nil && !running {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Errorf("mid %d was still running after starting %v", midPID, child)
+	}}
+	foundList, err := processesWhere(table, carries(value))
+	if err != nil {
+		t.Fatalf("listing: %v", err)
+	}
+	if !table.fired {
+		t.Fatal("the mid process's environment was never read, so its exit did not fall inside the listing")
+	}
+	if child.PID == 0 {
+		t.Fatal("the process the mid started was gone before the listing returned")
+	}
+	if !slices.ContainsFunc(foundList, func(p Process) bool { return p.Identity == child }) {
+		t.Errorf("the listing is %v, without the process %v the matching mid started as it exited under a refused shell; a parent-outside settle returns empty here", foundList, child)
+	}
+	if presence, err := child.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the child %v was not running once the listing returned (%v, %v)", child, presence, err)
+	}
+}
+
+// eioChildOfShell is a processTable that passes every read through to the
+// kernel except commandLine and environment of child, which fail with EIO
+// (the shape #549 and #735 r1 finding 2 use), while parent is a refused
+// shell that owns child.
+type eioChildOfShell struct {
+	kernel
+	parent, child int
+}
+
+func (t *eioChildOfShell) commandLine(pid int) (string, []string, error) {
+	if pid == t.child {
+		return "", nil, syscall.EIO
+	}
+	return t.kernel.commandLine(pid)
+}
+
+func (t *eioChildOfShell) environment(pid int) ([]string, error) {
+	if pid == t.child {
+		return nil, syscall.EIO
+	}
+	return t.kernel.environment(pid)
+}
+
+// A failed read of this user's running process under a refused shell still
+// unsettles the reading (P15, #735 r1 finding 2): the shell here is real and
+// owns a real sleep; every command-line read of the sleep fails with EIO;
+// match refuses both. The parent-outside shortcut settled the sleep's failed
+// read through the shell and returned empty while the sleep still ran. The
+// control is that the sleep is still running once the listing returns an
+// unsettledError naming it.
+func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	holder := exec.Command("/bin/sh", "-c", `sleep 60 & echo $!; wait $!`)
+	holder.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := holder.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := holder.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var sleepPID int
+	// End the shell and its sleep even when the test fails before sleepPID
+	// is known (P15): the group Setpgid made is signalled as a whole.
+	t.Cleanup(func() {
+		if sleepPID > 0 {
+			_ = syscall.Kill(sleepPID, syscall.SIGKILL)
+		}
+		if holder.Process != nil {
+			_ = syscall.Kill(-holder.Process.Pid, syscall.SIGKILL)
+			_ = holder.Process.Kill()
+			_ = holder.Wait()
+		}
+	})
+	if _, err := fmt.Fscan(bufio.NewReader(out), &sleepPID); err != nil || sleepPID <= 0 {
+		t.Fatalf("the shell did not print its sleep's pid: %v, %d", err, sleepPID)
+	}
+	lineage, found, err := agents.ReadLineage(sleepPID)
+	if err != nil || !found || lineage.Parent != holder.Process.Pid {
+		t.Fatalf("sleep %d parent is %v (found %v, %v), want shell %d", sleepPID, lineage.Parent, found, err, holder.Process.Pid)
+	}
+	table := &eioChildOfShell{parent: holder.Process.Pid, child: sleepPID}
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+	_, err = processesWhere(table, refuseAll)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.PID != sleepPID || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("listing = %v; want unsettled naming sleep %d and EIO (a parent-outside settle returns nil here)", err, sleepPID)
+	}
+	if err := syscall.Kill(sleepPID, 0); err != nil {
+		t.Fatalf("sleep %d was not running once the listing returned (%v)", sleepPID, err)
+	}
+}
+
+// unreadGoneEachReadingBesideMatched names only a real matched process and,
+// each reading, a fresh pid that identify reports as not running: the
+// unread-exit shape. The matched process is a real sleep so Identity.Presence
+// is the kernel's (#735 r1 finding 3).
+type unreadGoneEachReadingBesideMatched struct {
+	kernel
+	matched  int
+	readings int
+	gone     int
+}
+
+func (u *unreadGoneEachReadingBesideMatched) ids() ([]int, error) {
+	u.readings++
+	u.gone = 80_000 + u.readings
+	return []int{u.matched, u.gone}, nil
+}
+
+func (u *unreadGoneEachReadingBesideMatched) identify(pid int) (agents.Identity, bool, error) {
+	if pid == u.gone {
+		return agents.Identity{}, false, nil
+	}
+	return u.kernel.identify(pid)
+}
+
+// An unread exit beside a matched process still unsettles (P15, #735 r1
+// finding 3 / #722 control): the matched process is a real sleep (so
+// Presence is not a fabricated identity), and every reading also names a
+// pid that is already gone. If unread-first-time exits were ignored, the
+// listing would settle with only the sleep. The control is that removing
+// that unsettle leaves readings == 1 and a non-error return (checked in
+// REPORT.md fail-before); with it, all 64 readings unsettle.
+func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	id, found, err := agents.Identify(sleeper.Process.Pid)
+	if err != nil || !found {
+		t.Fatalf("Identify(sleep) = %v, %v, %v", id, found, err)
+	}
+	if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("sleep Presence = %v, %v; the fixture must be a real running process", presence, err)
+	}
+	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid}
+	acceptSleep := func(_ processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return pid == sleeper.Process.Pid, err
+	}
+	_, err = processesWhere(table, acceptSleep)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) {
+		t.Fatalf("listing = %v; want unsettled from the unread gone pid", err)
+	}
+	// Each reading's gone pid is new, so Readings on the named cause is 1;
+	// the guard is that every reading unsettled (table.readings).
+	if table.readings != settleReadings {
+		t.Fatalf("readings = %d, want %d (listing settled early: %v)", table.readings, settleReadings, err)
+	}
+}
+
+// churnUnreadUnderRefusedParent is #722's model: every reading names a
+// refused parent and a new child already gone when identified. Under the
+// settle invariant, that unread exit unsettles (a refused parent does not
+// place the child outside). The listing fails to settle - the open #722
+// gap when never-read-whole processes keep exiting. Presence for the
+// parent uses a real sleep so the fixture is not a fabricated identity.
+func TestOutsideChurnOfUnreadExitsStillPreventsSettling(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	sleeper := exec.Command("sleep", "60")
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
+	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid}
+	refuseAll := func(table processTable, pid int) (bool, error) {
+		_, _, err := table.commandLine(pid)
+		return false, err
+	}
+	_, err := processesWhere(table, refuseAll)
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) {
+		t.Fatalf("listing = %v; want #722's settle failure (unread exits under a refused parent must not settle)", err)
+	}
+	if table.readings != settleReadings {
+		t.Fatalf("readings = %d, want %d (a parent-outside settle ends in one reading)", table.readings, settleReadings)
+	}
+}

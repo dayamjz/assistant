@@ -172,20 +172,32 @@ const settleReadings = 64
 // process it already read whole, until a reading settles or settleReadings
 // have run, which is an error naming what left the last reading unsettled.
 //
+// Invariant: a settled reading has read whole every live process of this
+// user's that could match, and every process that exited unread is one the
+// listing had already read whole and match refused in an earlier reading
+// (or read as not running then too). Match is by executable and arguments,
+// not by ancestry: a refused parent does not make its child outside the
+// listing (#735 r1; the parent-outside shortcut of #553's leak check does
+// not apply here).
+//
 // One exit does not unsettle a reading: that of a process the reading
 // before read as running and as one this listing had read whole and match
 // refused. What a refused process starts once a reading has begun is read
 // only by a later reading whose table names it, whether the refused process
 // goes on running or exits, so its exit tells the listing nothing its
 // running would not. Every other process's exit does unsettle the reading
-// it is first read in. Without this a reading settles only when no process
-// it names exits during it, and on CI, where other packages' tests start
-// and end processes beside the listing, none of 64 readings did (#569).
+// it is first read in, including one never read whole whose parent match
+// refused: that child may itself match. Without the refused-exit exception
+// a reading settles only when no process it names exits during it, and on
+// CI, where other packages' tests start and end processes beside the
+// listing, none of 64 readings did (#569).
 //
 // So every process of this user's running when a settled reading began was
 // read whole, as one match accepts or refuses, and a process that match
 // accepted, or that was never read whole, and that exited during an earlier
 // reading after starting another has that other read whole in a later one.
+// Processes never read whole that keep exiting, one in every reading, still
+// keep every reading from settling (#722; see Decision needed in the PR).
 //
 // When no reading settles, the error is an unsettledError naming the
 // process number that kept the most readings in a row from settling,
