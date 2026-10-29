@@ -358,11 +358,63 @@ class PlanTest(unittest.TestCase):
         self.assertIn("(setsid, setpgid) is outside that group and is not ended", message)
 
     def test_a_reaped_leader_is_not_signalled(self):
-        # Once reaped and the group is empty, the leader's pid may name
-        # another group, so end_process_group must not signal (P15).
+        # Once reaped, the leader's pid may name another group, so
+        # end_process_group must not signal (procgroup's rule / P15).
         proc = subprocess.Popen(["true"], start_new_session=True)
         proc.wait()
         self.assertTrue(repeat_plan.end_process_group(proc).startswith("not signalled"))
+
+    def test_discovery_signals_only_while_the_leader_is_unreaped(self):
+        # Fail before (c6d89e7): communicate reaped the leader, then SIGKILL
+        # after a grace could target a recycled pgid (#744 round 3). Now every
+        # killpg happens while returncode is still None, and none after reap.
+        events = []
+        real_end = repeat_plan.end_process_group
+
+        def wrapped(proc, grace=repeat_plan.DISCOVERY_KILL_GRACE):
+            real_killpg = os.killpg
+
+            def killpg(pgid, sig):
+                # Presence polls use signal 0 after the reap; only real
+                # termination signals must see an unreaped leader.
+                if sig != 0:
+                    events.append(("signal", sig, proc.returncode))
+                    try:
+                        os.kill(proc.pid, 0)
+                    except ProcessLookupError:
+                        events.append(("leader_gone", sig))
+                return real_killpg(pgid, sig)
+
+            os.killpg = killpg
+            try:
+                events.append(("enter_end", proc.returncode))
+                result = real_end(proc, grace)
+                events.append(("after_end", proc.returncode))
+                return result
+            finally:
+                os.killpg = real_killpg
+
+        repeat_plan.end_process_group = wrapped
+        self.addCleanup(lambda: setattr(repeat_plan, "end_process_group", real_end))
+        root, cmd = listing_with_leftover(self, exit_code=0)
+        with self.assertRaises(RuntimeError):
+            repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
+        leftover = recorded_pid(root / "leftover.pid")
+        leader = recorded_pid(root / "leader.pid")
+        self.addCleanup(end_survivor, leftover)
+        self.assertIsNotNone(leader)
+        self.assertTrue(group_empty(leader), f"process group {leader} still had members")
+        self.assertEqual(events[0], ("enter_end", None), events)
+        signals = [e for e in events if e[0] == "signal"]
+        self.assertEqual(
+            [sig for _, sig, _ in signals],
+            [signal.SIGTERM, signal.SIGKILL],
+            events,
+        )
+        for _, sig, code in signals:
+            self.assertIsNone(code, f"signal {sig} saw a reaped leader: {events}")
+        self.assertNotIn("leader_gone", [e[0] for e in events], events)
+        self.assertIsNotNone(events[-1][1], "leader was not reaped after the last signal")
 
     def test_discovery_ends_its_group_after_exit_0_with_a_leftover(self):
         # Fail before (62ec5dd): run_discovery returned success and left
