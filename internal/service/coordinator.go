@@ -117,7 +117,14 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 	request := tasks.Request{
 		Shape: r.Shape, Project: r.Project, Instructions: r.Instructions, Mode: r.Mode,
 		Repository: r.Repository, Branch: r.Branch, Overlaps: r.Overlaps, Delivery: r.Delivery,
-		Role: r.Role,
+		Role: r.Role, Housekeeping: r.Housekeeping,
+	}
+	if p.isSubordinate && r.Housekeeping {
+		// PRD section 9: a subordinate coordinator is refused creating a
+		// housekeeping pass, which is about a repository and so in no
+		// domain: it is the first coordinator's to create.
+		return machine.TaskCreated{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and creating a housekeeping pass is one it does not hold",
+			ipc.ErrSubordinate, peerOf(req), p.subordinate.Domain)
 	}
 	if p.isSubordinate {
 		// PRD section 6: a subordinate records no posture, and section 9:
@@ -459,7 +466,7 @@ func refusalOf(err error) error {
 	switch {
 	case errors.Is(err, tasks.ErrRequest):
 		return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
-	case errors.Is(err, errRelaunchUnprobed), errors.Is(err, tasks.ErrPostureUnreadable):
+	case errors.Is(err, errRelaunchUnprobed), errors.Is(err, tasks.ErrPostureUnreadable), errors.Is(err, tasks.ErrPassScopeUnreadable):
 		return fmt.Errorf("%w: %w", ipc.ErrUnavailable, err)
 	case tasks.IsRefusal(err),
 		errors.Is(err, tasks.ErrNotPromotable),
