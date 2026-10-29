@@ -204,10 +204,12 @@ def main(argv=None) -> int:
         try:
             probe(Client(token), args.repo, args.check_name)
         except APIError as error:
-            # An unreadable API must not fail the Ubuntu job before the
-            # suite; fall back so the suite runs (#708 review).
-            print(f"prior-check probe: {error}; continuing so the suite runs", file=sys.stderr)
-            return 0
+            # The probe must actually evaluate a commit. An unreadable API
+            # fails loudly so the step cannot go green without checking
+            # either path. The non-probe decision path still fails open
+            # to run=true (#708 delta review).
+            print(f"prior-check probe: {error}", file=sys.stderr)
+            return 1
         return 0
 
     if not args.sha or args.run_id is None:

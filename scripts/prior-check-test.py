@@ -161,8 +161,8 @@ class ProbeTest(unittest.TestCase):
         self.assertGreaterEqual(calls["n"], 2)
 
     def test_probe_healthy_history_does_not_fail_the_job(self):
-        """When every recent commit already has a PR check, the probe must
-        still exit 0 so the Ubuntu suite runs (#708 review)."""
+        """When every recent commit already has a PR check, the probe still
+        evaluated the skip path and shows run via empty check runs (#708)."""
         commits = [{"sha": f"{i:040x}"} for i in range(30)]
 
         class FakeClient:
@@ -177,6 +177,58 @@ class ProbeTest(unittest.TestCase):
             with mock.patch.object(
                 prior_check, "evaluate", side_effect=lambda *a, **k: (True, "already")
             ):
+                with mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}):
+                    code = prior_check.main(
+                        [
+                            "--repo", "dayamjz/assistant",
+                            "--check-name", "check (ubuntu-latest)",
+                            "--probe",
+                        ]
+                    )
+        self.assertEqual(code, 0)
+
+    def test_probe_first_api_503_exits_nonzero(self):
+        """A probe that never evaluates a commit must fail loudly (#708)."""
+
+        def failing_opener(request, timeout=30):
+            raise urllib.error.HTTPError(
+                request.full_url, 503, "unavailable", hdrs=None, fp=io.BytesIO(b"{}")
+            )
+
+        real = prior_check.Client
+
+        def factory(token, api_url=prior_check.API_URL, opener=None):
+            return real(token, api_url=api_url, opener=failing_opener)
+
+        with mock.patch.object(prior_check, "Client", factory):
+            with mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}):
+                code = prior_check.main(
+                    [
+                        "--repo", "dayamjz/assistant",
+                        "--check-name", "check (ubuntu-latest)",
+                        "--probe",
+                    ]
+                )
+        self.assertEqual(code, 1)
+
+    def test_probe_exits_zero_when_both_paths_evaluate(self):
+        """Positive control: a working API that yields both paths exits 0."""
+
+        class FakeClient:
+            def get(self, path):
+                if "workflows/ci.yml/runs" in path:
+                    return {"workflow_runs": [{"head_sha": "testedsha"}]}
+                if path.startswith("repos/dayamjz/assistant/commits?"):
+                    return [{"sha": "testedsha"}, {"sha": "neversha"}]
+                raise AssertionError(path)
+
+        def fake_evaluate(client, repo, sha, check_name, current_run_id):
+            if sha == "testedsha":
+                return True, "already"
+            return False, "never"
+
+        with mock.patch.object(prior_check, "Client", lambda token, **k: FakeClient()):
+            with mock.patch.object(prior_check, "evaluate", side_effect=fake_evaluate):
                 with mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}):
                     code = prior_check.main(
                         [
