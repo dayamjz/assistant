@@ -602,8 +602,21 @@ func TestARetirementHoldRefusingAPassesWorkerHandoffRaisesNoFallbackHold(t *test
 // read as a launch under way for as long as the service ran, every offer
 // was refused (store.ErrPassMoves), and the pass blocked every later pass
 // with no hold for a person to answer.
+//
+// keep then begins the pass again (the review of #688 at f50b270): the
+// failed launch left the slot settled for the service's lifetime, which
+// the dispatch passes over, so keep gives it back and the dispatch claims
+// the pass's next attempt over the standing copy. That dispatch asks the
+// process sweep first; on a host whose sweeps refuse to clear (macOS CI's
+// sudo among them) it raises the unswept hold and claims nothing, which is
+// P6 and not a missed hand-back. requireSweepClearsHere and
+// fatalUnlessSweepsStoppedClearing are the sibling handoff test's guards,
+// so a host that cannot sweep skips rather than timing out as if keep had
+// left the pass on its one attempt.
 func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
 	principles.Cite(t, principles.P15)
+	const unestablished = "that keep begins a pass again after its worker failed to start"
+	requireSweepClearsHere(t, unestablished)
 	ctx := t.Context()
 	sub := launchSubjectOver(t, workerStandIn(t), passDispatchSubject(t))
 	s := sub.service
@@ -634,11 +647,6 @@ func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
 		t.Fatalf("the retirement hold the loop offers reads %+v, want it open", h)
 	}
 
-	// keep then begins the pass again (the review of #688 at f50b270): the
-	// failed launch left the slot settled for the service's lifetime, which
-	// the dispatch passes over, so keep gives it back and the dispatch
-	// claims the pass's next attempt. Before, keep logged a dispatch that
-	// skipped the pass, and it stayed on its one attempt.
 	rh, ok := parseRetireHold(h.Key, sub.task)
 	if !ok {
 		t.Fatalf("the offered hold's key %s does not parse as the pass's retirement hold", h.Key)
@@ -648,9 +656,13 @@ func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
 		t.Fatalf("answering keep: %v", err)
 	}
 	deadline := time.Now().Add(30 * time.Second)
-	for len(recordedAttempts(t, sub.records, sub.task)) < 2 {
-		if time.Now().After(deadline) {
-			t.Fatalf("keep did not begin the pass again: its attempts are %+v", recordedAttempts(t, sub.records, sub.task))
+	for {
+		attempts := recordedAttempts(t, sub.records, sub.task)
+		if len(attempts) >= 2 {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			fatalUnlessSweepsStoppedClearing(t, unestablished, "keep did not begin the pass again: its attempts are %+v", attempts)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
