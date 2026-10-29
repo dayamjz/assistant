@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -183,16 +184,26 @@ func (s *Service) SubordinateSessionOf(domain string) (session.Host, *session.Se
 
 // AbandonSessionsForTest forgets every session this service launched
 // without ending it, so Close ends none of them. It is the shape a service
-// killed with SIGKILL leaves, which a test cannot produce of its own
-// process: the worker, its terminal and the attempt's recorded reference
-// stand, and no service holds a handle to any of them. It exists only in
-// the tests and models nothing a running service does; the test that calls
-// it ends the worker itself.
+// killed with SIGKILL leaves for a worker whose process outlives the
+// service (a tmux pane, or a pipe worker whose stdin write end is still
+// held), which a test cannot produce of its own process: the worker, its
+// terminal and the attempt's recorded reference stand, and no service
+// holds a handle to any of them in launched. The sessions are retained
+// only so the garbage collector does not close their stdin and end a pipe
+// worker the way a real SIGKILL of the service process would; the test
+// that calls it ends the worker itself. It exists only in the tests and
+// models nothing a running service does.
 func (s *Service) AbandonSessionsForTest(tb testing.TB) {
 	tb.Helper()
 	s.mu.Lock()
+	abandoned := s.launched
 	s.launched = make(map[string]launchedWorker)
 	s.mu.Unlock()
+	// Keep the provider and session handles reachable until the test ends
+	// them: dropping them here lets a GC pass close each pipe worker's
+	// stdin, the stand-in exits, and a later service reads the survivor
+	// gone without ending it by its verified identity (#732).
+	tb.Cleanup(func() { runtime.KeepAlive(abandoned) })
 }
 
 // ReconcileProbeBound is the bound one read of the fleet at reconciliation
