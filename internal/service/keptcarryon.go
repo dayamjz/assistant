@@ -128,10 +128,10 @@ import (
 // pass cuts a fresh clone at the path the copy is about to stand at; between
 // the claim and the slot no task row exists yet, so no pass can find the task
 // to dispatch. Once the row exists a pass can hold the slot while it reads that
-// the claim holds the task; an answer that finds the slot claimed is refused at
-// once with machine.PhraseCarryOnSlotBusy (claimCarryOnSlot), which is true
-// for a dispatch reading the hold, another carry-on, a relaunch or a stop, and
-// never names a carry-on under way that is not (#707, #731). Then, in the order
+// the claim holds the task; an answer that finds claiming[id] set is
+// refused at once with machine.PhraseCarryOnSlotBusy (claimCarryOnSlot),
+// which states only what that fact establishes and never names a
+// carry-on under way that is not (#707, #731). Then, in the order
 // intake keeps, the task is created with that identifier, with the outlived
 // task's delivery posture as the floor intake records it under unless the
 // project's, read once there, is stricter (carriedPosture), the copy is moved

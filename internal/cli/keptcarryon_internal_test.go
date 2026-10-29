@@ -13,12 +13,13 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// The carry-on busy and already-started refusals reach a person through the
-// CLI renderer as the entry key they typed and the phrase row, with no task
-// identifier and none of the internal words the rows must not say (P13,
-// #731 round 2). On 1ba201c the busy line named the task id and said
-// "dispatch" / "claim owed".
-func TestCarryOnSlotRefusalsPrintWithoutTaskIdentifiers(t *testing.T) {
+// Render and FormatFailure print a refused carry-on the way a person reads
+// it. The production refusals from completeCarryOn, with the task id the
+// test created, are asserted through FormatFailure in internal/service
+// (TestCarryOnSlotRefusalsPrintThroughTheCLIRendererWithoutTaskIdentifiers).
+// This file holds the render half and the positive control that each guard
+// fails when the error interpolates a task id (#731 round 3, P13).
+func TestCarryOnSlotRefusalRenderOmitsInterpolatedTaskIdentifiers(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P13)
 	vocabtest.Control(t)
@@ -34,28 +35,29 @@ func TestCarryOnSlotRefusalsPrintWithoutTaskIdentifiers(t *testing.T) {
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			vocabtest.Assert(t, row.phrase.String())
-			// The service wraps ipc.ErrRefused with the hold key and the row;
-			// the wire then the CLI print err.Error() on standard error.
+			bad := fmt.Errorf("%w: %s: task %s: %s", ipc.ErrRefused, key, taskID, row.phrase)
+			var badOut, badErrs bytes.Buffer
+			if code := render(&invocation{env: Environment{Stdout: &badOut, Stderr: &badErrs}}, nil, bad); code != machine.ExitFailure {
+				t.Fatalf("render of the positive-control error exited %s, want failure", code)
+			}
+			if !strings.Contains(badErrs.String(), taskID) {
+				t.Fatalf("positive control: render of an error that interpolates task %s did not print it:\n%s", taskID, badErrs.String())
+			}
+			if !strings.Contains(FormatFailure(bad), taskID) {
+				t.Fatalf("positive control: FormatFailure of the same error omitted task %s", taskID)
+			}
+
 			err := fmt.Errorf("%w: %s: %s", ipc.ErrRefused, key, row.phrase)
 			var out, errs bytes.Buffer
-			in := &invocation{env: Environment{Stdout: &out, Stderr: &errs}}
-			if code := render(in, nil, err); code != machine.ExitFailure {
+			if code := render(&invocation{env: Environment{Stdout: &out, Stderr: &errs}}, nil, err); code != machine.ExitFailure {
 				t.Fatalf("render exited %s, want failure", code)
 			}
-			printed := errs.String()
-			if !strings.Contains(printed, row.phrase.String()) {
-				t.Fatalf("printed %q, want the phrase row", printed)
-			}
-			if !strings.Contains(printed, key) {
-				t.Fatalf("printed %q, want the hold key %s the person typed", printed, key)
+			printed := strings.TrimSuffix(errs.String(), "\n")
+			if printed != FormatFailure(err) {
+				t.Fatalf("render printed %q, want FormatFailure %q", printed, FormatFailure(err))
 			}
 			if strings.Contains(printed, taskID) {
 				t.Fatalf("printed the task identifier %s:\n%s", taskID, printed)
-			}
-			for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
-				if strings.Contains(printed, term) {
-					t.Fatalf("printed internal wording %q:\n%s", term, printed)
-				}
 			}
 		})
 	}

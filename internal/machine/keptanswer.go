@@ -262,23 +262,26 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
 }
 
-// PhraseCarryOnSlotBusy is the row for a carry-on answer that finds other
-// work on the same answer still under way in this service. The entry stays
-// open and nothing moved; the person answers again shortly (#707, #731).
-// It names no task identifier and no internal mechanic (P13).
+// PhraseCarryOnSlotBusy is the row for a carry-on answer refused because
+// this service already holds that successor's in-flight work
+// (claiming[id]). The mechanism does not say which write that is, so the
+// row states only what every holder shares: the answer was not taken and
+// the entry stays open; the person answers again shortly (#707, #731). It
+// names no task identifier and no internal mechanic (P13).
 var PhraseCarryOnSlotBusy = Phrase{
-	Outcome:     "That carry-on was not taken, because other work on this answer is still under way.",
-	Consequence: "The entry is still open, and nothing moved.",
+	Outcome:     "That carry-on was not taken, because this service cannot take it right now.",
+	Consequence: "The entry is still open.",
 	Decision:    "Answer again shortly.",
 }
 
-// PhraseCarryOnAlreadyStarted is the row for a carry-on answer that finds
-// this service has already begun the successor work. The entry stays open
-// and nothing moved (P13).
+// PhraseCarryOnAlreadyStarted is the row for a carry-on answer refused
+// because this service has already begun the successor work and keeps that
+// hold for its lifetime. Answering again cannot free it; the person reads
+// what stands (P13).
 var PhraseCarryOnAlreadyStarted = Phrase{
 	Outcome:     "That carry-on was not taken, because this service has already begun that work.",
-	Consequence: "The entry is still open, and nothing moved.",
-	Decision:    "Answer again once that work has ended, or read what stands with assistant --json status.",
+	Consequence: "The entry is still open.",
+	Decision:    "Read what stands with assistant --json status.",
 }
 
 // KeptWorkAnsweredPhrase is the line a person reads for an answered kept

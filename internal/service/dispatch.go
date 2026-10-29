@@ -680,17 +680,18 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 }
 
 // claimCarryOnSlot takes the task's slot for a carry on of kept work into
-// it, or refuses at once when a claim already holds the slot, and returns
-// the function that gives the slot back. A carry on's task is held by the
-// entry it carries on until the carry on marks it (store.KeptWorkHolding),
-// so a pass can hold that slot while it only reads the hold; another carry
-// on, a relaunch or a stop can hold it too. Naming any of those as a carry
-// on under way was false when a pass only read the hold (#707). Waiting for
-// the claim to end had no server-side deadline on the IPC handler's context
-// (P15, #731). The refusal reaches a person as machine.PhraseCarryOnSlotBusy
-// beside the entry key they typed, with no task identifier (P13). A settled
-// slot, which claimDispatch refuses too, is refused with errSlotSettled and
-// machine.PhraseCarryOnAlreadyStarted the same way.
+// it, or refuses at once when claiming[id] is set, and returns the function
+// that gives the slot back. A carry on's task is held by the entry it
+// carries on until the carry on marks it (store.KeptWorkHolding), so a
+// pass can hold that slot while it only reads the hold; another carry on,
+// a relaunch or a stop can hold it too. Naming any of those as a carry on
+// under way was false when a pass only read the hold (#707). Waiting for
+// claiming[id] to clear had no server-side deadline on the IPC handler's
+// context (P15, #731). The refusal reaches a person as
+// machine.PhraseCarryOnSlotBusy beside the entry key they typed, with no
+// task identifier (P13); claiming[id] alone is what that row knows. A
+// settled slot, which claimDispatch refuses too, is refused with
+// errSlotSettled and machine.PhraseCarryOnAlreadyStarted the same way.
 func (s *Service) claimCarryOnSlot(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 )
 
 // SecondCheckHeading is the heading dispatch appends the second check to a
@@ -175,6 +176,20 @@ func (s *Service) ClaimSlotForTest(tb testing.TB, id string) func() {
 		tb.Fatalf("claiming the slot of task %s: %v", id, err)
 	}
 	return release
+}
+
+// SettleSlotForTest marks the task's slot settled with no claim in flight,
+// as a finished dispatch of this service leaves it, for this package's
+// external tests of a carry-on that finds errSlotSettled.
+func (s *Service) SettleSlotForTest(tb testing.TB, id string) {
+	tb.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if s.claiming[id] {
+		tb.Fatalf("settling the slot of task %s: a claim is still in flight", id)
+	}
+	s.isolated[id] = tasks.Isolation{}
 }
 
 // SetAfterPromotedLaunchStartedForTest installs afterPromotedLaunchStarted
