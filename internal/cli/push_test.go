@@ -589,10 +589,12 @@ type gaveUp struct {
 	// said is what the push was doing when it was given up on, for a
 	// failure.
 	said string
-	// notEnded is nil only when a reading made after the push was ended
-	// succeeded and found none of it running. Otherwise it names what that
-	// reading found still running, the reading that failed, or both, so a
-	// cleanup nothing could read is never taken for one that left nothing.
+	// notEnded is nil only when giving up read the whole of the push and
+	// none of what it read still runs: every reading of it succeeded, and
+	// every process any of them attributed to the push reads as gone once
+	// the push was ended. Otherwise it names what still runs, what could not
+	// be read, or both, so a cleanup that could not read the push is never
+	// taken for one that left nothing.
 	notEnded error
 }
 

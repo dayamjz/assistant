@@ -16,3 +16,7 @@ func (p *boundedPush) giveUp() gaveUp {
 		notEnded: errors.New("nothing the push started is read on this platform, so it is not shown ended"),
 	}
 }
+
+// spawnerMain returns at once here: no test on this platform parks the
+// spawner in a push, for the reason giveUp gives.
+func spawnerMain() {}

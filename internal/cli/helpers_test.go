@@ -30,8 +30,9 @@ import (
 // test opens resolves instead of whatever agent is installed on the machine
 // running the tests, as the command a gate's hooks invoke, as the
 // coordinator's client run from a process a test placed in a worker's
-// process group, and as a second process holding a home's lock for the host
-// hook's tests.
+// process group, as a second process holding a home's lock for the host
+// hook's tests, and as the spawner a push's give-up tests park inside a push
+// (spawnerMain).
 //
 // Every one of those processes ends with the test binary that started it
 // (standin.WatchOwner), and once the tests have returned the package fails
@@ -46,6 +47,7 @@ func TestMain(m *testing.M) {
 	standInManagerMain()
 	hookMain()
 	holdLockMain()
+	spawnerMain()
 	// After every verb this binary answers as another process, because a
 	// hook or a worker's route is the process it is and takes no terminal
 	// of its own; a test's push is a person's, and the gate places one by
