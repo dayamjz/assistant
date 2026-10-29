@@ -15,12 +15,11 @@ import (
 )
 
 // P6 for keep after a failed launch: a concurrent retire that holds
-// claimSteer across keep's giveBackSettledSlot must not leave the settled
-// slot behind. keep notes a redispatch for that steer's release, which
-// gives the slot back and asks dispatchDue, so attempt 2 is claimed.
-// Before, giveBackSettledSlot was a no-op under the steer, dispatch skipped
-// the occupied slot, and after retire refused the already-answered hold the
-// slot stayed settled with one sessionless attempt.
+// claimSteer across keep's freeSettledSlotForKeep must not leave the settled
+// slot behind. That one critical section notes a redispatch for the steer's
+// release, which gives the slot back and asks dispatchDue, so attempt 2 is
+// claimed. Before, separate giveBack and note locks let a refuse-and-release
+// fall between them and leave the slot settled with one sessionless attempt.
 func TestKeepDispatchesAfterAConcurrentRetireReleasesTheSettledSlot(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	const unestablished = "that keep's dispatch survives a concurrent retire"

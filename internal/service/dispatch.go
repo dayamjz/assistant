@@ -515,18 +515,10 @@ func (s *Service) giveBackSlot(id string) {
 	delete(s.claiming, id)
 }
 
-// giveBackSettledSlot gives back the task's slot when this service holds it
-// settled, which a launch that failed or a dispatch that ended without a
-// proof leaves for the service's lifetime, and reports whether it did. A
-// slot a claim in flight or a steer holds is left. It is for an answer that
-// decides the task is to be begun again, whose dispatch claims a new
-// attempt under the store's anchor, so it is no second launch of the
-// attempt the slot was kept for. keep's answer that finds a steer holding
-// notes a redispatch for that steer's release instead (noteRedispatchWhenSteerFrees),
-// so the settled slot is not left behind after the steer returns.
-func (s *Service) giveBackSettledSlot(id string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// giveBackSettledSlotLocked frees a settled slot with s.mu already held. A
+// slot a claim in flight or a steer holds is left. claimSteer's release
+// calls it after clearing that steer; keep uses freeSettledSlotForKeep.
+func (s *Service) giveBackSettledSlotLocked(id string) bool {
 	if _, held := s.isolated[id]; !held || s.claiming[id] {
 		return false
 	}
@@ -534,23 +526,35 @@ func (s *Service) giveBackSettledSlot(id string) bool {
 	return true
 }
 
-// noteRedispatchWhenSteerFrees records that a keep answer owed a dispatch
-// of id while a claimSteer held the task's slot, so that steer's release
-// gives the settled slot back and asks dispatchDue again. It reports
-// whether a steer held the slot; a caller that gets false still runs its
-// own dispatch. Called with the same conditions giveBackSettledSlot just
-// refused: the slot is settled under a steer (claiming and steering).
-func (s *Service) noteRedispatchWhenSteerFrees(id string) bool {
+// freeSettledSlotForKeep is what keep does about the task's slot after it
+// resolves a retirement hold when the latest attempt has no session.
+//
+// After a keep resolves a retirement hold, either the settled slot is freed
+// and the pass redispatched, or a holder of the steer is recorded as owing
+// that redispatch, and the check and the record are one critical section
+// under the same lock claimSteer and its release take. No release can fall
+// between them. It reports whether the caller should dispatch now; false
+// means the steer's release will give the slot back and ask dispatchDue.
+func (s *Service) freeSettledSlotForKeep(id string) (dispatchNow bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.slotMaps()
-	if !s.steering[id] {
+	_, held := s.isolated[id]
+	if !held {
+		return true
+	}
+	if s.steering[id] {
+		s.redispatchWhenFree[id] = true
 		return false
 	}
-	if s.redispatchWhenFree == nil {
-		s.redispatchWhenFree = make(map[string]bool)
+	if s.claiming[id] {
+		// A launch claim in flight still owns the slot; asking dispatch
+		// now loses nothing: dispatchDue passes the claim over, and the
+		// keep+retirement hold case cannot reach a launch claim (the open
+		// hold refused it).
+		return true
 	}
-	s.redispatchWhenFree[id] = true
+	delete(s.isolated, id)
 	return true
 }
 

@@ -706,16 +706,14 @@ func (s *Service) answerRetirement(ctx context.Context, req ipc.Request, r machi
 		// claims the next attempt. An attempts read that fails runs it too,
 		// since the dispatch reads them again and skips a launched task.
 		// A launch that ended with no session left the pass's slot settled
-		// for the service's lifetime, which the dispatch passes over, so the
-		// slot is given back first (giveBackSettledSlot) and the dispatch
-		// claims the pass's next attempt. A concurrent retire or stop that
-		// already holds claimSteer makes giveBackSettledSlot a no-op; noting
-		// the redispatch for that steer's release (as releasePassHeldSlot
-		// does for a keep answered while a refused dispatch still held the
-		// slot) is what keeps the begin from being lost (P6).
+		// for the service's lifetime, which the dispatch passes over.
+		// freeSettledSlotForKeep either frees that slot so this answer
+		// redispatches, or records the steer holder as owing the redispatch,
+		// in one critical section (P6): a concurrent retire cannot refuse
+		// and release between those two facts.
 		attempts, readErr := s.store.TaskAttempts(ctx, r.Task)
 		if _, launched := latestSession(attempts); readErr != nil || !launched {
-			if s.giveBackSettledSlot(r.Task) || !s.noteRedispatchWhenSteerFrees(r.Task) {
+			if s.freeSettledSlotForKeep(r.Task) {
 				s.log.Printf("housekeeping pass %s is dispatched now that hold %s is answered %q, since its latest attempt has no session", r.Task, hold.Key, r.Answer)
 				s.dispatchInBackground()
 			} else {

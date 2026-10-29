@@ -326,12 +326,14 @@ func (s *Service) sendMessage(ctx context.Context, id, ref, text string) error {
 // that must not interleave with one, leaving whatever proof it holds, and
 // returns the function that releases it. A slot a dispatch or a relaunch
 // holds unsettled, which it does through the launch that follows it
-// (dispatch.go), or another stop holds, is errSteerInFlight. The release
-// also runs a keep answer's deferred dispatch when that answer noted one
-// while this claim held the settled slot (noteRedispatchWhenSteerFrees):
-// it gives the slot back and asks dispatchDue, so keep cannot lose the
-// begin to a concurrent retire or stop that refused after the hold was
-// already answered.
+// (dispatch.go), or another stop holds, is errSteerInFlight.
+//
+// After a keep resolves a retirement hold, either the settled slot is freed
+// and the pass redispatched, or a holder of the steer is recorded as owing
+// that redispatch, and the check and the record are one critical section
+// (freeSettledSlotForKeep). The release here runs that owed redispatch: it
+// gives the settled slot back and asks dispatchDue, so no refuse-and-release
+// of this claim can fall between keep's check and its record.
 func (s *Service) claimSteer(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -347,9 +349,11 @@ func (s *Service) claimSteer(id string) (func(), error) {
 		delete(s.steering, id)
 		need := s.redispatchWhenFree[id]
 		delete(s.redispatchWhenFree, id)
+		if need {
+			s.giveBackSettledSlotLocked(id)
+		}
 		s.mu.Unlock()
 		if need {
-			s.giveBackSettledSlot(id)
 			s.dispatchInBackground()
 		}
 	}, nil
