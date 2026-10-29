@@ -94,24 +94,27 @@ def group_empty(pgid):
     return False
 
 
-def listing_with_leftover(test, exit_code=0):
-    """A command that starts sleep 60 in its process group, prints TestProbe,
-    and exits with exit_code. Records the sleep's pid in leftover.pid and the
-    leader's pid (the process group) in leader.pid."""
+def listing_with_leftover(test, exit_code=0, diagnostic=None):
+    """A command that starts sleep 60 in its process group, optionally prints
+    diagnostic on stderr, prints TestProbe on stdout, and exits with
+    exit_code. Records the sleep's pid in leftover.pid and the leader's pid
+    (the process group) in leader.pid."""
     root = Path(tempfile.mkdtemp(prefix="repeat-plan-leftover-"))
     test.addCleanup(lambda: subprocess.run(["rm", "-rf", str(root)], check=False))
     leftover = shlex.quote(str(root / "leftover.pid"))
     leader = shlex.quote(str(root / "leader.pid"))
+    lines = [
+        "#!/bin/sh",
+        f"echo $$ > {leader}",
+        f"sleep 60 </dev/null >/dev/null 2>&1 &",
+        f"echo $! > {leftover}",
+        f"while [ ! -s {leftover} ]; do sleep 0.05; done",
+    ]
+    if diagnostic is not None:
+        lines.append(f"echo {shlex.quote(diagnostic)} >&2")
+    lines += ["echo TestProbe", f"exit {int(exit_code)}"]
     script = root / "list.sh"
-    script.write_text(
-        "#!/bin/sh\n"
-        f"echo $$ > {leader}\n"
-        f"sleep 60 </dev/null >/dev/null 2>&1 &\n"
-        f"echo $! > {leftover}\n"
-        f"while [ ! -s {leftover} ]; do sleep 0.05; done\n"
-        "echo TestProbe\n"
-        f"exit {int(exit_code)}\n"
-    )
+    script.write_text("\n".join(lines) + "\n")
     script.chmod(0o755)
     return root, [str(script)]
 
@@ -246,14 +249,18 @@ class PlanTest(unittest.TestCase):
         # Fail before (62ec5dd): run_discovery returned success and left
         # sleep running. Now the group is empty afterwards and the leftover
         # fails the listing loudly so the later leak-check baseline cannot
-        # hide it (#744 / #727 review, P15).
-        self._assert_leftover_after_exit(exit_code=0)
+        # hide it (#744 / #727 review, P15). Round 2: the error keeps stderr.
+        self._assert_leftover_after_exit(
+            exit_code=0, diagnostic="listing processes: permission denied")
 
     def test_discovery_ends_its_group_after_nonzero_exit_with_a_leftover(self):
-        self._assert_leftover_after_exit(exit_code=7)
+        # Fail before (c8bbfee): cleanup ended the child but the error omitted
+        # Go's exit code and stderr (#744 round 2).
+        self._assert_leftover_after_exit(
+            exit_code=7, diagnostic="listing processes: permission denied")
 
-    def _assert_leftover_after_exit(self, exit_code):
-        root, cmd = listing_with_leftover(self, exit_code=exit_code)
+    def _assert_leftover_after_exit(self, exit_code, diagnostic=None):
+        root, cmd = listing_with_leftover(self, exit_code=exit_code, diagnostic=diagnostic)
         err = None
         try:
             repeat_plan.run_discovery(cmd, timeout=STALL_TIMEOUT)
@@ -268,8 +275,11 @@ class PlanTest(unittest.TestCase):
         self.assertTrue(group_empty(leader), f"process group {leader} still had members")
         self.assertFalse(running(leftover), f"leftover sleep {leftover} outlived discovery")
         message = str(err)
+        self.assertIn(f"exited {exit_code}", message)
         self.assertIn(f"still had members after the listing exited {exit_code}", message)
         self.assertIn("nothing in it is left", message)
+        if diagnostic is not None:
+            self.assertIn(diagnostic, message)
 
     def test_discovery_ends_its_group_when_the_planner_gets_sigint(self):
         self._assert_signal_ends_discovery_group(signal.SIGINT)
@@ -328,6 +338,66 @@ class PlanTest(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail(f"planner did not exit after {sig!r}")
         self.assertTrue(group_empty(leader), f"process group {leader} still had members after {sig!r}")
+
+    def test_cleanup_defers_sigterm_until_the_group_is_ended(self):
+        # Fail before (c8bbfee): a SIGTERM during end_process_group's grace
+        # after timeout cut cleanup short before SIGKILL; the listing (which
+        # ignores SIGTERM) stayed alive while the planner exited 143 (#744).
+        root, env = stalled_listing(self)
+        started = time.monotonic()
+        child = subprocess.Popen(
+            [
+                sys.executable, "-c",
+                "import importlib.util, os;"
+                f"spec = importlib.util.spec_from_file_location('rp', {str(SCRIPT)!r});"
+                "rp = importlib.util.module_from_spec(spec); spec.loader.exec_module(rp);"
+                "rp.install_termination_signals();"
+                f"rp.run_discovery(['go', 'test', '-list', '^Test', '.'], "
+                f"timeout={STALL_TIMEOUT}, cwd={str(root)!r}, env=dict(os.environ))",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        )
+
+        def _reap_child():
+            if child.poll() is None:
+                child.kill()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            for pipe in (child.stdout, child.stderr):
+                if pipe is not None:
+                    pipe.close()
+            stall = recorded_pid(root / "stall.pid")
+            if stall is not None:
+                end_survivor(stall)
+
+        self.addCleanup(_reap_child)
+        deadline = started + STALL_TIMEOUT + 1
+        stall = None
+        while time.monotonic() < deadline:
+            stall = recorded_pid(root / "stall.pid")
+            if stall is not None:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(stall, "discovery never reached its stalled wrapper")
+        # Into the grace after discovery's timeout: cleanup has sent SIGTERM
+        # to the group and is sleeping before SIGKILL.
+        into_grace = started + STALL_TIMEOUT + 0.3
+        delay = into_grace - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        child.send_signal(signal.SIGTERM)
+        try:
+            child.wait(timeout=repeat_plan.discovery_bound(STALL_TIMEOUT) + 5)
+        except subprocess.TimeoutExpired:
+            self.fail("planner did not exit after deferred SIGTERM")
+        self.assertEqual(
+            child.returncode, 128 + signal.SIGTERM,
+            f"want deferred SIGTERM status, got {child.returncode}",
+        )
+        self.assertTrue(group_empty(stall), f"process group {stall} still had members")
+        self.assertFalse(running(stall), f"stalled wrapper {stall} outlived deferred-SIGTERM cleanup")
 
     def test_every_covered_package_exists(self):
         root = SCRIPT.parent.parent
