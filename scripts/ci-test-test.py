@@ -75,6 +75,13 @@ class InputTest(unittest.TestCase):
         self.assert_refused("CI_TEST_COUNT", "3 -race=false")
         self.assert_refused("CI_TEST_TIMEOUT", "30m -race=false")
 
+    def test_a_run_filter_with_a_flag_or_space_is_refused(self):
+        # A flag or a list of names is not a pattern of test names: as
+        # -run's value it would select no test, and the run would pass.
+        self.assert_refused("CI_TEST_RUN", "-race=false")
+        self.assert_refused("CI_TEST_RUN", "TestA TestB")
+        self.assert_refused("CI_TEST_RUN", "^(TestA)$ -count=1")
+
     def test_the_unfinished_mode_refuses_the_same_packages(self):
         # bash ci-test.sh unfinished lists packages with go list; a flag in
         # its packages is refused there too, before go runs.
@@ -99,6 +106,20 @@ class InputTest(unittest.TestCase):
         self.assertIn("-count=3", go_test)
         self.assertEqual(go_test[-2:], ["./internal/agents/...", "./internal/service"])
         self.assertEqual(go_test.index("-race"), go_test.index("-count=3") - 1)
+        self.assertNotIn("-run", go_test, "no CI_TEST_RUN, so every test runs")
+
+    def test_a_run_filter_reaches_go_test_before_the_packages(self):
+        _, calls = self.run_script(CI_TEST_PACKAGES="./internal/service",
+                                   CI_TEST_COUNT="3", CI_TEST_TIMEOUT="55m",
+                                   CI_TEST_RUN="^(TestA|TestB)$")
+        runs = [c for c in calls if c.startswith("python3 scripts/leak-check.py run ")]
+        self.assertEqual(len(runs), 1, calls)
+        words = runs[0].split()
+        go_test = words[words.index("go"):]
+        self.assertIn("-run", go_test)
+        self.assertEqual(go_test[go_test.index("-run") + 1], "^(TestA|TestB)$")
+        self.assertLess(go_test.index("-run"), go_test.index("./internal/service"))
+        self.assertLess(go_test.index("-race"), go_test.index("-run"))
 
 
 if __name__ == "__main__":
