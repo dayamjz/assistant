@@ -69,13 +69,63 @@ repository more than one round of review.
   disclosure made the false half plausible. A doc comment is a contract in both
   directions, so verify a stated gap against the mechanism before writing it.
 
+## Where to start reading
+
+Every package states its own contract in `doc.go` or its package comment, and
+those comments are the authority. This is only the map that says which one to
+open first.
+
+- `cmd/assistant` is the process boundary and nothing more. The command line is
+  `internal/cli`. Four commands sit outside its verb table because something
+  other than a person types them: `gate` (the `pre-receive` and `post-receive`
+  hooks `internal/gate` writes invoke the binary back), `host` and
+  `coordinator` (the coordinating agent's side), and `worker` (a launched
+  worker's route home).
+- A verb does little itself. It opens the home (`internal/home`) and calls the
+  background service over the local socket (`internal/ipc`).
+  `internal/service` holds that home's exclusive lock, so one service owns a
+  home, and it is wiring rather than policy: every decision it appears to make
+  belongs to a package beneath it.
+- A run is `internal/graph` walking the topology `internal/pipeline` declares,
+  with the nine stage bodies in `internal/stages`. The engine is pure, so the
+  effects sit at the edges: `internal/vcs` for git, `internal/forge` for a code
+  host, `internal/agents` for agent processes, `internal/session` for
+  terminals, `internal/store` for the database, `internal/checkpoints` for a
+  run's durable position.
+- `internal/findings` is the vocabulary all of that speaks, and
+  `internal/machine` is the shape an answer takes when the caller is a program
+  rather than a person.
+- Fleet work is `internal/tasks`, with `internal/taskstate` computing what is
+  true of a task now rather than reading it off the event log (P8).
+
 ## Code
 
-- Go, formatted with `gofmt`. `make check` (lint and the race suite) is the
-  local check; keep it green. CI runs the suite through `scripts/ci-test.sh`
-  under the leak check (`scripts/leak-check.py`), so a package that leaves a
-  process or temp entry behind fails CI even when `make check` passes. The gate
-  runs `make lint` and leaves the full suite to CI (`.no-mistakes.yaml`).
+### Commands
+
+- `make check` is lint then the race suite; keep it green. `make build` puts
+  the binary in `bin/`. `make fmt`, `make vet`, `make cover` and `make tidy`
+  are the rest.
+- One package is `go test -race ./internal/graph`, one test is
+  `go test -race -run 'TestName$' ./internal/graph`. Leave `-race` on: both CI
+  platforms run with it, so a test that passes only without it fails elsewhere.
+- `make lint` refuses unless golangci-lint v2 is on PATH, because
+  `.golangci.yml` is a schema v2 config that a v1 binary rejects before it
+  lints anything; the pinned release is in `.github/workflows/ci.yml`, and
+  `make lint-guard-test` drives those refusals. `make vet` also vets
+  `internal/judge` under the `judgelive` tag. CI runs `GOOS=windows go vet
+  ./...` as well, so Windows-tagged sources have to keep building.
+- CI's test step is `bash scripts/ci-test.sh`, the race suite under the leak
+  check (`scripts/leak-check.py`), so a package that leaves a process or temp
+  entry behind fails CI even when `make check` passes. `CI_TEST_PACKAGES`,
+  `CI_TEST_COUNT` and `CI_TEST_TIMEOUT` parameterize it, which is how
+  `repeat.yml` re-runs a change's own packages several times. Each
+  `scripts/*.py` has a `*-test.py` beside it that CI runs.
+- The gate runs `make lint` and leaves the full suite to CI
+  (`.no-mistakes.yaml`).
+
+### Conventions
+
+- Go, formatted with `gofmt`.
 - Branch protection on `main` requires five checks: `check (ubuntu-latest)`,
   `check (macos-latest)`, `lint`, `repeat`, and `re-runs`. That set is the
   protection rule, which this tree does not store. `.github/workflows/ci.yml`
