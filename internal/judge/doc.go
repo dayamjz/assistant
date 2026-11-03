@@ -123,6 +123,16 @@
 //     that record. Writing the row is best-effort: a row the store refuses is
 //     not retried, and the record then understates, which the review stage
 //     names in a note on the run's report.
+//   - A Record measures its call, failed ones included, and the store keeps
+//     the measures with the answer: the requests sent, the time from the
+//     check's start to its answer or failure, and its size. The size is the
+//     provider's reported token count where its reply carries one, and
+//     otherwise the bodies' bytes, which no field turns into tokens; Usage
+//     says which field is which. A path whose diff could not be read was
+//     never a call and is recorded unmeasured. A call is priced only at a
+//     Rate in rate.go, which names its source, and only when every request
+//     it sent reported its tokens; rates is empty, so no call is priced, and
+//     an unpriced call has no price rather than a price of zero.
 //   - The model's answer is a judgment with no evidence behind it. A screen
 //     that does not flag a file says nothing about the file being safe, and
 //     the screen runs beside the review rather than before it, so the

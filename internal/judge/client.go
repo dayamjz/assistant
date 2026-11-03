@@ -56,9 +56,10 @@ const (
 )
 
 // Bounds on what one request carries. They are this package's own, not the
-// provider's: the provider states its limit in tokens, and this package does
-// not count tokens. maxPieceBytes is where a file's changed lines are first
-// cut into consecutive pieces; a piece the provider still refuses as too large
+// provider's: the provider states its limit in tokens, and this package
+// estimates none to cut by. It records what each reply says about tokens, or
+// its size in bytes when it says nothing, in Usage. maxPieceBytes is where a file's changed lines are first cut into
+// consecutive pieces; a piece the provider still refuses as too large
 // is cut in half and asked again, down to minPieceBytes, below which the
 // refusal stands as FailureTooLarge. So whether a piece fits is decided by the
 // provider's answer and not by an estimate made here.
@@ -228,7 +229,9 @@ func (c *Client) HasKey() bool { return c != nil && c.key != "" }
 // the reason against the path's change as a whole; a diff over this package's
 // piece bound, or one the provider refuses as too large, fails with
 // FailureTooLarge rather than being cut, and the reason is then not checked.
-func (c *Client) Trace(ctx context.Context, path, reason, diff string) Result {
+func (c *Client) Trace(ctx context.Context, path, reason, diff string) (r Result) {
+	var u Usage
+	defer measured(&r, time.Now(), &u)
 	if !c.HasKey() {
 		return failed(CheckTrace, path, FailureNoKey, "no key for the decision model is in "+KeyVariable, 0)
 	}
@@ -242,7 +245,7 @@ func (c *Client) Trace(ctx context.Context, path, reason, diff string) Result {
 	if !c.allowance.take() {
 		return failed(CheckTrace, path, FailureOverBound, c.allowance.over(), 0)
 	}
-	p, failure, detail := c.ask(ctx, CheckTrace, map[string]string{"path": path, "reason": reason, "diff": diff})
+	p, failure, detail := c.ask(ctx, CheckTrace, map[string]string{"path": path, "reason": reason, "diff": diff}, &u)
 	if failure != "" {
 		return failed(CheckTrace, path, failure, detail, 1)
 	}
@@ -259,7 +262,9 @@ func (c *Client) Trace(ctx context.Context, path, reason, diff string) Result {
 // that failed fails the file, because a piece nobody read is not a piece found
 // clean. Only when every piece was answered and none flagged is the file
 // answered unflagged, with the highest piece's probability.
-func (c *Client) Screen(ctx context.Context, path, diff string) Result {
+func (c *Client) Screen(ctx context.Context, path, diff string) (r Result) {
+	var u Usage
+	defer measured(&r, time.Now(), &u)
 	if !c.HasKey() {
 		return failed(CheckScreen, path, FailureNoKey, "no key for the decision model is in "+KeyVariable, 0)
 	}
@@ -288,7 +293,7 @@ func (c *Client) Screen(ctx context.Context, path, diff string) Result {
 		if !c.allowance.take() {
 			return failed(CheckScreen, path, FailureOverBound, c.allowance.over(), requests)
 		}
-		p, failure, detail := c.ask(ctx, CheckScreen, map[string]string{"path": path, "diff": piece})
+		p, failure, detail := c.ask(ctx, CheckScreen, map[string]string{"path": path, "diff": piece}, &u)
 		requests++
 		if failure == FailureTooLarge && len(piece) > minPieceBytes {
 			queue = append(halves(piece), queue...)
@@ -358,13 +363,14 @@ type errorBody struct {
 
 // ask puts one question about state to the model and returns the probability,
 // or a failure and a sentence about it. The sentence never quotes a header,
-// and it passes the redactor before it is returned.
-func (c *Client) ask(ctx context.Context, check Check, state map[string]string) (float64, Failure, string) {
-	p, failure, detail := c.askOnce(ctx, check, state)
+// and it passes the redactor before it is returned. A reply it reads is added
+// to u.
+func (c *Client) ask(ctx context.Context, check Check, state map[string]string, u *Usage) (float64, Failure, string) {
+	p, failure, detail := c.askOnce(ctx, check, state, u)
 	return p, failure, c.redactor.Redact(detail)
 }
 
-func (c *Client) askOnce(ctx context.Context, check Check, state map[string]string) (float64, Failure, string) {
+func (c *Client) askOnce(ctx context.Context, check Check, state map[string]string, u *Usage) (float64, Failure, string) {
 	q := questions[check]
 	body, err := json.Marshal(request{
 		Model: ModelVersion,
@@ -397,6 +403,7 @@ func (c *Client) askOnce(ctx context.Context, check Check, state map[string]stri
 	if err != nil {
 		return 0, transportFailure(ctx, reqCtx, err), "the response could not be read: " + err.Error()
 	}
+	u.add(resp.StatusCode, body, raw)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		var refusal errorBody
 		if json.Unmarshal(raw, &refusal) == nil && refusal.Detail.ErrorType == "max_tokens_exceeded" {

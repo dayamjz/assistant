@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -39,8 +40,53 @@ type DecisionAnswer struct {
 	// Finding is the action of the finding the answer produced, empty when it
 	// produced none.
 	Finding string
+	// Measures is what the call measured, unknown on a row appended before
+	// migration 70 kept it and on a path the stage could not ask about.
+	Measures Optional[DecisionMeasures]
+	// Rate is the rate the call was priced at, unknown when it was not
+	// priced; AppendDecisionAnswer keeps one only on a priced row. The price
+	// is the reported tokens at it, so no column repeats it.
+	Rate Optional[DecisionRate]
 	// Recorded is when the row was appended, set by this package.
 	Recorded time.Time
+}
+
+// DecisionMeasures is what one decision-model call measured, each field as
+// its namesake in internal/judge's Record and Usage, stored as handed over.
+type DecisionMeasures struct {
+	Requests, ReportedRequests, UnreportedRequests                                          int
+	ReportedInputTokens, ReportedOutputTokens, UnreportedSentBytes, UnreportedReceivedBytes int64
+	Elapsed                                                                                 time.Duration
+}
+
+// DecisionRate is the rate a call was priced at, as internal/judge's Rate has
+// it: US dollars per million input and output tokens, and their source.
+type DecisionRate struct {
+	InputUSDPerMillionTokens, OutputUSDPerMillionTokens float64
+	Source                                              string
+}
+
+// pricedRate reports whether r prices a row measured o: every request reported
+// its tokens, and r names a source and two finite figures at or above zero.
+func pricedRate(o Optional[DecisionMeasures], r DecisionRate) bool {
+	m, ok := o.Get()
+	in, out := r.InputUSDPerMillionTokens, r.OutputUSDPerMillionTokens
+	return ok && m.ReportedRequests == m.Requests && m.UnreportedRequests == 0 &&
+		strings.TrimSpace(r.Source) != "" && in >= 0 && out >= 0 && !math.IsInf(in+out, 1)
+}
+
+// measureArgs is a's measure and rate columns, each group all NULL when it is
+// unknown.
+func measureArgs(a DecisionAnswer) []any {
+	args := make([]any, 11)
+	if m, ok := a.Measures.Get(); ok {
+		copy(args, []any{m.Requests, m.ReportedRequests, m.ReportedInputTokens, m.ReportedOutputTokens,
+			m.UnreportedRequests, m.UnreportedSentBytes, m.UnreportedReceivedBytes, int64(m.Elapsed)})
+	}
+	if r, ok := a.Rate.Get(); ok {
+		copy(args[8:], []any{r.InputUSDPerMillionTokens, r.OutputUSDPerMillionTokens, r.Source})
+	}
+	return args
 }
 
 // AppendDecisionAnswer appends one answer to the record and returns the row
@@ -48,7 +94,8 @@ type DecisionAnswer struct {
 // no stage, no check, or no model, because an answer nothing is attributed to
 // answers no question the record exists for, and it refuses a row that is
 // both an answer and a failure, or neither, because the record would then say
-// two things about one call or nothing at all.
+// two things about one call or nothing at all. It refuses a rate on a row that
+// pricedRate does not call priced, which would claim a price nobody can know.
 func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (DecisionAnswer, error) {
 	for _, field := range []struct{ name, value string }{
 		{"run", a.Run}, {"stage", a.Stage}, {"check", a.Check}, {"model", a.Model},
@@ -60,14 +107,20 @@ func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (Dec
 	if a.Probability.IsKnown() == (a.Failure != "") {
 		return DecisionAnswer{}, fmt.Errorf("store: a decision answer is a probability or a failure, exactly one")
 	}
+	if r, ok := a.Rate.Get(); ok && !pricedRate(a.Measures, r) {
+		return DecisionAnswer{}, fmt.Errorf("store: a decision answer's rate is on a row that was not priced")
+	}
 	a.Recorded = time.Now().UTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO decision_answer (
-				run, stage, check_name, path, model, probability, cutoff, failure, finding, recorded_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			a.Run, a.Stage, a.Check, a.Path, a.Model, a.Probability, a.Cutoff,
-			a.Failure, a.Finding, encodeTime(a.Recorded))
+				run, stage, check_name, path, model, probability, cutoff, failure, finding, recorded_at,
+				requests, reported_requests, reported_input_tokens, reported_output_tokens,
+				unreported_requests, unreported_sent_bytes, unreported_received_bytes, elapsed_ns,
+				rate_input_usd_per_million_tokens, rate_output_usd_per_million_tokens, rate_source)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			append([]any{a.Run, a.Stage, a.Check, a.Path, a.Model, a.Probability, a.Cutoff,
+				a.Failure, a.Finding, encodeTime(a.Recorded)}, measureArgs(a)...)...)
 		if err != nil {
 			return err
 		}
@@ -84,7 +137,13 @@ func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (Dec
 // appended.
 func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnswer, error) {
 	rows, err := s.read.QueryContext(ctx, `
-		SELECT seq, run, stage, check_name, path, model, probability, cutoff, failure, finding, recorded_at
+		SELECT seq, run, stage, check_name, path, model, probability, cutoff, failure, finding, recorded_at,
+			elapsed_ns IS NOT NULL, COALESCE(requests, 0), COALESCE(reported_requests, 0),
+			COALESCE(reported_input_tokens, 0), COALESCE(reported_output_tokens, 0),
+			COALESCE(unreported_requests, 0), COALESCE(unreported_sent_bytes, 0),
+			COALESCE(unreported_received_bytes, 0), COALESCE(elapsed_ns, 0),
+			rate_source IS NOT NULL, COALESCE(rate_input_usd_per_million_tokens, 0),
+			COALESCE(rate_output_usd_per_million_tokens, 0), COALESCE(rate_source, '')
 		FROM decision_answer WHERE run = ? ORDER BY seq`, run)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading decision answers: %w", err)
@@ -94,10 +153,24 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 	var out []DecisionAnswer
 	for rows.Next() {
 		var a DecisionAnswer
+		var m DecisionMeasures
+		var r DecisionRate
 		var recorded string
+		var measured, priced bool
+		var elapsed int64
 		if err := rows.Scan(&a.Seq, &a.Run, &a.Stage, &a.Check, &a.Path, &a.Model,
-			&a.Probability, &a.Cutoff, &a.Failure, &a.Finding, &recorded); err != nil {
+			&a.Probability, &a.Cutoff, &a.Failure, &a.Finding, &recorded, &measured,
+			&m.Requests, &m.ReportedRequests, &m.ReportedInputTokens, &m.ReportedOutputTokens,
+			&m.UnreportedRequests, &m.UnreportedSentBytes, &m.UnreportedReceivedBytes, &elapsed,
+			&priced, &r.InputUSDPerMillionTokens, &r.OutputUSDPerMillionTokens, &r.Source); err != nil {
 			return nil, fmt.Errorf("store: reading decision answers: %w", err)
+		}
+		if measured {
+			m.Elapsed = time.Duration(elapsed)
+			a.Measures = Known(m)
+		}
+		if priced {
+			a.Rate = Known(r)
 		}
 		if a.Recorded, err = decodeTime(recorded); err != nil {
 			return nil, fmt.Errorf("store: decision answer %d: %w", a.Seq, err)
