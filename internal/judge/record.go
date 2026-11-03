@@ -3,6 +3,8 @@ package judge
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // Record is one answer as PRD section 5 has it kept: which run and stage
@@ -52,8 +54,7 @@ type Record struct {
 	Elapsed time.Duration
 	// Rate is the rate the call was priced at, kept so the row outlives a
 	// change of rate, and nil when its price is not known: the answer is not
-	// Measured, rates has no valid entry for Model, or a request for it
-	// reported no tokens.
+	// Measured, rates has no entry for Model, or store.PricedAt refuses it.
 	Rate *Rate
 }
 
@@ -82,7 +83,8 @@ type Usage struct {
 	// UnreportedRequests is how many replies were read without a usage field.
 	UnreportedRequests int
 	// UnreportedSentBytes and UnreportedReceivedBytes are the body sizes of
-	// those requests and of their replies, summed.
+	// those requests and of their replies, summed. A reply is read only up to
+	// maxResponseBytes+1 bytes, so a larger one counts at that cap.
 	UnreportedSentBytes, UnreportedReceivedBytes int64
 }
 
@@ -151,11 +153,20 @@ func recordAt(run, stage string, r Result, finding string, table map[string]Rate
 	if failure, _, isFailed := r.Failed(); isFailed {
 		rec.Failure = failure
 	}
-	if rate, ok := table[rec.Model]; ok && rate.valid() == nil && rec.Measured &&
-		rec.Usage.ReportedRequests == rec.Requests {
+	if rate, ok := table[rec.Model]; ok && rec.Measured && store.PricedAt(rec.Measures(), rate) == nil {
 		rec.Rate = &rate
 	}
 	return rec
+}
+
+// Measures is the call's measures as the store keeps them, if it is Measured.
+func (r Record) Measures() store.DecisionMeasures {
+	return store.DecisionMeasures{
+		Requests: r.Requests, ReportedRequests: r.Usage.ReportedRequests,
+		UnreportedRequests: r.Usage.UnreportedRequests, ReportedInputTokens: r.Usage.ReportedInputTokens,
+		ReportedOutputTokens: r.Usage.ReportedOutputTokens, UnreportedSentBytes: r.Usage.UnreportedSentBytes,
+		UnreportedReceivedBytes: r.Usage.UnreportedReceivedBytes, Elapsed: r.Elapsed,
+	}
 }
 
 // Record hands rec to the client's recorder and returns why it could not keep

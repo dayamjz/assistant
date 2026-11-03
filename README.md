@@ -313,11 +313,11 @@ The review stage's decision-model checks (the trace and screen questions put to 
 | --- | --- |
 | Requests | Requests sent for the answer, failed ones included |
 | Reported tokens | Input and output tokens **as the provider reported them** in its reply's `usage` field |
-| Unreported bytes and pieces | For replies with no `usage` field: request and reply sizes in bytes and how many such replies. **Basis for an estimate, not tokens**; nothing converts them |
+| Unreported bytes and pieces | For replies with no `usage` field: request and reply sizes in bytes and how many such replies. A reply is read only up to just over 1 MiB, so a larger one counts at that cap. **Basis for an estimate, not tokens**; nothing converts them |
 | Elapsed | From the check's start to its answer or failure |
 | Rate | Only on a **priced** call: input and output price per million tokens and the rate's source. The price is the reported tokens at that rate, so it is not stored twice |
 
-A call is priced only when a rate for the model is set, with its source, in `internal/judge/rate.go` (the one place a rate is set), and every request it sent reported its tokens. That table ships **empty**, so no call is priced in this build: an unpriced row has no rate and no price, never a price of zero. A path whose changes could not be read was never a call and is recorded with no measures; rows written before these fields existed read back the same way.
+A call is priced only when a rate for the model is set, with its source, in `internal/judge/rate.go` (the one place a rate is set), and every request it sent reported its tokens; the store's `PricedAt` is the one statement of that rule. That table ships **empty**, so no call is priced in this build: an unpriced row has no rate and no price, never a price of zero. A path whose changes could not be read was never a call and is recorded with no measures; rows written before these fields existed read back the same way.
 
 Each review that reaches the checks also writes one **batch row** for the checks as a whole: the run, the stage, the decision-model mode, how many requests every check sent together, and how long the checks took the review, from before the first diff read to after the last answer's row was written. A review with the checks `off`, or with no key, writes the same row with zero requests, so the review's time with and without the checks can be compared. A review stopped during the checks, or one that never reached them, writes none. Calls overlap (four run at once), so per-call times do not add up to the batch's.
 

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -66,13 +67,20 @@ type DecisionRate struct {
 	Source                                              string
 }
 
-// pricedRate reports whether r prices a row measured o: every request reported
-// its tokens, and r names a source and two finite figures at or above zero.
-func pricedRate(o Optional[DecisionMeasures], r DecisionRate) bool {
-	m, ok := o.Get()
+// PricedAt says why a call measured m is not priced at r, or nil when it is.
+// It is the rule's one statement: internal/judge asks it before giving a
+// record a rate, and AppendDecisionAnswer refuses a rate it does not accept.
+func PricedAt(m DecisionMeasures, r DecisionRate) error {
 	in, out := r.InputUSDPerMillionTokens, r.OutputUSDPerMillionTokens
-	return ok && m.ReportedRequests == m.Requests && m.UnreportedRequests == 0 &&
-		strings.TrimSpace(r.Source) != "" && in >= 0 && out >= 0 && !math.IsInf(in+out, 1)
+	switch {
+	case m.ReportedRequests != m.Requests || m.UnreportedRequests != 0:
+		return errors.New("store: a request of the call reported no tokens")
+	case strings.TrimSpace(r.Source) == "":
+		return errors.New("store: the rate names no source")
+	case !(in >= 0 && out >= 0) || math.IsInf(in+out, 1):
+		return errors.New("store: a rate's figure is not finite and at or above zero")
+	}
+	return nil
 }
 
 // measureArgs is a's measure and rate columns, each group all NULL when it is
@@ -94,8 +102,7 @@ func measureArgs(a DecisionAnswer) []any {
 // no stage, no check, or no model, because an answer nothing is attributed to
 // answers no question the record exists for, and it refuses a row that is
 // both an answer and a failure, or neither, because the record would then say
-// two things about one call or nothing at all. It refuses a rate on a row that
-// pricedRate does not call priced, which would claim a price nobody can know.
+// two things about one call or nothing at all, and a rate PricedAt refuses.
 func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (DecisionAnswer, error) {
 	for _, field := range []struct{ name, value string }{
 		{"run", a.Run}, {"stage", a.Stage}, {"check", a.Check}, {"model", a.Model},
@@ -107,8 +114,14 @@ func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (Dec
 	if a.Probability.IsKnown() == (a.Failure != "") {
 		return DecisionAnswer{}, fmt.Errorf("store: a decision answer is a probability or a failure, exactly one")
 	}
-	if r, ok := a.Rate.Get(); ok && !pricedRate(a.Measures, r) {
-		return DecisionAnswer{}, fmt.Errorf("store: a decision answer's rate is on a row that was not priced")
+	if r, ok := a.Rate.Get(); ok {
+		m, measured := a.Measures.Get()
+		if !measured {
+			return DecisionAnswer{}, errors.New("store: a decision answer's rate is on a row with no measures")
+		}
+		if err := PricedAt(m, r); err != nil {
+			return DecisionAnswer{}, fmt.Errorf("store: a decision answer's rate is on a row that was not priced: %w", err)
+		}
 	}
 	a.Recorded = time.Now().UTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {

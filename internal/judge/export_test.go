@@ -13,6 +13,3 @@ func RecordWithRates(run, stage string, r Result, finding string, table map[stri
 
 // ShippedRates is the shipped rate table.
 func ShippedRates() map[string]Rate { return rates }
-
-// ValidRate is why r is not a rate, or nil.
-func ValidRate(r Rate) error { return r.valid() }
