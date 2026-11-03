@@ -67,11 +67,9 @@ type DecisionRate struct {
 	Source                                              string
 }
 
-// PricedAt says why a call measured m is not priced at r, or nil when it is:
-// every request m counts reported its tokens, and r names its source and two
-// figures that are finite and at or above zero. It is the one statement of
-// that rule: internal/judge asks it before it gives a record a rate, and
-// AppendDecisionAnswer refuses a rate on any row it does not hold for.
+// PricedAt says why a call measured m is not priced at r, or nil when it is.
+// It is the rule's one statement: internal/judge asks it before giving a
+// record a rate, and AppendDecisionAnswer refuses a rate it does not accept.
 func PricedAt(m DecisionMeasures, r DecisionRate) error {
 	in, out := r.InputUSDPerMillionTokens, r.OutputUSDPerMillionTokens
 	switch {
@@ -104,9 +102,7 @@ func measureArgs(a DecisionAnswer) []any {
 // no stage, no check, or no model, because an answer nothing is attributed to
 // answers no question the record exists for, and it refuses a row that is
 // both an answer and a failure, or neither, because the record would then say
-// two things about one call or nothing at all. It refuses a rate on a row with
-// no measures or one PricedAt does not call priced, which would claim a price
-// nobody can know.
+// two things about one call or nothing at all, and a rate PricedAt refuses.
 func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (DecisionAnswer, error) {
 	for _, field := range []struct{ name, value string }{
 		{"run", a.Run}, {"stage", a.Stage}, {"check", a.Check}, {"model", a.Model},

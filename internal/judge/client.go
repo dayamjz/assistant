@@ -56,14 +56,12 @@ const (
 )
 
 // Bounds on what one request carries. They are this package's own, not the
-// provider's: the provider states its limit in tokens, and this package
-// estimates none to cut by. It records what each reply says about tokens, or
-// its size in bytes when it says nothing, in Usage. maxPieceBytes is where a
-// file's changed lines are first cut into consecutive pieces; a piece the
-// provider still refuses as too large is cut in half and asked again, down to
-// minPieceBytes, below which the refusal stands as FailureTooLarge. So whether
-// a piece fits is decided by the provider's answer and not by an estimate made
-// here.
+// provider's: the provider states its limit in tokens, and this package does
+// not estimate them. maxPieceBytes is where a file's changed lines are first
+// cut into consecutive pieces; a piece the provider still refuses as too large
+// is cut in half and asked again, down to minPieceBytes, below which the
+// refusal stands as FailureTooLarge. So whether a piece fits is decided by the
+// provider's answer and not by an estimate made here.
 const (
 	maxPieceBytes = 64 << 10
 	minPieceBytes = 512

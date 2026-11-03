@@ -142,8 +142,7 @@ func recordAt(run, stage string, r Result, finding string, table map[string]Rate
 	return rec
 }
 
-// Measures is what the record's call measured, as the store keeps it. It means
-// nothing when the record is not Measured.
+// Measures is the call's measures as the store keeps them, if it is Measured.
 func (r Record) Measures() store.DecisionMeasures {
 	return store.DecisionMeasures{
 		Requests: r.Requests, ReportedRequests: r.Usage.ReportedRequests,
