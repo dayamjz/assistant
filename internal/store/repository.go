@@ -370,6 +370,7 @@ var runRecords = []runRecord{
 	// A follow-up is keyed by the answer it follows, so it goes first.
 	{table: "decision_followup", remove: `DELETE FROM decision_followup WHERE answer IN (SELECT seq FROM decision_answer WHERE run = ?)`},
 	{table: "decision_answer", remove: `DELETE FROM decision_answer WHERE run = ?`},
+	{table: "decision_batch", remove: `DELETE FROM decision_batch WHERE run = ?`},
 	{table: "checks_wait", remove: `DELETE FROM checks_wait WHERE run = ?`},
 	// An agent invocation names the run it served where it served one, and
 	// goes with that run like the rest of its records; a call that named no

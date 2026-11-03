@@ -154,6 +154,9 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if n, err := s.AppendDecisionFollowUp(ctx, run.ID, "a.go", FollowUpFinding, "review", "note", answer.Seq); err != nil || n != 1 {
 		t.Fatalf("AppendDecisionFollowUp = %d, %v; want one follow-up", n, err)
 	}
+	if _, err := s.AppendDecisionBatch(ctx, DecisionBatch{Run: run.ID, Stage: "review", Mode: "evaluate"}); err != nil {
+		t.Fatalf("AppendDecisionBatch: %v", err)
+	}
 	if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Agent: "claude", Purpose: "review", Started: now,
 		Run: Known(run.ID), Stage: Known("review")}); err != nil {
 		t.Fatalf("AppendAgentInvocation: %v", err)

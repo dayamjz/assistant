@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
@@ -44,7 +45,8 @@ type decisionRun struct {
 }
 
 // active reports whether the checks are asked for at all. With the mode off,
-// or any value Resolve cannot produce, nothing is sent and nothing is said.
+// or any value Resolve cannot produce, nothing is sent and nothing is said
+// about the checks; recordBatch still records the review's batch.
 func (d decisionRun) active() bool { return d.mode.RunsChecks() }
 
 // sends reports whether a request may leave the machine: the checks are asked
@@ -400,4 +402,30 @@ func (d decisionRun) record(lost []string, r judge.Result, finding string) []str
 		return append(lost, r.Path()+" ("+string(r.Check())+": "+err.Error()+")")
 	}
 	return lost
+}
+
+// recordBatch hands the client's recorder this review's pass over the checks
+// as one row: the requests every outcome in asked sent, and the time since
+// start, which covers each path's diff read and each answer's record. A review
+// whose checks are off or had no key records one too, with no requests, so
+// the stage's time with the checks can be set beside its time without them.
+// A review stopped during the checks, and one that never reached them,
+// records none. It returns a note when the record could not keep the row,
+// fixed text for lostNote's reason.
+func (d decisionRun) recordBatch(start time.Time, asked []checked) []findings.Finding {
+	b := judge.Batch{Run: d.run, Stage: pipeline.StageReview.String(), Mode: string(d.mode)}
+	for _, c := range asked {
+		b.Requests += c.result.Requests()
+	}
+	b.Elapsed = time.Since(start)
+	if d.client.RecordBatch(b) == nil {
+		return nil
+	}
+	return []findings.Finding{{
+		Severity: findings.SeverityInfo,
+		Action:   findings.ActionNote,
+		Description: "The decision-model record could not keep this review's row timing the checks, so " +
+			"the record kept for deciding whether the checks earn their place has no time for this " +
+			"review; the service log says why. This is informational and holds nothing.",
+	}}
 }

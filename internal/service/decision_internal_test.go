@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -56,7 +57,8 @@ func openDecisionService(t *testing.T, env map[string]string, provider *judgetes
 // The client every run's review stage is handed reads its key from the
 // operator's environment and records into the store: an answer and a failed
 // call each land one row of the decision-model record, the failed one with no
-// probability, each with what its call measured. With no key in the environment the same service sends nothing.
+// probability, each with what its call measured, and a review's batch lands
+// one row of its own. With no key in the environment the same service sends nothing.
 func TestTheServicesDecisionClientRecordsEveryAnswerInTheStore(t *testing.T) {
 	t.Parallel()
 	provider := judgetest.New(t, func(r judgetest.Request) judgetest.Reply {
@@ -133,6 +135,14 @@ func TestTheServicesDecisionClientRecordsEveryAnswerInTheStore(t *testing.T) {
 	}
 	if r, ok := more[1].Rate.Get(); !ok || r != wantRate || !more[1].Measures.IsKnown() {
 		t.Fatalf("a priced call's rate was recorded as (%+v, %v), want %+v", r, ok, wantRate)
+	}
+	if err := s.judge.RecordBatch(judge.Batch{Run: "run-1", Stage: "review", Mode: "evaluate", Requests: 2,
+		Elapsed: time.Second}); err != nil {
+		t.Fatalf("recording a batch: %v", err)
+	}
+	if batches, err := s.store.DecisionBatches(t.Context(), "run-1"); err != nil || len(batches) != 1 ||
+		batches[0].Requests != 2 || batches[0].Elapsed != time.Second || batches[0].Mode != "evaluate" {
+		t.Fatalf("the batch was recorded as %+v (%v)", batches, err)
 	}
 
 	quiet := judgetest.New(t, judgetest.Always(judgetest.Answer(0.9)))

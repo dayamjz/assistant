@@ -155,3 +155,38 @@ func TestADecisionRateIsKeptOnlyOnAPricedRow(t *testing.T) {
 		t.Fatalf("the record is %+v (%v), want only the priced row as written", got, err)
 	}
 }
+
+// A batch reads back as written, a batch with no requests included, and a
+// batch naming no run, stage, or mode, or counting below zero, is refused.
+func TestDecisionBatchesReadBackAndRefuseWhatNamesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	on := DecisionBatch{Run: "run-1", Stage: "review", Mode: "evaluate", Requests: 5, Elapsed: 2 * time.Second}
+	off := DecisionBatch{Run: "run-1", Stage: "review", Mode: "off"}
+	for _, b := range []DecisionBatch{on, off} {
+		if _, err := s.AppendDecisionBatch(ctx, b); err != nil {
+			t.Fatalf("appending %+v: %v", b, err)
+		}
+	}
+	for name, b := range map[string]DecisionBatch{
+		"no run": {Stage: "review", Mode: "off"}, "no stage": {Run: "run-1", Mode: "off"},
+		"no mode": {Run: "run-1", Stage: "review"}, "negative requests": {Run: "run-1", Stage: "review", Mode: "off", Requests: -1},
+		"negative elapsed": {Run: "run-1", Stage: "review", Mode: "off", Elapsed: -time.Second},
+	} {
+		if _, err := s.AppendDecisionBatch(ctx, b); err == nil {
+			t.Errorf("a batch with %s was stored", name)
+		}
+	}
+	got, err := s.DecisionBatches(ctx, "run-1")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("run-1's batches are %+v (%v), want two", got, err)
+	}
+	for i, want := range []DecisionBatch{on, off} {
+		g := got[i]
+		if g.Run != want.Run || g.Stage != want.Stage || g.Mode != want.Mode || g.Requests != want.Requests ||
+			g.Elapsed != want.Elapsed || g.Seq == 0 || g.Recorded.IsZero() {
+			t.Fatalf("batch %d read back as %+v, want %+v", i, g, want)
+		}
+	}
+}

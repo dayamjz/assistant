@@ -114,6 +114,77 @@ func TestAnAnswerTheRecordRefusesIsReportedOnTheRun(t *testing.T) {
 	assertNoWeaker(t, kept.report(), lost.report())
 }
 
+// Every review that reaches the decision-model checks records one batch row
+// timing them as a whole: with the checks on, as many requests as the
+// provider received and at least as long as the slowest answer took; with
+// the checks off or no key, a row of its own with no requests.
+func TestEveryReviewRecordsOneBatchOfItsChecks(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		mode  config.DecisionModel
+		key   string
+		sends bool
+	}{
+		{"checks on in evaluate", config.DecisionEvaluate, decisionKey, true},
+		{"checks on in enforce", config.DecisionEnforce, decisionKey, true},
+		{"checks off", config.DecisionOff, decisionKey, false},
+		{"no key", config.DecisionEvaluate, "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+			rec := &records{}
+			s := newSubject(t)
+			run(t, s, script(standin.Report(cleanReview(s))), mode(tc.mode), s.start(),
+				withJudge(judge.New(tc.key, judge.WithEndpoint(provider.URL()), judge.WithRecorder(rec))))
+			batches := rec.allBatches()
+			if len(batches) != 1 {
+				t.Fatalf("the review recorded %d batches, want 1: %+v", len(batches), batches)
+			}
+			b := batches[0]
+			if b.Run != s.run || b.Stage != "review" || b.Mode != string(tc.mode) || b.Requests != provider.Count() ||
+				(b.Requests > 0) != tc.sends || b.Elapsed < 0 {
+				t.Fatalf("the batch is %+v, and the provider received %d requests", b, provider.Count())
+			}
+			for _, r := range rec.all() {
+				if r.Elapsed <= 0 || b.Elapsed < r.Elapsed {
+					t.Fatalf("an answer took %v and the batch holding it %v", r.Elapsed, b.Elapsed)
+				}
+			}
+		})
+	}
+}
+
+// A batch row the record refuses is reported in a note on the run's report,
+// and the review's findings are what they would be had it been kept. The
+// note's text is fixed, as the lost-answer note's is. The control is the
+// same review with a recorder that keeps everything.
+func TestABatchTheRecordRefusesIsReportedOnTheRun(t *testing.T) {
+	t.Parallel()
+	review := func(rec *records) reviewed {
+		provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+		s := newSubject(t)
+		return run(t, s, script(standin.Report(cleanReview(s))), mode(config.DecisionEvaluate), s.start(),
+			withJudge(decided(provider, judge.WithRecorder(rec))))
+	}
+	lost := review(&records{refuseBatch: errors.New("database is locked")})
+	notes := withDescription(lost.report(), "could not keep this review's row timing the checks")
+	if len(notes) != 1 || notes[0].Action != findings.ActionNote ||
+		strings.Contains(notes[0].Description, "database is locked") {
+		t.Fatalf("the refused batch is not reported in one fixed note: %+v", lost.report().Findings)
+	}
+	kept := review(&records{})
+	if got := withDescription(kept.report(), "could not keep"); len(got) != 0 {
+		t.Fatalf("a record that kept everything was reported as losing some: %+v", got)
+	}
+	if lost.outcome() != kept.outcome() {
+		t.Fatalf("losing the batch brought the review to %s, and keeping it to %s", lost.outcome(), kept.outcome())
+	}
+	assertNoWeaker(t, kept.report(), lost.report())
+}
+
 // The decision-model checks keep text that varies between fix rounds out of
 // the review's report, so the convergence bound still fires. The loop runs
 // for real: a review that keeps reporting the same fix-eligible finding, a

@@ -107,14 +107,31 @@ func (u *Usage) add(status int, sent, raw []byte) {
 	u.UnreportedReceivedBytes += int64(len(raw))
 }
 
+// Batch is one review's pass over the decision-model checks as a whole, so
+// that the stage's time with the checks can be set beside its time without
+// them. The review stage writes one per review that reaches the checks, and a
+// review whose checks are off or had no key writes one with no requests.
+type Batch struct {
+	// Run is the run the review served, and Stage the stage that asked.
+	Run, Stage string
+	// Mode is the review's decision_model mode.
+	Mode string
+	// Requests is how many requests every check of the review sent together.
+	Requests int
+	// Elapsed is how long the checks took the review, from before the first
+	// diff read to after the last answer was recorded.
+	Elapsed time.Duration
+}
+
 // Recorder keeps answers. It returns why it could not keep one, so a caller
 // can say the record lost a row rather than leaving that in a log: the review
 // stage names every answer it could not record in a note. Recording is still
 // best-effort - a row the recorder could not keep is not retried, and nothing
 // is held up for it - and the record then understates, which that note is
-// what makes visible.
+// what makes visible. RecordBatch keeps a review's Batch on the same terms.
 type Recorder interface {
 	RecordAnswer(Record) error
+	RecordBatch(Batch) error
 }
 
 // RecordOf is the record of r as asked for run at stage, with finding the
@@ -149,4 +166,12 @@ func (c *Client) Record(rec Record) error {
 		return nil
 	}
 	return c.recorder.RecordAnswer(rec)
+}
+
+// RecordBatch hands b to the client's recorder on Record's terms.
+func (c *Client) RecordBatch(b Batch) error {
+	if c == nil || c.recorder == nil {
+		return nil
+	}
+	return c.recorder.RecordBatch(b)
 }
