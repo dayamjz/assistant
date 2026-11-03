@@ -2,10 +2,12 @@ package stages
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -215,7 +217,7 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		return pipeline.Output{}, err
 	}
 	change, err := readChange(ctx, repo, facts, deps.Config.IgnorePatterns)
-	return reviewRead(ctx, deps, repo, facts, change, err)
+	return reviewRead(ctx, deps, repo, facts, change, err, pipeline.StageReview)
 }
 
 // reviewRead is everything a review does once the change has been read, and it
@@ -228,9 +230,10 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 //
 // err is what readChange returned. It is handled here rather than by the
 // caller because a change too large to read is a report rather than an error,
-// and the judge lens has to be added to that report too.
+// and the judge lens has to be added to that report too. stage is the caller's
+// stage, which the decision-model checks' batch row names.
 func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts reviewFacts,
-	change reviewChangeSet, err error) (pipeline.Output, error) {
+	change reviewChangeSet, err error, stage pipeline.Stage) (pipeline.Output, error) {
 	// The judge lens is read off the change unfiltered, and it is added to
 	// every report this body returns from here on, including the ones that
 	// review nothing: a change the ignore patterns exclude whole is exactly
@@ -304,9 +307,10 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	// screen asks first, so on a change over the bound it is the trace check
 	// that goes without.
 	decide := decisionRun{mode: mode, client: deps.judge.ForReview(), repo: repo,
-		run: facts.run, from: change.from, head: facts.head}
+		run: facts.run, from: change.from, head: facts.head, stage: stage, batch: rand.Text()}
 	var unconfirmed []findings.Trace
 	checks := decisionChecks{Mode: string(mode)}
+	start := time.Now()
 	switch {
 	case decide.sends():
 		checks.Model = judge.ModelVersion
@@ -337,6 +341,7 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	default:
 		checks.Why = "the decision-model mode is " + string(mode) + ", so nothing was sent"
 	}
+	report.Findings = append(report.Findings, decide.recordBatch(start)...)
 	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
 	return finish(pipeline.Output{Report: report}, judged, outside, checks), nil
 }

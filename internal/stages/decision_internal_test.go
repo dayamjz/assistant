@@ -73,14 +73,22 @@ func TestAPathWhoseDiffCannotBeReadIsRecordedAndReported(t *testing.T) {
 
 // recorded is a judge.Recorder that keeps what it is handed.
 type recorded struct {
-	mu   sync.Mutex
-	rows []judge.Record
+	mu      sync.Mutex
+	rows    []judge.Record
+	batches []judge.Batch
 }
 
 func (r *recorded) RecordAnswer(rec judge.Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rows = append(r.rows, rec)
+	return nil
+}
+
+func (r *recorded) RecordBatch(b judge.Batch) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.batches = append(r.batches, b)
 	return nil
 }
 

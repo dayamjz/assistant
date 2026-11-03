@@ -360,7 +360,7 @@ func reviewLaterCommits(ctx context.Context, deps StageDeps, repo *vcs.Repositor
 		laterRounds:  facts.laterRounds,
 	}
 	change, err := readChange(ctx, repo, review, deps.Config.IgnorePatterns)
-	return reviewRead(ctx, deps, repo, review, change, err)
+	return reviewRead(ctx, deps, repo, review, change, err, pipeline.StagePush)
 }
 
 // laterCommitsNotApproved is the report for commits this run authored after

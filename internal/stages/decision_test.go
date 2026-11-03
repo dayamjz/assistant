@@ -308,11 +308,13 @@ func TestEveryAnswerIsRecordedWithTheFindingItProduced(t *testing.T) {
 }
 
 // records is a judge.Recorder that keeps what it is handed, except what
-// refuse turns down, the way a store refusing a row would.
+// refuse and refuseBatch turn down, the way a store refusing a row would.
 type records struct {
-	mu     sync.Mutex
-	rows   []judge.Record
-	refuse func(judge.Record) error
+	mu          sync.Mutex
+	rows        []judge.Record
+	batches     []judge.Batch
+	refuse      func(judge.Record) error
+	refuseBatch error
 }
 
 func (r *records) RecordAnswer(rec judge.Record) error {
@@ -325,6 +327,22 @@ func (r *records) RecordAnswer(rec judge.Record) error {
 	}
 	r.rows = append(r.rows, rec)
 	return nil
+}
+
+func (r *records) RecordBatch(b judge.Batch) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.refuseBatch != nil {
+		return r.refuseBatch
+	}
+	r.batches = append(r.batches, b)
+	return nil
+}
+
+func (r *records) allBatches() []judge.Batch {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]judge.Batch(nil), r.batches...)
 }
 
 func (r *records) all() []judge.Record {

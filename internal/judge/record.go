@@ -39,6 +39,8 @@ type Record struct {
 	// produced none. It is the caller's to state, because the caller builds
 	// the finding: this package answers and does not report.
 	Finding string
+	// Batch is the ID of the Batch of the review that asked.
+	Batch string
 	// Measured is whether the client measured a call for this answer. It is
 	// false for a path whose diff could not be read (Unasked): nothing was
 	// sent or timed, so Requests, Usage, and Elapsed are zero and mean nothing.
@@ -109,27 +111,62 @@ func (u *Usage) add(status int, sent, raw []byte) {
 	u.UnreportedReceivedBytes += int64(len(raw))
 }
 
+// Batch is one review's pass over the decision-model checks as a whole, so
+// that the stage's time with the checks can be set beside its time without
+// them, and Sends says which of the two a batch is. A review that reaches the
+// checks and is not stopped during them writes one, naming the stage that
+// asked: the review stage, or the push stage reviewing commits written after
+// it. A review whose checks are off or had no key writes one too, with Sends
+// false. A review stopped during the checks writes none, and a Batch the
+// recorder refuses is not kept, so the ID its answers carry names no kept
+// Batch in both cases; the record alone cannot tell the two apart, and only
+// the refusal leaves a note on the run's report.
+//
+// How many requests the checks sent is on the answers alone: a batch's
+// requests are those of the kept answers naming its ID, so an answer the
+// recorder refused counts in no batch.
+type Batch struct {
+	// ID names the batch. The review draws it before its first check, so each
+	// Record it writes carries it as Batch before the batch itself is written.
+	ID string
+	// Run is the run the review served, and Stage the stage that asked.
+	Run, Stage string
+	// Mode is the review's decision_model mode.
+	Mode string
+	// Sends is whether the checks could send requests: they were on and the
+	// operator's environment held a key. It is false with the checks off or
+	// with no key, so it is what tells a review without the checks apart, and
+	// not whether an answer names the batch: answers are best-effort, and a
+	// review whose every answer was refused sent requests all the same.
+	Sends bool
+	// Elapsed is how long the checks took the review, from before the first
+	// diff read to after the last answer was recorded.
+	Elapsed time.Duration
+}
+
 // Recorder keeps answers. It returns why it could not keep one, so a caller
 // can say the record lost a row rather than leaving that in a log: the review
 // stage names every answer it could not record in a note. Recording is still
 // best-effort - a row the recorder could not keep is not retried, and nothing
 // is held up for it - and the record then understates, which that note is
-// what makes visible.
+// what makes visible. RecordBatch keeps a review's Batch on the same terms.
 type Recorder interface {
 	RecordAnswer(Record) error
+	RecordBatch(Batch) error
 }
 
-// RecordOf is the record of r as asked for run at stage, with finding the
-// action of the finding the caller built from it, empty for none.
-func RecordOf(run, stage string, r Result, finding string) Record {
-	return recordAt(run, stage, r, finding, rates)
+// RecordOf is the record of r as asked for run at stage by the review whose
+// Batch is batch, with finding the action of the finding the caller built
+// from it, empty for none.
+func RecordOf(run, stage, batch string, r Result, finding string) Record {
+	return recordAt(run, stage, batch, r, finding, rates)
 }
 
 // recordAt is RecordOf pricing from table, which is rates outside a test.
-func recordAt(run, stage string, r Result, finding string, table map[string]Rate) Record {
+func recordAt(run, stage, batch string, r Result, finding string, table map[string]Rate) Record {
 	p, ok := r.Probability()
 	rec := Record{
-		Run: run, Stage: stage, Check: r.Check(), Path: r.Path(), Model: r.Model(),
+		Run: run, Stage: stage, Batch: batch, Check: r.Check(), Path: r.Path(), Model: r.Model(),
 		Probability: p, Answered: ok, Cutoff: r.Cutoff(), Finding: finding,
 		Measured: r.measured, Requests: r.requests, Usage: r.usage, Elapsed: r.elapsed,
 	}
@@ -160,4 +197,12 @@ func (c *Client) Record(rec Record) error {
 		return nil
 	}
 	return c.recorder.RecordAnswer(rec)
+}
+
+// RecordBatch hands b to the client's recorder on Record's terms.
+func (c *Client) RecordBatch(b Batch) error {
+	if c == nil || c.recorder == nil {
+		return nil
+	}
+	return c.recorder.RecordBatch(b)
 }
