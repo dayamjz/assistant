@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/judge"
+	"github.com/dayamjz/assistant/internal/judge/judgetest"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -136,29 +137,41 @@ func TestCommitsAReviewApprovesAfterTheTestFixRoundArePushed(t *testing.T) {
 }
 
 // Each stage that reviews records its own batch row of the decision-model
-// checks: the review stage's pass over the change is the review's, and the
-// push stage's pass over the commits a fix round wrote after it is the
-// push's. The run is the positive control's above, with a client that has no
-// key and records into rec, so each review reaches the checks and writes its
-// row with no requests.
+// checks and its own answer rows: the review stage's pass over the change is
+// the review's, and the push stage's pass over the commits a fix round wrote
+// after it is the push's. The run is the positive control's above, with a
+// client that has a key and asks the stand-in provider, so each pass sends
+// requests, and every request a stage's batch counts is one its answers
+// account for under that stage's name.
 func TestEachReviewingStageRecordsItsOwnDecisionBatch(t *testing.T) {
 	t.Parallel()
 	rec := &records{}
+	provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
 	run := newLaterRun(t, pipeline.StageTest, standin.Reviewed("the round's change is sound"),
-		judge.New("", judge.WithRecorder(rec)))
+		decided(provider, judge.WithRecorder(rec)))
 	result := run.execute(t)
 	if got := pipeline.StageOutcome(result.State, pipeline.StagePush); got != pipeline.OutcomePassed {
 		t.Fatalf("the push stage came to %s, want passed after reviewing the later commits", got)
 	}
+	answered := map[string]int{}
+	for _, r := range rec.all() {
+		answered[r.Stage] += r.Requests
+	}
 	var stagesAsked []string
+	total := 0
 	for _, b := range rec.allBatches() {
-		if b.Run != run.subject.run || b.Requests != 0 {
-			t.Fatalf("a batch is %+v, want run %s and no requests", b, run.subject.run)
+		if b.Run != run.subject.run || b.Requests == 0 || answered[b.Stage] != b.Requests {
+			t.Fatalf("a batch is %+v, and the answers recorded under %q account for %d request(s): %v",
+				b, b.Stage, answered[b.Stage], answered)
 		}
 		stagesAsked = append(stagesAsked, b.Stage)
+		total += b.Requests
 	}
 	if want := []string{pipeline.StageReview.String(), pipeline.StagePush.String()}; !slices.Equal(stagesAsked, want) {
 		t.Fatalf("the batches name the stages %q, want %q", stagesAsked, want)
+	}
+	if total != provider.Count() {
+		t.Fatalf("the batches count %d requests and the provider received %d", total, provider.Count())
 	}
 }
 

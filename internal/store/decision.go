@@ -198,8 +198,11 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 
 // DecisionBatch is one review's pass over the decision-model checks as a
 // whole, as internal/judge's Batch has it: how many requests its checks sent
-// and how long they took, with none sent when they were off. It is history on
-// DecisionAnswer's terms.
+// and how long they took, with none sent when they were off or had no key. It
+// is history on DecisionAnswer's terms. No answer row points at its batch, so
+// when one stage of a run reviews more than once, as after a fix round, the
+// run has several batches for that stage and the record cannot say which
+// answers belong to which; only the run's and the stage's totals line up.
 type DecisionBatch struct {
 	// Seq is the row's position, assigned on append.
 	Seq int64

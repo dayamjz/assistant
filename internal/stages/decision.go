@@ -43,13 +43,16 @@ type decisionRun struct {
 	from   string
 	head   string
 	// stage is the stage that asked: the review stage, or the push stage
-	// reviewing commits written after it. Its batch row names it.
+	// reviewing commits written after it. Its answer rows and its batch row
+	// name it.
 	stage pipeline.Stage
 }
 
 // active reports whether the checks are asked for at all. With the mode off,
 // or any value Resolve cannot produce, nothing is sent and nothing is said
-// about the checks; recordBatch still records the review's batch.
+// about the checks, with one exception: recordBatch still records the
+// review's batch, and a batch row the record refuses adds its note in every
+// mode, off included.
 func (d decisionRun) active() bool { return d.mode.RunsChecks() }
 
 // sends reports whether a request may leave the machine: the checks are asked
@@ -401,7 +404,7 @@ func flaggedFinding(mode config.DecisionModel, r judge.Result) findings.Finding 
 // record hands one answer to the client's recorder, and adds it to lost when
 // the recorder could not keep it.
 func (d decisionRun) record(lost []string, r judge.Result, finding string) []string {
-	if err := d.client.Record(judge.RecordOf(d.run, pipeline.StageReview.String(), r, finding)); err != nil {
+	if err := d.client.Record(judge.RecordOf(d.run, d.stage.String(), r, finding)); err != nil {
 		return append(lost, r.Path()+" ("+string(r.Check())+": "+err.Error()+")")
 	}
 	return lost
