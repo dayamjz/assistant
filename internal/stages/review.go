@@ -2,6 +2,7 @@ package stages
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strconv"
@@ -306,9 +307,8 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	// screen asks first, so on a change over the bound it is the trace check
 	// that goes without.
 	decide := decisionRun{mode: mode, client: deps.judge.ForReview(), repo: repo,
-		run: facts.run, from: change.from, head: facts.head, stage: stage}
+		run: facts.run, from: change.from, head: facts.head, stage: stage, batch: rand.Text()}
 	var unconfirmed []findings.Trace
-	var asked []checked
 	checks := decisionChecks{Mode: string(mode)}
 	start := time.Now()
 	switch {
@@ -316,13 +316,11 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 		checks.Model = judge.ModelVersion
 		shown := append(append([]string(nil), change.touched...), change.excluded...)
 		screened := decide.screen(ctx, shown)
-		asked = append(asked, screened...)
 		checks.Screen = coverageOf(screened)
 		report.Findings = append(report.Findings, decide.screenFindings(screened)...)
 		if scopeErr == nil {
 			var notes []findings.Finding
 			traced := decide.traces(ctx, change.touched, report.Traced)
-			asked = append(asked, traced...)
 			checks.Trace = coverageOf(traced)
 			unconfirmed, notes = decide.traceFindings(traced)
 			report.Findings = append(report.Findings, notes...)
@@ -343,7 +341,7 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	default:
 		checks.Why = "the decision-model mode is " + string(mode) + ", so nothing was sent"
 	}
-	report.Findings = append(report.Findings, decide.recordBatch(start, asked)...)
+	report.Findings = append(report.Findings, decide.recordBatch(start)...)
 	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
 	return finish(pipeline.Output{Report: report}, judged, outside, checks), nil
 }

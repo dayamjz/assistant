@@ -59,7 +59,7 @@ func TestEveryCallRecordsItsTimeAndSize(t *testing.T) {
 				c.Trace(t.Context(), "notes.md", "adds a line", diff),
 				c.Screen(t.Context(), "notes.md", diff),
 			} {
-				rec := judge.RecordOf("run-1", "review", r, "")
+				rec := judge.RecordOf("run-1", "review", "batch-1", r, "")
 				if rec.Failure != tc.failure || rec.Answered != (tc.failure == "") || rec.Requests != 1 {
 					t.Fatalf("%s recorded failure %q, answered %v and %d request(s), want %q and 1",
 						rec.Check, rec.Failure, rec.Answered, rec.Requests, tc.failure)
@@ -94,7 +94,7 @@ func TestASplitScreenRecordsEveryPiece(t *testing.T) {
 	provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
 	c := client(provider, judge.WithMaxPiece(64))
 	large := strings.Repeat("+a line of the change, long enough to need cutting\n", 6)
-	rec := judge.RecordOf("run-1", "review", c.Screen(t.Context(), "notes.md", large), "")
+	rec := judge.RecordOf("run-1", "review", "batch-1", c.Screen(t.Context(), "notes.md", large), "")
 
 	requests := provider.Requests()
 	want := judge.Usage{ReportedRequests: len(requests), ReportedOutputTokens: int64(len(requests))}
@@ -143,7 +143,7 @@ func TestACallIsPricedOnlyAtASourcedRateWithEveryTokenReported(t *testing.T) {
 			t.Parallel()
 			provider := judgetest.New(t, judgetest.Always(tc.reply))
 			r := client(provider, judge.WithTimeout(tc.timeout)).Screen(t.Context(), "notes.md", diff)
-			rec := judge.RecordWithRates("run-1", "review", r, "", tc.table)
+			rec := judge.RecordWithRates("run-1", "review", "batch-1", r, "", tc.table)
 			price, ok := rec.Price()
 			if !tc.priced {
 				if rec.Rate != nil || ok || price != 0 {
@@ -191,11 +191,11 @@ func TestEveryShippedRateNamesItsSource(t *testing.T) {
 // one and is.
 func TestAnUnaskedPathIsNotRecordedAsMeasured(t *testing.T) {
 	t.Parallel()
-	unasked := judge.RecordOf("run-1", "review", judge.Unasked(judge.CheckScreen, "a.go", "unreadable"), "")
+	unasked := judge.RecordOf("run-1", "review", "batch-1", judge.Unasked(judge.CheckScreen, "a.go", "unreadable"), "")
 	if unasked.Measured || unasked.Elapsed != 0 || unasked.Rate != nil {
 		t.Fatalf("an unasked path was recorded as %+v, want unmeasured", unasked)
 	}
-	keyless := judge.RecordOf("run-1", "review", judge.New("").Screen(t.Context(), "a.go", diff), "")
+	keyless := judge.RecordOf("run-1", "review", "batch-1", judge.New("").Screen(t.Context(), "a.go", diff), "")
 	if !keyless.Measured || keyless.Requests != 0 {
 		t.Fatalf("a check with no key was recorded as %+v, want measured with no requests", keyless)
 	}

@@ -785,8 +785,10 @@
 // reason, or a key could land in. Each row keeps what its call measured
 // (DecisionMeasures), unknown on a row from before migration 70, and the rate
 // it was priced at (DecisionRate), unknown when it was not priced.
-// AppendDecisionBatch and DecisionBatches keep one row per review's pass over
-// the checks on the same terms. What the run did with that path afterwards
+// AppendDecisionBatch and DecisionBatches keep one row per review that
+// finished its pass over the checks, on the same terms, and each answer from
+// migration 71 on names its review's batch (DecisionBatch says why a name
+// may have no row). What the run did with that path afterwards
 // is AppendDecisionFollowUp: one row per answer it follows, of a closed set of
 // kinds, so an answer with no row is one nothing followed and the answer rows
 // are untouched. DecisionFirings reads the two back per run of a repository,

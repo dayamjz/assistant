@@ -53,6 +53,7 @@ func (r decisionRecorder) RecordAnswer(rec judge.Record) error {
 		Cutoff:      rec.Cutoff,
 		Failure:     string(rec.Failure),
 		Finding:     rec.Finding,
+		Batch:       rec.Batch,
 		Measures:    measuresOf(rec),
 		Rate:        rateOf(rec),
 	})
@@ -70,7 +71,7 @@ func (r decisionRecorder) RecordBatch(b judge.Batch) error {
 		return fmt.Errorf("service: the store is not open")
 	}
 	_, err := st.AppendDecisionBatch(r.s.recordCtx(), store.DecisionBatch{
-		Run: b.Run, Stage: b.Stage, Mode: b.Mode, Requests: b.Requests, Elapsed: b.Elapsed,
+		Batch: b.ID, Run: b.Run, Stage: b.Stage, Mode: b.Mode, Elapsed: b.Elapsed,
 	})
 	if err != nil && r.s.log != nil {
 		r.s.log.Printf("dropping run %s's decision-model batch: %v", b.Run, err)

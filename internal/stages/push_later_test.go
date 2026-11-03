@@ -141,8 +141,8 @@ func TestCommitsAReviewApprovesAfterTheTestFixRoundArePushed(t *testing.T) {
 // the review's, and the push stage's pass over the commits a fix round wrote
 // after it is the push's. The run is the positive control's above, with a
 // client that has a key and asks the stand-in provider, so each pass sends
-// requests, and every request a stage's batch counts is one its answers
-// account for under that stage's name.
+// requests, and every answer names its own stage's batch, so the two passes'
+// requests stay apart and together are what the provider received.
 func TestEachReviewingStageRecordsItsOwnDecisionBatch(t *testing.T) {
 	t.Parallel()
 	rec := &records{}
@@ -153,25 +153,34 @@ func TestEachReviewingStageRecordsItsOwnDecisionBatch(t *testing.T) {
 	if got := pipeline.StageOutcome(result.State, pipeline.StagePush); got != pipeline.OutcomePassed {
 		t.Fatalf("the push stage came to %s, want passed after reviewing the later commits", got)
 	}
-	answered := map[string]int{}
-	for _, r := range rec.all() {
-		answered[r.Stage] += r.Requests
-	}
+	stageOf := map[string]string{}
 	var stagesAsked []string
-	total := 0
 	for _, b := range rec.allBatches() {
-		if b.Run != run.subject.run || b.Requests == 0 || answered[b.Stage] != b.Requests {
-			t.Fatalf("a batch is %+v, and the answers recorded under %q account for %d request(s): %v",
-				b, b.Stage, answered[b.Stage], answered)
+		if b.Run != run.subject.run || stageOf[b.ID] != "" {
+			t.Fatalf("a batch is %+v, after batches %v", b, stageOf)
 		}
+		stageOf[b.ID] = b.Stage
 		stagesAsked = append(stagesAsked, b.Stage)
-		total += b.Requests
+	}
+	sent := map[string]int{}
+	total := 0
+	for _, r := range rec.all() {
+		if stageOf[r.Batch] != r.Stage {
+			t.Fatalf("an answer under %q names batch %q, of stage %q", r.Stage, r.Batch, stageOf[r.Batch])
+		}
+		sent[r.Batch] += r.Requests
+		total += r.Requests
+	}
+	for id, stage := range stageOf {
+		if sent[id] == 0 {
+			t.Fatalf("the %s stage's batch has answers sending no requests: %v", stage, sent)
+		}
 	}
 	if want := []string{pipeline.StageReview.String(), pipeline.StagePush.String()}; !slices.Equal(stagesAsked, want) {
 		t.Fatalf("the batches name the stages %q, want %q", stagesAsked, want)
 	}
 	if total != provider.Count() {
-		t.Fatalf("the batches count %d requests and the provider received %d", total, provider.Count())
+		t.Fatalf("the answers count %d requests and the provider received %d", total, provider.Count())
 	}
 }
 

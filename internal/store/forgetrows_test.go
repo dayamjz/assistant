@@ -146,7 +146,7 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 		t.Fatalf("AppendStageExecution: %v", err)
 	}
 	answer, err := s.AppendDecisionAnswer(ctx, DecisionAnswer{
-		Run: run.ID, Stage: "review", Check: "trace-reason", Path: "a.go", Model: "m-1", Probability: Known(0.5), Cutoff: 0.8,
+		Run: run.ID, Stage: "review", Batch: "b-1", Check: "trace-reason", Path: "a.go", Model: "m-1", Probability: Known(0.5), Cutoff: 0.8,
 	})
 	if err != nil {
 		t.Fatalf("AppendDecisionAnswer: %v", err)
@@ -154,7 +154,7 @@ func TestForgettingARepositoryRemovesItsRowsFromEveryRunKeyedTable(t *testing.T)
 	if n, err := s.AppendDecisionFollowUp(ctx, run.ID, "a.go", FollowUpFinding, "review", "note", answer.Seq); err != nil || n != 1 {
 		t.Fatalf("AppendDecisionFollowUp = %d, %v; want one follow-up", n, err)
 	}
-	if _, err := s.AppendDecisionBatch(ctx, DecisionBatch{Run: run.ID, Stage: "review", Mode: "evaluate"}); err != nil {
+	if _, err := s.AppendDecisionBatch(ctx, DecisionBatch{Batch: "b-1", Run: run.ID, Stage: "review", Mode: "evaluate"}); err != nil {
 		t.Fatalf("AppendDecisionBatch: %v", err)
 	}
 	if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Agent: "claude", Purpose: "review", Started: now,

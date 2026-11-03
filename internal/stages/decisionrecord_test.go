@@ -1,11 +1,13 @@
 package stages_test
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
@@ -114,10 +116,11 @@ func TestAnAnswerTheRecordRefusesIsReportedOnTheRun(t *testing.T) {
 	assertNoWeaker(t, kept.report(), lost.report())
 }
 
-// Every review that reaches the decision-model checks records one batch row
-// timing them as a whole: with the checks on, as many requests as the
-// provider received and at least as long as the slowest answer took; with
-// the checks off or no key, a row of its own with no requests.
+// Every review that reaches the decision-model checks and finishes them
+// records one batch row timing them as a whole, which every answer it
+// recorded names: with the checks on, answers whose requests are as many as
+// the provider received, and a batch at least as long as the slowest answer
+// took; with the checks off or no key, a row of its own that no answer names.
 func TestEveryReviewRecordsOneBatchOfItsChecks(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -144,14 +147,18 @@ func TestEveryReviewRecordsOneBatchOfItsChecks(t *testing.T) {
 				t.Fatalf("the review recorded %d batches, want 1: %+v", len(batches), batches)
 			}
 			b := batches[0]
-			if b.Run != s.run || b.Stage != "review" || b.Mode != string(tc.mode) || b.Requests != provider.Count() ||
-				(b.Requests > 0) != tc.sends || b.Elapsed < 0 {
-				t.Fatalf("the batch is %+v, and the provider received %d requests", b, provider.Count())
+			if b.ID == "" || b.Run != s.run || b.Stage != "review" || b.Mode != string(tc.mode) || b.Elapsed < 0 {
+				t.Fatalf("the batch is %+v", b)
 			}
+			requests := 0
 			for _, r := range rec.all() {
-				if r.Elapsed <= 0 || b.Elapsed < r.Elapsed {
-					t.Fatalf("an answer took %v and the batch holding it %v", r.Elapsed, b.Elapsed)
+				if r.Batch != b.ID || r.Elapsed <= 0 || b.Elapsed < r.Elapsed {
+					t.Fatalf("an answer of batch %q took %v, and batch %q took %v", r.Batch, r.Elapsed, b.ID, b.Elapsed)
 				}
+				requests += r.Requests
+			}
+			if requests != provider.Count() || (requests > 0) != tc.sends {
+				t.Fatalf("the batch's answers count %d requests and the provider received %d", requests, provider.Count())
 			}
 		})
 	}
@@ -311,5 +318,74 @@ func TestThePullRequestRecordsWhichDecisionModelChecksRan(t *testing.T) {
 	none := section(graph.Value{})
 	if !strings.Contains(none, "no decision-model check ran") || strings.Contains(none, "Mode:") {
 		t.Fatalf("a run whose review recorded nothing reads as:\n\n%s", none)
+	}
+}
+
+// A review stopped during the decision-model checks writes no batch row, and
+// the answers it recorded before stopping, requests and all, name the batch
+// it drew, so the record shows a review whose checks never finished rather
+// than answers belonging to no review. The provider answers one screen and
+// holds the other, and the run is stopped once both have reached it. The
+// control is the same review left to finish, whose answers name the batch it
+// wrote.
+func TestAReviewStoppedDuringTheChecksLeavesAnswersNamingABatchItNeverWrote(t *testing.T) {
+	t.Parallel()
+	review := func(answer func(judgetest.Request) judgetest.Reply, stop bool) (*records, error) {
+		provider := judgetest.New(t, answer)
+		rec := &records{}
+		s := newSubject(t)
+		p := prepare(t, s, script(standin.Report(cleanReview(s))), mode(config.DecisionEvaluate), s.start(),
+			withJudge(decided(provider, judge.WithRecorder(rec))))
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { _, err := p.execute(ctx); done <- err }()
+		if stop {
+			for provider.Count() < 2 {
+				select {
+				case err := <-done:
+					t.Fatalf("the run ended before both screens reached the provider: %v", err)
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+			cancel()
+		}
+		return rec, <-done
+	}
+	stopped, err := review(func(r judgetest.Request) judgetest.Reply {
+		if r.Path == readmePath {
+			return judgetest.Answer(0.01)
+		}
+		return judgetest.Hang()
+	}, true)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("the stopped run ended with %v, want context.Canceled", err)
+	}
+	if b := stopped.allBatches(); len(b) != 0 {
+		t.Fatalf("a review stopped during the checks wrote batches %+v", b)
+	}
+	answers, requests := stopped.all(), 0
+	for _, r := range answers {
+		if r.Batch == "" || r.Batch != answers[0].Batch {
+			t.Fatalf("the stopped review's answers name batches %q and %q", answers[0].Batch, r.Batch)
+		}
+		requests += r.Requests
+	}
+	if len(answers) == 0 || requests < 2 {
+		t.Fatalf("the stopped review recorded %d answers sending %d requests, want both screens", len(answers), requests)
+	}
+
+	finished, err := review(judgetest.Always(judgetest.Answer(0.01)), false)
+	if err != nil {
+		t.Fatalf("the finished run ended with %v", err)
+	}
+	batches := finished.allBatches()
+	if len(batches) != 1 || len(finished.all()) == 0 {
+		t.Fatalf("the finished review wrote batches %+v and %d answers", batches, len(finished.all()))
+	}
+	for _, r := range finished.all() {
+		if r.Batch != batches[0].ID {
+			t.Fatalf("an answer names batch %q and the review wrote %q", r.Batch, batches[0].ID)
+		}
 	}
 }

@@ -39,6 +39,8 @@ type Record struct {
 	// produced none. It is the caller's to state, because the caller builds
 	// the finding: this package answers and does not report.
 	Finding string
+	// Batch is the ID of the Batch of the review that asked.
+	Batch string
 	// Measured is whether the client measured a call for this answer. It is
 	// false for a path whose diff could not be read (Unasked): nothing was
 	// sent or timed, so Requests, Usage, and Elapsed are zero and mean nothing.
@@ -111,16 +113,22 @@ func (u *Usage) add(status int, sent, raw []byte) {
 
 // Batch is one review's pass over the decision-model checks as a whole, so
 // that the stage's time with the checks can be set beside its time without
-// them. Each review that reaches the checks writes one, naming the stage that
-// asked: the review stage, or the push stage reviewing commits written after
-// it. A review whose checks are off or had no key writes one with no requests.
+// them. A review that reaches the checks and finishes them writes one, naming
+// the stage that asked: the review stage, or the push stage reviewing commits
+// written after it. A review whose checks are off or had no key writes one
+// too, and no answer names it. A review stopped during the checks writes
+// none, so the answers it recorded name an ID no Batch has.
+//
+// What the checks sent is on the answers alone: a batch's requests are those
+// of the answers naming its ID.
 type Batch struct {
+	// ID names the batch. The review draws it before its first check, so each
+	// Record it writes carries it as Batch before the batch itself is written.
+	ID string
 	// Run is the run the review served, and Stage the stage that asked.
 	Run, Stage string
 	// Mode is the review's decision_model mode.
 	Mode string
-	// Requests is how many requests every check of the review sent together.
-	Requests int
 	// Elapsed is how long the checks took the review, from before the first
 	// diff read to after the last answer was recorded.
 	Elapsed time.Duration
@@ -137,17 +145,18 @@ type Recorder interface {
 	RecordBatch(Batch) error
 }
 
-// RecordOf is the record of r as asked for run at stage, with finding the
-// action of the finding the caller built from it, empty for none.
-func RecordOf(run, stage string, r Result, finding string) Record {
-	return recordAt(run, stage, r, finding, rates)
+// RecordOf is the record of r as asked for run at stage by the review whose
+// Batch is batch, with finding the action of the finding the caller built
+// from it, empty for none.
+func RecordOf(run, stage, batch string, r Result, finding string) Record {
+	return recordAt(run, stage, batch, r, finding, rates)
 }
 
 // recordAt is RecordOf pricing from table, which is rates outside a test.
-func recordAt(run, stage string, r Result, finding string, table map[string]Rate) Record {
+func recordAt(run, stage, batch string, r Result, finding string, table map[string]Rate) Record {
 	p, ok := r.Probability()
 	rec := Record{
-		Run: run, Stage: stage, Check: r.Check(), Path: r.Path(), Model: r.Model(),
+		Run: run, Stage: stage, Batch: batch, Check: r.Check(), Path: r.Path(), Model: r.Model(),
 		Probability: p, Answered: ok, Cutoff: r.Cutoff(), Finding: finding,
 		Measured: r.measured, Requests: r.requests, Usage: r.usage, Elapsed: r.elapsed,
 	}

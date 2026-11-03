@@ -41,6 +41,10 @@ type DecisionAnswer struct {
 	// Finding is the action of the finding the answer produced, empty when it
 	// produced none.
 	Finding string
+	// Batch is the batch of the review that asked, empty only on a row
+	// appended before migration 71 kept it. A DecisionBatch of that name
+	// exists only once the review finished its checks.
+	Batch string
 	// Measures is what the call measured, unknown on a row appended before
 	// migration 70 kept it and on a path the stage could not ask about.
 	Measures Optional[DecisionMeasures]
@@ -99,13 +103,13 @@ func measureArgs(a DecisionAnswer) []any {
 
 // AppendDecisionAnswer appends one answer to the record and returns the row
 // with the sequence and time it was assigned. It refuses a row naming no run,
-// no stage, no check, or no model, because an answer nothing is attributed to
+// no stage, no batch, no check, or no model, because an answer nothing is attributed to
 // answers no question the record exists for, and it refuses a row that is
 // both an answer and a failure, or neither, because the record would then say
 // two things about one call or nothing at all, and a rate PricedAt refuses.
 func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (DecisionAnswer, error) {
 	for _, field := range []struct{ name, value string }{
-		{"run", a.Run}, {"stage", a.Stage}, {"check", a.Check}, {"model", a.Model},
+		{"run", a.Run}, {"stage", a.Stage}, {"batch", a.Batch}, {"check", a.Check}, {"model", a.Model},
 	} {
 		if strings.TrimSpace(field.value) == "" {
 			return DecisionAnswer{}, fmt.Errorf("store: decision answer has no %s", field.name)
@@ -130,10 +134,10 @@ func (s *Store) AppendDecisionAnswer(ctx context.Context, a DecisionAnswer) (Dec
 				run, stage, check_name, path, model, probability, cutoff, failure, finding, recorded_at,
 				requests, reported_requests, reported_input_tokens, reported_output_tokens,
 				unreported_requests, unreported_sent_bytes, unreported_received_bytes, elapsed_ns,
-				rate_input_usd_per_million_tokens, rate_output_usd_per_million_tokens, rate_source)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			append([]any{a.Run, a.Stage, a.Check, a.Path, a.Model, a.Probability, a.Cutoff,
-				a.Failure, a.Finding, encodeTime(a.Recorded)}, measureArgs(a)...)...)
+				rate_input_usd_per_million_tokens, rate_output_usd_per_million_tokens, rate_source, batch)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			append(append([]any{a.Run, a.Stage, a.Check, a.Path, a.Model, a.Probability, a.Cutoff,
+				a.Failure, a.Finding, encodeTime(a.Recorded)}, measureArgs(a)...), a.Batch)...)
 		if err != nil {
 			return err
 		}
@@ -156,7 +160,7 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 			COALESCE(unreported_requests, 0), COALESCE(unreported_sent_bytes, 0),
 			COALESCE(unreported_received_bytes, 0), COALESCE(elapsed_ns, 0),
 			rate_source IS NOT NULL, COALESCE(rate_input_usd_per_million_tokens, 0),
-			COALESCE(rate_output_usd_per_million_tokens, 0), COALESCE(rate_source, '')
+			COALESCE(rate_output_usd_per_million_tokens, 0), COALESCE(rate_source, ''), COALESCE(batch, '')
 		FROM decision_answer WHERE run = ? ORDER BY seq`, run)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading decision answers: %w", err)
@@ -175,7 +179,7 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 			&a.Probability, &a.Cutoff, &a.Failure, &a.Finding, &recorded, &measured,
 			&m.Requests, &m.ReportedRequests, &m.ReportedInputTokens, &m.ReportedOutputTokens,
 			&m.UnreportedRequests, &m.UnreportedSentBytes, &m.UnreportedReceivedBytes, &elapsed,
-			&priced, &r.InputUSDPerMillionTokens, &r.OutputUSDPerMillionTokens, &r.Source); err != nil {
+			&priced, &r.InputUSDPerMillionTokens, &r.OutputUSDPerMillionTokens, &r.Source, &a.Batch); err != nil {
 			return nil, fmt.Errorf("store: reading decision answers: %w", err)
 		}
 		if measured {
@@ -197,20 +201,20 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 }
 
 // DecisionBatch is one review's pass over the decision-model checks as a
-// whole, as internal/judge's Batch has it: how many requests its checks sent
-// and how long they took, with none sent when they were off or had no key. It
-// is history on DecisionAnswer's terms. No answer row points at its batch, so
-// when one stage of a run reviews more than once, as after a fix round, the
-// run has several batches for that stage and the record cannot say which
-// answers belong to which; only the run's and the stage's totals line up.
+// whole, as internal/judge's Batch has it: how long they took. It is history
+// on DecisionAnswer's terms. Its answers are the rows naming its Batch, and
+// what the checks sent is theirs alone, so no column here repeats it; a batch
+// of checks that were off or had no key has none. A review stopped during the
+// checks wrote answers and no batch, so a Batch an answer names may have no
+// row.
 type DecisionBatch struct {
 	// Seq is the row's position, assigned on append.
 	Seq int64
+	// Batch is the name the review drew, which its answers carry.
+	Batch string
 	// Run, Stage, and Mode are the run, the stage that asked, and its
 	// decision_model mode.
 	Run, Stage, Mode string
-	// Requests is how many requests the checks sent together.
-	Requests int
 	// Elapsed is how long the checks took the stage.
 	Elapsed time.Duration
 	// Recorded is when the row was appended, set by this package.
@@ -218,18 +222,19 @@ type DecisionBatch struct {
 }
 
 // AppendDecisionBatch appends one batch and returns the row with the sequence
-// and time it was assigned. It refuses a row naming no run, stage, or mode,
-// or counting below zero.
+// and time it was assigned. It refuses a row naming no batch, run, stage, or
+// mode, a batch already appended, or a negative time.
 func (s *Store) AppendDecisionBatch(ctx context.Context, b DecisionBatch) (DecisionBatch, error) {
-	if strings.TrimSpace(b.Run) == "" || strings.TrimSpace(b.Stage) == "" || strings.TrimSpace(b.Mode) == "" {
-		return DecisionBatch{}, fmt.Errorf("store: a decision batch names a run, a stage, and a mode")
+	if strings.TrimSpace(b.Batch) == "" || strings.TrimSpace(b.Run) == "" || strings.TrimSpace(b.Stage) == "" ||
+		strings.TrimSpace(b.Mode) == "" {
+		return DecisionBatch{}, fmt.Errorf("store: a decision batch names a batch, a run, a stage, and a mode")
 	}
 	b.Recorded = time.Now().UTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO decision_batch (run, stage, mode, requests, elapsed_ns, recorded_at)
+			INSERT INTO decision_batch (batch, run, stage, mode, elapsed_ns, recorded_at)
 			VALUES (?, ?, ?, ?, ?, ?)`,
-			b.Run, b.Stage, b.Mode, b.Requests, int64(b.Elapsed), encodeTime(b.Recorded))
+			b.Batch, b.Run, b.Stage, b.Mode, int64(b.Elapsed), encodeTime(b.Recorded))
 		if err != nil {
 			return err
 		}
@@ -245,7 +250,7 @@ func (s *Store) AppendDecisionBatch(ctx context.Context, b DecisionBatch) (Decis
 // DecisionBatches returns one run's batches in the order they were appended.
 func (s *Store) DecisionBatches(ctx context.Context, run string) ([]DecisionBatch, error) {
 	rows, err := s.read.QueryContext(ctx, `
-		SELECT seq, run, stage, mode, requests, elapsed_ns, recorded_at
+		SELECT seq, batch, run, stage, mode, elapsed_ns, recorded_at
 		FROM decision_batch WHERE run = ? ORDER BY seq`, run)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading decision batches: %w", err)
@@ -256,7 +261,7 @@ func (s *Store) DecisionBatches(ctx context.Context, run string) ([]DecisionBatc
 		var b DecisionBatch
 		var elapsed int64
 		var recorded string
-		if err := rows.Scan(&b.Seq, &b.Run, &b.Stage, &b.Mode, &b.Requests, &elapsed, &recorded); err != nil {
+		if err := rows.Scan(&b.Seq, &b.Batch, &b.Run, &b.Stage, &b.Mode, &elapsed, &recorded); err != nil {
 			return nil, fmt.Errorf("store: reading decision batches: %w", err)
 		}
 		b.Elapsed = time.Duration(elapsed)

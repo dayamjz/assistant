@@ -46,6 +46,9 @@ type decisionRun struct {
 	// reviewing commits written after it. Its answer rows and its batch row
 	// name it.
 	stage pipeline.Stage
+	// batch is the ID of this review's judge.Batch, which each answer row
+	// names.
+	batch string
 }
 
 // active reports whether the checks are asked for at all. With the mode off,
@@ -404,26 +407,23 @@ func flaggedFinding(mode config.DecisionModel, r judge.Result) findings.Finding 
 // record hands one answer to the client's recorder, and adds it to lost when
 // the recorder could not keep it.
 func (d decisionRun) record(lost []string, r judge.Result, finding string) []string {
-	if err := d.client.Record(judge.RecordOf(d.run, d.stage.String(), r, finding)); err != nil {
+	if err := d.client.Record(judge.RecordOf(d.run, d.stage.String(), d.batch, r, finding)); err != nil {
 		return append(lost, r.Path()+" ("+string(r.Check())+": "+err.Error()+")")
 	}
 	return lost
 }
 
 // recordBatch hands the client's recorder this review's pass over the checks
-// as one row naming d.stage: the requests every outcome in asked sent, and
-// the time since start, which covers each path's diff read and each answer's
-// record. A review whose checks are off or had no key records one too, with no
-// requests, so the stage's time with the checks can be set beside its time
-// without them. A review stopped during the checks, and one that never reached
-// them, records none. It returns a note when the record could not keep the
-// row, fixed text for lostNote's reason.
-func (d decisionRun) recordBatch(start time.Time, asked []checked) []findings.Finding {
-	b := judge.Batch{Run: d.run, Stage: d.stage.String(), Mode: string(d.mode)}
-	for _, c := range asked {
-		b.Requests += c.result.Requests()
-	}
-	b.Elapsed = time.Since(start)
+// as one row, d.batch, naming d.stage, timed from start, which covers each
+// path's diff read and each answer's record. A review whose checks are off or
+// had no key records one too, which no answer names, so the stage's time with
+// the checks can be set beside its time without them. A review stopped during
+// the checks, and one that never reached them, records none. It returns a
+// note when the record could not keep the row, fixed text for lostNote's
+// reason.
+func (d decisionRun) recordBatch(start time.Time) []findings.Finding {
+	b := judge.Batch{ID: d.batch, Run: d.run, Stage: d.stage.String(), Mode: string(d.mode),
+		Elapsed: time.Since(start)}
 	if d.client.RecordBatch(b) == nil {
 		return nil
 	}

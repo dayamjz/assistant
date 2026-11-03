@@ -2981,20 +2981,24 @@ var schema = []migration{
 		version: 71,
 		name:    decisionBatchMigration,
 		statements: []string{
-			// One row per review that reached the decision-model checks, its
-			// checks on or not: how many requests they sent and how long
-			// they took. It is history on decision_answer's terms, and its
-			// run column carries no foreign key for that table's reason.
+			// One row per review that finished the decision-model checks,
+			// its checks on or not: how long they took. It is history on
+			// decision_answer's terms, and its run column carries no foreign
+			// key for that table's reason.
 			`CREATE TABLE decision_batch (
 				seq         INTEGER PRIMARY KEY,
+				batch       TEXT NOT NULL UNIQUE,
 				run         TEXT NOT NULL,
 				stage       TEXT NOT NULL,
 				mode        TEXT NOT NULL,
-				requests    INTEGER NOT NULL CHECK (requests >= 0),
 				elapsed_ns  INTEGER NOT NULL CHECK (elapsed_ns >= 0),
 				recorded_at TEXT NOT NULL
 			) STRICT`,
 			`CREATE INDEX decision_batch_run ON decision_batch(run, seq)`,
+			// The batch each answer's review drew, NULL on a row from before
+			// it. It is no foreign key: a review stopped during the checks
+			// names a batch it never wrote.
+			`ALTER TABLE decision_answer ADD COLUMN batch TEXT`,
 		},
 	},
 }
@@ -3010,5 +3014,6 @@ const attemptLaunchEndMigration = "attempt launch end"
 const decisionMeasuresMigration = "decision measures"
 
 // decisionBatchMigration names the migration that adds the per-review batch
-// row, for the reason sealCheckpointTableMigration is a constant.
+// row and the batch each answer names, for the reason
+// sealCheckpointTableMigration is a constant.
 const decisionBatchMigration = "decision batch"

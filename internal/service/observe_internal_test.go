@@ -21,7 +21,7 @@ import (
 func answerAbout(t *testing.T, s *Service, run, path string) int64 {
 	t.Helper()
 	a, err := s.store.AppendDecisionAnswer(t.Context(), store.DecisionAnswer{
-		Run: run, Stage: "review", Check: "reviewer-directed-text", Path: path,
+		Run: run, Stage: "review", Batch: "b-1", Check: "reviewer-directed-text", Path: path,
 		Model: "jev-1.13.0", Probability: store.Known(0.9), Cutoff: 0.3, Finding: "note",
 	})
 	if err != nil {
