@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -130,6 +132,33 @@ func TestCommitsAReviewApprovesAfterTheTestFixRoundArePushed(t *testing.T) {
 	}
 	if calls := run.agent.Calls(); len(calls) != 3 {
 		t.Fatalf("the agent was invoked %d time(s), want three", len(calls))
+	}
+}
+
+// Each stage that reviews records its own batch row of the decision-model
+// checks: the review stage's pass over the change is the review's, and the
+// push stage's pass over the commits a fix round wrote after it is the
+// push's. The run is the positive control's above, with a client that has no
+// key and records into rec, so each review reaches the checks and writes its
+// row with no requests.
+func TestEachReviewingStageRecordsItsOwnDecisionBatch(t *testing.T) {
+	t.Parallel()
+	rec := &records{}
+	run := newLaterRun(t, pipeline.StageTest, standin.Reviewed("the round's change is sound"),
+		judge.New("", judge.WithRecorder(rec)))
+	result := run.execute(t)
+	if got := pipeline.StageOutcome(result.State, pipeline.StagePush); got != pipeline.OutcomePassed {
+		t.Fatalf("the push stage came to %s, want passed after reviewing the later commits", got)
+	}
+	var stagesAsked []string
+	for _, b := range rec.allBatches() {
+		if b.Run != run.subject.run || b.Requests != 0 {
+			t.Fatalf("a batch is %+v, want run %s and no requests", b, run.subject.run)
+		}
+		stagesAsked = append(stagesAsked, b.Stage)
+	}
+	if want := []string{pipeline.StageReview.String(), pipeline.StagePush.String()}; !slices.Equal(stagesAsked, want) {
+		t.Fatalf("the batches name the stages %q, want %q", stagesAsked, want)
 	}
 }
 
@@ -336,10 +365,12 @@ type laterRun struct {
 // working copy, so what an agent would have changed is put there the way
 // fix_test.go puts it, and everything after the edit is the product's.
 //
+// judged, when given, is the decision-model client both reviews are handed.
+//
 // later is how the review of later commits is answered. The review stage's
 // own review is otherwise answered cleanly, so the only thing that can hold
 // the push is the review this decision added.
-func newLaterRun(t *testing.T, fixAt pipeline.Stage, later standin.Reply) *laterRun {
+func newLaterRun(t *testing.T, fixAt pipeline.Stage, later standin.Reply, judged ...*judge.Client) *laterRun {
 	t.Helper()
 	s := newSubject(t)
 	git(t, s.dir, "config", "user.name", "test")
@@ -367,6 +398,9 @@ func newLaterRun(t *testing.T, fixAt pipeline.Stage, later standin.Reply) *later
 	agent := standin.New(t, standin.Script{Steps: steps})
 
 	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Defaults(), nil, redact.New())
+	for _, c := range judged {
+		deps = deps.WithJudge(c)
+	}
 	fixDeps := stages.NewFixDeps(
 		func(ctx context.Context, _ string) (agents.Fixer, error) {
 			return agents.OpenFixer(ctx, agent.Runner(), "")

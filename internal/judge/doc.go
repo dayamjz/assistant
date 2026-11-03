@@ -132,9 +132,10 @@
 //     never a call and is recorded unmeasured. A call is priced only at a
 //     Rate in rate.go that store.PricedAt, the rule's one owner, accepts for
 //     it; rates is empty, so no call is priced, and an unpriced call has no
-//     price rather than a price of zero. The review stage records one Batch
-//     per review that reaches the checks, timing them as a whole, with no
-//     requests when they are off or had no key.
+//     price rather than a price of zero. Each review that reaches the checks,
+//     the review stage's or the push stage's over later commits, records one
+//     Batch naming its stage, timing them as a whole, with no requests when
+//     they are off or had no key.
 //   - The model's answer is a judgment with no evidence behind it. A screen
 //     that does not flag a file says nothing about the file being safe, and
 //     the screen runs beside the review rather than before it, so the

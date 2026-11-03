@@ -111,8 +111,9 @@ func (u *Usage) add(status int, sent, raw []byte) {
 
 // Batch is one review's pass over the decision-model checks as a whole, so
 // that the stage's time with the checks can be set beside its time without
-// them. The review stage writes one per review that reaches the checks, and a
-// review whose checks are off or had no key writes one with no requests.
+// them. Each review that reaches the checks writes one, naming the stage that
+// asked: the review stage, or the push stage reviewing commits written after
+// it. A review whose checks are off or had no key writes one with no requests.
 type Batch struct {
 	// Run is the run the review served, and Stage the stage that asked.
 	Run, Stage string

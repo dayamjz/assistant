@@ -42,6 +42,9 @@ type decisionRun struct {
 	run    string
 	from   string
 	head   string
+	// stage is the stage that asked: the review stage, or the push stage
+	// reviewing commits written after it. Its batch row names it.
+	stage pipeline.Stage
 }
 
 // active reports whether the checks are asked for at all. With the mode off,
@@ -405,15 +408,15 @@ func (d decisionRun) record(lost []string, r judge.Result, finding string) []str
 }
 
 // recordBatch hands the client's recorder this review's pass over the checks
-// as one row: the requests every outcome in asked sent, and the time since
-// start, which covers each path's diff read and each answer's record. A review
-// whose checks are off or had no key records one too, with no requests, so
-// the stage's time with the checks can be set beside its time without them.
-// A review stopped during the checks, and one that never reached them,
-// records none. It returns a note when the record could not keep the row,
-// fixed text for lostNote's reason.
+// as one row naming d.stage: the requests every outcome in asked sent, and
+// the time since start, which covers each path's diff read and each answer's
+// record. A review whose checks are off or had no key records one too, with no
+// requests, so the stage's time with the checks can be set beside its time
+// without them. A review stopped during the checks, and one that never reached
+// them, records none. It returns a note when the record could not keep the
+// row, fixed text for lostNote's reason.
 func (d decisionRun) recordBatch(start time.Time, asked []checked) []findings.Finding {
-	b := judge.Batch{Run: d.run, Stage: pipeline.StageReview.String(), Mode: string(d.mode)}
+	b := judge.Batch{Run: d.run, Stage: d.stage.String(), Mode: string(d.mode)}
 	for _, c := range asked {
 		b.Requests += c.result.Requests()
 	}
