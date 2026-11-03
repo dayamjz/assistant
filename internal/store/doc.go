@@ -782,7 +782,9 @@
 // The decision-model record PRD section 5 asks for is here on the same terms,
 // as AppendDecisionAnswer and DecisionAnswers: one row per answer or failed
 // call, appended and never revised, with no column a question, a diff, a
-// reason, or a key could land in. What the run did with that path afterwards
+// reason, or a key could land in. Each row keeps what its call measured
+// (DecisionMeasures), unknown on a row from before migration 70, and the rate
+// it was priced at (DecisionRate), unknown when it was not priced. What the run did with that path afterwards
 // is AppendDecisionFollowUp: one row per answer it follows, of a closed set of
 // kinds, so an answer with no row is one nothing followed and the answer rows
 // are untouched. DecisionFirings reads the two back per run of a repository,

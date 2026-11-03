@@ -2952,9 +2952,39 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 70,
+		name:    decisionMeasuresMigration,
+		statements: []string{
+			// What each decision-model call measured, as internal/judge's
+			// Record has it: AppendDecisionAnswer writes the eight measures
+			// all or none, and a row from before this migration has none,
+			// which reads back as unmeasured rather than as a call that took
+			// no time. The three rate columns are written together, only for
+			// a priced call, which AppendDecisionAnswer holds every writer to,
+			// and are NULL otherwise rather than a price of zero; the price is
+			// the reported tokens at the rate, so no column holds it twice.
+			`ALTER TABLE decision_answer ADD COLUMN requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_input_tokens INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_output_tokens INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_sent_bytes INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_received_bytes INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN elapsed_ns INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_input_usd_per_million_tokens REAL`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_output_usd_per_million_tokens REAL`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_source TEXT`,
+		},
+	},
 }
 
 // attemptLaunchEndMigration names the migration that records a claimed
 // launch's end with no session, for the reason sealCheckpointTableMigration
 // is a constant.
 const attemptLaunchEndMigration = "attempt launch end"
+
+// decisionMeasuresMigration names the migration that adds what each
+// decision-model call measured, for the reason sealCheckpointTableMigration
+// is a constant.
+const decisionMeasuresMigration = "decision measures"
