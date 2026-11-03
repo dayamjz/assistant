@@ -138,11 +138,11 @@ func TestTheServicesDecisionClientRecordsEveryAnswerInTheStore(t *testing.T) {
 		t.Fatalf("a priced call's rate was recorded as (%+v, %v), want %+v", r, ok, wantRate)
 	}
 	if err := s.judge.RecordBatch(judge.Batch{ID: "batch-1", Run: "run-1", Stage: "review", Mode: "evaluate",
-		Elapsed: time.Second}); err != nil {
+		Sends: true, Elapsed: time.Second}); err != nil {
 		t.Fatalf("recording a batch: %v", err)
 	}
 	if batches, err := s.store.DecisionBatches(t.Context(), "run-1"); err != nil || len(batches) != 1 ||
-		batches[0].Batch != "batch-1" || batches[0].Elapsed != time.Second || batches[0].Mode != "evaluate" {
+		batches[0].Batch != "batch-1" || !batches[0].Sends || batches[0].Elapsed != time.Second || batches[0].Mode != "evaluate" {
 		t.Fatalf("the batch was recorded as %+v (%v)", batches, err)
 	}
 

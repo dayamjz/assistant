@@ -201,12 +201,15 @@ func (s *Store) DecisionAnswers(ctx context.Context, run string) ([]DecisionAnsw
 }
 
 // DecisionBatch is one review's pass over the decision-model checks as a
-// whole, as internal/judge's Batch has it: how long they took. It is history
-// on DecisionAnswer's terms. Its answers are the rows naming its Batch, and
-// what the checks sent is theirs alone, so no column here repeats it; a batch
-// of checks that were off or had no key has none. A review stopped during the
-// checks wrote answers and no batch, so a Batch an answer names may have no
-// row.
+// whole, as internal/judge's Batch has it: how long they took, and whether
+// they could send. It is history on DecisionAnswer's terms. A review that
+// reaches the checks and is not stopped during them writes one, its checks
+// on, off, or with no key, and Sends is what tells the first apart from the
+// other two, not whether an answer names the batch.
+// How many requests the checks sent is the kept answers' naming its Batch,
+// so no column here repeats it. A Batch an answer names may have no row: the
+// review was stopped during the checks, or this row was refused, and the
+// record does not say which.
 type DecisionBatch struct {
 	// Seq is the row's position, assigned on append.
 	Seq int64
@@ -215,6 +218,8 @@ type DecisionBatch struct {
 	// Run, Stage, and Mode are the run, the stage that asked, and its
 	// decision_model mode.
 	Run, Stage, Mode string
+	// Sends is whether the checks were on with a key, so requests could leave.
+	Sends bool
 	// Elapsed is how long the checks took the stage.
 	Elapsed time.Duration
 	// Recorded is when the row was appended, set by this package.
@@ -232,9 +237,9 @@ func (s *Store) AppendDecisionBatch(ctx context.Context, b DecisionBatch) (Decis
 	b.Recorded = time.Now().UTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
-			INSERT INTO decision_batch (batch, run, stage, mode, elapsed_ns, recorded_at)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			b.Batch, b.Run, b.Stage, b.Mode, int64(b.Elapsed), encodeTime(b.Recorded))
+			INSERT INTO decision_batch (batch, run, stage, mode, sends, elapsed_ns, recorded_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			b.Batch, b.Run, b.Stage, b.Mode, b.Sends, int64(b.Elapsed), encodeTime(b.Recorded))
 		if err != nil {
 			return err
 		}
@@ -250,7 +255,7 @@ func (s *Store) AppendDecisionBatch(ctx context.Context, b DecisionBatch) (Decis
 // DecisionBatches returns one run's batches in the order they were appended.
 func (s *Store) DecisionBatches(ctx context.Context, run string) ([]DecisionBatch, error) {
 	rows, err := s.read.QueryContext(ctx, `
-		SELECT seq, batch, run, stage, mode, elapsed_ns, recorded_at
+		SELECT seq, batch, run, stage, mode, sends, elapsed_ns, recorded_at
 		FROM decision_batch WHERE run = ? ORDER BY seq`, run)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading decision batches: %w", err)
@@ -261,7 +266,7 @@ func (s *Store) DecisionBatches(ctx context.Context, run string) ([]DecisionBatc
 		var b DecisionBatch
 		var elapsed int64
 		var recorded string
-		if err := rows.Scan(&b.Seq, &b.Batch, &b.Run, &b.Stage, &b.Mode, &elapsed, &recorded); err != nil {
+		if err := rows.Scan(&b.Seq, &b.Batch, &b.Run, &b.Stage, &b.Mode, &b.Sends, &elapsed, &recorded); err != nil {
 			return nil, fmt.Errorf("store: reading decision batches: %w", err)
 		}
 		b.Elapsed = time.Duration(elapsed)

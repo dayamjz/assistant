@@ -118,9 +118,10 @@ func TestAnAnswerTheRecordRefusesIsReportedOnTheRun(t *testing.T) {
 
 // Every review that reaches the decision-model checks and finishes them
 // records one batch row timing them as a whole, which every answer it
-// recorded names: with the checks on, answers whose requests are as many as
-// the provider received, and a batch at least as long as the slowest answer
-// took; with the checks off or no key, a row of its own that no answer names.
+// recorded names: with the checks on, a batch that says it could send,
+// answers whose requests are as many as the provider received, and a batch at
+// least as long as the slowest answer took; with the checks off or no key, a
+// row of its own that says it could not send and that no answer names.
 func TestEveryReviewRecordsOneBatchOfItsChecks(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -147,7 +148,8 @@ func TestEveryReviewRecordsOneBatchOfItsChecks(t *testing.T) {
 				t.Fatalf("the review recorded %d batches, want 1: %+v", len(batches), batches)
 			}
 			b := batches[0]
-			if b.ID == "" || b.Run != s.run || b.Stage != "review" || b.Mode != string(tc.mode) || b.Elapsed < 0 {
+			if b.ID == "" || b.Run != s.run || b.Stage != "review" || b.Mode != string(tc.mode) || b.Sends != tc.sends ||
+				b.Elapsed < 0 {
 				t.Fatalf("the batch is %+v", b)
 			}
 			requests := 0
@@ -323,8 +325,10 @@ func TestThePullRequestRecordsWhichDecisionModelChecksRan(t *testing.T) {
 
 // A review stopped during the decision-model checks writes no batch row, and
 // the answers it recorded before stopping, requests and all, name the batch
-// it drew, so the record shows a review whose checks never finished rather
-// than answers belonging to no review. The provider answers one screen and
+// it drew, so they belong to a review rather than to none. The record shows
+// only that their batch has no row; a review whose batch row the store
+// refused leaves the same shape, and only the run's report notes that one
+// (TestABatchTheRecordRefusesIsReportedOnTheRun). The provider answers one screen and
 // holds the other, and the run is stopped once both have reached it. The
 // control is the same review left to finish, whose answers name the batch it
 // wrote.
@@ -387,5 +391,35 @@ func TestAReviewStoppedDuringTheChecksLeavesAnswersNamingABatchItNeverWrote(t *t
 		if r.Batch != batches[0].ID {
 			t.Fatalf("an answer names batch %q and the review wrote %q", r.Batch, batches[0].ID)
 		}
+	}
+}
+
+// The batch row itself tells a review that sent requests apart from one
+// without the checks, whatever answer rows the record kept: a keyed review
+// whose every answer row is refused and a review with no key both leave a
+// batch no answer names, in the same mode, and only the keyed one's says it
+// could send. The keyed one did send: the provider received its requests.
+func TestABatchSaysItCouldSendEvenWhenEveryAnswerWasRefused(t *testing.T) {
+	t.Parallel()
+	batchOf := func(key string, rec *records) (judge.Batch, int) {
+		provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+		s := newSubject(t)
+		run(t, s, script(standin.Report(cleanReview(s))), mode(config.DecisionEvaluate), s.start(),
+			withJudge(judge.New(key, judge.WithEndpoint(provider.URL()), judge.WithRecorder(rec))))
+		b := rec.allBatches()
+		if len(b) != 1 || len(rec.all()) != 0 {
+			t.Fatalf("the review kept batches %+v and %d answers, want one batch and none", b, len(rec.all()))
+		}
+		return b[0], provider.Count()
+	}
+	keyed, sent := batchOf(decisionKey, &records{refuse: func(judge.Record) error {
+		return errors.New("database is locked")
+	}})
+	keyless, none := batchOf("", &records{})
+	if sent == 0 || none != 0 {
+		t.Fatalf("the keyed review sent %d requests and the keyless one %d", sent, none)
+	}
+	if keyed.Mode != keyless.Mode || !keyed.Sends || keyless.Sends {
+		t.Fatalf("the keyed review's batch is %+v and the keyless one's %+v", keyed, keyless)
 	}
 }

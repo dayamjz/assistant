@@ -169,7 +169,7 @@ func TestDecisionBatchesReadBackAndRefuseWhatNamesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s := openStore(t)
-	on := DecisionBatch{Batch: "b-1", Run: "run-1", Stage: "review", Mode: "evaluate", Elapsed: 2 * time.Second}
+	on := DecisionBatch{Batch: "b-1", Run: "run-1", Stage: "review", Mode: "evaluate", Sends: true, Elapsed: 2 * time.Second}
 	off := DecisionBatch{Batch: "b-2", Run: "run-1", Stage: "review", Mode: "off"}
 	for _, b := range []DecisionBatch{on, off} {
 		if _, err := s.AppendDecisionBatch(ctx, b); err != nil {
@@ -193,7 +193,7 @@ func TestDecisionBatchesReadBackAndRefuseWhatNamesNothing(t *testing.T) {
 	for i, want := range []DecisionBatch{on, off} {
 		g := got[i]
 		if g.Batch != want.Batch || g.Run != want.Run || g.Stage != want.Stage || g.Mode != want.Mode ||
-			g.Elapsed != want.Elapsed || g.Seq == 0 || g.Recorded.IsZero() {
+			g.Sends != want.Sends || g.Elapsed != want.Elapsed || g.Seq == 0 || g.Recorded.IsZero() {
 			t.Fatalf("batch %d read back as %+v, want %+v", i, g, want)
 		}
 	}

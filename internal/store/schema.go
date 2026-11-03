@@ -2981,8 +2981,9 @@ var schema = []migration{
 		version: 71,
 		name:    decisionBatchMigration,
 		statements: []string{
-			// One row per review that finished the decision-model checks,
-			// its checks on or not: how long they took. It is history on
+			// One row per review that reached the decision-model checks and
+			// was not stopped during them, its checks on or not: whether
+			// they could send, and how long they took. It is history on
 			// decision_answer's terms, and its run column carries no foreign
 			// key for that table's reason.
 			`CREATE TABLE decision_batch (
@@ -2991,6 +2992,7 @@ var schema = []migration{
 				run         TEXT NOT NULL,
 				stage       TEXT NOT NULL,
 				mode        TEXT NOT NULL,
+				sends       INTEGER NOT NULL CHECK (sends IN (0, 1)),
 				elapsed_ns  INTEGER NOT NULL CHECK (elapsed_ns >= 0),
 				recorded_at TEXT NOT NULL
 			) STRICT`,

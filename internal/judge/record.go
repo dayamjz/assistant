@@ -113,14 +113,18 @@ func (u *Usage) add(status int, sent, raw []byte) {
 
 // Batch is one review's pass over the decision-model checks as a whole, so
 // that the stage's time with the checks can be set beside its time without
-// them. A review that reaches the checks and finishes them writes one, naming
-// the stage that asked: the review stage, or the push stage reviewing commits
-// written after it. A review whose checks are off or had no key writes one
-// too, and no answer names it. A review stopped during the checks writes
-// none, so the answers it recorded name an ID no Batch has.
+// them, and Sends says which of the two a batch is. A review that reaches the
+// checks and is not stopped during them writes one, naming the stage that
+// asked: the review stage, or the push stage reviewing commits written after
+// it. A review whose checks are off or had no key writes one too, with Sends
+// false. A review stopped during the checks writes none, and a Batch the
+// recorder refuses is not kept, so the ID its answers carry names no kept
+// Batch in both cases; the record alone cannot tell the two apart, and only
+// the refusal leaves a note on the run's report.
 //
-// What the checks sent is on the answers alone: a batch's requests are those
-// of the answers naming its ID.
+// How many requests the checks sent is on the answers alone: a batch's
+// requests are those of the kept answers naming its ID, so an answer the
+// recorder refused counts in no batch.
 type Batch struct {
 	// ID names the batch. The review draws it before its first check, so each
 	// Record it writes carries it as Batch before the batch itself is written.
@@ -129,6 +133,12 @@ type Batch struct {
 	Run, Stage string
 	// Mode is the review's decision_model mode.
 	Mode string
+	// Sends is whether the checks could send requests: they were on and the
+	// operator's environment held a key. It is false with the checks off or
+	// with no key, so it is what tells a review without the checks apart, and
+	// not whether an answer names the batch: answers are best-effort, and a
+	// review whose every answer was refused sent requests all the same.
+	Sends bool
 	// Elapsed is how long the checks took the review, from before the first
 	// diff read to after the last answer was recorded.
 	Elapsed time.Duration

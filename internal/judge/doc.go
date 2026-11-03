@@ -135,9 +135,10 @@
 //     price rather than a price of zero. Each review that reaches the checks,
 //     the review stage's or the push stage's over later commits, records one
 //     Batch naming its stage and timing them as a whole, which every answer
-//     the review recorded names; with the checks off or no key, no answer
-//     does. A review stopped during the checks records no Batch, so its
-//     answers name one the record does not have.
+//     the review recorded names; with the checks off or no key, its Sends is
+//     false and no answer does. A review stopped during the checks records no
+//     Batch, and one the recorder refused is not kept, so its answers name
+//     one the record does not have, and the record cannot say which.
 //   - The model's answer is a judgment with no evidence behind it. A screen
 //     that does not flag a file says nothing about the file being safe, and
 //     the screen runs beside the review rather than before it, so the
