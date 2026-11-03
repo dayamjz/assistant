@@ -9,6 +9,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/judge/judgetest"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // Every call's record says how long it took and how large it was, failed
@@ -159,17 +160,18 @@ func TestACallIsPricedOnlyAtASourcedRateWithEveryTokenReported(t *testing.T) {
 	}
 }
 
-// A rate is its two figures with their source, or not one. The shipped table
-// holds only rates, and the check it is held to refuses each way a rate can
-// be wrong, so an empty table passing it is not the check looking at nothing.
+// Every shipped rate prices a fully reported call by store.PricedAt, the one
+// owner of that rule. The rule is asked of rates it must refuse too, so an
+// empty table passing here is not the check looking at nothing.
 func TestEveryShippedRateNamesItsSource(t *testing.T) {
 	t.Parallel()
+	reported := store.DecisionMeasures{Requests: 1, ReportedRequests: 1}
 	for model, rate := range judge.ShippedRates() {
-		if err := judge.ValidRate(rate); err != nil {
-			t.Errorf("the shipped rate for %s is not a rate: %v", model, err)
+		if err := store.PricedAt(reported, rate); err != nil {
+			t.Errorf("the shipped rate for %s prices nothing: %v", model, err)
 		}
 	}
-	if err := judge.ValidRate(judge.Rate{InputUSDPerMillionTokens: 1, OutputUSDPerMillionTokens: 3, Source: "x"}); err != nil {
+	if err := store.PricedAt(reported, judge.Rate{InputUSDPerMillionTokens: 1, OutputUSDPerMillionTokens: 3, Source: "x"}); err != nil {
 		t.Fatalf("a rate with both figures and a source was refused: %v", err)
 	}
 	for name, bad := range map[string]judge.Rate{
@@ -178,7 +180,7 @@ func TestEveryShippedRateNamesItsSource(t *testing.T) {
 		"not a number":      {InputUSDPerMillionTokens: math.NaN(), OutputUSDPerMillionTokens: 3, Source: "x"},
 		"infinite":          {InputUSDPerMillionTokens: math.Inf(1), OutputUSDPerMillionTokens: 3, Source: "x"},
 	} {
-		if judge.ValidRate(bad) == nil {
+		if store.PricedAt(reported, bad) == nil {
 			t.Errorf("a rate with %s was accepted", name)
 		}
 	}

@@ -56,7 +56,8 @@ func openDecisionService(t *testing.T, env map[string]string, provider *judgetes
 // The client every run's review stage is handed reads its key from the
 // operator's environment and records into the store: an answer and a failed
 // call each land one row of the decision-model record, the failed one with no
-// probability, each with what its call measured. With no key in the environment the same service sends nothing.
+// probability, each with what its call measured. With no key in the
+// environment the same service sends nothing.
 func TestTheServicesDecisionClientRecordsEveryAnswerInTheStore(t *testing.T) {
 	t.Parallel()
 	provider := judgetest.New(t, func(r judgetest.Request) judgetest.Reply {

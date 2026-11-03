@@ -67,12 +67,7 @@ func measuresOf(rec judge.Record) store.Optional[store.DecisionMeasures] {
 	if !rec.Measured {
 		return store.Unknown[store.DecisionMeasures]()
 	}
-	return store.Known(store.DecisionMeasures{
-		Requests: rec.Requests, ReportedRequests: rec.Usage.ReportedRequests,
-		UnreportedRequests: rec.Usage.UnreportedRequests, ReportedInputTokens: rec.Usage.ReportedInputTokens,
-		ReportedOutputTokens: rec.Usage.ReportedOutputTokens, UnreportedSentBytes: rec.Usage.UnreportedSentBytes,
-		UnreportedReceivedBytes: rec.Usage.UnreportedReceivedBytes, Elapsed: rec.Elapsed,
-	})
+	return store.Known(rec.Measures())
 }
 
 // rateOf is the rate rec's call was priced at, unknown when it was not priced.
@@ -80,8 +75,7 @@ func rateOf(rec judge.Record) store.Optional[store.DecisionRate] {
 	if rec.Rate == nil {
 		return store.Unknown[store.DecisionRate]()
 	}
-	return store.Known(store.DecisionRate{InputUSDPerMillionTokens: rec.Rate.InputUSDPerMillionTokens,
-		OutputUSDPerMillionTokens: rec.Rate.OutputUSDPerMillionTokens, Source: rec.Rate.Source})
+	return store.Known(*rec.Rate)
 }
 
 // proposalWindow is how many of a check's most recent firing runs the
