@@ -222,15 +222,7 @@ const settleReadings = 64
 // whole that keep exiting, one in every reading, still keep every reading
 // from settling.
 func processesWhere(table processTable, match func(processTable, int) (bool, error)) ([]Process, error) {
-	exclude := map[int]bool{}
-	for pid := os.Getpid(); pid > 1 && !exclude[pid]; {
-		exclude[pid] = true
-		lineage, found, err := agents.ReadLineage(pid)
-		if err != nil || !found {
-			break
-		}
-		pid = lineage.Parent
-	}
+	exclude := ownLineage()
 	// read is every process read whole so far, with what it was read as:
 	// a process match accepts, or nil for one it refuses or passes over;
 	// refused is those of them read whole that match refused.
@@ -357,6 +349,23 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		standing = nowStanding
 	}
 	return nil, longestStanding(causes, standing)
+}
+
+// ownLineage is the process numbers a listing leaves out as its own: this
+// process and its ancestors, as far as their lineage can be read. A
+// listing reads nothing of a number in it, whatever process the table
+// names there.
+func ownLineage() map[int]bool {
+	lineage := map[int]bool{}
+	for pid := os.Getpid(); pid > 1 && !lineage[pid]; {
+		lineage[pid] = true
+		read, found, err := agents.ReadLineage(pid)
+		if err != nil || !found {
+			break
+		}
+		pid = read.Parent
+	}
+	return lineage
 }
 
 // emptyArguments reports an argument list read as nothing: none, or the one
