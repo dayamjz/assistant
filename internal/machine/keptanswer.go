@@ -262,27 +262,43 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
 }
 
+// The two carry-on slot refusals below are read by a person after the
+// service let go of every lock the refusal was decided under, so each
+// clause states only what no write after that moment can make false: what
+// this answer did, and what the service was doing when the answer came to
+// carry the work on, in the past tense. Neither says whether the entry is
+// open (another answer holding the slot may close it), that the answer
+// recorded nothing (the answer that recorded the claim can be the one
+// refused, when another answer carries that claim out first), nor what the
+// service can do now or later (the holder lets the slot go, and a retry
+// answered on a hold can free a slot a dispatch kept). The person reads
+// what stands instead (#731).
+
 // PhraseCarryOnSlotBusy is the row for a carry-on answer refused because
-// this service already holds that successor's in-flight work
-// (claiming[id]). The mechanism does not say which write that is, so the
-// row states only what every holder shares: the answer was not taken and
-// the entry stays open; the person answers again shortly (#707, #731). It
-// names no task identifier and no internal mechanic (P13).
+// another call of this service held the new task's slot when the answer
+// asked for it (claiming[id]): another carry-on of the same claim, a
+// dispatch pass reading the hold, a relaunch or a steer. The row says the
+// answer ended there and why, says it cannot tell whether the entry is
+// open, and asks the person to read what stands and answer again only if
+// the entry is open there. It names no task identifier and no internal
+// mechanic (P13).
 var PhraseCarryOnSlotBusy = Phrase{
-	Outcome:     "That carry-on was not taken, because this service cannot take it right now.",
-	Consequence: "The entry is still open.",
-	Decision:    "Answer again shortly.",
+	Outcome:     "This answer ended before carrying that work on, because this service was busy with it when this answer came to carry it on.",
+	Consequence: "The entry may have changed since this answer read it, so this answer does not say whether it is open.",
+	Decision:    "Read what stands with assistant --json status, and answer again if the entry is open there.",
 }
 
 // PhraseCarryOnAlreadyStarted is the row for a carry-on answer refused
-// because this service already keeps that successor's slot for its
-// lifetime (a settled isolated[id]). That fact alone does not say the
-// successor began: a refused relaunch settles the same way with zero
-// attempts (#731). Answering again cannot free it; the person reads what
-// stands (P13).
+// because a dispatch or a relaunch of the new task in this service had
+// ended and kept its slot before the answer asked for it (a settled
+// isolated[id]). That does not say the new task began: a refused relaunch
+// keeps the slot with no attempt begun. The row says the answer ended
+// there and why, says it cannot tell whether the entry is open, and asks
+// the person to read what stands; it does not promise that answering
+// again helps (P13).
 var PhraseCarryOnAlreadyStarted = Phrase{
-	Outcome:     "That carry-on was not taken, because this service cannot take it again.",
-	Consequence: "The entry is still open.",
+	Outcome:     "This answer ended before carrying that work on, because this service had already handled it once.",
+	Consequence: "The entry may have changed since this answer read it, so this answer does not say whether it is open.",
 	Decision:    "Read what stands with assistant --json status.",
 }
 

@@ -604,11 +604,17 @@ func (s *Service) settleDispatch(ctx context.Context, id string, settle func(tas
 			s.betweenHeldAndRelease(id)
 		}
 		s.releaseHeldSlot(ctx, id)
+		if s.afterHeldSlotRelease != nil {
+			s.afterHeldSlotRelease(id)
+		}
 	case errors.Is(err, store.ErrPassHeld):
 		if s.betweenHeldAndRelease != nil {
 			s.betweenHeldAndRelease(id)
 		}
 		s.releasePassHeldSlot(ctx, id)
+		if s.afterHeldSlotRelease != nil {
+			s.afterHeldSlotRelease(id)
+		}
 	case errors.As(err, &unread):
 		s.giveBackSlot(id)
 	case err != nil:
@@ -689,11 +695,15 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 // claiming[id] to clear had no server-side deadline on the IPC handler's
 // context (P15, #731). The refusal reaches a person as
 // machine.PhraseCarryOnSlotBusy beside the entry key they typed, with no
-// task identifier (P13); claiming[id] alone is what that row knows. A
-// settled slot, which claimDispatch refuses too, is refused with
-// errSlotSettled and machine.PhraseCarryOnAlreadyStarted: that row states
-// only that this service will not take the slot again, not that successor
-// work began (a refused relaunch settles the same map).
+// task identifier (P13). A settled slot, which claimDispatch refuses too,
+// is refused with errSlotSettled and machine.PhraseCarryOnAlreadyStarted.
+// Both are decided here under s.mu and nothing else: the entry is not read
+// under this lock, and the lock is let go before the person reads the
+// refusal, so the holder can close the entry and let the slot go in
+// between. The rows therefore say only what this answer did and what the
+// slot was at this moment, never whether the entry is open, whether the
+// answer recorded anything, or what the service can take now
+// (keptanswer.go's comment on the two rows, #731).
 func (s *Service) claimCarryOnSlot(id string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -713,8 +723,9 @@ func (s *Service) claimCarryOnSlot(id string) (func(), error) {
 // machine.PhraseCarryOnSlotBusy.
 var errCarryOnSlotBusy = errors.New("service: the task's slot is claimed here")
 
-// errSlotSettled reports a slot a dispatch of this service settled when it
-// ended after its claim, which claimDispatch does not take again.
+// errSlotSettled reports a slot a dispatch or a relaunch of this service
+// settled when it ended after its claim, which claimDispatch and
+// claimCarryOnSlot do not take again.
 var errSlotSettled = errors.New("service: the task has already been dispatched here")
 
 // claimRelaunch takes the task's slot for a relaunch, or for a dispatch a

@@ -130,8 +130,9 @@ import (
 // to dispatch. Once the row exists a pass can hold the slot while it reads that
 // the claim holds the task; an answer that finds claiming[id] set is
 // refused at once with machine.PhraseCarryOnSlotBusy (claimCarryOnSlot),
-// which states only what that fact establishes and never names a
-// carry-on under way that is not (#707, #731). Then, in the order
+// which states only what this answer did and what the slot was then,
+// never what stands after it, since the holder can close the entry first
+// (#707, #731). Then, in the order
 // intake keeps, the task is created with that identifier, with the outlived
 // task's delivery posture as the floor intake records it under unless the
 // project's, read once there, is stricter (carriedPosture), the copy is moved
@@ -499,6 +500,11 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 	done := func(k store.KeptWork) machine.KeptWorkAnswered {
 		return machine.KeptWorkAnswered{Entry: k, Effect: machine.KeptWorkCarriedOn, Task: id}
 	}
+	if s.betweenCarryOnReadAndSlot != nil {
+		if err := s.betweenCarryOnReadAndSlot(); err != nil {
+			return machine.KeptWorkAnswered{}, err
+		}
+	}
 	release, err := s.claimCarryOnSlot(id)
 	if errors.Is(err, errSlotSettled) {
 		// Name the entry only as the person did on --hold (entry.Key), with
@@ -512,6 +518,9 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		return machine.KeptWorkAnswered{}, err
 	}
 	defer func() {
+		if s.beforeCarryOnSlotRelease != nil {
+			s.beforeCarryOnSlotRelease()
+		}
 		release()
 		s.dispatchInBackground()
 	}()

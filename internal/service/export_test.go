@@ -75,6 +75,35 @@ func WithCarryOnClaimInterruptForTest(tb testing.TB, o Options, f func() error) 
 	return o
 }
 
+// WithBetweenCarryOnReadAndSlotForTest returns o with completeCarryOn's
+// seam between its first read of the entry and claimCarryOnSlot set to f,
+// for this package's external tests: an answer whose f waits there reaches
+// the slot only after what the test lets another answer do first, such as
+// close the entry while still holding the slot (#731 round 5).
+func WithBetweenCarryOnReadAndSlotForTest(o Options, f func() error) Options {
+	o.betweenCarryOnReadAndSlot = f
+	return o
+}
+
+// WithBeforeCarryOnSlotReleaseForTest returns o with completeCarryOn's seam
+// after the body returns and before the deferred slot give-back set to f,
+// for this package's external tests: f runs while claiming[id] still holds
+// and the entry may already be closed (#731 round 5).
+func WithBeforeCarryOnSlotReleaseForTest(o Options, f func()) Options {
+	o.beforeCarryOnSlotRelease = f
+	return o
+}
+
+// WithAfterHeldSlotReleaseForTest returns o with the seam after a held
+// dispatch gives the task's slot back set to f, for this package's
+// external tests: a carry-on that schedules dispatchInBackground can wait
+// here for that pass to release the successor's slot before a relaunch
+// (#731 round 5).
+func WithAfterHeldSlotReleaseForTest(o Options, f func(id string)) Options {
+	o.afterHeldSlotRelease = f
+	return o
+}
+
 // WithHeldDispatchWindowForTest returns o with the seam that runs in a
 // dispatch of the task it is given that kept work or a housekeeping pass's
 // retirement hold held, after the refusal and before the task's slot is

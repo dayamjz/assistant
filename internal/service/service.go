@@ -221,6 +221,19 @@ type Options struct {
 	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
 	// product never does.
 	interruptCarryOnClaim func() error
+	// betweenCarryOnReadAndSlot is the Service field of the same
+	// name, which export_test.go's
+	// WithBetweenCarryOnReadAndSlotForTest sets and the product
+	// never does.
+	betweenCarryOnReadAndSlot func() error
+	// beforeCarryOnSlotRelease is the Service field of the same name, which
+	// export_test.go's WithBeforeCarryOnSlotReleaseForTest sets and the
+	// product never does.
+	beforeCarryOnSlotRelease func()
+	// afterHeldSlotRelease is the Service field of the same name, which
+	// export_test.go's WithAfterHeldSlotReleaseForTest sets and the product
+	// never does.
+	afterHeldSlotRelease func(id string)
 	// heldDispatchWindow is the Service field betweenHeldAndRelease, which
 	// export_test.go's WithHeldDispatchWindowForTest sets and the product
 	// never does.
@@ -480,6 +493,24 @@ type Service struct {
 	// entry, and an error it returns ends the answer there. It is nil in
 	// production and set only through WithCarryOnClaimInterruptForTest.
 	betweenCarryOnClaimAndCompletion func() error
+	// betweenCarryOnReadAndSlot runs in completeCarryOn after the
+	// completion's first read of the entry (the pending claim) and before
+	// claimCarryOnSlot, and an error it returns ends the answer there. It
+	// is nil in production and set only through
+	// WithBetweenCarryOnReadAndSlotForTest.
+	betweenCarryOnReadAndSlot func() error
+	// beforeCarryOnSlotRelease runs in completeCarryOn after the body
+	// returns and before the deferred give-back of the successor's slot, so
+	// a test can observe the entry closed while claiming[id] still holds.
+	// It is nil in production and set only through
+	// WithBeforeCarryOnSlotReleaseForTest.
+	beforeCarryOnSlotRelease func()
+	// afterHeldSlotRelease runs in settleDispatch for the task it is given
+	// once releaseHeldSlot (or releasePassHeldSlot) has returned: the slot
+	// is given back and the hold read again, which asks for another pass
+	// only when nothing holds the task any more. It is nil in production
+	// and set only through WithAfterHeldSlotReleaseForTest.
+	afterHeldSlotRelease func(id string)
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
@@ -800,6 +831,9 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		afterMergeReadPass:        o.afterMergeReadPass,
 		betweenHeldAndRelease:     o.heldDispatchWindow,
+		betweenCarryOnReadAndSlot: o.betweenCarryOnReadAndSlot,
+		beforeCarryOnSlotRelease:  o.beforeCarryOnSlotRelease,
+		afterHeldSlotRelease:      o.afterHeldSlotRelease,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		steering:                  make(map[string]bool),

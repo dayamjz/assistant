@@ -2422,7 +2422,7 @@ func TestACarryOnAnswerRefusesWhileADispatchPassHoldsItsSlot(t *testing.T) {
 
 // assertCarryOnSlotBusyLine holds a busy refusal to the phrase row that is
 // true for every claiming[id] holder, the hold key, and the absence of the
-// task id and of the false sentences 81a26ce printed (#731 round 3).
+// task id and of the false sentences rounds 3 and 5 rejected (#731).
 func assertCarryOnSlotBusyLine(t *testing.T, err error, key, taskID string) {
 	t.Helper()
 	busy := machine.PhraseCarryOnSlotBusy.String()
@@ -2439,15 +2439,95 @@ func assertCarryOnSlotBusyLine(t *testing.T, err error, key, taskID string) {
 	if strings.Contains(line, taskID) {
 		t.Fatalf("the busy refusal names the task identifier %s: %q", taskID, line)
 	}
-	for _, falseClaim := range []string{"nothing moved", "other work on this answer"} {
+	for _, falseClaim := range []string{"nothing moved", "other work on this answer", "still open", "Answer again shortly"} {
 		if strings.Contains(line, falseClaim) {
-			t.Fatalf("the busy refusal states %q, which is not true for every claiming holder: %q", falseClaim, line)
+			t.Fatalf("the busy refusal states %q, which a concurrent closer can falsify: %q", falseClaim, line)
 		}
 	}
 	for _, term := range []string{"dispatch", "claim", "slot", "settled", "being carried on by task"} {
 		if strings.Contains(line, term) {
 			t.Fatalf("the busy refusal carries internal wording %q: %q", term, line)
 		}
+	}
+}
+
+// carryOnStands is what stands when a person reads a carry-on slot
+// refusal: read from the records after the refusal returned and after the
+// call that held the slot finished, the latest the person can read it.
+type carryOnStands struct {
+	// open is whether the entry is open.
+	open bool
+	// claimedByRefused is whether the refused answer is the one that
+	// recorded the claim it stopped at, so it recorded something.
+	claimedByRefused bool
+}
+
+// carryOnStandsOf reads the entry's openness for carryOnStands.
+func carryOnStandsOf(t *testing.T, h *home.Home, entryID int64, claimedByRefused bool) carryOnStands {
+	t.Helper()
+	now, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return carryOnStands{open: now.Open(), claimedByRefused: claimedByRefused}
+}
+
+// falseCarryOnSentences returns each sentence of line that what stands
+// makes false. Its rows are the sentences #731's rounds printed and review
+// or this file falsified: "The entry is still open." once the answer that
+// held the slot closed the entry (round 5), and "Nothing was recorded for
+// this answer." for the answer that recorded the claim (round 5's draft).
+func falseCarryOnSentences(line string, now carryOnStands) []string {
+	var out []string
+	for _, row := range []struct {
+		sentence string
+		false    bool
+	}{
+		{"The entry is still open.", !now.open},
+		{"Nothing was recorded for this answer.", now.claimedByRefused},
+	} {
+		if row.false && strings.Contains(line, row.sentence) {
+			out = append(out, row.sentence)
+		}
+	}
+	return out
+}
+
+// The rows #731 printed before round 5 for a slot refusal: the positive
+// controls of assertCarryOnRefusalTrue, each false at an interleaving this
+// file forces.
+var (
+	roundFourCarryOnBusy = machine.Phrase{
+		Outcome:     "That carry-on was not taken, because this service cannot take it right now.",
+		Consequence: "The entry is still open.",
+		Decision:    "Answer again shortly.",
+	}
+	roundFiveDraftCarryOnBusy = machine.Phrase{
+		Outcome:     "That carry-on was not taken, because this service cannot take it right now.",
+		Consequence: "Nothing was recorded for this answer.",
+		Decision:    "Read what stands with assistant --json status.",
+	}
+	roundFiveDraftCarryOnSettled = machine.Phrase{
+		Outcome:     "That carry-on was not taken, because this service cannot take it again.",
+		Consequence: "Nothing was recorded for this answer.",
+		Decision:    "Read what stands with assistant --json status.",
+	}
+)
+
+// assertCarryOnRefusalTrue holds a refusal's line to what stands when the
+// person reads it, and holds the guard to control, an earlier row that
+// what stands makes false, so the check cannot pass by looking at nothing
+// (#731 round 5, P13).
+func assertCarryOnRefusalTrue(t *testing.T, err error, now carryOnStands, control machine.Phrase) {
+	t.Helper()
+	if len(falseCarryOnSentences(control.String(), now)) == 0 {
+		t.Fatalf("positive control: %q reads true where %+v stands; the check would hold nothing", control, now)
+	}
+	if err == nil {
+		t.Fatal("the carry-on answer was not refused")
+	}
+	if wrong := falseCarryOnSentences(err.Error(), now); len(wrong) != 0 {
+		t.Fatalf("the refusal %q states %q, which is false where %+v stands", err, wrong, now)
 	}
 }
 
@@ -2611,11 +2691,14 @@ func TestACarryOnAnswerRefusesWhileASteerHoldsItsSlot(t *testing.T) {
 }
 
 // A carry-on answer that finds the successor's slot already settled is
-// refused with PhraseCarryOnAlreadyStarted ("cannot take it again");
-// answering again cannot free that hold (#731 round 3–4).
+// refused with PhraseCarryOnAlreadyStarted (#731 rounds 3-4). The refused
+// answer here is the one that recorded the claim, which stands after the
+// refusal, so the row may not say this answer recorded nothing (#731
+// round 5, P13).
 func TestACarryOnAnswerRefusesWhenTheSuccessorSlotIsSettled(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P13)
 	principles.Cite(t, principles.P15)
 
 	h := newHome(t)
@@ -2670,12 +2753,17 @@ func TestACarryOnAnswerRefusesWhenTheSuccessorSlotIsSettled(t *testing.T) {
 		release()
 		err := <-firstDone
 		assertCarryOnSettledLine(t, err, entry.Key(), id)
+		owed, readErr := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if readErr != nil || !owed.CarryOnClaimed() || owed.CarriedOnTask.Or("") != id {
+			t.Fatalf("after the settled refusal the entry reads %+v, %v; want the claim this answer recorded for %s", owed, readErr, id)
+		}
+		assertCarryOnRefusalTrue(t, err, carryOnStandsOf(t, h, entry.ID, true), roundFiveDraftCarryOnSettled)
 	})
 }
 
 // assertCarryOnSettledLine holds a settled-slot refusal to the phrase that
-// is true for every settler (not "already begun"), the hold key, and the
-// absence of the task id (#731 round 4).
+// is true for every settler (not "already begun" or "still open"), the hold
+// key, and the absence of the task id (#731 rounds 4-5).
 func assertCarryOnSettledLine(t *testing.T, err error, key, taskID string) {
 	t.Helper()
 	started := machine.PhraseCarryOnAlreadyStarted.String()
@@ -2692,9 +2780,9 @@ func assertCarryOnSettledLine(t *testing.T, err error, key, taskID string) {
 	if strings.Contains(line, taskID) {
 		t.Fatalf("the settled refusal names the task identifier %s: %q", taskID, line)
 	}
-	for _, falseClaim := range []string{"already begun", "nothing moved", "Answer again once that work has ended"} {
+	for _, falseClaim := range []string{"already begun", "nothing moved", "Answer again once that work has ended", "still open"} {
 		if strings.Contains(line, falseClaim) {
-			t.Fatalf("the settled refusal states %q, which a refused relaunch does not establish: %q", falseClaim, line)
+			t.Fatalf("the settled refusal states %q, which every settler does not establish: %q", falseClaim, line)
 		}
 	}
 	for _, term := range []string{"dispatch", "claim", "slot", "settled"} {
@@ -2707,6 +2795,16 @@ func assertCarryOnSettledLine(t *testing.T, err error, key, taskID string) {
 // A failed adoption leaves the successor undispatched with zero attempts; a
 // relaunch then refused as not due settles the slot. Retrying carry-on must
 // not say the work already began (#731 round 4).
+//
+// The failed adoption's deferred release asks for a dispatch pass, which
+// takes the successor's slot, is refused because the owed claim holds the
+// task, and gives the slot back; a relaunch while it holds the slot is
+// refused as in flight instead (#731 round 5). The test waits on that
+// release itself (WithAfterHeldSlotReleaseForTest), never on a read of the
+// records. Nothing asks for another pass before the relaunch: the release
+// reads the hold again and asks for one only when nothing holds the task,
+// and the owed claim still does, so the relaunch can only be refused as
+// not due.
 func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -2722,7 +2820,14 @@ func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(oldDir, 0o700) })
 
+	released := make(chan string, 8)
 	o, _ := workerOptions(t, h)
+	o = service.WithAfterHeldSlotReleaseForTest(o, func(id string) {
+		select {
+		case released <- id:
+		default:
+		}
+	})
 	withServiceOptions(t, o, func(under serviceUnderTest) {
 		ctx := t.Context()
 		var out machine.KeptWorkAnswered
@@ -2740,6 +2845,16 @@ func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
 		if attempts := attemptsOfTask(t, h, id); len(attempts) != 0 {
 			t.Fatalf("after the failed adoption task %s has attempts %+v; want none", id, attempts)
 		}
+		// The bound only turns a pass that never comes into a failure
+		// rather than a hang; the order is the release itself.
+		bound := time.After(30 * time.Second)
+		for got := ""; got != id; {
+			select {
+			case got = <-released:
+			case <-bound:
+				t.Fatalf("no dispatch pass refused task %s on its owed claim and gave its slot back", id)
+			}
+		}
 		if err := under.service.RelaunchTaskForTest(ctx, id); !errors.Is(err, service.ErrRelaunchNotDue) {
 			t.Fatalf("relaunch of the undispatched successor = %v; want not due", err)
 		}
@@ -2748,6 +2863,259 @@ func TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan(t *testing.T) {
 		}
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
 		assertCarryOnSettledLine(t, err, entry.Key(), id)
+	})
+}
+
+// Answer B reads A's pending carry-on claim, A carries it out and closes
+// the entry while it still holds the new task's slot, and only then does B
+// ask for the slot and find it busy: the review's interleaving of #731
+// round 5, forced with seams rather than timing. B's line is held to what
+// stands once A has finished, the latest a person can read it: the entry
+// is closed, so a row saying it is still open would be false, and B
+// recorded nothing. Round 4's busy row is the positive control.
+func TestABusyCarryOnRefusalStaysTrueWhenAConcurrentAnswerClosedTheEntry(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P13)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		claimPaused sync.Once
+		claimOnce   sync.Once
+		slotOnce    sync.Once
+		readOnce    sync.Once
+		closedOnce  sync.Once
+		armMu       sync.Mutex
+		armB        bool
+		claimed     = make(chan string, 1)
+		bRead       = make(chan struct{})
+		aClosed     = make(chan struct{})
+		leaveClaim  = make(chan struct{})
+		leaveSlot   = make(chan struct{})
+	)
+	releaseClaim := func() { claimOnce.Do(func() { close(leaveClaim) }) }
+	releaseSlot := func() { slotOnce.Do(func() { close(leaveSlot) }) }
+	t.Cleanup(func() {
+		releaseClaim()
+		releaseSlot()
+	})
+
+	o, _ := workerOptions(t, h)
+	// A, the first answer, records the claim and waits here until B has
+	// read it.
+	o = service.WithCarryOnClaimInterruptForTest(t, o, func() error {
+		first := false
+		claimPaused.Do(func() { first = true })
+		if !first {
+			return nil
+		}
+		owed, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+		if err != nil {
+			return err
+		}
+		claimed <- owed.CarriedOnTask.Or("")
+		<-leaveClaim
+		return nil
+	})
+	// B, once armed, has read A's claim and waits here, before the slot,
+	// until A has closed the entry.
+	o = service.WithBetweenCarryOnReadAndSlotForTest(o, func() error {
+		armMu.Lock()
+		block := armB
+		armMu.Unlock()
+		if !block {
+			return nil
+		}
+		first := false
+		readOnce.Do(func() {
+			first = true
+			close(bRead)
+		})
+		if !first {
+			return nil
+		}
+		<-aClosed
+		return nil
+	})
+	// A, after its mark, keeps the slot here until the test lets it go.
+	o = service.WithBeforeCarryOnSlotReleaseForTest(o, func() {
+		closedOnce.Do(func() { close(aClosed) })
+		<-leaveSlot
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer releaseClaim()
+		defer releaseSlot()
+		ctx := t.Context()
+		firstDone := make(chan error, 1)
+		go func() {
+			var out machine.KeptWorkAnswered
+			firstDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}()
+		var id string
+		select {
+		case id = <-claimed:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its claim seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never reached its claim seam")
+		}
+		if id == "" {
+			t.Fatal("the claim seam saw no carried-on task id")
+		}
+
+		armMu.Lock()
+		armB = true
+		armMu.Unlock()
+		secondDone := make(chan error, 1)
+		go func() {
+			var again machine.KeptWorkAnswered
+			secondDone <- under.client.Call(ctx, ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &again)
+		}()
+		select {
+		case <-bRead:
+		case err := <-secondDone:
+			t.Fatalf("the second answer returned %v before its read-and-slot seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the second answer never reached its read-and-slot seam")
+		}
+		releaseClaim()
+		select {
+		case <-aClosed:
+		case err := <-firstDone:
+			t.Fatalf("the first answer returned %v before its post-mark seam ran", err)
+		case <-ctx.Done():
+			t.Fatal("the first answer never closed the entry while holding the slot")
+		}
+		closed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || closed.Open() || !closed.CarriedOnAt.IsKnown() || closed.CarriedOnTask.Or("") != id {
+			t.Fatalf("after A's mark the entry reads %+v, %v; want it closed, carried on by %s", closed, err, id)
+		}
+		var got error
+		select {
+		case got = <-secondDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the second answer still waited after A closed the entry with the slot held")
+		case <-ctx.Done():
+			t.Fatal("the second answer neither refused nor returned")
+		}
+		assertCarryOnSlotBusyLine(t, got, entry.Key(), id)
+		releaseSlot()
+		if err := <-firstDone; err != nil {
+			t.Fatalf("the first answer failed after closing the entry: %v", err)
+		}
+		assertCarryOnRefusalTrue(t, got, carryOnStandsOf(t, h, entry.ID, false), roundFourCarryOnBusy)
+	})
+}
+
+// The answer that recorded the claim can itself be refused as busy: A
+// records its claim and reads it, a second answer C carries that claim out
+// and closes the entry while it still holds the new task's slot, and only
+// then does A ask for the slot. The claim A recorded is the one C carried
+// out, so a busy row saying this answer recorded nothing, as round 5's
+// first draft did, is false, and so is one saying the entry is still open
+// (#731 round 5, P13). Seams force the order, not timing.
+func TestABusyCarryOnRefusalOfTheAnswerThatClaimedSaysNothingItDidNotDo(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P13)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	var (
+		readOnce  sync.Once
+		heldOnce  sync.Once
+		aOnce     sync.Once
+		cOnce     sync.Once
+		aRead     = make(chan struct{})
+		cHolds    = make(chan struct{})
+		leaveRead = make(chan struct{})
+		leaveSlot = make(chan struct{})
+		releaseA  = func() { aOnce.Do(func() { close(leaveRead) }) }
+		releaseC  = func() { cOnce.Do(func() { close(leaveSlot) }) }
+		answer    = func(under serviceUnderTest, done chan<- error) {
+			var out machine.KeptWorkAnswered
+			done <- under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, carryOnRequest(old, entry), &out)
+		}
+	)
+	t.Cleanup(func() {
+		releaseA()
+		releaseC()
+	})
+	o, _ := workerOptions(t, h)
+	// The first answer to read the entry in its completion is A, which
+	// recorded the claim; it waits there, before the slot, until C holds it.
+	o = service.WithBetweenCarryOnReadAndSlotForTest(o, func() error {
+		first := false
+		readOnce.Do(func() {
+			first = true
+			close(aRead)
+		})
+		if first {
+			<-leaveRead
+		}
+		return nil
+	})
+	// C, after its mark, keeps the slot until the test lets it go.
+	o = service.WithBeforeCarryOnSlotReleaseForTest(o, func() {
+		heldOnce.Do(func() { close(cHolds) })
+		<-leaveSlot
+	})
+	withServiceOptions(t, o, func(under serviceUnderTest) {
+		defer releaseA()
+		defer releaseC()
+		ctx := t.Context()
+		aDone := make(chan error, 1)
+		go answer(under, aDone)
+		select {
+		case <-aRead:
+		case err := <-aDone:
+			t.Fatalf("answer A returned %v before it read its claim", err)
+		case <-ctx.Done():
+			t.Fatal("answer A never read its claim")
+		}
+		claim, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !claim.CarryOnClaimed() {
+			t.Fatalf("after answer A's claim the entry reads %+v, %v; want A's claim", claim, err)
+		}
+		id := claim.CarriedOnTask.Or("")
+
+		cDone := make(chan error, 1)
+		go answer(under, cDone)
+		select {
+		case <-cHolds:
+		case err := <-cDone:
+			t.Fatalf("answer C returned %v before it held the slot past its mark", err)
+		case <-ctx.Done():
+			t.Fatal("answer C never carried A's claim out")
+		}
+		closed, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || closed.Open() || !closed.CarriedOnAt.IsKnown() || closed.CarriedOnTask.Or("") != id {
+			t.Fatalf("after C's mark the entry reads %+v, %v; want it closed, carried on by A's claim for %s", closed, err, id)
+		}
+
+		releaseA()
+		var got error
+		select {
+		case got = <-aDone:
+		case <-time.After(2 * time.Second):
+			t.Fatal("answer A still waited while C held the slot")
+		case <-ctx.Done():
+			t.Fatal("answer A neither refused nor returned")
+		}
+		assertCarryOnSlotBusyLine(t, got, entry.Key(), id)
+		releaseC()
+		if err := <-cDone; err != nil {
+			t.Fatalf("answer C failed after carrying A's claim out: %v", err)
+		}
+		assertCarryOnRefusalTrue(t, got, carryOnStandsOf(t, h, entry.ID, true), roundFiveDraftCarryOnBusy)
 	})
 }
 
