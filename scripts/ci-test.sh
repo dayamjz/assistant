@@ -10,6 +10,7 @@
 #   CI_TEST_PACKAGES  space-separated package patterns (./...)
 #   CI_TEST_COUNT     go test -count, a positive integer (1)
 #   CI_TEST_TIMEOUT   go test -timeout for each package binary (30m)
+#   CI_TEST_RUN       optional go test -run regexp (unset: every test)
 # A value it cannot use is refused before anything runs.
 #
 # bash scripts/ci-test.sh unfinished, in a step after the one that ran the
@@ -90,7 +91,22 @@ if ! [[ $timeout =~ ^[0-9]+[hms]$|^[0-9]+m[0-9]+s$|^[0-9]+h[0-9]+m$ ]]; then
   echo "::error::CI_TEST_TIMEOUT must be a duration such as 30m, not '$timeout'"
   exit 2
 fi
-echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
+# The optional -run filter reaches go test as -run's one argument, after
+# -race, so it sets no other flag. It may hold only test-name characters
+# and the regexp metacharacters a pattern of names uses: a list of names
+# or a flag given here (a space, an '=') would, as a -run regexp, select
+# no test, and go test passes a package that ran none. A pattern can still
+# select no test (^$); which tests it names is the caller's to get right.
+run_filter=${CI_TEST_RUN:-}
+if [ -n "$run_filter" ] && ! [[ $run_filter =~ ^[A-Za-z0-9_^$|()\\.+*?{},-]+$ ]]; then
+  echo "::error::CI_TEST_RUN must be a go test -run regexp, not '$run_filter'"
+  exit 2
+fi
+if [ -n "$run_filter" ]; then
+  echo "ci-test: go test -race -count=$count -timeout $timeout -run (${#run_filter} bytes) ${packages[*]}"
+else
+  echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
+fi
 export ASSISTANT_REQUIRE_TMUX=1
 run=()
 if [ "$RUNNER_OS" = "Linux" ]; then
@@ -138,8 +154,12 @@ per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
 export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 "${run[@]}" python3 scripts/leak-check.py self-test
 : > "$LEAK_CHECK_RECORD"
+run_args=()
+if [ -n "$run_filter" ]; then
+  run_args=(-run "$run_filter")
+fi
 "${run[@]}" python3 scripts/leak-check.py run --per-package -- \
-  go test "${per_package[@]}" -race -count="$count" -timeout "$timeout" -v "${packages[@]}" > test.log 2>&1 || status=$?
+  go test "${per_package[@]}" -race -count="$count" -timeout "$timeout" "${run_args[@]}" -v "${packages[@]}" > test.log 2>&1 || status=$?
 passed=$(grep -cE '^ok[[:space:]]' test.log || true)
 checked=$(wc -l < "$LEAK_CHECK_RECORD")
 echo "leak-check: $checked package(s) ran through the per-package check; go test reported $passed ok"

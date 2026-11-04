@@ -16,7 +16,7 @@ func TestAFollowUpAttachesToTheAnswersBeforeItsMark(t *testing.T) {
 	appendAnswer := func(run, path, finding string) DecisionAnswer {
 		t.Helper()
 		a, err := s.AppendDecisionAnswer(ctx, DecisionAnswer{
-			Run: run, Stage: "review", Check: "reviewer-directed-text", Path: path,
+			Run: run, Stage: "review", Batch: "b-1", Check: "reviewer-directed-text", Path: path,
 			Model: "jev-1.13.0", Probability: Known(0.9), Cutoff: 0.3, Finding: finding,
 		})
 		if err != nil {
@@ -87,7 +87,7 @@ func TestDecisionFiringsCountFiredAndFollowedPerRun(t *testing.T) {
 	add := func(run, check, path, finding string) {
 		t.Helper()
 		if _, err := s.AppendDecisionAnswer(ctx, DecisionAnswer{
-			Run: run, Stage: "review", Check: check, Path: path,
+			Run: run, Stage: "review", Batch: "b-1", Check: check, Path: path,
 			Model: "jev-1.13.0", Probability: Known(0.5), Cutoff: 0.3, Finding: finding,
 		}); err != nil {
 			t.Fatalf("appending: %v", err)

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
@@ -41,10 +42,20 @@ type decisionRun struct {
 	run    string
 	from   string
 	head   string
+	// stage is the stage that asked: the review stage, or the push stage
+	// reviewing commits written after it. Its answer rows and its batch row
+	// name it.
+	stage pipeline.Stage
+	// batch is the ID of this review's judge.Batch, which each answer row
+	// names.
+	batch string
 }
 
 // active reports whether the checks are asked for at all. With the mode off,
-// or any value Resolve cannot produce, nothing is sent and nothing is said.
+// or any value Resolve cannot produce, nothing is sent and nothing is said
+// about the checks, with one exception: recordBatch still records the
+// review's batch, and a batch row the record refuses adds its note in every
+// mode, off included.
 func (d decisionRun) active() bool { return d.mode.RunsChecks() }
 
 // sends reports whether a request may leave the machine: the checks are asked
@@ -396,8 +407,32 @@ func flaggedFinding(mode config.DecisionModel, r judge.Result) findings.Finding 
 // record hands one answer to the client's recorder, and adds it to lost when
 // the recorder could not keep it.
 func (d decisionRun) record(lost []string, r judge.Result, finding string) []string {
-	if err := d.client.Record(judge.RecordOf(d.run, pipeline.StageReview.String(), r, finding)); err != nil {
+	if err := d.client.Record(judge.RecordOf(d.run, d.stage.String(), d.batch, r, finding)); err != nil {
 		return append(lost, r.Path()+" ("+string(r.Check())+": "+err.Error()+")")
 	}
 	return lost
+}
+
+// recordBatch hands the client's recorder this review's pass over the checks
+// as one row, d.batch, naming d.stage, timed from start, which covers each
+// path's diff read and each answer's record, and saying whether its checks
+// could send (d.sends). A review whose checks are off or had no key records
+// one too, so the stage's time with the checks can be set beside its time
+// without them. A review stopped during
+// the checks, and one that never reached them, records none. It returns a
+// note when the record could not keep the row, fixed text for lostNote's
+// reason.
+func (d decisionRun) recordBatch(start time.Time) []findings.Finding {
+	b := judge.Batch{ID: d.batch, Run: d.run, Stage: d.stage.String(), Mode: string(d.mode),
+		Sends: d.sends(), Elapsed: time.Since(start)}
+	if d.client.RecordBatch(b) == nil {
+		return nil
+	}
+	return []findings.Finding{{
+		Severity: findings.SeverityInfo,
+		Action:   findings.ActionNote,
+		Description: "The decision-model record could not keep this review's row timing the checks, so " +
+			"the record kept for deciding whether the checks earn their place has no time for this " +
+			"review; the service log says why. This is informational and holds nothing.",
+	}}
 }

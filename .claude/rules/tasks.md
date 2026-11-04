@@ -73,7 +73,8 @@ paths: ["internal/tasks/**"]
   `kept_test.go` places every reason for both.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
   as this build takes it, the preview (removal on a confirmed discard is
-  deferred to AGE-486, on the branch feat/age-407-discard), and `Loss` is
+  still deferred to the rest of AGE-486; the journal and set-aside
+  mechanism landed in #678 and #679), and `Loss` is
   also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose: the commits that anything the
   removal destroys names reaches (HEAD, a reference, a root reference such
@@ -125,8 +126,8 @@ paths: ["internal/tasks/**"]
   removing, anything else at its name, a directory with no journal or a
   journal naming no copy's identity among it. A staging directory a
   stopped first write left blocks nothing and is left. No discard answer
-  calls it yet; the set-aside that does follows in AGE-486's stack. An
-  entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
+  calls it yet; the removal that would is deferred to the rest of AGE-486.
+  An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after
   and a directory listed again; a write that leaves the stamp as it was,

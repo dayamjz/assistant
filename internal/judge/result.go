@@ -1,5 +1,7 @@
 package judge
 
+import "time"
+
 // Failure is why a check did not produce an answer. A Result carrying one has
 // no probability: Probability reports false and Fired reports false, so no
 // path reads a failed call as an answer in either direction.
@@ -60,6 +62,9 @@ type Result struct {
 	failure     Failure
 	detail      string
 	requests    int
+	usage       Usage
+	elapsed     time.Duration
+	measured    bool
 }
 
 // Check is the check this result answers.
@@ -104,6 +109,13 @@ func (r Result) Model() string { return ModelVersion }
 // when nothing was sent, which is how a caller can show that a missing key or
 // an empty question sent nothing.
 func (r Result) Requests() int { return r.requests }
+
+// measured sets r's usage to u and its elapsed time to the time since start,
+// and marks r measured. A check defers it, so every result it returns carries
+// both; a result Unasked builds was never a call and is not marked.
+func measured(r *Result, start time.Time, u *Usage) {
+	r.usage, r.elapsed, r.measured = *u, time.Since(start), true
+}
 
 // Unasked is the result for a path the caller could not ask about because it
 // could not read the path's diff. Nothing was sent, so it carries no

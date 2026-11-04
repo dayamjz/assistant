@@ -1,5 +1,12 @@
 package judge
 
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/store"
+)
+
 // Record is one answer as PRD section 5 has it kept: which run and stage
 // asked, which check, about which path, of which model version, what came
 // back, the cutoff it was compared against, and the finding it produced.
@@ -32,6 +39,109 @@ type Record struct {
 	// produced none. It is the caller's to state, because the caller builds
 	// the finding: this package answers and does not report.
 	Finding string
+	// Batch is the ID of the Batch of the review that asked.
+	Batch string
+	// Measured is whether the client measured a call for this answer. It is
+	// false for a path whose diff could not be read (Unasked): nothing was
+	// sent or timed, so Requests, Usage, and Elapsed are zero and mean nothing.
+	Measured bool
+	// Requests is how many requests left the machine for this answer, failed
+	// ones included; Result.Requests is its source.
+	Requests int
+	// Usage is those requests' size; Usage says which field is a reported
+	// token count and which a size in bytes.
+	Usage Usage
+	// Elapsed is from the check's start to its parsed answer or its
+	// failure, across every request it took.
+	Elapsed time.Duration
+	// Rate is the rate the call was priced at, kept so the row outlives a
+	// change of rate, and nil when its price is not known: the answer is not
+	// Measured, rates has no entry for Model, or store.PricedAt refuses it.
+	Rate *Rate
+}
+
+// Price is the call's price in US dollars at Rate, and false when the call
+// was not priced.
+func (r Record) Price() (float64, bool) {
+	if r.Rate == nil {
+		return 0, false
+	}
+	return float64(r.Usage.ReportedInputTokens)*r.Rate.InputUSDPerMillionTokens/1e6 +
+		float64(r.Usage.ReportedOutputTokens)*r.Rate.OutputUSDPerMillionTokens/1e6, true
+}
+
+// Usage is how large one check's requests were. A success reply may carry a
+// usage field with input_tokens and output_tokens, the provider's own counts,
+// which the Reported fields sum. A reply read without them adds its request's
+// and its own body sizes in bytes to the Unreported fields, for a later
+// estimate at a stated ratio; no field holds an estimate. A request that got
+// no reply is in neither; Record.Requests counts it.
+type Usage struct {
+	// ReportedRequests is how many replies carried a usage field.
+	ReportedRequests int
+	// ReportedInputTokens and ReportedOutputTokens are those replies' counts,
+	// summed.
+	ReportedInputTokens, ReportedOutputTokens int64
+	// UnreportedRequests is how many replies were read without a usage field.
+	UnreportedRequests int
+	// UnreportedSentBytes and UnreportedReceivedBytes are the body sizes of
+	// those requests and of their replies, summed. A reply is read only up to
+	// maxResponseBytes+1 bytes, so a larger one counts at that cap.
+	UnreportedSentBytes, UnreportedReceivedBytes int64
+}
+
+// add counts one reply read to the request body sent: its usage field when
+// a success carries a whole one, and the two bodies' sizes otherwise.
+func (u *Usage) add(status int, sent, raw []byte) {
+	var reply struct {
+		Usage struct {
+			Input  *int64 `json:"input_tokens"`
+			Output *int64 `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if status >= 200 && status <= 299 && json.Unmarshal(raw, &reply) == nil &&
+		reply.Usage.Input != nil && reply.Usage.Output != nil && *reply.Usage.Input >= 0 && *reply.Usage.Output >= 0 {
+		u.ReportedRequests++
+		u.ReportedInputTokens += *reply.Usage.Input
+		u.ReportedOutputTokens += *reply.Usage.Output
+		return
+	}
+	u.UnreportedRequests++
+	u.UnreportedSentBytes += int64(len(sent))
+	u.UnreportedReceivedBytes += int64(len(raw))
+}
+
+// Batch is one review's pass over the decision-model checks as a whole, so
+// that the stage's time with the checks can be set beside its time without
+// them, and Sends says which of the two a batch is. A review that reaches the
+// checks and is not stopped during them writes one, naming the stage that
+// asked: the review stage, or the push stage reviewing commits written after
+// it. A review whose checks are off or had no key writes one too, with Sends
+// false. A review stopped during the checks writes none, and a Batch the
+// recorder refuses is not kept, so the ID its answers carry names no kept
+// Batch in both cases; the record alone cannot tell the two apart, and only
+// the refusal leaves a note on the run's report.
+//
+// How many requests the checks sent is on the answers alone: a batch's
+// requests are those of the kept answers naming its ID, so an answer the
+// recorder refused counts in no batch.
+type Batch struct {
+	// ID names the batch. The review draws it before its first check, so each
+	// Record it writes carries it as Batch before the batch itself is written.
+	ID string
+	// Run is the run the review served, and Stage the stage that asked.
+	Run, Stage string
+	// Mode is the review's decision_model mode.
+	Mode string
+	// Sends is whether the checks could send requests: they were on and the
+	// operator's environment held a key. It is false with the checks off or
+	// with no key, so it is what tells a review without the checks apart, and
+	// not whether an answer names the batch: answers are best-effort, and a
+	// review whose every answer was refused sent requests all the same.
+	Sends bool
+	// Elapsed is how long the checks took the review, from before the first
+	// diff read to after the last answer was recorded.
+	Elapsed time.Duration
 }
 
 // Recorder keeps answers. It returns why it could not keep one, so a caller
@@ -39,23 +149,44 @@ type Record struct {
 // stage names every answer it could not record in a note. Recording is still
 // best-effort - a row the recorder could not keep is not retried, and nothing
 // is held up for it - and the record then understates, which that note is
-// what makes visible.
+// what makes visible. RecordBatch keeps a review's Batch on the same terms.
 type Recorder interface {
 	RecordAnswer(Record) error
+	RecordBatch(Batch) error
 }
 
-// RecordOf is the record of r as asked for run at stage, with finding the
-// action of the finding the caller built from it, empty for none.
-func RecordOf(run, stage string, r Result, finding string) Record {
+// RecordOf is the record of r as asked for run at stage by the review whose
+// Batch is batch, with finding the action of the finding the caller built
+// from it, empty for none.
+func RecordOf(run, stage, batch string, r Result, finding string) Record {
+	return recordAt(run, stage, batch, r, finding, rates)
+}
+
+// recordAt is RecordOf pricing from table, which is rates outside a test.
+func recordAt(run, stage, batch string, r Result, finding string, table map[string]Rate) Record {
 	p, ok := r.Probability()
 	rec := Record{
-		Run: run, Stage: stage, Check: r.Check(), Path: r.Path(), Model: r.Model(),
+		Run: run, Stage: stage, Batch: batch, Check: r.Check(), Path: r.Path(), Model: r.Model(),
 		Probability: p, Answered: ok, Cutoff: r.Cutoff(), Finding: finding,
+		Measured: r.measured, Requests: r.requests, Usage: r.usage, Elapsed: r.elapsed,
 	}
 	if failure, _, isFailed := r.Failed(); isFailed {
 		rec.Failure = failure
 	}
+	if rate, ok := table[rec.Model]; ok && rec.Measured && store.PricedAt(rec.Measures(), rate) == nil {
+		rec.Rate = &rate
+	}
 	return rec
+}
+
+// Measures is the call's measures as the store keeps them, if it is Measured.
+func (r Record) Measures() store.DecisionMeasures {
+	return store.DecisionMeasures{
+		Requests: r.Requests, ReportedRequests: r.Usage.ReportedRequests,
+		UnreportedRequests: r.Usage.UnreportedRequests, ReportedInputTokens: r.Usage.ReportedInputTokens,
+		ReportedOutputTokens: r.Usage.ReportedOutputTokens, UnreportedSentBytes: r.Usage.UnreportedSentBytes,
+		UnreportedReceivedBytes: r.Usage.UnreportedReceivedBytes, Elapsed: r.Elapsed,
+	}
 }
 
 // Record hands rec to the client's recorder and returns why it could not keep
@@ -66,4 +197,12 @@ func (c *Client) Record(rec Record) error {
 		return nil
 	}
 	return c.recorder.RecordAnswer(rec)
+}
+
+// RecordBatch hands b to the client's recorder on Record's terms.
+func (c *Client) RecordBatch(b Batch) error {
+	if c == nil || c.recorder == nil {
+		return nil
+	}
+	return c.recorder.RecordBatch(b)
 }

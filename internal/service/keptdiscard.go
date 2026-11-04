@@ -16,8 +16,9 @@ import (
 // section 9's first half, "--answer discard alone shows exactly what would
 // be lost, with a short digest of it, and removes nothing". The removal on
 // a confirmed discard is deferred to AGE-486 (docs/prd.md, sections 6 and
-// 9, the owner's decision of 2026-10-25); its work is on the branch
-// feat/age-407-discard.
+// 9, the owner's decision of 2026-10-25). The journal (tasks.beginDiscard)
+// and move aside (tasks.moveAsRead) are on main; this package still refuses
+// a confirmation and does not call them.
 //
 // A discard answer given no confirmation reads what would be lost through
 // internal/tasks' Loss, the same read a land decides from, and returns it

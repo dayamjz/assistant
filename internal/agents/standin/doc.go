@@ -110,7 +110,9 @@
 // whatever environment a test starts it with, and Tmux refuses a test that
 // does not run inside RunOwned. The check RunOwned runs once the tests have
 // returned fails the package naming every process of its binary, and every
-// process carrying its identity, still running. Before it, RunOwned has the
+// process carrying its identity, still running, except when the binary was
+// started only to list test names: then RunOwned runs the listing alone and
+// records no owner (see RunOwned). Before the check, RunOwned has the
 // binary start no further process, and the check lists again until a
 // listing comes back empty, so what an exiting process starts is listed
 // too; only then, on a pass, does RunOwned end the sweep and remove the

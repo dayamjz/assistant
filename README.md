@@ -305,6 +305,22 @@ A coordinator could delegate backend and frontend work to separate workers, then
 
 For the recorded view, run `assistant runs --usage=24h` or `assistant --json runs --usage=24h`. These limits only apply to the recorded scope, not all coordinator or worker turns. See [usage budgets and ceilings in the operator guide](docs/operators.md) for interpretation and configuration.
 
+### Decision-model check record
+
+The review stage's decision-model checks (the trace and screen questions put to TypeSafe's Jev, PRD section 5) are not agent calls and are not in the usage view above. Each answer, and each call that failed, is a row of the decision-model record in the service's database. No command prints it in this build; the service reads it to propose turning a check off. Besides the answer, a row keeps what its call measured:
+
+| Field | What it is |
+| --- | --- |
+| Requests | Requests sent for the answer, failed ones included |
+| Reported tokens | Input and output tokens **as the provider reported them** in its reply's `usage` field |
+| Unreported bytes and pieces | For replies with no `usage` field: request and reply sizes in bytes and how many such replies. A reply is read only up to just over 1 MiB, so a larger one counts at that cap. **Basis for an estimate, not tokens**; nothing converts them |
+| Elapsed | From the check's start to its answer or failure |
+| Rate | Only on a **priced** call: input and output price per million tokens and the rate's source. The price is the reported tokens at that rate, so it is not stored twice |
+
+A call is priced only when a rate for the model is set, with its source, in `internal/judge/rate.go` (the one place a rate is set), and every request it sent reported its tokens; the store's `PricedAt` is the one statement of that rule. That table ships **empty**, so no call is priced in this build: an unpriced row has no rate and no price, never a price of zero. A path whose changes could not be read was never a call and is recorded with no measures; rows written before these fields existed read back the same way.
+
+Each review that reaches the checks and is not stopped during them also writes one **batch row** for the checks as a whole: a batch name the review drew, the run, the stage that asked (`review`, or `push` when the push stage reviews commits a fix round wrote after the review), the decision-model mode, whether the checks could send (`sends`: on, with a key), and how long the checks took the review, from before the first diff read to after the last answer's row was written. Every answer row the review wrote names its batch, so a batch's requests, tokens and price are those of the kept answers naming it, and the batch row repeats none of them. A review with the checks `off`, or with no key, writes the same row with `sends` false, so the review's time with and without the checks can be compared; read that from `sends`, not from whether any answer names the batch, because answer rows are best-effort and a review whose every answer row was refused still sent its requests. A review that never reached the checks writes none, and neither does one stopped during them. Answers that name a batch with no row come from a review stopped during the checks or from one whose batch row the store refused (the run's report then carries a note); the record alone does not say which. Calls overlap (up to `decisionConcurrency` in `internal/stages/decision.go` at once), so per-call times do not add up to the batch's.
+
 ## Operations and recovery
 
 A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers land or carry on (or until cleanup closes the entry on proof). A discard answer previews what removal would lose and does not remove the copy in this build. Use `assistant watch`, `assistant tasks`, and the [operator guide](docs/operators.md#kept-work) to inspect those states.

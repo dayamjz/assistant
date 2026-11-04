@@ -2952,9 +2952,70 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 70,
+		name:    decisionMeasuresMigration,
+		statements: []string{
+			// What each decision-model call measured, as internal/judge's
+			// Record has it: AppendDecisionAnswer writes the eight measures
+			// all or none, and a row from before this migration has none,
+			// which reads back as unmeasured rather than as a call that took
+			// no time. The three rate columns are written together, only for
+			// a priced call, which AppendDecisionAnswer holds every writer to,
+			// and are NULL otherwise rather than a price of zero; the price is
+			// the reported tokens at the rate, so no column holds it twice.
+			`ALTER TABLE decision_answer ADD COLUMN requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_input_tokens INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN reported_output_tokens INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_requests INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_sent_bytes INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN unreported_received_bytes INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN elapsed_ns INTEGER`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_input_usd_per_million_tokens REAL`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_output_usd_per_million_tokens REAL`,
+			`ALTER TABLE decision_answer ADD COLUMN rate_source TEXT`,
+		},
+	},
+	{
+		version: 71,
+		name:    decisionBatchMigration,
+		statements: []string{
+			// One row per review that reached the decision-model checks and
+			// was not stopped during them, its checks on or not: whether
+			// they could send, and how long they took. It is history on
+			// decision_answer's terms, and its run column carries no foreign
+			// key for that table's reason.
+			`CREATE TABLE decision_batch (
+				seq         INTEGER PRIMARY KEY,
+				batch       TEXT NOT NULL UNIQUE,
+				run         TEXT NOT NULL,
+				stage       TEXT NOT NULL,
+				mode        TEXT NOT NULL,
+				sends       INTEGER NOT NULL CHECK (sends IN (0, 1)),
+				elapsed_ns  INTEGER NOT NULL CHECK (elapsed_ns >= 0),
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX decision_batch_run ON decision_batch(run, seq)`,
+			// The batch each answer's review drew, NULL on a row from before
+			// it. It is no foreign key: a review stopped during the checks
+			// names a batch it never wrote.
+			`ALTER TABLE decision_answer ADD COLUMN batch TEXT`,
+		},
+	},
 }
 
 // attemptLaunchEndMigration names the migration that records a claimed
 // launch's end with no session, for the reason sealCheckpointTableMigration
 // is a constant.
 const attemptLaunchEndMigration = "attempt launch end"
+
+// decisionMeasuresMigration names the migration that adds what each
+// decision-model call measured, for the reason sealCheckpointTableMigration
+// is a constant.
+const decisionMeasuresMigration = "decision measures"
+
+// decisionBatchMigration names the migration that adds the per-review batch
+// row and the batch each answer names, for the reason
+// sealCheckpointTableMigration is a constant.
+const decisionBatchMigration = "decision batch"

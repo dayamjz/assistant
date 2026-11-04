@@ -14,7 +14,8 @@ import (
 // decisionRecorder feeds the store's decision-model record, which is PRD
 // section 5's record of every answer the checks got. It is the recorder the
 // service's judge.Client is built with, so every answer a review stage records
-// through that client lands one row.
+// through that client lands one row, with what its call measured, and so does
+// every batch.
 //
 // It holds the service rather than the store for the reason
 // invocationRecorder does: the client is built before the store is open, and
@@ -52,12 +53,46 @@ func (r decisionRecorder) RecordAnswer(rec judge.Record) error {
 		Cutoff:      rec.Cutoff,
 		Failure:     string(rec.Failure),
 		Finding:     rec.Finding,
+		Batch:       rec.Batch,
+		Measures:    measuresOf(rec),
+		Rate:        rateOf(rec),
 	})
 	if err != nil && r.s.log != nil {
 		r.s.log.Printf("dropping run %s's decision-model answer of %s about %s: %v",
 			rec.Run, rec.Check, rec.Path, err)
 	}
 	return err
+}
+
+// RecordBatch stores one review's batch, on RecordAnswer's terms.
+func (r decisionRecorder) RecordBatch(b judge.Batch) error {
+	st := r.s.store
+	if st == nil {
+		return fmt.Errorf("service: the store is not open")
+	}
+	_, err := st.AppendDecisionBatch(r.s.recordCtx(), store.DecisionBatch{
+		Batch: b.ID, Run: b.Run, Stage: b.Stage, Mode: b.Mode, Sends: b.Sends, Elapsed: b.Elapsed,
+	})
+	if err != nil && r.s.log != nil {
+		r.s.log.Printf("dropping run %s's decision-model batch: %v", b.Run, err)
+	}
+	return err
+}
+
+// measuresOf is what rec's call measured, unknown when it was not a call.
+func measuresOf(rec judge.Record) store.Optional[store.DecisionMeasures] {
+	if !rec.Measured {
+		return store.Unknown[store.DecisionMeasures]()
+	}
+	return store.Known(rec.Measures())
+}
+
+// rateOf is the rate rec's call was priced at, unknown when it was not priced.
+func rateOf(rec judge.Record) store.Optional[store.DecisionRate] {
+	if rec.Rate == nil {
+		return store.Unknown[store.DecisionRate]()
+	}
+	return store.Known(*rec.Rate)
 }
 
 // proposalWindow is how many of a check's most recent firing runs the
