@@ -692,20 +692,79 @@ func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
 	}
 }
 
+// goneNumbers hands a table fixture the numbers of processes it says are
+// gone, counting up from a base and skipping every number a listing leaves
+// out as its own (ownLineage) and every number in avoid. A listing reads
+// nothing of a number it leaves out, so a gone process given one is not
+// read as gone, and the reading it was to keep from settling settles: the
+// test binary once ran as process 80007, the reading that named 80007 as
+// gone settled, and two tests expecting every reading to stay unsettled
+// failed on a busy machine, where process numbers had come round to it
+// (#752).
+type goneNumbers struct {
+	next int
+	skip map[int]bool
+}
+
+// newGoneNumbers counts from base, skipping this listing's own lineage and
+// avoid, the numbers of the real processes the fixture names beside them.
+func newGoneNumbers(base int, avoid ...int) *goneNumbers {
+	skip := ownLineage()
+	for _, pid := range avoid {
+		skip[pid] = true
+	}
+	return &goneNumbers{next: base, skip: skip}
+}
+
+// take is the next number a gone process may be given.
+func (g *goneNumbers) take() int {
+	for g.skip[g.next] {
+		g.next++
+	}
+	pid := g.next
+	g.next++
+	return pid
+}
+
+// A gone process's number is never this process's, an ancestor's, or one
+// the fixture names a real process under (#752): counting from each of
+// those, the first number taken is past it. Without the skip, the first
+// number taken from a base is the base.
+func TestGoneNumbersSkipTheListingsOwnLineageAndTheFixturesProcesses(t *testing.T) {
+	t.Parallel()
+	for name, base := range map[string]int{"this process": os.Getpid(), "its parent": os.Getppid()} {
+		if got := newGoneNumbers(base).take(); got == base {
+			t.Errorf("counting from %s's number %d took %d, a number the listing leaves out", name, base, got)
+		}
+	}
+	free := 4_000_000
+	for lineage := ownLineage(); lineage[free]; {
+		free++
+	}
+	if got := newGoneNumbers(free, free).take(); got == free {
+		t.Errorf("counting from %d, which the fixture names a real process under, took it", free)
+	}
+	if got := newGoneNumbers(free).take(); got != free {
+		t.Errorf("counting from %d, a number nothing leaves out, took %d", free, got)
+	}
+}
+
 // unreadGoneEachReadingBesideMatched names only a real matched process and,
 // each reading, a fresh pid that identify reports as not running: the
 // unread-exit shape. The matched process is a real sleep so Identity.Presence
-// is the kernel's (#735 r1 finding 3).
+// is the kernel's (#735 r1 finding 3). The gone numbers come from goneNumbers,
+// so none is one the listing leaves out (#752).
 type unreadGoneEachReadingBesideMatched struct {
 	kernel
 	matched  int
 	readings int
 	gone     int
+	numbers  *goneNumbers
 }
 
 func (u *unreadGoneEachReadingBesideMatched) ids() ([]int, error) {
 	u.readings++
-	u.gone = 80_000 + u.readings
+	u.gone = u.numbers.take()
 	return []int{u.matched, u.gone}, nil
 }
 
@@ -738,7 +797,7 @@ func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
 	if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
 		t.Fatalf("sleep Presence = %v, %v; the fixture must be a real running process", presence, err)
 	}
-	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid}
+	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid, numbers: newGoneNumbers(80_001, sleeper.Process.Pid)}
 	acceptSleep := func(_ processTable, pid int) (bool, error) {
 		_, _, err := table.commandLine(pid)
 		return pid == sleeper.Process.Pid, err
@@ -769,7 +828,7 @@ func TestOutsideChurnOfUnreadExitsStillPreventsSettling(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sleeper.Process.Kill(); _ = sleeper.Wait() })
-	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid}
+	table := &unreadGoneEachReadingBesideMatched{matched: sleeper.Process.Pid, numbers: newGoneNumbers(80_001, sleeper.Process.Pid)}
 	refuseAll := func(table processTable, pid int) (bool, error) {
 		_, _, err := table.commandLine(pid)
 		return false, err
