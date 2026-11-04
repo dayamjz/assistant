@@ -14,6 +14,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // Placement under the tmux provider, read off real processes with the real
@@ -230,14 +231,29 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	}
 
 	// A person's shell outside tmux types a command into the worker's
-	// window, and waits so its own identifier can be read.
+	// window, and waits so its own identifier can be read. What it types
+	// runs a program written beside the test's files, so the line is one
+	// path long: a line past agents.TerminalLineLimit does not arrive whole
+	// at the worker, and the command itself, with the test's paths and the
+	// held process's command line in it, passed that limit once the
+	// directory the paths are under was long (#753).
 	typed := filepath.Join(dir, "typed")
 	outside := filepath.Join(dir, "outside")
+	program := filepath.Join(dir, "typed.sh")
+	body := "#!/bin/sh\nsleep 60 >/dev/null 2>&1 &\n" +
+		"echo $! > " + procgroup.ShellQuote(typed+".tmp") + " && mv " + procgroup.ShellQuote(typed+".tmp") + " " + procgroup.ShellQuote(typed) + "\n" +
+		"exec " + held + "\n"
+	if err := procgroup.WriteProgram(program, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := "run: " + procgroup.ShellQuote(program)
+	if len(line) > agents.TerminalLineLimit {
+		t.Fatalf("the line the person types is %d bytes, past agents.TerminalLineLimit (%d), so it would not arrive whole: %s", len(line), agents.TerminalLineLimit, line)
+	}
 	script := `echo "$$" > ` + outside + `.tmp && mv ` + outside + `.tmp ` + outside + ` && ` +
-		`"$0" -S "$1" send-keys -t worker -l "run: sleep 60 >/dev/null 2>&1 & echo \$! > ` + typed + `.tmp && mv ` + typed + `.tmp ` + typed +
-		`; exec ` + held + `" && ` +
+		`"$0" -S "$1" send-keys -t worker -l "$2" && ` +
 		`"$0" -S "$1" send-keys -t worker Enter && exec sleep 60`
-	person := exec.Command("/bin/sh", "-c", script, term.Tmux, term.Socket)
+	person := exec.Command("/bin/sh", "-c", script, term.Tmux, term.Socket, line)
 	if err := person.Start(); err != nil {
 		t.Fatal(err)
 	}
