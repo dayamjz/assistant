@@ -81,7 +81,15 @@ func pidIn(t *testing.T, path string) int {
 // windowShell is the shell command a new window runs so a test can read its
 // process: it writes its own identifier to path and waits.
 func windowShell(path string) string {
-	return `echo "$$" > ` + path + `.tmp && mv ` + path + `.tmp ` + path + ` && exec sleep 60`
+	return recordShell(path) + ` && exec sleep 60`
+}
+
+// recordShell is the shell command that writes the shell's own identifier
+// to path whole, through a file beside it, for pidIn to read; the paths
+// are quoted, so a directory with a space or a shell character in it is
+// written to as named.
+func recordShell(path string) string {
+	return `echo "$$" > ` + procgroup.ShellQuote(path+".tmp") + ` && mv ` + procgroup.ShellQuote(path+".tmp") + ` ` + procgroup.ShellQuote(path)
 }
 
 // The worker under tmux is not this process's child: its parent is the tmux
@@ -174,8 +182,8 @@ func TestUnderTmuxAWindowTheWorkerOpensOnItsOwnServerIsPlacedAsTheWorkers(t *tes
 	// The socket is read from the worker's own environment and nowhere
 	// else, which is what makes the server reachable from the pane; a
 	// pane with no TMUX exits 9 and the window never opens.
-	command := `[ -n "$TMUX" ] || exit 9; ` + shellWord(term.Tmux) + ` -S "${TMUX%%,*}" new-window -d -- /bin/sh -c ` +
-		shellWord(windowShell(window))
+	command := `[ -n "$TMUX" ] || exit 9; ` + procgroup.ShellQuote(term.Tmux) + ` -S "${TMUX%%,*}" new-window -d -- /bin/sh -c ` +
+		procgroup.ShellQuote(windowShell(window))
 	if err := worker.Send(t.Context(), "run: "+command); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -233,10 +241,11 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	// A person's shell outside tmux types a command into the worker's
 	// window, and waits so its own identifier can be read. What it types
 	// runs a program written beside the test's files, so the line is one
-	// path long: a line past agents.TerminalLineLimit does not arrive whole
-	// at the worker, and the command itself, with the test's paths and the
-	// held process's command line in it, passed that limit once the
-	// directory the paths are under was long (#753).
+	// path long. The command itself, with the test's paths and the held
+	// process's command line in it, grew with the directory the paths are
+	// under, and once that was long it passed agents.TerminalLineLimit,
+	// whose doc says what a terminal was seen to do with a longer line; on
+	// macOS the typed command never ran (#753).
 	typed := filepath.Join(dir, "typed")
 	outside := filepath.Join(dir, "outside")
 	program := filepath.Join(dir, "typed.sh")
@@ -248,9 +257,9 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	}
 	line := "run: " + procgroup.ShellQuote(program)
 	if len(line) > agents.TerminalLineLimit {
-		t.Fatalf("the line the person types is %d bytes, past agents.TerminalLineLimit (%d), so it would not arrive whole: %s", len(line), agents.TerminalLineLimit, line)
+		t.Fatalf("the line the person types is %d bytes, past agents.TerminalLineLimit (%d), the longest line the scripted adapter's terminal framing types (see its doc): %s", len(line), agents.TerminalLineLimit, line)
 	}
-	script := `echo "$$" > ` + outside + `.tmp && mv ` + outside + `.tmp ` + outside + ` && ` +
+	script := recordShell(outside) + ` && ` +
 		`"$0" -S "$1" send-keys -t worker -l "$2" && ` +
 		`"$0" -S "$1" send-keys -t worker Enter && exec sleep 60`
 	person := exec.Command("/bin/sh", "-c", script, term.Tmux, term.Socket, line)
@@ -288,9 +297,4 @@ func TestUnderTmuxAPersonsWindowIsTheWorkersAndAPersonOutsideIsNot(t *testing.T)
 	if _, ok, err := placeByAncestry(pid, readLineage, member); err != nil || ok {
 		t.Errorf("the client a person attached with was placed %v, %v; want nobody's", ok, err)
 	}
-}
-
-// shellWord quotes one word for a POSIX shell.
-func shellWord(word string) string {
-	return "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
 }
