@@ -34,6 +34,14 @@ func commandLine(pid int) (string, []string, error) {
 	return executable, args, err
 }
 
+// executable reads pid's executable path from the record commandLine reads
+// it from (procArgs), so it is the string ofBinary compares, for an ofBinary
+// listing's snapshot (processesWhere). proc_pidpath is not that string.
+func executable(pid int) (string, error) {
+	path, _, _, err := procArgs(pid)
+	return path, err
+}
+
 // startEnvironment reads the environment the kernel holds for pid, one
 // NAME=value string per variable, from the same record. That is the
 // environment the process was started with, not one it set for itself

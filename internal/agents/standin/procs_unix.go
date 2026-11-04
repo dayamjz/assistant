@@ -38,12 +38,14 @@ func (p Process) String() string {
 // is read whole. The list is a settled reading of the process table
 // (processesWhere), so a process that exits while the table is read makes
 // it read again rather than being passed over, unless the listing had
-// already read it whole and refused it. A list that cannot be read,
+// already read it whole and refused it, or it is an ofBinary listing's
+// exit that the executable snapshot refused (processesWhere's exception
+// (c), with what that does not cover). A list that cannot be read,
 // or that no reading settles for, is an error and never an empty list; a
 // process of another user's (foreignProcess) whose command line cannot be
 // read is passed over, and one of this user's is read again (processesWhere).
 func ProcessesOf(binary string) ([]Process, error) {
-	return processesWhere(kernel{}, ofBinary(binary))
+	return processesOf(kernel{}, binary)
 }
 
 // ProcessesMatching lists every process whose arguments, argv[0] first, match
@@ -119,6 +121,7 @@ type processTable interface {
 	ids() ([]int, error)
 	identify(pid int) (agents.Identity, bool, error)
 	commandLine(pid int) (string, []string, error)
+	executable(pid int) (string, error)
 	environment(pid int) ([]string, error)
 	foreign(pid int) (bool, error)
 	isExiting(pid int) (bool, error)
@@ -132,6 +135,7 @@ func (kernel) identify(pid int) (agents.Identity, bool, error) {
 	return agents.Identify(pid)
 }
 func (kernel) commandLine(pid int) (string, []string, error) { return commandLine(pid) }
+func (kernel) executable(pid int) (string, error)            { return executable(pid) }
 func (kernel) environment(pid int) ([]string, error)         { return startEnvironment(pid) }
 func (kernel) foreign(pid int) (bool, error)                 { return foreignProcess(pid) }
 func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
@@ -140,6 +144,11 @@ func (kernel) isExiting(pid int) (bool, error)               { return exitingPro
 // table looking for a settled reading (processesWhere), so a listing ends
 // even when processes keep exiting mid-reading on a busy machine.
 const settleReadings = 64
+
+// followUpPasses bounds how many follow-up passes one reading of an ofBinary
+// listing makes after settling a process through (c) (processesWhere): a
+// reading whose follow-ups have not gone quiet by then is not settled.
+const followUpPasses = 64
 
 // processesWhere lists every process match accepts, other than this
 // process, its ancestors and every owner sweep, each with its identity and its
@@ -197,7 +206,39 @@ const settleReadings = 64
 // accepted, or that was never read whole, and that exited during an earlier
 // reading after starting another has that other read whole in a later one.
 // Processes never read whole that keep exiting, one in every reading, still
-// keep every reading from settling (#722; see Decision needed in the PR).
+// keep every reading from settling, except as an ofBinary listing settles
+// them below (#722).
+//
+// An ofBinary listing (ProcessesOf, and leftRunning with no owner value)
+// settles one more exit, (c), with follow-up passes, (d), that keep it
+// sound, so that other programs' short-lived processes do not keep every
+// reading from settling (#722). Each pass of its reading reads the table,
+// then the executable of every process it names (snapshot, by executable:
+// the string ofBinary compares), then each process as above. A process read
+// as not running for the first time in the reading settles through (c)
+// when that pass's snapshot named an executable at its number that is not
+// binary; one the snapshot could not read, or read as binary, unsettles the
+// reading as before. The snapshot decides nothing about a process read as
+// running, which is read whole as above, so one that execs binary after
+// its snapshot is read as what it then runs. A process settled through (c)
+// may have started another the pass did not name, so a reading that
+// settled one is read again, in follow-up passes that each read the table,
+// snapshot it and identify every process it names, so that a number
+// another process now holds is read as that process, while what an earlier
+// pass of the reading listed stays listed. A process number already read as
+// not running in the reading and so read again settles unless that pass's
+// snapshot names binary at it, which unsettles the reading. The reading
+// settles at the first pass with nothing unsettled that settles no new
+// process through (c) and, after the first pass, names no number the
+// reading had not; followUpPasses follow-ups without such a pass leave it
+// unsettled.
+//
+// So a settled ofBinary reading has read whole every live process of this
+// user's that could match among the numbers its passes named, and every
+// process that exited unread is one refused or not running in the reading
+// before, as above, or one a snapshot of the pass that read it as not
+// running named with an executable that is not binary, after which every
+// number the follow-ups named was identified again.
 //
 // When no reading settles, the error is an unsettledError naming the
 // process number that kept the most readings in a row from settling,
@@ -221,7 +262,37 @@ const settleReadings = 64
 // readings, would be taken for it; and processes the listing never read
 // whole that keep exiting, one in every reading, still keep every reading
 // from settling.
+//
+// What an ofBinary listing's (c) does not cover besides (Linear AGE-508,
+// accepted): a settled reading can be empty while a process of binary
+// runs. A number already read as not running in the reading can be taken
+// by a process of binary that starts another after a pass named the number
+// and exits before that pass identifies it, which the snapshot never read
+// when the process exited before it, or when it read the number's earlier
+// process; that pass settles, and the process started is in no pass's
+// table. A caller that takes an empty list as nothing to clean up then
+// leaves it running. Nor does (c) settle a process that exits after it was
+// identified as running and before its read was made whole, so that churn
+// still keeps readings from settling, as do processes new to every
+// follow-up pass, which exhaust followUpPasses; the snapshot costs one
+// read of an executable per process named per pass, and the follow-ups
+// further passes.
 func processesWhere(table processTable, match func(processTable, int) (bool, error)) ([]Process, error) {
+	return settledListing(table, match, "")
+}
+
+// processesOf is ProcessesOf's listing of table, and leftRunning's when it
+// has no owner value: processesWhere's with ofBinary(binary) as the match,
+// and with the executable snapshot, exception (c) and the follow-up passes
+// processesWhere describes for an ofBinary listing.
+func processesOf(table processTable, binary string) ([]Process, error) {
+	return settledListing(table, ofBinary(binary), binary)
+}
+
+// settledListing is processesWhere's listing, and processesOf's when
+// binary is not empty: binary is then what match accepts the executable of,
+// and each pass snapshots the executables the table names.
+func settledListing(table processTable, match func(processTable, int) (bool, error), binary string) ([]Process, error) {
 	exclude := ownLineage()
 	// read is every process read whole so far, with what it was read as:
 	// a process match accepts, or nil for one it refuses or passes over;
@@ -237,24 +308,65 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	// from settling.
 	var causes []unsettledCause
 	standing := map[int]int{}
-	for range settleReadings {
+	// A reading is one pass of the table, or for an ofBinary listing that
+	// settled a process through (c), that pass and its follow-ups; pass
+	// counts them. found is what the reading listed, in the order the table
+	// first named it, listed the identities in it, and seen the process
+	// numbers any of its passes named.
+	var (
+		found                  []Process
+		listed                 map[agents.Identity]bool
+		nowStopped, nowRefused map[int]bool
+		seen                   map[int]bool
+		pass                   int
+	)
+	list := func(p Process) {
+		if !listed[p.Identity] {
+			listed[p.Identity] = true
+			found = append(found, p)
+		}
+	}
+	for readings := 0; readings < settleReadings; {
+		if pass == 0 {
+			found, listed = nil, map[agents.Identity]bool{}
+			nowStopped, nowRefused = map[int]bool{}, map[int]bool{}
+			seen = map[int]bool{}
+		}
 		pids, err := table.ids()
 		if err != nil {
 			return nil, fmt.Errorf("listing processes: %w", err)
 		}
-		var found []Process
 		causes = nil
 		unsettle := func(pid int, err error) {
 			causes = append(causes, unsettledCause{pid: pid, err: err})
 		}
-		nowStopped, nowRefused := map[int]bool{}, map[int]bool{}
+		var snap map[int]string
+		if binary != "" {
+			snap = snapshot(table, pids, exclude)
+		}
+		// keptGoing is a process number that keeps this reading from
+		// settling at this pass without unsettling it: one new to the
+		// reading on a follow-up, or one this pass settled through (c).
+		keptGoing, quiet := 0, true
 		for _, pid := range pids {
 			if exclude[pid] {
 				continue
 			}
+			if !seen[pid] {
+				seen[pid] = true
+				if pass > 0 {
+					keptGoing, quiet = pid, false
+				}
+			}
 			id, running, err := table.identify(pid)
 			if err != nil {
 				unsettle(pid, fmt.Errorf("process %d could not be identified: %w", pid, err))
+				continue
+			}
+			if !running && binary != "" {
+				if settleUnreadExit(pid, binary, snap, stopped, wasRefused, nowStopped, unsettle) {
+					keptGoing, quiet = pid, false
+				}
 				continue
 			}
 			if !running {
@@ -266,7 +378,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			if p, ok := read[id]; ok {
 				if p != nil {
-					found = append(found, *p)
+					list(*p)
 				}
 				if refused[id] {
 					nowRefused[pid] = true
@@ -336,11 +448,20 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			}
 			p := Process{Identity: id, Args: args}
 			read[id] = &p
-			found = append(found, p)
+			list(p)
 		}
-		if len(causes) == 0 {
+		if len(causes) == 0 && quiet {
 			return found, nil
 		}
+		if len(causes) == 0 && pass < followUpPasses {
+			pass++
+			continue
+		}
+		if len(causes) == 0 {
+			unsettle(keptGoing, fmt.Errorf("process %d kept the last of %d follow-up passes from going quiet", keptGoing, followUpPasses))
+		}
+		pass = 0
+		readings++
 		stopped, wasRefused = nowStopped, nowRefused
 		nowStanding := make(map[int]int, len(causes))
 		for _, c := range causes {
@@ -349,6 +470,57 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		standing = nowStanding
 	}
 	return nil, longestStanding(causes, standing)
+}
+
+// snapshot is an ofBinary listing's executable snapshot of one pass
+// (processesWhere): the executable of every process pids names other than
+// exclude's, read right after the table named them. A process whose
+// executable could not be read, or read empty, is not in it, so its exit
+// refuses nothing.
+func snapshot(table processTable, pids []int, exclude map[int]bool) map[int]string {
+	snap := map[int]string{}
+	for _, pid := range pids {
+		if exclude[pid] {
+			continue
+		}
+		if path, err := table.executable(pid); err == nil && path != "" {
+			snap[pid] = path
+		}
+	}
+	return snap
+}
+
+// settleUnreadExit is an ofBinary listing's reading of pid as not running
+// on a pass whose executable snapshot is snap (processesWhere). It records
+// pid in nowStopped, unsettles the reading unless the exit settles, and
+// reports whether this pass newly settled pid through (c), which keeps the
+// reading going for a follow-up pass. A pid read as not running in the
+// reading before, or as one refused there, settles as in every listing. One
+// already read as not running earlier in this reading settles again unless
+// this pass's snapshot names binary at its number: a process of binary was
+// there since. One read so for the first time settles through (c) only when
+// this pass's snapshot names an executable at its number that is not
+// binary.
+func settleUnreadExit(pid int, binary string, snap map[int]string, stopped, wasRefused, nowStopped map[int]bool, unsettle func(int, error)) bool {
+	path, snapped := snap[pid]
+	again := nowStopped[pid]
+	nowStopped[pid] = true
+	switch {
+	case stopped[pid] || wasRefused[pid]:
+		return false
+	case again && snapped && path == binary:
+		unsettle(pid, fmt.Errorf("process %d read as not running again, its executable %s when this pass began", pid, path))
+		return false
+	case again:
+		return false
+	case snapped && path != binary:
+		return true
+	case snapped:
+		unsettle(pid, fmt.Errorf("process %d read as not running for the first time, its executable %s when this pass began", pid, path))
+		return false
+	}
+	unsettle(pid, fmt.Errorf("process %d read as not running for the first time", pid))
+	return false
 }
 
 // ownLineage is the process numbers a listing leaves out as its own: this
@@ -617,11 +789,12 @@ func leftAfterTests() bool {
 // (carrying) when it is not empty, from one settled reading of the process
 // table (processesWhere), so no process is missed for having been started
 // between the reading that would list it by its executable and the one
-// that would list it by its environment.
+// that would list it by its environment. With no owner value it is
+// ProcessesOf's listing (processesOf), an ofBinary listing.
 func leftRunning(table processTable, binary, value string) ([]Process, error) {
 	byBinary := ofBinary(binary)
 	if value == "" {
-		return processesWhere(table, byBinary)
+		return processesOf(table, binary)
 	}
 	byIdentity := carries(value)
 	return processesWhere(table, func(table processTable, pid int) (bool, error) {

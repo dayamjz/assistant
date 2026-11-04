@@ -41,6 +41,13 @@ func commandLine(pid int) (string, []string, error) {
 	return executable, strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"), nil
 }
 
+// executable reads pid's executable, the link commandLine reads it from,
+// so it is the string ofBinary compares, for an ofBinary listing's snapshot
+// (processesWhere), without reading the arguments.
+func executable(pid int) (string, error) {
+	return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+}
+
 // startEnvironment reads the environment the kernel holds for pid, one
 // NAME=value string per variable, from its NUL-separated environ. That is the
 // environment the process was started with, not one it set for itself
