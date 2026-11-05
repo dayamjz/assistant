@@ -399,7 +399,7 @@ func TestKeepAnsweredWhileARefusedPassDispatchHasItsSlotStillDispatchesThePass(t
 		hold = offerRetirementHoldOf(t, sub.records, sub.task)
 	}
 	inWindow := false
-	s.betweenHeldAndRelease = func() {
+	s.betweenHeldAndRelease = func(string) {
 		inWindow = true
 		s.betweenHeldAndRelease = nil
 		if _, err := sub.records.ResolveHold(ctx, hold.Key, machine.AnswerKeep, store.ResolvedByMachineInterface()); err != nil {

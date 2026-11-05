@@ -347,8 +347,7 @@ func (s *Service) claimSteer(id string) (func(), error) {
 	s.steering[id] = true
 	return func() {
 		s.mu.Lock()
-		delete(s.claiming, id)
-		delete(s.steering, id)
+		s.endClaim(id)
 		need := s.redispatchWhenFree[id]
 		delete(s.redispatchWhenFree, id)
 		if need {

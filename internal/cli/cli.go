@@ -570,6 +570,25 @@ func subcommandRefusal(verb string, args, names []string) error {
 	return usagef("%s: %s", written, machine.SubcommandPhrase(len(args) > 0, names))
 }
 
+// PrintFailure writes what a person reads on stderr for err without --json:
+// the error, and when nextActions has a row, the next step. render uses it;
+// tests of a refused carry-on drive completeCarryOn and then this, so the
+// printed line is the renderer's (#731).
+func PrintFailure(w io.Writer, err error) {
+	writeln(w, err.Error())
+	if action := nextAction(err); action != "" {
+		writeln(w, action)
+	}
+}
+
+// FormatFailure is PrintFailure as a string, for tests that assert the
+// printed line without an io.Writer.
+func FormatFailure(err error) string {
+	var b strings.Builder
+	PrintFailure(&b, err)
+	return strings.TrimSuffix(b.String(), "\n")
+}
+
 // render writes the answer and returns the exit code.
 //
 // A structured answer goes to standard output whether or not it reports a
@@ -596,10 +615,7 @@ func render(in *invocation, answer any, err error) machine.Code {
 			_ = encoder.Encode(failure)
 			return code
 		}
-		writeln(env.Stderr, failure.Error)
-		if failure.NextAction != "" {
-			writeln(env.Stderr, failure.NextAction)
-		}
+		PrintFailure(env.Stderr, err)
 		return code
 	}
 	if in.json {

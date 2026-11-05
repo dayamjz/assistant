@@ -221,6 +221,23 @@ type Options struct {
 	// WithCarryOnClaimInterruptForTest sets, with carryOnTest, and the
 	// product never does.
 	interruptCarryOnClaim func() error
+	// betweenCarryOnReadAndSlot is the Service field of the same
+	// name, which export_test.go's
+	// WithBetweenCarryOnReadAndSlotForTest sets and the product
+	// never does.
+	betweenCarryOnReadAndSlot func() error
+	// beforeCarryOnSlotRelease is the Service field of the same name, which
+	// export_test.go's WithBeforeCarryOnSlotReleaseForTest sets and the
+	// product never does.
+	beforeCarryOnSlotRelease func()
+	// afterHeldSlotRelease is the Service field of the same name, which
+	// export_test.go's WithAfterHeldSlotReleaseForTest sets and the product
+	// never does.
+	afterHeldSlotRelease func(id string)
+	// heldDispatchWindow is the Service field betweenHeldAndRelease, which
+	// export_test.go's WithHeldDispatchWindowForTest sets and the product
+	// never does.
+	heldDispatchWindow func(id string)
 	// cleanupAskSpacing replaces landedAskSpacing for this service, which
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
@@ -447,12 +464,13 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// betweenHeldAndRelease runs in a dispatch that kept work or a
-	// housekeeping pass's retirement hold held, after the refusal and before
-	// the slot is given back. It is nil in production and set only by this
-	// package's tests, which use it to close the entry or answer the hold,
-	// and run another dispatch pass, inside that window.
-	betweenHeldAndRelease func()
+	// betweenHeldAndRelease runs in a dispatch of the task it is given that
+	// kept work or a housekeeping pass's retirement hold held, after the
+	// refusal and before the slot is given back. It is nil in production and
+	// set only by this package's tests, which use it to close the entry,
+	// answer the hold or a carry on, and run another dispatch pass, inside
+	// that window; WithHeldDispatchWindowForTest sets it.
+	betweenHeldAndRelease func(id string)
 	// betweenLandingClaimAndStart runs in a landing of kept work after its
 	// claim and before it brings the commit into the gate and starts the
 	// run. It is nil in production and set only by this package's tests,
@@ -475,6 +493,24 @@ type Service struct {
 	// entry, and an error it returns ends the answer there. It is nil in
 	// production and set only through WithCarryOnClaimInterruptForTest.
 	betweenCarryOnClaimAndCompletion func() error
+	// betweenCarryOnReadAndSlot runs in completeCarryOn after the
+	// completion's first read of the entry (the pending claim) and before
+	// claimCarryOnSlot, and an error it returns ends the answer there. It
+	// is nil in production and set only through
+	// WithBetweenCarryOnReadAndSlotForTest.
+	betweenCarryOnReadAndSlot func() error
+	// beforeCarryOnSlotRelease runs in completeCarryOn after the body
+	// returns and before the deferred give-back of the successor's slot, so
+	// a test can observe the entry closed while claiming[id] still holds.
+	// It is nil in production and set only through
+	// WithBeforeCarryOnSlotReleaseForTest.
+	beforeCarryOnSlotRelease func()
+	// afterHeldSlotRelease runs in settleDispatch for the task it is given
+	// once releaseHeldSlot (or releasePassHeldSlot) has returned: the slot
+	// is given back and the hold read again, which asks for another pass
+	// only when nothing holds the task any more. It is nil in production
+	// and set only through WithAfterHeldSlotReleaseForTest.
+	afterHeldSlotRelease func(id string)
 	// landings is the kept work entries a landing is carrying out in this
 	// service now, keyed by entry: the in-process half of the landing's
 	// exactly-once, on keptanswer.go's terms. It is read and written under
@@ -794,6 +830,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		landedSpacing:             landedSpacingOf(o.cleanupAskSpacing),
 		afterIntakeBranchRelease:  o.afterIntakeBranchRelease,
 		afterMergeReadPass:        o.afterMergeReadPass,
+		betweenHeldAndRelease:     o.heldDispatchWindow,
+		betweenCarryOnReadAndSlot: o.betweenCarryOnReadAndSlot,
+		beforeCarryOnSlotRelease:  o.beforeCarryOnSlotRelease,
+		afterHeldSlotRelease:      o.afterHeldSlotRelease,
 		isolated:                  make(map[string]tasks.Isolation),
 		claiming:                  make(map[string]bool),
 		steering:                  make(map[string]bool),

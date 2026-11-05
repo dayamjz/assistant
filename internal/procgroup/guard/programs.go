@@ -315,6 +315,10 @@ var WriteExceptions = []WriteException{
 		Why: "Takes the write permission off the kept copy's parent directory, so its rename fails, and puts it back; the modes are a directory's.",
 	},
 	{
+		File: "internal/service/keptcarryon_test.go", Function: "TestACarryOnAfterARefusedRelaunchDoesNotSayWorkBegan",
+		Why: "Takes the write permission off the kept copy's parent directory, so its rename fails, and puts it back; the modes are a directory's.",
+	},
+	{
 		File: "internal/stages/rebase_conflict_test.go", Function: "(modeFixer).Apply",
 		Why: "Sets the executable bit on the conflicted file the fixer resolves. The test does not run that file.",
 	},
