@@ -961,7 +961,9 @@ the service is watching the fleet again first. Like the other coordinator
 subcommands, all of these are refused for a task's worker.
 
 A restart does not leave that queue exactly as it was. When the service
-starts it reconciles every task, and a task whose worker's terminal is gone
+starts it first holds again every worker that went on running in tmux
+across the restart (see [Watch a worker in a terminal](#watch-a-worker-in-a-terminal)),
+which is not relaunched. It then reconciles every task, and a task whose worker's terminal is gone
 with its work not landed and no report filed for it is relaunched, up to
 `relaunch_attempts` times (2 unless configured). A relaunch records each still-queued `terminal-gone`
 wake about the session it replaced as handled by the program, so no later
@@ -1249,20 +1251,25 @@ and parks the run.
 
 ## Watch a worker in a terminal
 
-By default a worker runs on pipes the service holds, which nothing can attach
-to. To host each worker in a terminal you can watch and type into, set the
-provider in your own configuration file, `config.yaml` under the home (by
-default `~/.assistant`), which is a YAML document:
+By default (`session_provider: auto`) each worker runs in a terminal you can
+watch and type into wherever a tmux binary is on the service's PATH and the
+worker's adapter declares terminal workers (today: Claude), and on pipes the
+service holds, which nothing can attach to, wherever it cannot.
+`assistant doctor`'s session provider row says which applies here. To choose
+for yourself, set the provider in your own configuration file, `config.yaml`
+under the home (by default `~/.assistant`), which is a YAML document:
 
 ```yaml
-session_provider: tmux
+session_provider: tmux # or pipe, or auto, the default
 ```
 
-Workers also need an adapter that declares terminal workers (today: Claude).
-A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
-reason rather than falling back or widening grants; list Claude after Cursor
-if you want Cursor for runs and Claude for attachable workers. See
-`docs/multi-agent-support.md`.
+`tmux` insists on a terminal: a worker whose adapter does not declare
+terminal workers is refused with a recorded `route-refused` reason rather
+than falling back or widening grants, so a Cursor-only `agent:` pin refuses
+the launch; list Claude after Cursor if you want Cursor for runs and Claude
+for attachable workers. `pipe` never uses tmux. See
+`docs/multi-agent-support.md`. Under `auto` a subordinate coordinator
+(`assistant coordinator delegate`) still runs on pipes.
 
 `session_provider: herdr` and the keys for workers on another machine
 (`remote_hosts`, `placement.local`, `placement.arch` and
@@ -1315,6 +1322,21 @@ the command that attaches you:
 ```sh
 tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
 ```
+
+A worker in a terminal outlives a restart of the service.
+`assistant service restart` lets it go rather than ending it, and the next
+service holds it again as it starts: the same worker, with its context,
+answers through the next service, and no relaunch is recorded, so a restart
+does not count toward `relaunch_attempts`. A service killed outright leaves
+it running the same way, and the next start holds it again too. Before it
+holds one, the service checks that the process the task's attempt recorded is
+still running with its recorded start time and that the worker's own server,
+on the socket the attempt recorded, answers with that process. A worker that
+fails that check is not held: it reads as unobservable and is reported as a
+terminal-gone wake rather than relaunched beside, until it ends.
+`assistant service stop` still ends every worker, and a worker on pipes is
+ended by a restart too and relaunched in place, as before. While no service
+runs, a worker that goes on cannot push or reach the service.
 
 What you type there is the worker's input, exactly as a message is, and the
 program keeps no record of it: the worker acts on it, and the coordinator

@@ -58,3 +58,45 @@ func TestReferenceEncodesAndDecodesOneClosedFormat(t *testing.T) {
 		}
 	}
 }
+
+// A tmux worker's reference names its server's socket in a sixth field under
+// a format of its own, round-trips through it, and is refused with
+// ErrReference for a socket name Tmux.Create could not have drawn; a
+// subordinate's reference names none.
+func TestATerminalReferenceNamesItsSocket(t *testing.T) {
+	h, err := home.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := session.Reference{Home: session.HomeMarker(h), Task: id, PID: 4242, Start: 99, Terminal: "0123456789abcdef"}
+	text := ref.String()
+	if !strings.HasPrefix(text, "terminal2:") || !strings.HasSuffix(text, ":0123456789abcdef") || strings.Count(text, ":") != 5 {
+		t.Fatalf("encoded as %q, want the terminal format with the socket name last", text)
+	}
+	if got, err := session.ParseReference(text); err != nil || got != ref {
+		t.Fatalf("ParseReference(%q) = %+v, %v; want %+v", text, got, err, ref)
+	}
+	for name, text := range map[string]string{
+		"short name":     strings.TrimSuffix(text, "f"),
+		"uppercase name": strings.TrimSuffix(text, "abcdef") + "ABCDEF",
+		"no name":        strings.TrimSuffix(text, ":0123456789abcdef"),
+		"seven fields":   text + ":0123456789abcdef",
+	} {
+		if _, err := session.ParseReference(text); !errors.Is(err, session.ErrReference) {
+			t.Errorf("%s (%q) answered %v, want ErrReference", name, text, err)
+		}
+	}
+	bad := ref
+	bad.Terminal = "not-hex"
+	if _, err := bad.Encode(); !errors.Is(err, session.ErrReference) {
+		t.Errorf("Encode of a bad socket name answered %v, want ErrReference", err)
+	}
+	subordinate := session.Reference{Home: ref.Home, Domain: "payments", PID: 1, Start: 1, Terminal: ref.Terminal}
+	if _, err := subordinate.Encode(); !errors.Is(err, session.ErrReference) {
+		t.Errorf("Encode of a subordinate naming a terminal answered %v, want ErrReference", err)
+	}
+}

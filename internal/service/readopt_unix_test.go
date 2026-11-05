@@ -16,7 +16,12 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// A restart of the service with three live tmux-hosted workers relaunches
+// defaultProviderGlobal is the home's configuration with no session
+// provider named, so the default decides.
+const defaultProviderGlobal = `{"supervision_beacon_interval": "1s"}`
+
+// A restart of the service with three live workers under the default
+// provider, which hosts each in tmux where tmux is installed, relaunches
 // none of them: the restart verb releases each worker rather than ending it,
 // its tmux server goes on running, and the next service re-adopts it from the
 // attempt's recorded session once the liveness probe verifies the pane and
@@ -32,7 +37,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 	tmux := standin.Tmux(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
-	if err := os.WriteFile(h.ConfigFile(), []byte(tmuxGlobal+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(h.ConfigFile(), []byte(defaultProviderGlobal+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	subject := newSubject(t)
@@ -46,6 +51,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 
 	first := map[string]session.Reference{}
 	o, _ := workerOptions(t, h)
+	o.PipeByDefault = false
 	running, closeFirst := openService(t, o)
 	for _, id := range ids {
 		provider, launched := launchedSession(t, running.service, id)
@@ -69,11 +75,15 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 	}
 
 	o, _ = workerOptions(t, h)
+	o.PipeByDefault = false
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		for _, id := range ids {
 			provider, held, ok := running.service.SessionOf(id)
 			if !ok {
 				t.Fatalf("the restarted service holds no session for task %s, so its worker was not re-adopted", id)
+			}
+			if _, tmux := provider.(*session.Tmux); !tmux {
+				t.Fatalf("task %s's worker is held through %T, want the tmux provider the default chose", id, provider)
 			}
 			if held.Reference() != first[id] {
 				t.Fatalf("task %s runs in session %s after the restart, want the same worker %s", id, held.Reference(), first[id])
@@ -91,5 +101,45 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 		if attempts := attemptsOf(t, h, id); len(attempts) != 1 {
 			t.Fatalf("task %s has attempts %+v after the restart, want its one launch and zero relaunch records", id, attempts)
 		}
+	}
+}
+
+// A worker that outlives a service stopped hard, with no restart asked for,
+// is held again the same way: the service that died let nothing go, and its
+// attempt's record still names the worker and its server, so the next
+// service verifies and holds it, the task reads Running through it, and no
+// relaunch is recorded. A plain stop of that service then ends it, as P15's
+// stop half ends every worker a stop that is not a restart finds held.
+func TestASurvivorOfAHardStopIsHeldAgainAndAPlainStopEndsIt(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	h, id := tmuxHome(t, "task/readopt-survivor")
+	o, _ := workerOptions(t, h)
+	var first session.Reference
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		provider, launched := launchedSession(t, running.service, id)
+		waitCapture(t, provider, launched, "worker ready")
+		first = launched.Reference()
+		socket := socketOf(t, provider, launched)
+		t.Cleanup(func() { _ = exec.Command(standin.Tmux(t), "-S", socket, "kill-server").Run() })
+		running.service.AbandonSessionsForTest(t)
+	})
+	homeIsFree(t, h)
+
+	o, _ = workerOptions(t, h)
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		_, held := launchedSession(t, running.service, id)
+		if held.Reference() != first {
+			t.Fatalf("the survivor is held as %s, want %s", held.Reference(), first)
+		}
+		if got := observed(t, taskState, running.client, id); !readsRunning(got) {
+			t.Fatalf("the survivor's task resolves %+v, want Running through the session held again", got)
+		}
+	})
+	if attempts := attemptsOf(t, h, id); len(attempts) != 1 {
+		t.Fatalf("the task has attempts %+v, want its one launch and no relaunch", attempts)
+	}
+	if presence, err := (agents.Identity{PID: first.PID, Start: first.Start}).Presence(); err != nil || presence == agents.PresencePresent {
+		t.Fatalf("the worker reads %q (%v) after a plain stop of the service holding it, want it ended", presence, err)
 	}
 }

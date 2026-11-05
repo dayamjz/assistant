@@ -390,6 +390,9 @@ func serveOptions(t *testing.T, o service.Options) func() {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	o.Build = build
+	// The workers these tests script are pipe workers, whatever tmux this
+	// machine has; the default provider is internal/service's subject.
+	o.PipeByDefault = true
 	// A home nothing has opened yet gets this build's database copied in
 	// rather than created, on internal/store/storetest's terms; a home that
 	// already holds one is left as it is.

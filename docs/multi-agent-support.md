@@ -207,7 +207,9 @@ what the adapter asks for; nothing checks the window a started process has.
 
 Task workers are routed separately from the run agent. `agents.Route` picks
 the first runnable entry whose declared capabilities cover the worker need
-(`worker_sessions`, and `terminal_workers` when `session_provider: tmux`):
+(`worker_sessions`, and `terminal_workers` when `session_provider: tmux`; under
+the default, `auto`, a worker whose adapter lacks `terminal_workers` runs on
+pipes instead):
 
 - A **single named** `agent` entry (not `auto`) is an operator pin: if that
   adapter lacks the need, launch is refused with no fallthrough.
@@ -402,7 +404,9 @@ A failed safety proof or an exhausted relaunch bound follows the existing
 A retry that failed before a session was recorded reuses dispatch's existing
 standing-copy sweep and the same relaunch bound.
 
-Cursor workers require `session_provider: pipe` (the default). Worker backup capabilities are checked before any worker starts. A tmux provider
+Cursor workers run on pipes: under `session_provider: pipe`, and under the
+default, `auto`, which hosts a worker in tmux only when its adapter declares
+terminal workers. Worker backup capabilities are checked before any worker starts. A tmux provider
 is refused for Cursor rather than replaced, because Cursor terminal support
  is not declared. Its ACP client grants only read/edit/search requests and
 literal git or worker-route commands without shell operators; other permission

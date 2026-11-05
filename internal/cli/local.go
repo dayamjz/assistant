@@ -653,10 +653,12 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 }
 
 // sessionProvider reports whether the operator's chosen terminal session
-// provider can host workers here. The default pipe always can. tmux needs a
-// tmux binary on PATH and an agent that declares terminal_workers; without
-// either, every launch is refused and the task stays Dispatched, which is
-// the stall this row names before an operator waits on one. It reads the
+// provider can host workers here. pipe always can, and so can auto, the
+// default, which hosts a worker in tmux where tmux is on PATH and the agent
+// declares terminal_workers and on a pipe otherwise; the row says which. tmux
+// needs a tmux binary on PATH and an agent that declares terminal_workers;
+// without either, every launch is refused and the task stays Dispatched,
+// which is the stall this row names before an operator waits on one. It reads the
 // operator's file the way the service does at start, and resolves the agent
 // list that file names (defaults included), which is what launches go
 // through. It does not block a run: gate validation does not need a worker
@@ -670,12 +672,15 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 			Detail: "the home's configuration could not be read, so whether workers can launch under it is unknown: " + err.Error(),
 		}
 	}
+	if cfg.SessionProvider == config.SessionProviderAuto {
+		return autoSessionProvider(ctx, cfg, catalog)
+	}
 	if cfg.SessionProvider != config.SessionProviderTmux {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
 			OK:   true,
-			Detail: "workers run on pipes (the default); set session_provider: tmux in " +
-				configFile + " to host each in an attachable terminal",
+			Detail: "workers run on pipes, as session_provider pipe in " + configFile +
+				" chooses; remove it to host each in an attachable terminal where tmux is installed",
 		}
 	}
 	tmux, lookErr := exec.LookPath("tmux")
@@ -707,6 +712,28 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 		Detail: fmt.Sprintf("tmux at %s, and %s declares %s",
 			tmux, resolution.Name, agents.CapabilityTerminalWorkers),
 	}
+}
+
+// autoSessionProvider is sessionProvider's row for auto, which is always OK
+// and says which provider a worker of the resolved agent gets here.
+func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents.Catalog) machine.Check {
+	row := machine.Check{Name: machine.CheckSessionProvider, OK: true}
+	tmux, lookErr := exec.LookPath("tmux")
+	resolution, err := agents.Resolve(ctx, cfg.Agent, catalog)
+	switch {
+	case lookErr != nil:
+		row.Detail = "workers run on pipes (the default, auto): no tmux binary is on PATH, so a worker cannot outlive a restart of the service"
+	case err != nil:
+		row.Detail = "workers run in tmux where their agent declares " + string(agents.CapabilityTerminalWorkers) +
+			" and on pipes otherwise (the default, auto); the agent could not be resolved here: " + err.Error()
+	case !resolution.Runner.Capabilities().Has(agents.CapabilityTerminalWorkers):
+		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto): %s has not declared %s, so a worker cannot outlive a restart of the service",
+			resolution.Name, agents.CapabilityTerminalWorkers)
+	default:
+		row.Detail = fmt.Sprintf("workers run in tmux (the default, auto): tmux at %s, and %s declares %s",
+			tmux, resolution.Name, agents.CapabilityTerminalWorkers)
+	}
+	return row
 }
 
 // namedOnlyAgents reports the adapters that resolve on this machine but that

@@ -20,6 +20,15 @@ var ErrReference = errors.New("session: not a session reference")
 // rather than read, except subordinatePrefix.
 const referencePrefix = "terminal1"
 
+// terminalPrefix names the format of a tmux-hosted worker's reference: the
+// worker's five fields and a sixth, the name of its server's socket, which is
+// what lets a later provider reach the server again (Tmux.Readopt).
+const terminalPrefix = "terminal2"
+
+// terminalNameLength is the length of a socket name Tmux.Create draws: eight
+// random bytes in lowercase hex.
+const terminalNameLength = 16
+
 // subordinatePrefix names the format of a subordinate coordinator's
 // reference: the same five fields, with the domain in the task's place. The
 // prefix is what tells the two apart, so a domain and a task identifier that
@@ -54,6 +63,10 @@ type Reference struct {
 	// Start is the platform's reading of the process's start time, compared
 	// for equality only, and zero where the platform could not read one.
 	Start uint64
+	// Terminal is the name of the socket a tmux-hosted worker's own server
+	// listens on, under home.TerminalSocket, and empty for a worker on a
+	// pipe and for every subordinate coordinator.
+	Terminal string
 }
 
 // Subordinate reports whether the reference names a subordinate
@@ -69,7 +82,8 @@ func HomeMarker(h *home.Home) string {
 
 // Encode encodes the reference in the closed format ParseReference reads:
 // the format name, the home marker, the task identifier or the domain, the
-// process identifier and the start time, joined by colons. A reference with
+// process identifier and the start time, joined by colons, and for a worker
+// with a Terminal, that name last under terminalPrefix. A reference with
 // a Domain and no Task encodes under subordinatePrefix and one with a Task
 // and no Domain under referencePrefix. One naming both, or neither, is
 // refused with an error wrapping ErrReference: it is the identity of no
@@ -82,12 +96,20 @@ func (r Reference) Encode() (string, error) {
 		return "", fmt.Errorf("%w: a reference names task %q and domain %q, and a session has exactly one owner", ErrReference, r.Task, r.Domain)
 	case r.Task == "" && r.Domain == "":
 		return "", fmt.Errorf("%w: a reference names neither a task nor a domain", ErrReference)
+	case r.Subordinate() && r.Terminal != "":
+		return "", fmt.Errorf("%w: a subordinate coordinator's reference names no terminal", ErrReference)
 	case r.Subordinate():
 		prefix, owner = subordinatePrefix, r.Domain
 	}
-	return strings.Join([]string{
-		prefix, r.Home, owner, strconv.Itoa(r.PID), strconv.FormatUint(r.Start, 10),
-	}, ":"), nil
+	fields := []string{prefix, r.Home, owner, strconv.Itoa(r.PID), strconv.FormatUint(r.Start, 10)}
+	if r.Terminal != "" {
+		if !validTerminalName(r.Terminal) {
+			return "", fmt.Errorf("%w: terminal %q is not %d lowercase hex characters", ErrReference, r.Terminal, terminalNameLength)
+		}
+		fields[0] = terminalPrefix
+		fields = append(fields, r.Terminal)
+	}
+	return strings.Join(fields, ":"), nil
 }
 
 // String renders the reference for a log line: Encode's text, or, for a
@@ -109,15 +131,24 @@ func (r Reference) String() string {
 // marker that is not lowercase hex of the fixed length, a task identifier
 // home.ValidTaskID refuses or a domain home.ValidDomain refuses, a process
 // identifier that is not a positive decimal, or a start time that is not a
-// decimal.
+// decimal; and, under terminalPrefix, a field count other than six or a
+// terminal name that is not lowercase hex of the length Tmux draws.
 func ParseReference(text string) (Reference, error) {
 	parts := strings.Split(text, ":")
+	terminal := ""
+	if parts[0] == terminalPrefix {
+		if len(parts) != 6 || !validTerminalName(parts[5]) {
+			return Reference{}, fmt.Errorf("%w: a %s reference is five fields and a terminal of %d lowercase hex characters",
+				ErrReference, terminalPrefix, terminalNameLength)
+		}
+		terminal, parts = parts[5], append([]string{referencePrefix}, parts[1:5]...)
+	}
 	if len(parts) != 5 {
 		return Reference{}, fmt.Errorf("%w: %d fields, want 5", ErrReference, len(parts))
 	}
 	subordinate := parts[0] == subordinatePrefix
 	if parts[0] != referencePrefix && !subordinate {
-		return Reference{}, fmt.Errorf("%w: format %q, want %q or %q", ErrReference, parts[0], referencePrefix, subordinatePrefix)
+		return Reference{}, fmt.Errorf("%w: format %q, want %q, %q or %q", ErrReference, parts[0], referencePrefix, terminalPrefix, subordinatePrefix)
 	}
 	marker := parts[1]
 	if len(marker) != homeMarkerLength || strings.Trim(marker, "0123456789abcdef") != "" {
@@ -138,9 +169,14 @@ func ParseReference(text string) (Reference, error) {
 	if err != nil || strconv.FormatUint(start, 10) != parts[4] {
 		return Reference{}, fmt.Errorf("%w: start time %q is not a decimal", ErrReference, parts[4])
 	}
-	ref := Reference{Home: marker, Task: parts[2], PID: pid, Start: start}
+	ref := Reference{Home: marker, Task: parts[2], PID: pid, Start: start, Terminal: terminal}
 	if subordinate {
 		ref.Task, ref.Domain = "", parts[2]
 	}
 	return ref, nil
+}
+
+// validTerminalName reports whether name is a socket name Tmux.Create draws.
+func validTerminalName(name string) bool {
+	return len(name) == terminalNameLength && strings.Trim(name, "0123456789abcdef") == ""
 }

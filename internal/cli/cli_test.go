@@ -1712,8 +1712,9 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 }
 
 // doctor reports the operator's session_provider before a task stalls
-// Dispatched: the default pipe is fine; tmux with a binary and an agent that
-// declares terminal_workers is fine; tmux without the binary, or with an
+// Dispatched: the default, auto, is fine and names tmux where it can host
+// the agent's workers and pipes where it cannot; tmux with a binary and an
+// agent that declares terminal_workers is fine; tmux without the binary, or with an
 // agent that has not declared the capability, is not OK and names the stall.
 // It stays serial because PATH is process state.
 func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
@@ -1748,8 +1749,8 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 
 	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found := findCheck(report, machine.CheckSessionProvider)
-	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "pipes") {
-		t.Fatalf("doctor's session provider row with the default is %+v, want OK naming pipes", row)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run in tmux (the default, auto)") {
+		t.Fatalf("doctor's session provider row with the default, tmux and claude is %+v, want OK naming tmux", row)
 	}
 
 	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
@@ -1772,6 +1773,17 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", noTmux)
+	if err := os.WriteFile(h.ConfigFile(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run on pipes (the default, auto)") {
+		t.Fatalf("doctor's session provider row with the default and no tmux is %+v, want OK naming pipes", row)
+	}
+	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found = findCheck(report, machine.CheckSessionProvider)
 	if !found || row.OK || row.Blocking || !strings.Contains(row.Detail, "stays dispatched") ||

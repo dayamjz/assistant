@@ -189,6 +189,14 @@ type Options struct {
 	// the service without internal/cli passes, starts every subordinate
 	// with git alone and tells it of no route.
 	CoordinatorRoute string
+	// PipeByDefault resolves session_provider auto, the default, to the
+	// pipe provider for every worker, which is what auto resolves to on a
+	// machine with no tmux, rather than looking for tmux. internal/cli
+	// leaves it false, so the product hosts a worker in tmux wherever tmux
+	// is installed and the worker's adapter declares terminal workers; a
+	// test whose subject is not the provider sets it so its workers keep the
+	// pipe shape it scripts. It changes nothing under an explicit provider.
+	PipeByDefault bool
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
@@ -370,6 +378,8 @@ type Service struct {
 	housekeeping housekeepingState
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
+	// pipeByDefault is Options.PipeByDefault.
+	pipeByDefault bool
 	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
 	// opens.
 	coordinatorRoute string
@@ -423,8 +433,10 @@ type Service struct {
 	// through the driver's provider alone. It is this service's memory,
 	// like the slot above: the attempt's record carries the session's
 	// reference and nothing durable carries the handle, so a service that
-	// restarts holds none of these and relaunches. Close ends every
-	// session here, and launch.go owns the map.
+	// restarts holds none of these until recovery holds again the tmux
+	// workers that verify (readoptWorkers), and relaunches the dead ones.
+	// Close ends every session here, after a restart has let go of the ones
+	// that can outlive it, and launch.go owns the map.
 	launched map[string]launchedWorker
 	// delegated holds, per domain, the session host and session
 	// subordinates.go started for the domain's subordinate coordinator and
@@ -844,6 +856,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
+		pipeByDefault:    o.PipeByDefault,
 		coordinatorRoute: o.CoordinatorRoute,
 		sweepCopy:        o.sweepCopy,
 	}
@@ -1103,6 +1116,9 @@ func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.stopDeadline()
 		s.Stop(false)
+		// On a restart, the workers that can outlive this service are let
+		// go first, before anything this close waits on could hurry them.
+		s.releaseForRestart()
 		var errs []error
 		s.closingAt("closing the protocol server, which waits for every request in flight")
 		if s.server != nil {
@@ -1117,14 +1133,17 @@ func (s *Service) Close() error {
 		s.work.Wait()
 		s.closingAt("stopping the supervisor loop")
 		errs = append(errs, s.stopSupervision())
-		// The workers this service launched are ended here, after the work
+		// The workers this service holds are ended here, after the work
 		// that could record against them and before the store they were
 		// recorded in closes. What that ends is exactly the sessions this
-		// service's provider created and still holds, on the terms
-		// session.Provider.Close states; a worker an earlier service of this
-		// home launched is no session of this one and goes on, which
-		// launch.go states.
+		// service's providers hold, on the terms session.Provider.Close
+		// states, a worker held again at recovery among them; a restart has
+		// already let go of every one that can outlive it, and a worker an
+		// earlier service launched that was not held again is no session of
+		// this one and goes on, which launch.go states.
 		s.closingAt("ending the workers it launched")
+		// Again, for a worker a launch under way recorded since the first.
+		s.releaseForRestart()
 		errs = append(errs, s.closeSessions()...)
 		s.closingAt("ending the subordinate coordinators it launched")
 		errs = append(errs, s.closeSubordinates()...)
@@ -1223,8 +1242,9 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// The session provider is built over the agent as resolved, before the
 	// wrapper below takes its worker arm away; driver.sessions says why.
 	// A review or fix role's agent is not a worker, so the provider stays
-	// on the service agent.
-	sessions := s.sessionHost(resolution.Runner)
+	// on the service agent. It starts subordinate coordinators, which the
+	// default, auto, keeps on pipes (driverHost).
+	sessions := s.driverHost(resolution.Runner)
 	// Every invocation of a run passes through the resolved runner or the
 	// fixer it opens, so wrapping here is what registers each one's process
 	// group with the containment registry for as long as it runs; contain.go
