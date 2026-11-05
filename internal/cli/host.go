@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -133,15 +134,29 @@ const hostBlockCode machine.Code = 2
 // name different things. PRD section 9's row for this verb says a person
 // never types it, which predates the installer; that is a finding against
 // the specification, raised where this row was added, and not settled here.
+// wake is the one the service runs, as the notify command install offers
+// for PRD section 8's host wake, and it is here for install's reason: the
+// line install prints is the command beside it.
 var hostHooks = []struct {
 	name    string
-	byHost  bool
+	by      hookInvoker
 	summary string
 	run     func(context.Context, *invocation) (any, error)
 }{
-	{"stop", true, "Decide whether the coordinator's turn may end, from the hook the host fires at turn end.", hostStop},
-	{"install", false, "Print the line the host's settings need to run stop; --host names claude or codex; --write adds it to that file.", hostInstall},
+	{"stop", invokedByHost, "Decide whether the coordinator's turn may end, from the hook the host fires at turn end.", hostStop},
+	{"install", typedByPerson, "Print the line the host's settings need to run stop, and the host wake's notify.command line when run in a tmux pane; --host names claude or codex; --write adds the stop line to that file.", hostInstall},
+	{"wake", runByService, "Type a notice into the coordinator's tmux pane, as the notify.command line install printed.", hostWake},
 }
+
+// hookInvoker is who runs a host subcommand, which is what hostUsage groups
+// them by.
+type hookInvoker int
+
+const (
+	invokedByHost hookInvoker = iota
+	typedByPerson
+	runByService
+)
 
 // hostVerb runs the hook subcommand the command line names, which has to be
 // the first thing after the verb, for the reason gateVerb gives: the command
@@ -261,17 +276,18 @@ func hostUsage() string {
 	b.WriteString("\nInvoked by the coordinator's host at turn end rather than typed. A turn the\n")
 	fmt.Fprintf(&b, "host re-entered after a block says so with %s true in the JSON on\n", hostReentryField)
 	fmt.Fprintf(&b, "standard input, or with %s set, and no other turn does:\n", HostReentryVar)
-	for _, hook := range hostHooks {
-		if hook.byHost {
-			fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
+	list := func(by hookInvoker) {
+		for _, hook := range hostHooks {
+			if hook.by == by {
+				fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
+			}
 		}
 	}
+	list(invokedByHost)
 	b.WriteString("\nTyped by a person to set the host up, and changing nothing without --write:\n")
-	for _, hook := range hostHooks {
-		if !hook.byHost {
-			fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
-		}
-	}
+	list(typedByPerson)
+	b.WriteString("\nRun by the service as its notify command, from the line install printed:\n")
+	list(runByService)
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -280,7 +296,9 @@ func hostUsage() string {
 // copies, each on a line of its own after a label. The settings file is
 // always named, because every row refers to it; the line is printed whenever
 // it was not written, because then the person may want it; and a conflict's
-// existing command line follows it, as the file holds it, escaped.
+// existing command line follows it, as the file holds it, escaped. The host
+// wake's row follows, and when a wake was offered, the configuration key and
+// the command line, which is never written and so always printed.
 func readOutHostInstall(w io.Writer, answer machine.HostInstall) {
 	writeln(w, machine.HostInstallPhrase(answer))
 	writef(w, "%s %s\n", hostInstallFileLabel, printable(answer.Settings))
@@ -289,6 +307,11 @@ func readOutHostInstall(w io.Writer, answer machine.HostInstall) {
 	}
 	if answer.Conflict != "" {
 		writef(w, "%s %s\n", hostInstallConflictLabel, printable(answer.Conflict))
+	}
+	writeln(w, machine.HostInstallWakePhrase(answer))
+	if answer.WakeCommand != "" {
+		writef(w, "%s %s\n", hostWakeKeyLabel, config.KeyNotifyCommand)
+		writef(w, "%s %s\n", hostWakeCommandLabel, printable(answer.WakeCommand))
 	}
 }
 

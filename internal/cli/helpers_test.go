@@ -122,12 +122,12 @@ func runQuietly(m *testing.M) int {
 // worker runs: see worker_unix_test.go. "--home", a path and "service" is a
 // service a test started through the surface or through a stand-in service
 // manager, which runs what a definition says and a definition says this
-// binary: see managed_standin_test.go. "--home", a path and "host" is the
-// host wake a service runs as its notify command, the line host install
-// prints with this binary's path: see hostwake_unix_test.go.
+// binary: see managed_standin_test.go. "host" first is the host wake a
+// service runs as its notify command, the line host install prints with
+// this binary's path: see hostwake_unix_test.go.
 func hookMain() {
-	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator" && os.Args[1] != "worker" &&
-		(len(os.Args) < 4 || os.Args[1] != "--home" || (os.Args[3] != "worker" && os.Args[3] != "service" && os.Args[3] != "host"))) {
+	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator" && os.Args[1] != "worker" && os.Args[1] != "host" &&
+		(len(os.Args) < 4 || os.Args[1] != "--home" || (os.Args[3] != "worker" && os.Args[3] != "service"))) {
 		return
 	}
 	workingDir, err := os.Getwd()

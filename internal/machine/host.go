@@ -128,6 +128,60 @@ type HostInstall struct {
 	// Detail says what was wrong with the file when the line was refused, and
 	// is empty otherwise.
 	Detail string `json:"detail,omitempty"`
+	// WakeCommand is PRD section 8's host wake for the tmux pane the
+	// installer ran in: the command line that, set as notify.command in the
+	// home's configuration, has the service type a notice into that pane for
+	// every wake it queues. It is machine text a person copies, and it is
+	// only ever printed, whatever the explicit flag says: the configuration
+	// file is the operator's, and a notify.command it already holds is a
+	// channel of theirs the line would replace. Empty when none was offered,
+	// and then WakeAbsent says why.
+	WakeCommand string `json:"wake_command,omitempty"`
+	// WakeProgram is the program the pane ran when the installer read it,
+	// which WakeCommand carries and the wake checks before it types, so it
+	// types only into the program the person installed it from.
+	WakeProgram string `json:"wake_program,omitempty"`
+	// WakeAbsent says why no host wake was offered: the installer did not
+	// run inside a tmux pane, or the pane could not be read. Empty when
+	// WakeCommand is set.
+	WakeAbsent string `json:"wake_absent,omitempty"`
+}
+
+// HostWake is the answer of PRD section 8's host wake, which the service
+// runs as its notify command for each wake it queues: the notice it typed
+// into the coordinator's tmux pane, and which pane. It answers only for a
+// notice typed; a pane that could not be read, or that no longer belongs to
+// the server or the program the installer saw, is a failure with nothing
+// typed, and the notify command's record keeps why.
+type HostWake struct {
+	// Pane is the tmux pane the notice was typed into, as tmux names it.
+	Pane string `json:"pane"`
+	// Program is the program the pane ran, checked against the one the
+	// installer saw before anything was typed.
+	Program string `json:"program"`
+	// Typed is the text typed, which is the phrase table's notice about a
+	// queued wake, the one listen prints, followed by Enter.
+	Typed string `json:"typed"`
+}
+
+// HostWakeNotice is the text the host wake types into the coordinator's
+// pane: the notice listen prints for a queued wake, so the coordinator reads
+// one sentence for one fact whichever way it was woken (P14). It carries no
+// backquote, dollar sign or other character a shell would expand, so text
+// typed into a pane whose program the check let through is still a sentence.
+func HostWakeNotice() string { return PhraseNoticeQueued.String() }
+
+// HostWakePhrase is what a person reads about a notice the host wake typed.
+func HostWakePhrase(HostWake) Phrase { return phraseHostWakeTyped }
+
+// HostInstallWakePhrase is what a person reads about the host wake the
+// installer offered beside the stop guard's line, or about why it offered
+// none.
+func HostInstallWakePhrase(h HostInstall) Phrase {
+	if h.WakeCommand != "" {
+		return phraseHostWakeOffered
+	}
+	return phraseHostWakeAbsent
 }
 
 // HostInstallResult is what became of a request to install the stop guard's

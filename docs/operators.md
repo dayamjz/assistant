@@ -1039,6 +1039,57 @@ What is sent, and what is not:
   stops offering wakes, and tries again about every 5 seconds.
 - With no command named, nothing runs and nothing is recorded.
 
+## Waking the coordinator's host in a tmux pane
+
+`listen` and `await` reach a coordinator only while it holds one. When the
+coordinator's host runs in a tmux pane, the service can also type a notice
+into that pane for every wake, so a wait the coordinator forgot to arm, or a
+`listen` that died, does not leave the fleet silent. This is the host wake,
+the fifth layer of the PRD's "Keeping supervision alive".
+
+Run the installer from inside the coordinator's pane, for example through
+the host's own shell tool:
+
+```sh
+assistant host install
+```
+
+Besides the stop guard's line, it prints a configuration key,
+`notify.command`, and a command line naming `assistant host wake` with the
+tmux binary, the server's socket and process, the pane, and the program the
+pane runs. Put that line in your `config.yaml`:
+
+```yaml
+notify:
+  command: /path/to/assistant host wake --tmux /path/to/tmux --socket /path/to/socket --pane %3 --server-pid 4242 --program claude
+```
+
+Then `assistant service restart`. The installer never writes this itself:
+the file is yours, and the line replaces any command `notify.command`
+already names. To keep a private channel as well, chain both in one shell
+line, remembering that the wake's JSON line arrives on standard input once.
+
+What it does, and what it does not:
+
+- It runs as the notify command above, so everything that section says
+  holds: once per wake, recorded `sent` or `failed`, never retried, and only
+  for a wake still waiting.
+- The notice is the line `listen` prints for a queued wake: drain with
+  `assistant --json coordinator wakes`, act, acknowledge. It is typed as a
+  paste followed by Enter. It hands out and acknowledges nothing.
+- Before every notice it reads the pane again and types only when the tmux
+  server on the socket is the process the installer read and the pane's
+  foreground program has the name the installer read. Otherwise it types
+  nothing and the notification is recorded `failed` with the reason. After
+  tmux restarts, or to move the coordinator to another pane, run the
+  installer there again and replace the line.
+- It does not read the screen: text someone left in the pane's input is
+  submitted with the notice, and a notice typed while the host is busy is
+  handled however that host handles input typed while busy.
+- One notice per wake: a burst of wakes types several.
+- A host outside a tmux pane gets no host wake. The PRD's host wake table
+  says what each host has instead.
+
 ### Delegating a domain
 
 A coordinator can hand a named set of tasks to a coordinator of its own,

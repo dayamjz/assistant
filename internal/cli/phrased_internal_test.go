@@ -246,11 +246,17 @@ func fixtures(t *testing.T) map[string]any {
 			Result:   machine.HostInstallRefused, Refusal: machine.HostInstallConflict,
 			Conflict: "/elsewhere/assistant --home " + filepath.Join(root, sampleID) + " host stop",
 			Detail:   "a turn-end hook runs this program's stop guard with a different command line",
+			WakeCommand: "/bin/assistant host wake --tmux /usr/bin/tmux --socket " + filepath.Join(root, "tmux") +
+				" --pane %3 --server-pid 42 --program claude",
+			WakeProgram: "claude",
 		},
-		"decision": fixtureDecision(),
-		"details":  withDetails,
-		"findings": fixtureDecision(),
-		"usage":    fixtureUsage(),
+		// A notice typed into the coordinator's pane, which names the pane
+		// and the program and nothing the set forbids.
+		"host wake": machine.HostWake{Pane: "%3", Program: "claude", Typed: machine.HostWakeNotice()},
+		"decision":  fixtureDecision(),
+		"details":   withDetails,
+		"findings":  fixtureDecision(),
+		"usage":     fixtureUsage(),
 		// The end of a review's log: the run, the stage and the path name it,
 		// and a reply carries what the agent wrote.
 		"log": machine.StageLog{Run: sampleID, Stage: "review", Path: filepath.Join(root, "logs", sampleID, "review.log"),
@@ -464,7 +470,11 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		},
 		"host install": func(v any) []string {
 			a := v.(machine.HostInstall)
-			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}
+			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict,
+				hostWakeKeyLabel + " notify.command", hostWakeCommandLabel + " " + a.WakeCommand}
+		},
+		"host wake": func(v any) []string {
+			return []string{hostWakePaneLabel + " " + v.(machine.HostWake).Pane}
 		},
 		"kept work answer": func(v any) []string {
 			return keptLossLines(*v.(machine.KeptWorkAnswered).Loss)
@@ -492,6 +502,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		"wakes acknowledged": "an acknowledgement answers with the wake rows' numbers and who the record says acknowledged them, and the set forbids neither",
 		"managed removal":    "a removal answers with the manager's name and the definition's path, which is in the user's own folders and not under the home, and the set forbids neither",
 		"delegation ended":   "an ended delegation answers with the record's domain, posture and instants and whether a session was ended, and the set forbids none of them",
+		"host wake":          "a notice typed answers with the pane tmux names, the program it runs and the phrase table's notice, and the set forbids none of them",
 	}
 	phrased := 0
 	for _, r := range Renderings() {

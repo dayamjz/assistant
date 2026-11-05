@@ -50,6 +50,11 @@ const (
 // a change in the host's configuration, and neither did running this command
 // without the flag.
 //
+// Its second job is PRD section 8's host wake: run inside a tmux pane, the
+// answer also carries the notify.command line for that pane, through
+// offerHostWake, which only ever prints it whatever --write says;
+// hostwake.go owns that line and why it is never written.
+//
 // The line's command is this binary's absolute path with the home this
 // invocation resolved, so the hook judges the home it was installed for
 // whatever environment the host gives it, and it cannot be redirected through
@@ -81,7 +86,7 @@ const (
 // rather than one tied to the coordinator's directory, which this command
 // does not know, so the line is configured beside every session that file
 // applies to and not only the coordinator's.
-func hostInstall(_ context.Context, in *invocation) (any, error) {
+func hostInstall(ctx context.Context, in *invocation) (any, error) {
 	write := false
 	hostName := string(HostClaude)
 	if err := in.parseFlags("host install", func(set *flag.FlagSet) {
@@ -120,6 +125,7 @@ func hostInstall(_ context.Context, in *invocation) (any, error) {
 		Host:     string(kind),
 		Result:   machine.HostInstallPrinted,
 	}
+	offerHostWake(ctx, in, &answer)
 	if !write {
 		return answer, nil
 	}

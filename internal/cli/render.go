@@ -242,6 +242,7 @@ var renderings = []rendering{
 	{name: "event", voice: VoicePhrased, of: typeOf[ipc.Event](), render: func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
 	{name: "host stop", voice: VoicePhrased, of: typeOf[machine.HostStop](), render: func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
 	{name: "host install", voice: VoicePhrased, of: typeOf[machine.HostInstall](), render: func(w io.Writer, v any) { readOutHostInstall(w, v.(machine.HostInstall)) }},
+	{name: "host wake", voice: VoicePhrased, of: typeOf[machine.HostWake](), render: func(w io.Writer, v any) { readOutHostWake(w, v.(machine.HostWake)) }},
 	{name: "decision", voice: VoicePhrased, render: func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
 	detailsRendering,
 	findingsRendering,

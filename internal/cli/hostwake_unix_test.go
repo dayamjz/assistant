@@ -67,28 +67,36 @@ func (p paneHost) environment(userHome string) func(string) string {
 // document decoded loosely, so a member it does not carry reads empty.
 func installFromPane(t *testing.T, h *home.Home, p paneHost) map[string]any {
 	t.Helper()
+	var answer map[string]any
+	installWith(t, h, p.environment(filepath.Dir(p.socket)), &answer)
+	return answer
+}
+
+// installWith runs assistant --json host install through cli.Run with the
+// environment getenv answers, and decodes its document into out.
+func installWith(t *testing.T, h *home.Home, getenv func(string) string, out any) {
+	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out, errs bytes.Buffer
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
 	code := cli.Run(t.Context(), cli.Environment{
 		Args:       []string{"--home", h.Root(), "--json", "host", "install"},
-		Stdout:     &out,
-		Stderr:     &errs,
-		Getenv:     p.environment(filepath.Dir(p.socket)),
-		WorkingDir: filepath.Dir(p.socket),
+		Stdout:     &stdout,
+		Stderr:     &stderr,
+		Getenv:     getenv,
+		WorkingDir: dir,
 		Executable: executable,
 		Version:    "assistant (test)",
 	})
 	if code != machine.ExitOK {
-		t.Fatalf("assistant host install from the pane exited %s:\n%s%s", code, out.String(), errs.String())
+		t.Fatalf("assistant host install exited %s:\n%s%s", code, stdout.String(), stderr.String())
 	}
-	var answer map[string]any
-	if err := json.Unmarshal(out.Bytes(), &answer); err != nil {
-		t.Fatalf("decoding assistant host install: %v\n%s", err, out.String())
+	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
+		t.Fatalf("decoding assistant host install: %v\n%s", err, stdout.String())
 	}
-	return answer
 }
 
 // typedLines is what reached the host's input so far, one entry per line.
@@ -189,5 +197,61 @@ func TestAWorkerExitWakesACoordinatorInATmuxPaneWithNoListen(t *testing.T) {
 			t.Fatalf("no wake reached the host's pane within %s of the worker's exit, with %s configured as notify.command", interval+oneRun, wake)
 		case <-time.After(20 * time.Millisecond):
 		}
+	}
+}
+
+// wakePane runs the wake line's command with flags as given, through cli.Run
+// as the service's notify command would run it, and returns its exit.
+func wakePane(t *testing.T, flags ...string) invocation {
+	t.Helper()
+	return runArgs(t, t.TempDir(), append([]string{"host", "wake"}, flags...)...)
+}
+
+// The host wake types only into the pane host install read: a server on
+// the socket that is not the process it read, or a pane whose program is
+// not the one it read, is refused with nothing typed, and the same command
+// with what was read types the notice once, as the positive control that
+// the refusals were not refusing everything.
+func TestTheHostWakeTypesOnlyIntoThePaneTheInstallerRead(t *testing.T) {
+	t.Parallel()
+	pane := startPaneHost(t)
+	base := []string{"--tmux", pane.tmux, "--socket", pane.socket, "--pane", pane.pane}
+	for _, wrong := range [][]string{
+		{"--server-pid", "1", "--program", "cat"},
+		{"--server-pid", pane.pid, "--program", "claude"},
+	} {
+		got := wakePane(t, append(base, wrong...)...)
+		if got.code != machine.ExitFailure || !strings.Contains(got.stderr, "nothing was typed") {
+			t.Fatalf("host wake %q exited %s, want an operational failure saying nothing was typed:\n%s%s", wrong, got.code, got.stdout, got.stderr)
+		}
+	}
+	got := wakePane(t, append(base, "--server-pid", pane.pid, "--program", "cat")...)
+	if got.code != machine.ExitOK {
+		t.Fatalf("host wake with what was read exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for len(pane.typedLines()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if typed := pane.typedLines(); len(typed) != 1 || typed[0] != machine.HostWakeNotice() {
+		t.Fatalf("the pane was typed %q, want the notice once, after two refusals typed nothing", typed)
+	}
+}
+
+// host install run outside a tmux pane offers no host wake and says why,
+// and still answers with the stop guard's line.
+func TestHostInstallOutsideTmuxOffersNoHostWake(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	userHome := t.TempDir()
+	var answer machine.HostInstall
+	installWith(t, h, func(name string) string {
+		if name == "HOME" {
+			return userHome
+		}
+		return ""
+	}, &answer)
+	if answer.WakeCommand != "" || !strings.Contains(answer.WakeAbsent, "tmux pane") || answer.Line == "" {
+		t.Fatalf("host install outside tmux answered %+v, want the stop line, no wake and why", answer)
 	}
 }

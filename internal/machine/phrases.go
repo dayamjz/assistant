@@ -123,6 +123,27 @@ var (
 	}
 )
 
+// The host wake's rows: the notice typed, and beside the installer's own
+// row, the wake offered or why none was. None names the pane, the command
+// or the key: they are machine text printed beside the row.
+var (
+	phraseHostWakeTyped = Phrase{
+		Outcome:     "A notice about the fleet was typed into the coordinator's pane.",
+		Consequence: "Nothing else was typed, and nothing was handed out or acknowledged.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseHostWakeOffered = Phrase{
+		Outcome:     "The command below, set as the configuration key named below in this home's configuration file, has the service type a notice into this pane whenever something needs the coordinator.",
+		Consequence: "Nothing was written to the configuration file, so the service does not type into this pane until you add it.",
+		Decision:    "Add it yourself if this pane is where the coordinator works; it replaces any command that key already names.",
+	}
+	phraseHostWakeAbsent = Phrase{
+		Outcome:     "No command to type a notice into the coordinator's pane was offered, because this was not run inside a tmux pane that could be read.",
+		Consequence: "The service reaches the coordinator only when the coordinator asks it for news.",
+		Decision:    "Run this from inside the coordinator's tmux pane if you want the service to type a notice there.",
+	}
+)
+
 // HostInstallPhrase is what a person reads about a request to install the
 // stop guard's hook: the row for the result, and for a refusal the row for
 // why. A refused answer whose refusal is not one HostInstallRefusals lists
@@ -1996,7 +2017,8 @@ var PhraseNoReading = Phrase{
 // uncertainties and follow-ups, a row per outcome and the three OutcomeExecuting splits into,
 // the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the row for
-// a turn-end check that would run in the background, the
+// a turn-end check that would run in the background, the host wake's three
+// (a notice typed, a wake offered and none offered), the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
@@ -2031,7 +2053,7 @@ func TablePhrases() []Phrase {
 	for _, refusal := range HostInstallRefusals() {
 		out = append(out, HostInstallPhrase(HostInstall{Result: HostInstallRefused, Refusal: refusal}))
 	}
-	out = append(out, phraseHostInstallAsync)
+	out = append(out, phraseHostInstallAsync, phraseHostWakeTyped, phraseHostWakeOffered, phraseHostWakeAbsent)
 	for _, state := range taskstate.States() {
 		if p, ok := phraseByState[state]; ok {
 			out = append(out, p)
