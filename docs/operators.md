@@ -1056,12 +1056,12 @@ assistant host install
 
 Besides the stop guard's line, it prints a configuration key,
 `notify.command`, and a command line naming `assistant host wake` with the
-tmux binary, the server's socket and process, the pane, and the program the
-pane runs. Put that line in your `config.yaml`:
+tmux binary, the server's socket, process and start time, the pane, and the
+program the pane runs. Put that line in your `config.yaml`:
 
 ```yaml
 notify:
-  command: /path/to/assistant host wake --tmux /path/to/tmux --socket /path/to/socket --pane %3 --server-pid 4242 --program claude
+  command: /path/to/assistant host wake --tmux /path/to/tmux --socket /path/to/socket --pane %3 --server-pid 4242 --server-start 1793900000 --program claude
 ```
 
 Then `assistant service restart`. The installer never writes this itself:
@@ -1078,8 +1078,10 @@ What it does, and what it does not:
   `assistant --json coordinator wakes`, act, acknowledge. It is typed as a
   paste followed by Enter. It hands out and acknowledges nothing.
 - Before every notice it reads the pane again and types only when the tmux
-  server on the socket is the process the installer read and the pane's
-  foreground program has the name the installer read. Otherwise it types
+  server on the socket has the process identifier and the start time the
+  installer read, so a later tmux server that happens to get the same
+  identifier is refused (unless it started within the same second), and the
+  pane's foreground program has the name the installer read. Otherwise it types
   nothing and the notification is recorded `failed` with the reason. After
   tmux restarts, or to move the coordinator to another pane, run the
   installer there again and replace the line.

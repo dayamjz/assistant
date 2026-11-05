@@ -23,14 +23,16 @@ import (
 // offers the line: this binary's absolute path, "host wake", and what it
 // read of the pane, which is tmux's own two variables for the socket and
 // the pane, the tmux binary on the PATH it was given, and one reading of the
-// pane for its server and its program. The operator sets that line as
+// pane for its server's process and start time and for its program. The
+// operator sets that line as
 // notify.command, and internal/service's notifier runs it once per queued
 // wake, on that file's terms: at most once, recorded, never on the loop.
 // hostWake is what runs then: it reads the pane again, and types the notice
-// only when the server answering on the socket is the one the installer
-// read and the pane's program is the one it read, so a pane identifier a
-// later server reused, or a host that exited back to its shell, is refused
-// with nothing typed. The notice is machine.HostWakeNotice, the sentence
+// only when the server answering on the socket has the process and the
+// start time the installer read and the pane's program is the one it read,
+// so a pane identifier a later server reused, under a reused process
+// identifier too, or a host that exited back to its shell, is refused with
+// nothing typed. The notice is machine.HostWakeNotice, the sentence
 // listen prints for a queued wake.
 //
 // The gaps, beside internal/agents' Pane's (the screen is not read, so a
@@ -44,6 +46,9 @@ import (
 //     operator's private channel unless both are chained in one shell line.
 //   - The program is compared by the name tmux reports, so another program
 //     of the same name in the same pane is typed into.
+//   - The start time is tmux's, in whole seconds, so a later server given
+//     the same process identifier within the same second as the one the
+//     installer read is not told apart from it.
 //   - The wake reaches a host in a tmux pane and no other; PRD section 8's
 //     host wake table says which hosts that leaves without one.
 
@@ -53,6 +58,7 @@ const (
 	hostWakeSocketFl  = "socket"
 	hostWakePaneFl    = "pane"
 	hostWakeServerFl  = "server-pid"
+	hostWakeStartFl   = "server-start"
 	hostWakeProgramFl = "program"
 )
 
@@ -72,12 +78,14 @@ const (
 func hostWake(ctx context.Context, in *invocation) (any, error) {
 	var pane agents.Pane
 	var server int
+	var start int64
 	var program string
 	if err := in.parseFlags("host wake", func(set *flag.FlagSet) {
 		set.StringVar(&pane.Tmux, hostWakeTmuxFl, "", "absolute path of the tmux binary")
 		set.StringVar(&pane.Socket, hostWakeSocketFl, "", "absolute path of the tmux server's socket")
 		set.StringVar(&pane.ID, hostWakePaneFl, "", "the coordinator's pane, as tmux names it")
 		set.IntVar(&server, hostWakeServerFl, 0, "process of the tmux server the installer read")
+		set.Int64Var(&start, hostWakeStartFl, 0, "start time of the tmux server the installer read, in seconds since the epoch")
 		set.StringVar(&program, hostWakeProgramFl, "", "program the installer read in the pane")
 	}); err != nil {
 		return nil, err
@@ -85,8 +93,9 @@ func hostWake(ctx context.Context, in *invocation) (any, error) {
 	if err := pane.Validate(); err != nil {
 		return nil, usageError{err: err}
 	}
-	if server <= 0 || program == "" {
-		return nil, usageError{err: fmt.Errorf("--%s and --%s name what host install read, and both are required", hostWakeServerFl, hostWakeProgramFl)}
+	if server <= 0 || start <= 0 || program == "" {
+		return nil, usageError{err: fmt.Errorf("--%s, --%s and --%s name what host install read, and all three are required",
+			hostWakeServerFl, hostWakeStartFl, hostWakeProgramFl)}
 	}
 	facts, err := agents.ReadPane(ctx, pane)
 	if err != nil {
@@ -94,6 +103,9 @@ func hostWake(ctx context.Context, in *invocation) (any, error) {
 	}
 	if facts.ServerPID != server {
 		return nil, fmt.Errorf("nothing was typed, because the tmux server on %s is process %d, not process %d that host install read", pane.Socket, facts.ServerPID, server)
+	}
+	if facts.ServerStart != start {
+		return nil, fmt.Errorf("nothing was typed, because the tmux server on %s started at %d, not at %d as the one host install read", pane.Socket, facts.ServerStart, start)
 	}
 	if facts.Program != program {
 		return nil, fmt.Errorf("nothing was typed, because pane %s runs %q, not %q that host install read", pane.ID, facts.Program, program)
@@ -147,6 +159,7 @@ func hostWakeLine(ctx context.Context, in *invocation) (line, program string, er
 	line = strings.Join([]string{shellQuote(in.env.Executable), hostVerbName, "wake",
 		"--" + hostWakeTmuxFl, shellQuote(tmux), "--" + hostWakeSocketFl, shellQuote(socket),
 		"--" + hostWakePaneFl, shellQuote(paneID), "--" + hostWakeServerFl, strconv.Itoa(server),
+		"--" + hostWakeStartFl, strconv.FormatInt(facts.ServerStart, 10),
 		"--" + hostWakeProgramFl, shellQuote(facts.Program)}, " ")
 	return line, facts.Program, nil
 }

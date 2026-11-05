@@ -3,7 +3,10 @@ package agents
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"unicode"
@@ -28,6 +31,11 @@ import (
 // a caller compares with what it recorded before it types; the reading and
 // the paste are two clients, so a pane that changes hands between them is
 // typed into all the same.
+//
+// tmux's named buffers belong to the server, not to a client, so every
+// TypeIntoPane loads its text into a buffer named for that call alone and
+// the paste deletes it; two calls on one server, two homes whose
+// coordinators share it among them, never paste each other's text.
 
 // Pane names one pane of a tmux server this package did not start: the
 // tmux binary as an absolute path, the server's socket as an absolute path,
@@ -54,15 +62,21 @@ func (p Pane) Validate() error {
 }
 
 // PaneFacts is what one reading of a pane says about who holds it: the
-// process identifier of the server that answered for the socket, and the
-// name of the program in the pane's foreground, as tmux reports each.
+// process identifier of the server that answered for the socket, the time
+// that server started in whole seconds since the Unix epoch, and the name of
+// the program in the pane's foreground, as tmux reports each. The process
+// and the start time together name one server start: a later server on the
+// same socket differs in its start time even where it was given the same
+// process identifier, unless both happened within the same second.
 type PaneFacts struct {
-	ServerPID int
-	Program   string
+	ServerPID   int
+	ServerStart int64
+	Program     string
 }
 
-// paneFormat is the reading ReadPane asks tmux for, tab-separated.
-const paneFormat = "#{pid}\t#{pane_id}\t#{pane_current_command}"
+// paneFormat is the reading ReadPane asks tmux for, tab-separated, the
+// program last so a tab in its name stays part of it.
+const paneFormat = "#{pid}\t#{start_time}\t#{pane_id}\t#{pane_current_command}"
 
 // ReadPane reads who holds p: the server answering on its socket and the
 // program in its foreground. A server that is not there, a pane it does not
@@ -79,20 +93,34 @@ func ReadPane(ctx context.Context, p Pane) (PaneFacts, error) {
 	if err != nil {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: %w: %s", p.ID, err, strings.TrimSpace(stderr.String()))
 	}
-	fields := strings.Split(strings.TrimRight(string(out), "\n"), "\t")
-	if len(fields) != 3 || fields[1] != p.ID || fields[2] == "" {
+	fields := strings.SplitN(strings.TrimRight(string(out), "\n"), "\t", 4)
+	if len(fields) != 4 || fields[2] != p.ID || fields[3] == "" {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q, which is not that pane's reading", p.ID, out)
 	}
 	pid, err := strconv.Atoi(fields[0])
 	if err != nil || pid <= 0 {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q for its server's process", p.ID, fields[0])
 	}
-	return PaneFacts{ServerPID: pid, Program: fields[2]}, nil
+	start, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || start <= 0 {
+		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q for its server's start time", p.ID, fields[1])
+	}
+	return PaneFacts{ServerPID: pid, ServerStart: start, Program: fields[3]}, nil
 }
 
-// paneBuffer is the tmux buffer TypeIntoPane loads its text into, deleted
-// by the paste.
-const paneBuffer = "assistant-wake"
+// paneBufferPrefix begins the name of the tmux buffer one TypeIntoPane
+// loads its text into: this process's identifier and random bytes follow,
+// so no two calls on one server share a buffer.
+const paneBufferPrefix = "assistant-wake-"
+
+// paneBuffer is a buffer name for one call.
+func paneBuffer() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("drawing a buffer name: %w", err)
+	}
+	return paneBufferPrefix + strconv.Itoa(os.Getpid()) + "-" + hex.EncodeToString(b[:]), nil
+}
 
 // TypeIntoPane types text into p as one paste, bracketed when the pane's
 // program asked tmux for bracketed pastes, followed by Enter as a key of
@@ -100,7 +128,9 @@ const paneBuffer = "assistant-wake"
 // with a slash or an exclamation mark, which some hosts read as a command of
 // their own; anything else is refused before a client starts. A client that
 // fails or runs past tmuxTypeBound may leave part of the text typed, and
-// nothing here takes it back.
+// nothing here takes it back; it is followed by one client deleting the
+// call's buffer, under tmuxEndBound and not under ctx, so a paste that never
+// ran leaves no buffer behind unless that client fails too.
 func TypeIntoPane(ctx context.Context, p Pane, text string) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -109,14 +139,22 @@ func TypeIntoPane(ctx context.Context, p Pane, text string) error {
 	if text == "" || !utf8.ValidString(text) || strings.IndexFunc(text, printable) >= 0 || strings.ContainsAny(text[:1], "/!") {
 		return &invocationFieldError{field: "text", reason: "is not one line of printable text a host reads as a message"}
 	}
+	buffer, err := paneBuffer()
+	if err != nil {
+		return err
+	}
 	cmd := procgroup.Command(p.Tmux, "-S", p.Socket,
-		"load-buffer", "-b", paneBuffer, "-", ";",
-		"paste-buffer", "-p", "-d", "-b", paneBuffer, "-t", p.ID, ";",
+		"load-buffer", "-b", buffer, "-", ";",
+		"paste-buffer", "-p", "-d", "-b", buffer, "-t", p.ID, ";",
 		"send-keys", "-t", p.ID, "Enter")
 	cmd.Stdin = strings.NewReader(text)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := runTmux(ctx, tmuxTypeBound, "the client typing into the pane", cmd); err != nil {
+		// The buffer may be loaded and never pasted. A paste that ran
+		// already deleted it, and then this client's failure says nothing.
+		_ = runTmux(context.WithoutCancel(ctx), tmuxEndBound, "the client deleting the notice's buffer",
+			procgroup.Command(p.Tmux, "-S", p.Socket, "delete-buffer", "-b", buffer))
 		return fmt.Errorf("typing into pane %s: %w: %s", p.ID, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
