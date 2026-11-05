@@ -130,6 +130,11 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 	return worker, nil
 }
 
+// terminalPreflight is nil: this adapter's terminal worker needs nothing of
+// its environment its pipe worker does not, unlike the Claude Code adapter's
+// whose runner it embeds.
+func (r *scriptedRunner) terminalPreflight() error { return nil }
+
 // AdoptInTerminal holds again a terminal worker of this adapter on
 // AdoptTerminalWorker's terms, typed into as StartInTerminal's is.
 func (r *scriptedRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {

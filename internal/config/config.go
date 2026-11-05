@@ -332,7 +332,7 @@ const (
 	// DefaultDelivery is PRD section 10's default delivery posture: the gate.
 	DefaultDelivery = DeliveryGated
 	// DefaultSessionProvider is auto: a worker is hosted in tmux where tmux
-	// is installed and its adapter declares terminal workers, so it can
+	// is installed and its adapter can start a terminal worker, so it can
 	// outlive a restart of the service, and on a pipe otherwise (the owner's
 	// decision of 2026-11-05 on #763, PRD decision 33).
 	DefaultSessionProvider = SessionProviderAuto
@@ -369,8 +369,9 @@ const (
 	SessionProviderHerdr SessionProvider = "herdr"
 	// SessionProviderAuto is the default: each worker is hosted as
 	// SessionProviderTmux hosts it when a tmux binary is on the service's
-	// PATH, the adapter routing selected for it declares terminal workers
-	// and the home's path leaves room for the worker's socket, and as
+	// PATH, the adapter routing selected for it can start a terminal worker
+	// here (agents.TerminalStartable) and the home's path leaves room for
+	// the worker's socket, and as
 	// SessionProviderPipe hosts it otherwise. Routing does
 	// not require terminal workers under it, so no adapter is refused for
 	// lacking them; internal/service's sessionHost decides per launch.

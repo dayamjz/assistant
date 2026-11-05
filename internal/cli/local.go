@@ -726,9 +726,9 @@ func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents
 	case err != nil:
 		row.Detail = "workers run in tmux where their agent declares " + string(agents.CapabilityTerminalWorkers) +
 			" and on pipes otherwise (the default, auto); the agent could not be resolved here: " + err.Error()
-	case !resolution.Runner.Capabilities().Has(agents.CapabilityTerminalWorkers):
-		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto): %s has not declared %s, so a worker cannot outlive a restart of the service",
-			resolution.Name, agents.CapabilityTerminalWorkers)
+	case agents.TerminalStartable(resolution.Runner) != nil:
+		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto), so a worker cannot outlive a restart of the service: %v",
+			agents.TerminalStartable(resolution.Runner))
 	default:
 		row.Detail = fmt.Sprintf("workers run in tmux (the default, auto): tmux at %s, and %s declares %s",
 			tmux, resolution.Name, agents.CapabilityTerminalWorkers)

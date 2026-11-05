@@ -331,3 +331,40 @@ func TestOpenTerminalWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T
 		t.Errorf("a boasting stub answered %v, want ErrAdapterDeclaration", err)
 	}
 }
+
+// TerminalStartable answers, before anything starts, what would stop a
+// terminal worker here: the Claude Code adapter refuses with ErrNoCredential
+// when neither of its credential variables is in the environment its worker
+// would start under, which its pipe worker does not need, and answers nil
+// once one is; the scripted adapter, which embeds that runner, needs none;
+// and an adapter that declares no terminal workers is a *CapabilityError.
+func TestTerminalStartableReadsTheAdaptersOwnRefusalFirst(t *testing.T) {
+	build := func(t *testing.T, f func(...agents.ClaudeOption) agents.Factory, env []string) agents.Runner {
+		t.Helper()
+		r, err := f(agents.WithBinary(helperBinary(t)), agents.WithBaseEnvironment(env)).New(t.Context(), nil)
+		if err != nil {
+			t.Fatalf("building the adapter: %v", err)
+		}
+		return r
+	}
+	bare := []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent"}
+	if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, bare)); !errors.Is(err, agents.ErrNoCredential) {
+		t.Errorf("claude with no credential answered %v, want ErrNoCredential", err)
+	}
+	for _, credential := range []string{agents.ClaudeKeyVariable + "=k", agents.ClaudeTokenVariable + "=t"} {
+		if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, append(bare, credential))); err != nil {
+			t.Errorf("claude with %s answered %v, want nil", strings.Split(credential, "=")[0], err)
+		}
+	}
+	if err := agents.TerminalStartable(build(t, agents.ScriptedFactory, bare)); err != nil {
+		t.Errorf("the scripted adapter answered %v, want nil", err)
+	}
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the cursor adapter: %v", err)
+	}
+	var refusal *agents.CapabilityError
+	if err := agents.TerminalStartable(cursor); !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers {
+		t.Errorf("cursor answered %v, want a *CapabilityError naming %s", err, agents.CapabilityTerminalWorkers)
+	}
+}

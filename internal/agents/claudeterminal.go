@@ -179,6 +179,13 @@ func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Ide
 	return worker, nil
 }
 
+// terminalPreflight is StartInTerminal's credential refusal, read from the
+// environment a worker would be started under, on TerminalStartable's terms.
+func (r *claudeRunner) terminalPreflight() error {
+	_, _, err := claudeTerminalCredential(WorkerEnvironment(r.settings.base, nil), r.name)
+	return err
+}
+
 // adoptedClaudeConfig is the configuration directory the server on t was
 // started with, on AdoptInTerminal's terms, or empty.
 func adoptedClaudeConfig(ctx context.Context, t Terminal) string {

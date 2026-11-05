@@ -96,9 +96,11 @@ import (
 // fall back to the pipe provider: the operator chose an attachable terminal,
 // and a worker they cannot attach to is not what they chose.
 //
-// For auto, the default, it is the tmux provider when r declares terminal
-// workers, a tmux binary resolves and the home's socket path fits the
-// platform's limit, and the pipe provider otherwise, which is the fallback
+// For auto, the default, it is the tmux provider when r could start a
+// terminal worker here (agents.TerminalStartable: it declares terminal
+// workers and, for the Claude Code adapter, a credential is in its
+// environment, which its pipe worker does not need), a tmux binary resolves
+// and the home's socket path fits the platform's limit, and the pipe provider otherwise, which is the fallback
 // auto names; Options.PipeByDefault makes it the pipe provider without
 // looking. Routing under auto does not require terminal
 // workers (routeWorker), so the adapter decides here and is never refused for
@@ -112,7 +114,7 @@ func (s *Service) sessionHost(r agents.Runner) session.Host {
 		}
 		return session.NewTmux(s.home, r, tmux)
 	case config.SessionProviderAuto:
-		if s.autoTmux && r.Capabilities().Has(agents.CapabilityTerminalWorkers) {
+		if s.autoTmux && agents.TerminalStartable(r) == nil {
 			if tmux, err := tmuxBinary(); err == nil && session.TerminalFits(s.home, tmux) {
 				return session.NewTmux(s.home, r, tmux)
 			}
