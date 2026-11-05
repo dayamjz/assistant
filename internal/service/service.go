@@ -378,8 +378,10 @@ type Service struct {
 	housekeeping housekeepingState
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
-	// pipeByDefault is Options.PipeByDefault.
-	pipeByDefault bool
+	// autoTmux is whether auto may host a worker in tmux: Open sets it to
+	// the opposite of Options.PipeByDefault, so a Service a test builds by
+	// hand rather than through Open hosts its workers on pipes.
+	autoTmux bool
 	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
 	// opens.
 	coordinatorRoute string
@@ -856,7 +858,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
-		pipeByDefault:    o.PipeByDefault,
+		autoTmux:         !o.PipeByDefault,
 		coordinatorRoute: o.CoordinatorRoute,
 		sweepCopy:        o.sweepCopy,
 	}

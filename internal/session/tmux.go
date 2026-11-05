@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
@@ -95,6 +96,15 @@ func (t *Tmux) Create(ctx context.Context, spec Spec) (*Session, error) {
 		return nil, fmt.Errorf("session: starting the worker in a terminal: %w", err)
 	}
 	return t.adopt(spec.TaskID, worker, worker.Attach(), worker.Host(), terminal)
+}
+
+// TerminalFits reports whether a worker's server under h can listen where
+// Create puts its socket: a socket path of the length Create draws, on tmux,
+// is one agents.Terminal.Validate accepts. A home whose root is too long for
+// the platform's socket path limit does not fit, and every Create on it is
+// refused with agents.ErrInvalidInvocation.
+func TerminalFits(h *home.Home, tmux string) bool {
+	return agents.Terminal{Tmux: tmux, Socket: h.TerminalSocket(strings.Repeat("0", terminalNameLength))}.Validate() == nil
 }
 
 // Release lets go of a held worker's session on Host.Release's terms: the
