@@ -369,8 +369,9 @@ const (
 	SessionProviderHerdr SessionProvider = "herdr"
 	// SessionProviderAuto is the default: each worker is hosted as
 	// SessionProviderTmux hosts it when a tmux binary is on the service's
-	// PATH and the adapter routing selected for it declares terminal
-	// workers, and as SessionProviderPipe hosts it otherwise. Routing does
+	// PATH, the adapter routing selected for it declares terminal workers
+	// and the home's path leaves room for the worker's socket, and as
+	// SessionProviderPipe hosts it otherwise. Routing does
 	// not require terminal workers under it, so no adapter is refused for
 	// lacking them; internal/service's sessionHost decides per launch.
 	SessionProviderAuto SessionProvider = "auto"

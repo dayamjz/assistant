@@ -1253,7 +1253,8 @@ and parks the run.
 
 By default (`session_provider: auto`) each worker runs in a terminal you can
 watch and type into wherever a tmux binary is on the service's PATH and the
-worker's adapter declares terminal workers (today: Claude), and on pipes the
+worker's adapter declares terminal workers (today: Claude), unless the home's
+path is too long to hold a terminal socket, and on pipes the
 service holds, which nothing can attach to, wherever it cannot.
 `assistant doctor`'s session provider row says which applies here. To choose
 for yourself, set the provider in your own configuration file, `config.yaml`
