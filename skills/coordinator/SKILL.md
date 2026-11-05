@@ -418,11 +418,19 @@ assistant --json coordinator listen     # one line per wake, until interrupted
 - Holding it is what makes you attached: wakes a drain hands you while it
   runs are not handed out again under you. When it ends, whatever you were
   handed and did not acknowledge comes back on the next drain.
+- It beats to the service once per `supervision_beacon_interval` (10s unless
+  configured). A `listen` that sends no beat for three intervals, because
+  its process was stopped or hung, is detached: what you were handed comes
+  back on the next drain, and the `listen`, if it runs again, exits `1`
+  saying its lease expired.
+- Hold one `listen` at a time. Starting a second ends the first, which
+  exits `1` saying another listen took the stream; what was handed out
+  under the first comes back on your next drain.
 - Its first line is a gap marker, and a gap later on means pushes were
   missed. On either, drain: the drain gives back every wake still queued
   that you were not already handed.
-- If the service stops, `listen` exits `1`. Run `assistant coordinator
-  supervision`, then start `listen` again and drain.
+- If the service stops or the lease expires, `listen` exits `1`. Run
+  `assistant coordinator supervision`, then start `listen` again and drain.
 
 ## Wait for a wake
 
@@ -527,14 +535,14 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   `assistant coordinator supervision` at session start and after any exit
   `1` from `await` or `listen`.
 - **Being attached is your stream, not you.** The service sees `listen`,
-  not your session. A `listen` left running after your session died keeps
-  what you were handed until that process ends, and two streams held at
-  once count as one, so a coordinator going away is not noticed until every
-  stream has closed. This build does not expire or heartbeat that
-  attachment, so a zombie `listen` can pin handouts until the process ends.
-  If you hold `listen` and never acknowledge what you acted on, you are not
-  handed it again, and it keeps the work counted as in flight: acknowledge
-  as you go, and do not leave a detached `listen` running.
+  not your session. A stopped or hung `listen` is detached three beat
+  intervals after its last beat, and a new `listen` replaces an old one at
+  once, but a `listen` left running after your session died keeps beating
+  and keeps what you were handed until that process ends or another
+  `listen` replaces it. If you hold `listen` and never acknowledge what you
+  acted on, you are not handed it again, and it keeps the work counted as
+  in flight: acknowledge as you go, and do not leave a detached `listen`
+  running.
 - **The service pushes only to `listen`.** It does not start a turn in your
   host by itself; a coordinator holding neither `listen` nor `await` is
   woken by nothing.

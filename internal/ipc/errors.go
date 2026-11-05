@@ -20,6 +20,13 @@ var (
 	// held only events that may not be discarded and the consumer was not
 	// reading. Attaching again reconciles.
 	ErrSubscriberStalled = sentinelFor(CodeSubscriberStalled)
+	// ErrLeaseExpired reports that a leased stream ended because its holder
+	// sent no beat within the lease's expiry. Attaching again takes a new
+	// lease.
+	ErrLeaseExpired = sentinelFor(CodeLeaseExpired)
+	// ErrStreamReplaced reports that a leased stream ended because another
+	// stream took its publisher's lease.
+	ErrStreamReplaced = sentinelFor(CodeStreamReplaced)
 	// ErrUnknownMethod reports a method this build does not serve.
 	ErrUnknownMethod = sentinelFor(CodeUnknownMethod)
 	// ErrInvalidRequest reports a request this build serves but cannot read:
@@ -162,6 +169,10 @@ const (
 	// a consumer can tell "attach again and reconcile" from "the service
 	// broke" without reading the message.
 	CodeSubscriberStalled Code = "subscriber-stalled"
+	// CodeLeaseExpired maps to ErrLeaseExpired.
+	CodeLeaseExpired Code = "lease-expired"
+	// CodeStreamReplaced maps to ErrStreamReplaced.
+	CodeStreamReplaced Code = "stream-replaced"
 	// CodeStreamClosed maps to ErrStreamClosed.
 	CodeStreamClosed Code = "stream-closed"
 	// CodePayloadTooLarge maps to ErrPayloadTooLarge.
@@ -218,6 +229,8 @@ var codeRows = []struct {
 	{CodeRefused, "ipc: refused by the records the request was decided against"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},
+	{CodeLeaseExpired, "ipc: the stream's lease expired with no beat from its holder"},
+	{CodeStreamReplaced, "ipc: another stream took this stream's lease"},
 	{CodeEventUndeliverable, "ipc: event cannot be delivered on this connection"},
 	{CodePayloadTooLarge, "ipc: event payload exceeds the publisher's bound"},
 	{CodeInvalidPayload, "ipc: event payload is not JSON"},

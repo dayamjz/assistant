@@ -7,10 +7,11 @@ paths: ["internal/supervisor/**"]
 - `internal/supervisor` is the pure core and performs no I/O: its direct
   imports are `internal/taskstate`, `internal/home` for its lock vocabulary,
   and the standard library. Its subpackage `feed` is the I/O edge.
-- The two durations derive from the one configured interval,
-  `config.KeySupervisionBeaconInterval`, through `FreshnessFor` and
-  `FirstBeaconWait`; staleness and the first-beacon wait are named multiples
-  and never rows of their own.
+- The durations derive from the one configured interval,
+  `config.KeySupervisionBeaconInterval`, through `FreshnessFor`,
+  `FirstBeaconWait` and `ListenLeaseFor` (the wake stream's lease, expiring
+  at the staleness window); staleness and the first-beacon wait are named
+  multiples and never rows of their own.
 - `inflight.go` (which states owe a supervision cycle) and `terminal.go` (which
   states have their terminal read at all) are closed tables over
   `taskstate.States()`, so a new state fails until placed.

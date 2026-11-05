@@ -147,6 +147,8 @@ var wireSentinels = map[Code]error{
 	CodeRefused:            ErrRefused,
 	CodeUnavailable:        ErrUnavailable,
 	CodeSubscriberStalled:  ErrSubscriberStalled,
+	CodeLeaseExpired:       ErrLeaseExpired,
+	CodeStreamReplaced:     ErrStreamReplaced,
 	CodeEventUndeliverable: ErrEventUndeliverable,
 	CodePayloadTooLarge:    ErrPayloadTooLarge,
 	CodeInvalidPayload:     ErrInvalidPayload,

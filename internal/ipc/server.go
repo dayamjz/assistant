@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime/debug"
 	"sync"
+	"time"
 )
 
 // Request is one call, as a handler sees it.
@@ -172,6 +173,13 @@ type ServerConfig struct {
 	// refuses, refuses a stream whose handler chose a name with
 	// ErrUnavailable; a handler that answers no choice attaches to Streams.
 	StreamFor func(m Method, name string) (*Publisher, error)
+	// Leases names the streaming methods whose streams are held under a
+	// lease, and its terms. A stream of one is granted its publisher's
+	// lease when it is acknowledged, after a restricted stream's admission,
+	// and its acknowledgement tells the client the beat, so a client of
+	// this package beats without being asked to; a method left out is held
+	// by no lease and is never attached (Publisher.Attachment).
+	Leases map[Method]Lease
 	// Backlog is the per-subscriber queue depth. Zero means DefaultBacklog.
 	Backlog int
 	// MaxFrameBytes bounds one frame in either direction. Zero means
@@ -251,6 +259,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	case cfg.MaxFrameBytes > 0 && cfg.MaxFrameBytes < minFrameBytes:
 		return nil, fmt.Errorf("ipc: a frame limit of %d bytes cannot carry the refusals this server has to be able to write, which need %d",
 			cfg.MaxFrameBytes, minFrameBytes)
+	}
+	for m, l := range cfg.Leases {
+		if spec, ok := Lookup(m); !ok || spec.Kind != KindStream {
+			return nil, fmt.Errorf("ipc: %q does not open a stream, so it cannot be leased", m)
+		}
+		if l.Beat <= 0 || l.Expiry <= l.Beat {
+			return nil, fmt.Errorf("ipc: the lease of %q beats every %s and expires after %s; a beat must be positive and the expiry longer", m, l.Beat, l.Expiry)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
@@ -375,6 +391,7 @@ type conn struct {
 
 	mu       sync.Mutex
 	streams  map[uint64]*Subscription
+	leases   map[uint64]*heldLease
 	inflight int
 	wg       sync.WaitGroup
 }
@@ -392,6 +409,7 @@ func (s *Server) serveConn(nc net.Conn) {
 		ctx:     ctx,
 		cancel:  cancel,
 		streams: make(map[uint64]*Subscription),
+		leases:  make(map[uint64]*heldLease),
 	}
 	defer func() {
 		cancel()
@@ -434,6 +452,10 @@ func (c *conn) serve() {
 		}
 		if f.Cancel {
 			c.endStream(f.ID, ErrStreamClosed)
+			continue
+		}
+		if f.Beat {
+			c.renew(f.ID)
 			continue
 		}
 		c.dispatch(f)
@@ -739,11 +761,56 @@ func (c *conn) openStream(f frame) (*Subscription, bool) {
 	return sub, true
 }
 
+// heldLease is the expiry of one leased stream on this connection, re-armed
+// by each beat.
+type heldLease struct {
+	timer  *time.Timer
+	expiry time.Duration
+}
+
+// streamOpened is a stream's acknowledgement: empty for a stream held by no
+// lease, and the beat for a leased one.
+type streamOpened struct {
+	Lease *leaseOffer `json:"lease,omitempty"`
+}
+
+// leaseOffer is what a client is told of its stream's lease.
+type leaseOffer struct {
+	// Beat is how often the client beats, as a time.Duration.
+	Beat time.Duration `json:"beat"`
+}
+
 // acknowledgeStream tells the caller its stream is open and starts pumping
 // it. The acknowledgement goes out before the first event, so a caller
-// learns synchronously that its stream is open.
+// learns synchronously that its stream is open. A stream of a leased method
+// is granted its publisher's lease first, so a caller that read the
+// acknowledgement is attached, and its expiry is armed; one that could not
+// be granted it, because it ended meanwhile, is refused as closed.
 func (c *conn) acknowledgeStream(f frame, sub *Subscription) {
-	if err := c.w.write(c.ctx, frame{ID: f.ID, Result: json.RawMessage("{}")}); err != nil {
+	var opened streamOpened
+	if terms, leased := c.srv.cfg.Leases[f.Method]; leased {
+		if !sub.pub.lease(sub) {
+			c.mu.Lock()
+			delete(c.streams, f.ID)
+			c.mu.Unlock()
+			sub.Close()
+			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, ErrStreamClosed)})
+			return
+		}
+		held := &heldLease{expiry: terms.Expiry}
+		held.timer = time.AfterFunc(terms.Expiry, func() { sub.pub.expire(sub) })
+		c.mu.Lock()
+		c.leases[f.ID] = held
+		c.mu.Unlock()
+		opened.Lease = &leaseOffer{Beat: terms.Beat}
+	}
+	result, err := json.Marshal(opened)
+	if err != nil {
+		c.endStream(f.ID, ErrStreamClosed)
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: encoding the acknowledgement: %w", ErrInternal, err))})
+		return
+	}
+	if err := c.w.write(c.ctx, frame{ID: f.ID, Result: result}); err != nil {
 		c.endStream(f.ID, ErrStreamClosed)
 		return
 	}
@@ -910,11 +977,30 @@ func (c *conn) pump(id uint64, method Method, sub *Subscription) {
 	}
 }
 
+// renew re-arms the expiry of the leased stream id names. A beat for a
+// stream that is not leased here, or no longer open, renews nothing.
+func (c *conn) renew(id uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if held := c.leases[id]; held != nil {
+		held.timer.Reset(held.expiry)
+	}
+}
+
+// forgetLease disarms the expiry of stream id, for a caller holding c.mu.
+func (c *conn) forgetLease(id uint64) {
+	if held := c.leases[id]; held != nil {
+		held.timer.Stop()
+		delete(c.leases, id)
+	}
+}
+
 // finishStream tells the caller a stream ended and why, and forgets it.
 func (c *conn) finishStream(id uint64, method Method, cause error) {
 	c.mu.Lock()
 	sub, ok := c.streams[id]
 	delete(c.streams, id)
+	c.forgetLease(id)
 	c.mu.Unlock()
 	if ok {
 		sub.Close()
@@ -932,6 +1018,7 @@ func (c *conn) endStream(id uint64, cause error) {
 	c.mu.Lock()
 	sub, ok := c.streams[id]
 	delete(c.streams, id)
+	c.forgetLease(id)
 	c.mu.Unlock()
 	if ok {
 		sub.finish(cause)
@@ -946,6 +1033,7 @@ func (c *conn) closeStreams() {
 	for id, sub := range c.streams {
 		subs = append(subs, sub)
 		delete(c.streams, id)
+		c.forgetLease(id)
 	}
 	c.mu.Unlock()
 	for _, sub := range subs {

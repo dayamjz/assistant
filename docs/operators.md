@@ -881,10 +881,10 @@ then acknowledges it with `assistant coordinator acknowledge`, which is the
 only thing that records a wake as handled. A wake handed out and never
 acknowledged is handed out again: after a service restart, and once the
 coordinator it was handed to is no longer attached. The service counts the
-coordinator as attached while its wake stream, `listen` below, is held, so a
-coordinator that holds `listen` is not handed its own wakes twice, and one
-whose `listen` ended, because it went away, gets them back on its next
-drain. A coordinator that holds no stream is never attached, so every drain
+coordinator as attached while its wake stream, `listen` below, holds the
+stream's lease, so a coordinator that holds `listen` is not handed its own
+wakes twice, and one whose `listen` ended, stopped beating, or was replaced
+by a newer `listen` gets them back on its next drain. A coordinator that holds no stream is never attached, so every drain
 hands it the wakes it has not acknowledged yet. The structured answer counts,
 in `handouts`, how many times each wake has been handed out.
 
@@ -927,6 +927,16 @@ output. It ends with success when interrupted, and as an operational failure
 when the stream ends any other way, a service stop included, so it has to be
 started again.
 
+`listen` holds the stream under a lease. While it runs it sends the service
+a beat once per `supervision_beacon_interval` (10s unless configured); a
+stream with no beat for three intervals, the window at which the
+supervisor's own beacon reads stale, is detached, and the wakes handed out
+under it are offered again on the next drain. A `listen` that was stopped
+(SIGSTOP, a suspended laptop, a hung process) and runs again then exits `1`
+with code `lease-expired`. One stream holds the lease at a time: starting a
+second `listen` ends the first with code `stream-replaced`, and what was
+handed out under the first is offered again under the second.
+
 A coordinator that cannot hold a stream waits instead. `assistant coordinator
 await` blocks until the queue holds a wake on offer, then drains it the way
 `assistant --json coordinator wakes` does, or lists none once its bound
@@ -944,9 +954,9 @@ before acknowledging is answered at once with the same wakes.
 
 Delivery is at least once, and the limits are stated rather than hidden. The
 service cannot see the coordinator, only its stream: a `listen` left running
-after its host died keeps what it was handed until that process ends, and two
-streams held at once, a person's and the coordinator's, count as one, so the
-coordinator going away is not noticed until both have closed. A coordinator
+and beating after the session that started it ended keeps what it was handed
+until that process ends or another `listen` replaces it, and a person's
+`listen` replaces the coordinator's just as a second coordinator's would. A coordinator
 that holds `listen` and never acknowledges what it acted on is not handed
 those wakes again, and they keep the work counted as in flight.
 
@@ -1142,17 +1152,20 @@ sign of life from a worker. What the service reads of a worker is its
 terminal's probe (Live, Dead or Unobserved) and its captured screen, so a
 worker that stopped producing output reads as the stalled screen row, and
 one whose process ended reads as the dead process row, never as a missed
-heartbeat. The one periodic sign of life is the supervisor's own beacon,
-which the supervisor loop rewrites every `supervision_beacon_interval` and
-which the stop hook, the pull guard and the service's watchdog read as stale
-at three times that interval. It says whether the supervisor is running, and
-nothing about any worker.
+heartbeat. The two periodic signs of life are not a worker's. One is the
+supervisor's own beacon, which the supervisor loop rewrites every
+`supervision_beacon_interval` and which the stop hook, the pull guard and the
+service's watchdog read as stale at three times that interval; it says
+whether the supervisor is running. The other is the coordinator's `listen`
+beat, on the same interval and window, which says only whether that `listen`
+process is running.
 
 **Residual (listen attachment).** Being attached is the `listen` process, not
-your session. A zombie `listen` left running after its host died keeps
-handouts pinned under that stretch until the process ends; this build does
-not expire or heartbeat that attachment. Acknowledge as you go, and do not
-leave a detached `listen` running.
+your session. A stopped or hung `listen` is detached three intervals after
+its last beat, and a newer `listen` replaces it at once, but a `listen` left
+running after its session ended keeps beating, and keeps handouts pinned
+under its lease until the process ends or is replaced. Acknowledge as you
+go, and do not leave a detached `listen` running.
 
 ## Stopping the service
 

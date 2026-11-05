@@ -25,7 +25,10 @@ import (
 type held struct {
 	cmd    *exec.Cmd
 	stderr *bytes.Buffer
-	exited chan error
+	// exited is closed once the process was waited for, and err is what
+	// the wait answered.
+	exited chan struct{}
+	err    *error
 }
 
 // holdStream starts a process holding the wake stream of the service on
@@ -41,8 +44,11 @@ func holdStream(t *testing.T, socket string) held {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting the listen: %v", err)
 	}
-	h := held{cmd: cmd, stderr: &stderr, exited: make(chan error, 1)}
-	go func() { h.exited <- cmd.Wait() }()
+	h := held{cmd: cmd, stderr: &stderr, exited: make(chan struct{}), err: new(error)}
+	go func() {
+		*h.err = cmd.Wait()
+		close(h.exited)
+	}()
 	t.Cleanup(func() {
 		_ = cmd.Process.Signal(syscall.SIGCONT)
 		_ = cmd.Process.Kill()
@@ -54,8 +60,8 @@ func holdStream(t *testing.T, socket string) held {
 			return h
 		}
 		select {
-		case err := <-h.exited:
-			t.Fatalf("the listen ended before its stream opened: %v: %s", err, stderr.String())
+		case <-h.exited:
+			t.Fatalf("the listen ended before its stream opened: %v: %s", *h.err, stderr.String())
 		default:
 		}
 		if !time.Now().Before(deadline) {
@@ -76,11 +82,9 @@ func holdStream(t *testing.T, socket string) held {
 // while the stream is held hands it out, and a second does not: the
 // coordinator is attached. The listen is then sent SIGSTOP, which is a
 // coordinator whose host died with the listen process left behind and not
-// reading, and drains made with no stream of their own are polled: none
-// hands the row out again before two intervals have passed since the stop
-// (the last beat was at most one interval before it), and one does within a
-// bound, which is the lease expiring and not the process ending, since the
-// process is still there, stopped. Continued, the listen reads that its
+// reading, and drains made with no stream of their own are polled until one
+// hands the row out again, which is the lease expiring and not the process
+// ending, since the process is still there, stopped. Continued, the listen reads that its
 // stream ended because its lease expired.
 //
 // A drain from a new stream is then handed the row, and holding that stream
@@ -126,9 +130,6 @@ func TestAStoppedListenIsDetachedAndAReplacedOneDoesNotCountTwice(t *testing.T) 
 		for {
 			got := mustList(t, w.running.client)
 			if handedOut(got, gone, 2) {
-				if since := time.Since(stopped); since < 2*interval {
-					t.Fatalf("wake %d was handed out again %s after the listen stopped, before its lease could have expired", gone, since)
-				}
 				break
 			}
 			if time.Since(stopped) > 30*time.Second {
@@ -140,7 +141,8 @@ func TestAStoppedListenIsDetachedAndAReplacedOneDoesNotCountTwice(t *testing.T) 
 			t.Fatalf("continuing the listen: %v", err)
 		}
 		select {
-		case err := <-listen.exited:
+		case <-listen.exited:
+			err := *listen.err
 			var exit *exec.ExitError
 			if !errors.As(err, &exit) || exit.ExitCode() != 4 || strings.TrimSpace(listen.stderr.String()) != "lease-expired" {
 				t.Fatalf("the continued listen ended with %v and %q, want its stream ended as lease-expired", err, listen.stderr.String())

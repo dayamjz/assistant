@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // DefaultBacklog is the per-subscriber queue depth used when a caller does not
@@ -59,9 +60,29 @@ type Publisher struct {
 	mu     sync.Mutex
 	subs   map[*Subscription]struct{}
 	closed bool
-	// attachments counts the subscriptions that opened on an empty set,
-	// which is what numbers Attachment's stretches.
+	// holder is the subscription holding this publisher's lease, nil while
+	// none does.
+	holder *Subscription
+	// attachments counts the leases granted, which is what numbers
+	// Attachment's leases.
 	attachments uint64
+}
+
+// Lease is the terms a leased stream is held under: ServerConfig.Leases
+// names the methods whose streams take one. A publisher has at most one
+// holder, so granting a stream the lease ends the stream that held it with
+// ErrStreamReplaced. The holder beats every Beat, and a stream that goes
+// Expiry without a beat loses the lease at once and ends with
+// ErrLeaseExpired. What stops a process from beating (a stop signal, a
+// hang, a severed connection) is not distinguished: each reads as no beat.
+type Lease struct {
+	// Beat is how often the holder's client beats. It is told to the client
+	// in the stream's acknowledgement.
+	Beat time.Duration
+	// Expiry is how long the server waits for a beat before the stream
+	// loses its lease. It is longer than Beat, so one late beat costs
+	// nothing.
+	Expiry time.Duration
 }
 
 // NewPublisher returns a publisher with no subscribers, or an error naming what
@@ -103,11 +124,56 @@ func (p *Publisher) Subscribe(backlog int) (*Subscription, error) {
 	}
 	s := newSubscription(backlog, true)
 	s.pub = p
-	if len(p.subs) == 0 {
-		p.attachments++
-	}
 	p.subs[s] = struct{}{}
 	return s, nil
+}
+
+// lease grants s this publisher's lease under a new number and ends the
+// subscription that held it before with ErrStreamReplaced, detached at
+// once, so the two never hold it together. It reports false, granting
+// nothing, when s is no longer open here or the publisher is closed.
+func (p *Publisher) lease(s *Subscription) bool {
+	p.mu.Lock()
+	if _, open := p.subs[s]; !open || p.closed {
+		p.mu.Unlock()
+		return false
+	}
+	prev := p.holder
+	if prev != nil {
+		delete(p.subs, prev)
+	}
+	p.attachments++
+	p.holder = s
+	p.mu.Unlock()
+	if prev != nil {
+		prev.finish(ErrStreamReplaced)
+	}
+	return true
+}
+
+// expire takes the lease from s when s holds it, detaches s and ends it
+// with ErrLeaseExpired. A subscription that no longer holds the lease,
+// because it was replaced or ended, is left as it is.
+func (p *Publisher) expire(s *Subscription) {
+	p.mu.Lock()
+	held := p.holder == s
+	if held {
+		p.holder = nil
+		delete(p.subs, s)
+	}
+	p.mu.Unlock()
+	if held {
+		s.finish(ErrLeaseExpired)
+	}
+}
+
+// detach removes s from the set and from the lease, for a caller holding
+// p.mu.
+func (p *Publisher) detach(s *Subscription) {
+	delete(p.subs, s)
+	if p.holder == s {
+		p.holder = nil
+	}
 }
 
 // Publish delivers e to every current subscriber. It never blocks on a
@@ -159,7 +225,7 @@ func (p *Publisher) Publish(e Event) error {
 			// publisher lives. Its consumer still drains what it holds and
 			// then sees why it ended, and this still reports only what is
 			// wrong with e rather than anything about a subscriber.
-			delete(p.subs, s)
+			p.detach(s)
 		}
 	}
 	return nil
@@ -172,23 +238,23 @@ func (p *Publisher) Subscribers() int {
 	return len(p.subs)
 }
 
-// Attachment reports which stretch of open subscriptions this publisher is
-// in, and whether one is open at all. A stretch begins when a subscription
-// opens on a publisher that had none open and ends when the last open one
-// detaches, whichever way it detaches: closed by its consumer, ended under a
-// delivery, or ended by Close. Its number is counted from one within this
-// publisher's life and never reused, so a caller that recorded the number
-// can tell later whether the stretch it saw is still the one open: it is
-// exactly when Attachment reports the same number and open.
+// Attachment reports which lease this publisher last granted, and whether
+// a subscription holds it now. A lease is granted to a stream of a method
+// ServerConfig.Leases names when the server acknowledges it, and is lost
+// when that stream detaches, whichever way: closed by its consumer, ended
+// under a delivery, replaced by the next stream granted the lease, expired
+// for want of a beat, or ended by Close. Its number is counted from one
+// within this publisher's life and never reused, so a caller that recorded
+// the number can tell later whether the lease it saw is still the one
+// held: it is exactly when Attachment reports the same number and open.
 //
-// It counts subscriptions and knows nothing of who holds them. Two that
-// overlap are one stretch, so one consumer leaving while another stays is
-// not an end, and a subscription a caller's admission later refuses is
-// counted for as long as it is open.
+// A subscription never granted the lease counts for nothing here: one
+// opened directly with Subscribe, or a restricted stream whose admission
+// is still being decided or refused it.
 func (p *Publisher) Attachment() (number uint64, open bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.attachments, len(p.subs) > 0
+	return p.attachments, p.holder != nil
 }
 
 // Close ends every subscription and refuses later ones. A consumer still
@@ -200,6 +266,7 @@ func (p *Publisher) Close() error {
 		subs = append(subs, s)
 	}
 	p.subs = make(map[*Subscription]struct{})
+	p.holder = nil
 	p.closed = true
 	p.mu.Unlock()
 	for _, s := range subs {
@@ -212,7 +279,7 @@ func (p *Publisher) Close() error {
 func (p *Publisher) remove(s *Subscription) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	delete(p.subs, s)
+	p.detach(s)
 }
 
 // Subscription is one consumer's bounded view of a stream.
