@@ -87,9 +87,11 @@ func awaitNotRunning(pid int) bool {
 // outsideLoop is the shell startOutside runs: it runs its arguments again
 // each time they end, until the file its first argument names exists or two
 // minutes have passed, in the background of a shell that exits once it has
-// printed the background shell's number.
-const outsideLoop = `stop=$1; shift; end=$(( $(date +%s) + 120 ))
-( while [ ! -e "$stop" ] && [ "$(date +%s)" -lt "$end" ]; do "$@" & wait $!; done ) </dev/null >/dev/null 2>&1 &
+// printed the background shell's number. Its test forks nothing, so the
+// background shell's only children are what it runs: a test that ended a
+// command substitution's fork once ended the loop (CI, macOS).
+const outsideLoop = `stop=$1; shift
+( while [ ! -e "$stop" ] && [ "$SECONDS" -lt 120 ]; do "$@" & wait $!; done ) </dev/null >/dev/null 2>&1 &
 echo $!`
 
 // startOutside starts, outside this process's tree, a shell that runs
@@ -235,7 +237,7 @@ func TestAListingOfABinarySettlesWhileProcessesOutsideItsTreeExitUnread(t *testi
 		t.Fatal(err)
 	}
 	held := startHeldBinary(t)
-	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60")}
+	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60"), name: "sleep"}
 	listed, err := processesOfBinary(table, self)
 	if table.ended != table.readings {
 		t.Fatalf("%d of %d readings ended a process outside this tree, so this shows nothing", table.ended, table.readings)
@@ -394,8 +396,8 @@ func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
 
 // insideLoop is the shell startInside runs: outsideLoop's loop, run by the
 // shell itself rather than in its background.
-const insideLoop = `stop=$1; shift; end=$(( $(date +%s) + 120 ))
-while [ ! -e "$stop" ] && [ "$(date +%s)" -lt "$end" ]; do "$@" & wait $!; done`
+const insideLoop = `stop=$1; shift
+while [ ! -e "$stop" ] && [ "$SECONDS" -lt 120 ]; do "$@" & wait $!; done`
 
 // startInside starts, as a child of this process, a shell that runs command
 // again each time it ends, as startOutside's does, and returns its number:
@@ -633,7 +635,7 @@ func TestAWrongPredictionOfThisProcessesNameTurnsTheRecordsOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60")}
+	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60"), name: "sleep"}
 	judge := newCandidates(self)
 	judge.name = "not-" + judge.name
 	_, err = processesWhere(table, ofBinary(self), judge)
@@ -655,7 +657,7 @@ func TestAWrongPredictionOfAnAcceptedProcessesNameTurnsTheRecordsOff(t *testing.
 	principles.Cite(t, principles.P15)
 	copied := copyOfBinary(t, "accepted.test")
 	startHeld(t, copied)
-	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60")}
+	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60"), name: "sleep"}
 	judge := newCandidates(copied)
 	judge.name = "not-" + judge.name
 	_, err := processesWhere(table, ofBinary(copied), judge)
