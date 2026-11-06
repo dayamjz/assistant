@@ -731,8 +731,9 @@ func (u *unreadExitEachReadingBesideMatched) ids() ([]int, map[int]tableRecord, 
 // listing would settle with only the sleep. The control is that removing
 // that unsettle leaves readings == 1 and a non-error return (checked in
 // REPORT.md fail-before); with it, all 64 readings unsettle.
+// Not parallel: it starts and ends a real process in each of its 64
+// readings, which would keep other tests' listings from settling.
 func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
-	t.Parallel()
 	principles.Cite(t, principles.P15)
 	sleeper := exec.Command("sleep", "60")
 	if err := sleeper.Start(); err != nil {
@@ -769,8 +770,9 @@ func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
 // unsettles each of the 64, the open #722 gap when never-read-whole
 // processes keep exiting. Presence for the sleep is the kernel's, so the
 // fixture is not a fabricated identity.
+// Not parallel: it starts and ends a real process in each of its 64
+// readings, which would keep other tests' listings from settling.
 func TestUnreadExitsBesideARefusedProcessStillPreventSettling(t *testing.T) {
-	t.Parallel()
 	principles.Cite(t, principles.P15)
 	sleeper := exec.Command("sleep", "60")
 	if err := sleeper.Start(); err != nil {

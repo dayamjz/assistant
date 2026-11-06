@@ -186,8 +186,9 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 // Before, the number was taken for the refused sleep, its exit passed over
 // as a refused process's, and the listing settled on the second reading.
 // The control is that every reading after the first met the staged record.
+// Not parallel: it starts and ends a real process in each of its 64
+// readings, which would keep other tests' listings from settling.
 func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
-	t.Parallel()
 	principles.Cite(t, principles.P15)
 	self, err := os.Executable()
 	if err != nil {
