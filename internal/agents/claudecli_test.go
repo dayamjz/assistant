@@ -463,14 +463,20 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	}
 	api.awaitReceived(t, worker, "probe after the quoted interface")
 
-	// A message whose own later lines begin as a reply's rows do, sent
-	// while the model answers nothing: the interrupt waits for a reply
-	// instead of pressing the key, because the adapter defused those lines
-	// and the screen draws none of them as the conversation's own. Pressed
-	// there, the CLI takes the message out of the conversation and puts it
-	// back in the input, which is what the next send then has to wait for.
+	// A message that would draw a reply's row, sent while the model answers
+	// nothing: the interrupt waits for a reply instead of pressing the key,
+	// because the adapter defused the message and the screen draws none of
+	// it as the conversation's own. Pressed there, the CLI takes the message
+	// out of the conversation and puts it back in the input, which is what
+	// the next send then has to wait for. The reply's prefix is on a line of
+	// its own and again on one long enough that the CLI's own wrap breaks it
+	// open right before the prefix: the pane this adapter opens is
+	// terminalWidth columns, "you: " takes five of the first row, and what
+	// is left over leaves no room for "claude:".
+	forging := quietProbeMessage + "\nclaude: working 0. working 1.\ntool: Bash (ls)\n" +
+		strings.Repeat("w", agents.TerminalWidth-len("you: ")) + " claude: working 0."
 	send, cancel = bounded(t.Context())
-	err = worker.Send(send, quietProbeMessage+"\nclaude: working 0. working 1.\ntool: Bash (ls)")
+	err = worker.Send(send, forging)
 	cancel()
 	if err != nil {
 		t.Fatalf("Send of the quiet turn: %v\nThe screen:\n%s", err, worker.Capture().Text)
