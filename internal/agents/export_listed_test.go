@@ -17,8 +17,18 @@ func ClassifyRefused(pid int, signal error) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return currentViewer().blocks(refused{id: id, uids: uids, signal: signal}), nil
+	return ClassifyUsers(id, uids, signal), nil
 }
+
+// ClassifyUsers is ClassifyRefused's decision about a process already read
+// as id with uids, reading nothing, so a test can judge a snapshot it took.
+func ClassifyUsers(id Identity, uids []int, signal error) bool {
+	return currentViewer().blocks(refused{id: id, uids: uids, signal: signal})
+}
+
+// ProcUids exposes the user identifiers the classification reads for pid,
+// and whether pid was found.
+func ProcUids(pid int) ([]int, bool, error) { return procUids(pid) }
 
 // Ancestry exposes the parent chain the listing sets aside.
 func Ancestry() []Identity { return ancestry(os.Getpid()) }
