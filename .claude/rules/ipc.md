@@ -22,7 +22,9 @@ paths: ["internal/ipc/**"]
   relation's second answer, decided by the handler and never a third access
   class; `ErrSubordinate` and `ErrOutsideDomain` are its two refusals, and
   `domain.delegate` and `domain.end` the two coordinator-only methods that
-  start and end it.
+  start and end it. A coordinator method refuses a peer none of the three
+  relations place with `ErrUnplaced`, before it decides anything, where
+  `gate.admit` refuses the same chain with `ErrUnplaceable`.
 
 Read `doc.go` for where state may still be collapsed into a gap marker and
 why that is not the strict rule relaxed, for the restricted `wakes.subscribe`
