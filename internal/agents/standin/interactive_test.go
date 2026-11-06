@@ -191,3 +191,42 @@ func TestAnInteractiveWorkerEndsATurnOnEscape(t *testing.T) {
 			"want both long turns, one, and the three messages", call.Interrupted, call.IdleEscapes, call.Lines)
 	}
 }
+
+// Two Escape keys that reach the worker in one write are two keys, as
+// Claude Code 2.1.308 took them: the first ends the quiet turn running and
+// puts its message back in the input, and the second, with no turn left
+// running, is an idle one. An ESC right behind an ESC begins a sequence of
+// its own rather than ending the first one's.
+func TestAnInteractiveWorkerTakesTwoEscapesInOneWriteAsTwoKeys(t *testing.T) {
+	const key = "standin-placeholder-key-0123456789abcdefghij"
+	state := `{"hasCompletedOnboarding":true,"projects":{"DIR":{"hasTrustDialogAccepted":true}},` +
+		`"customApiKeyResponses":{"approved":["` + suffix(key, approvalSuffix) + `"]}}`
+	socket, agent := startInteractiveWith(t, Script{Worker: &WorkerScript{Exchanges: []Exchange{
+		{Contains: "hello there", Reply: "the quiet turn's reply", Turn: time.Hour},
+	}}}, state, key)
+	screenOf(t, socket, footerBusy)
+	// A paste without -p and with -S writes the buffer as it is, control
+	// bytes unescaped, in one write.
+	both := exec.Command(Tmux(t), "-S", socket, "load-buffer", "-b", "e", "-", ";", "paste-buffer", "-S", "-d", "-b", "e", "-t", "w")
+	both.Stdin = strings.NewReader("\x1b\x1b")
+	if out, err := both.CombinedOutput(); err != nil {
+		t.Fatalf("writing two Escape keys: %v: %s", err, out)
+	}
+	screenOf(t, socket, footerIdle+"\n"+inputLine+" hello there")
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var call Call
+		for _, c := range agent.Calls() {
+			if c.Interactive {
+				call = c
+			}
+		}
+		if slices.Equal(call.Interrupted, []string{"hello there"}) && call.IdleEscapes == 1 {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker recorded %q interrupted and %d idle Escape keys, want the turn and one", call.Interrupted, call.IdleEscapes)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
