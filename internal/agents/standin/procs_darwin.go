@@ -38,14 +38,9 @@ func readTable() ([]int, map[int]tableRecord, error) {
 }
 
 // recordOf is the record a process table entry holds: its identity
-// (agents.EntryIdentity), its parent (Eproc.Ppid) and its command name
-// (Proc.P_comm, up to its first NUL).
+// (agents.EntryIdentity).
 func recordOf(entry *unix.KinfoProc) tableRecord {
-	name := entry.Proc.P_comm[:]
-	if end := bytes.IndexByte(name, 0); end >= 0 {
-		name = name[:end]
-	}
-	return tableRecord{Identity: agents.EntryIdentity(entry), parent: int(entry.Eproc.Ppid), name: string(name)}
+	return tableRecord{Identity: agents.EntryIdentity(entry)}
 }
 
 // commandLine reads pid's executable path and its arguments, argv[0]

@@ -144,12 +144,9 @@ func (kernel) foreign(pid int) (bool, error)                 { return foreignPro
 func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
 
 // tableRecord is what a read of the process table holds of one process
-// besides its number: its identity as agents.Identify reads it, its
-// parent's number, and the command name the table records for it.
+// besides its number: its identity as agents.Identify reads it.
 type tableRecord struct {
 	agents.Identity
-	parent int
-	name   string
 }
 
 // settleReadings bounds how many times processesWhere reads the process
