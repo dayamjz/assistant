@@ -320,7 +320,11 @@
 // not, a batch that checks every identifier and then writes every row in
 // one transaction, so an unknown identifier or a row already acknowledged
 // refuses the batch with a *WakeIDError and writes nothing, and a subset
-// acknowledged leaves the rest queued. UnacknowledgedWakes is the queue's
+// acknowledged leaves the rest queued. AcknowledgeAll takes every shape in
+// one such batch, and a number the caller named without its shape is a
+// task wake only while no row of another shape carries it; one that does
+// refuses the batch with a *WakeAmbiguousError, read in the same
+// transaction. UnacknowledgedWakes is the queue's
 // half of PRD section 5's "work is in flight": how many queued rows each
 // task has, handed out or not, which internal/supervisor's in-flight table
 // reads beside the resolved states, so a wake keeps its task in flight
