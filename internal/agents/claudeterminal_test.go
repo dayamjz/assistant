@@ -457,11 +457,11 @@ func TestTheClaudeScreenReaderReadsScreensTheCLIDrew(t *testing.T) {
 		{"quoted above", "you: what does accept edits on (shift+tab to cycle)  ·  esc to interrupt mean\n" +
 			"claude: the reply\naccept edits on (shift+tab to cycle)\n$\n", "ready"},
 		{"text in the input", "claude: the reply\nBrewed for 8s · done 10:23 PM\naccept edits on (shift+tab to cycle)\n" +
-			"effort: medium · /effort\n$\u00a0  /probe-slash command\n", "typed"},
+			"effort: medium · /effort\n$\u00a0  /probe-slash command\n", "drawn"},
 		{"the message just sent still in the input", "you:  !touch probe-bang\nclaude: probe reply 15\n" +
 			"Sautéed for 0s · done 10:50 PM\naccept edits on (shift+tab to cycle)\n" +
 			"tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking\n" +
-			"$\u00a0  !touch probe-bang\n", "typed"},
+			"$\u00a0  !touch probe-bang\n", "drawn"},
 		{"just after a paste", "claude: probe reply 59\nWorked for 0s · done 10:53 PM\npaste again to expand\n" +
 			"effort: medium · /effort\n$\n", "not drawn"},
 		// Drawn by Claude Code 2.1.308 around the Escape key, a path replaced.
@@ -473,28 +473,33 @@ func TestTheClaudeScreenReaderReadsScreensTheCLIDrew(t *testing.T) {
 			"Tip: Use /memory to view and manage Claude memory\naccept edits on (shift+tab to cycle)  ·  esc to interrupt\n$\n", "busy"},
 		{"text typed into a running turn, 2.1.308", "you: LONGTURN second long turn\n" +
 			"Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.\n" +
-			"accept edits on (shift+tab to cycle)\neffort: medium · /effort\n$\u00a0 half typed\n", "typed"},
+			"accept edits on (shift+tab to cycle)\neffort: medium · /effort\n$\u00a0 half typed\n", "drawn"},
 		{"interrupted, 2.1.308", "[Screen Reader Mode: on via flag]\nClaude Code v2.1.308\nOpus 5.5 · API Usage Billing\n/work\n" +
 			"you: LONGTURN please work for a long time\nclaude: working 0. working 1. working 2. working 3.\n" +
 			"Interrupted  · What should Claude do instead?\naccept edits on (shift+tab to cycle)\n$\n", "ready"},
 		{"interrupted over typed text, 2.1.308", "you: LONGTURN second long turn\nclaude: working 0. working 1.\n" +
 			"Interrupted  · What should Claude do instead?\naccept edits on (shift+tab to cycle)\n" +
-			"effort: medium · /effort\n$\u00a0 half typed\n", "typed"},
+			"effort: medium · /effort\n$\u00a0 half typed\n", "drawn"},
 		{"interrupted on a tool, 2.1.308", "you: TOOLTURN: git -c alias.zz='!sleep 40' zz\n" +
 			"tool error: Bash (git -c alias.zz='!sleep 40' zz)\nInterrupted  · What should Claude do instead?\n" +
 			"accept edits on (shift+tab to cycle)\n$\n", "ready"},
 		{"interrupted before any reply, 2.1.308", "you: hello first\nclaude: ack 2: hello first\n" +
-			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n$\u00a0 SLOWSTART nothing streams yet\n", "typed"},
+			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n$\u00a0 SLOWSTART nothing streams yet\n", "drawn"},
 		{"a paste interrupted before any reply, 2.1.308", "claude: ack 2: hello first\nCogitated for 0s · done 3:41 AM\n" +
 			"paste again to expand\n$\u00a0 [Pasted text #2 +3 lines]\n", "not drawn"},
 		{"a paste interrupted before any reply, settled, 2.1.308", "claude: ack 2: hello first\n" +
-			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n$\u00a0 [Pasted text #4 +3 lines]\n", "typed"},
+			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n$\u00a0 [Pasted text #4 +3 lines]\n", "drawn"},
 		{"a message of several lines put back in the input, 2.1.308", "claude: ack 5:\nCooked for 0s · done 3:55 AM\n" +
-			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\nSLOWSTART: think for a long time before answering\n\n\n", "typed"},
+			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\nSLOWSTART: think for a long time before answering\n\n\n", "drawn"},
 		{"its first line left after one clear, 2.1.308", "claude: ack 5:\nCooked for 0s · done 3:55 AM\n" +
-			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\n\n\n", "typed"},
+			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\n\n\n", "drawn"},
 		{"a message put back in the input that quotes the footer", "claude: the reply\n" +
-			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n(shift+tab to cycle)\n", "typed"},
+			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n(shift+tab to cycle)\n", "drawn"},
+		{"text in the input that quotes the footer and then the prompt", "claude: the reply\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n(shift+tab to cycle)\n$\n", "drawn"},
+		{"running before any of the reply is drawn, 2.1.308", "you: SLOWSTART nothing streams yet\nSimmering…\n" +
+			"Tip: Hit Enter to queue up additional messages while Claude is working.\n" +
+			"accept edits on (shift+tab to cycle)  ·  esc to interrupt\neffort: medium · /effort\n$\n", "drawn"},
 		{"a notice below the footer", "claude: the reply\nWorked for 0s · done 10:53 PM\n" +
 			"accept edits on (shift+tab to cycle)\n" +
 			"tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking\n" +
@@ -570,23 +575,16 @@ func TestAClaudeTerminalSubordinateIsRefusedBeforeItStarts(t *testing.T) {
 }
 
 // An interrupt presses Escape once, only on a screen that reads a turn
-// running with an empty input, and answers once the screen reads ready
-// with the worker still running, whether the turn had drawn part of its
-// reply, which the CLI answers with its interrupted line, or none, which it
-// answers by putting the message back in the input for the clear key to
-// take out; the turn is ended unanswered and the next send is answered.
+// running that has drawn part of its reply with an empty input, and answers
+// once the screen reads ready with the worker still running; the turn is
+// ended unanswered and the next send is answered.
 // With no turn running it answers so and presses nothing, and over a
 // person's unsent text it presses nothing and is refused with
 // ErrTerminalNotReady once its context ends, leaving the text theirs:
 // Claude Code 2.1.308 was observed to open a menu on a second Escape at an
 // idle screen and to offer to clear typed text on one.
 func TestAClaudeTerminalInterruptPressesOneKeyWhileATurnRuns(t *testing.T) {
-	for _, c := range []struct{ name, progress string }{
-		{"after part of the reply", "the reply begins"},
-		{"before any reply", ""},
-	} {
-		t.Run(c.name, func(t *testing.T) { interruptOneTurn(t, c.progress) })
-	}
+	interruptOneTurn(t, "the reply begins")
 }
 
 // interruptOneTurn is one run of
@@ -655,33 +653,37 @@ func interruptOneTurn(t *testing.T, progress string) {
 	}
 }
 
-// An interrupt takes out of the input only the message this worker was
-// sent: a turn a person started by typing into the pane, whose message the
-// interrupt puts back in the input, is ended and its text is left where it
-// is, and the interrupt is refused with ErrTerminalNotReady saying so.
-func TestAClaudeTerminalInterruptLeavesAPersonsMessageInTheInput(t *testing.T) {
-	const theirs = "a person's own long turn"
-	worker, term, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
-		{Contains: theirs, Reply: "their reply", Turn: time.Hour},
+// An interrupt presses nothing while the running turn has drawn none of its
+// reply, because Claude Code 2.1.308 answered Escape (and Control-C) there by
+// putting the message back in the input, which nothing can then take out
+// without risking a person's text: it waits, and is refused with
+// ErrTerminalNotReady once its context ends, the turn still running. Once
+// the reply has begun, the same turn is interrupted.
+func TestAClaudeTerminalInterruptWaitsForTheReplyToBegin(t *testing.T) {
+	const quiet = "a quiet long turn"
+	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: quiet, Reply: "the quiet reply", Turn: time.Hour},
 	}}}, workerSpec(t))
 	awaitInteractive(t, agent, answered(1))
-	if err := worker.Send(t.Context(), "settle"); err != nil {
+	if err := worker.Send(t.Context(), quiet); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	awaitInteractive(t, agent, answered(2))
-	typeAsAPerson(t, term, theirs)
-	awaitInteractive(t, agent, answered(3))
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	var err error
 	for interrupted := false; !interrupted && err == nil; {
 		interrupted, err = agents.InterruptTerminalWorker(ctx, agent.Runner(), worker)
 	}
-	if !errors.Is(err, agents.ErrTerminalNotReady) {
-		t.Fatalf("an interrupt of a person's turn answered %v, want ErrTerminalNotReady", err)
+	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("an interrupt of a turn that drew no reply answered %v, want ErrTerminalNotReady and the deadline", err)
 	}
-	if screen := worker.Capture().Text; !strings.Contains(screen, "$\u00a0"+theirs) {
-		t.Fatalf("the person's message is not in the input after the interrupt:\n%s", screen)
+	call := awaitInteractive(t, agent, answered(2))
+	if len(call.Interrupted) != 0 || call.IdleEscapes != 0 {
+		t.Fatalf("the worker recorded %q interrupted and %d idle Escape keys, want nothing pressed", call.Interrupted, call.IdleEscapes)
+	}
+	if !strings.Contains(worker.Capture().Text, "esc to interrupt") {
+		t.Fatalf("the turn is not still running:\n%s", worker.Capture().Text)
 	}
 }
 
@@ -693,7 +695,7 @@ func TestAClaudeTerminalInterruptLeavesAPersonsMessageInTheInput(t *testing.T) {
 func TestAClaudeTerminalInterruptBehindAWaitingSendKeepsItsDeadline(t *testing.T) {
 	const long = "a turn to wait behind"
 	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
-		{Contains: long, Reply: "the long reply", Turn: time.Hour},
+		{Contains: long, Reply: "the long reply", Turn: time.Hour, Progress: "the long reply begins"},
 	}}}, workerSpec(t))
 	awaitInteractive(t, agent, answered(1))
 	if err := worker.Send(t.Context(), long); err != nil {

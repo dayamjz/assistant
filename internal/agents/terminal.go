@@ -319,16 +319,18 @@ type TerminalWorker interface {
 
 	// Interrupt ends the running turn and keeps the worker, the mechanism of
 	// CapabilityTerminalInterrupt. It takes turns with Send under ctx, then
-	// waits for a turn running with an empty input, or ready, which answers
-	// false with nothing pressed. Running, it presses the key once and
-	// answers true once the screen reads ready with the worker alive: a turn
-	// ended, perhaps by itself just before the key. A message the key puts
-	// back in the input is cleared a line per press, each only on a reading
-	// whose input is the last text this handle typed or a leading part of
-	// it; other input is waited past and kept, but a draft typed between
-	// such a reading and its press is erased. A wait ctx ends is an error
-	// wrapping ErrTerminalNotReady saying whether the key was typed; also
-	// ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for no key.
+	// waits for a turn running that has drawn part of its reply with an
+	// empty input, or ready, which answers false with nothing pressed.
+	// Running, it presses the key once and answers true once the screen
+	// reads ready with the worker alive: a turn ended, perhaps by itself
+	// just before the key. A turn that has drawn none of its reply is waited
+	// on, because the CLI answered the key there by putting the message
+	// back in the input, which nothing here takes out again; so is any
+	// other screen, text in the input among them. A wait ctx ends is an
+	// error wrapping ErrTerminalNotReady saying whether the key was typed;
+	// also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
+	// adapter whose typing names no key. It never types anything but the
+	// key, so no text in the input is ever cleared.
 	Interrupt(ctx context.Context) (bool, error)
 }
 
@@ -556,12 +558,9 @@ const (
 	// screenReady is the interface drawn with no turn running and nothing
 	// in its input, which is the one state a send types into.
 	screenReady
-	// screenBusy is a turn running with nothing in the input, the one state
-	// an interrupt presses its key on.
+	// screenBusy is a turn running that has drawn part of its reply, with
+	// nothing in the input: the one state an interrupt presses its key on.
 	screenBusy
-	// screenTyped is text in the input with no turn shown running, which an
-	// agent may draw while a turn runs too, so it says nothing of a turn.
-	screenTyped
 )
 
 // terminalTyping is how an adapter types into a terminal worker: the bytes
@@ -582,14 +581,10 @@ type terminalTyping struct {
 	// types only once it reads screenReady. Nil, nothing is read and every
 	// send is typed at once.
 	read func(screen string) screenState
-	// interrupt, clear and held are Interrupt's, on its terms: the tmux
-	// names of the key that ends a running turn, empty for an adapter with
-	// none, which CapabilityTerminalInterrupt's row reads, and of the key
-	// that takes the input's last line out; and whether the input on screen
-	// is nothing but sent or a leading part of it.
+	// interrupt is the tmux name of the key that ends a running turn, which
+	// Interrupt presses, empty for an adapter with none; it is what
+	// CapabilityTerminalInterrupt's row reads.
 	interrupt string
-	clear     string
-	held      func(screen, sent string) bool
 }
 
 // terminalTyper is a runner whose workers are typed into with the typing it
@@ -625,10 +620,8 @@ type tmuxWorker struct {
 	serverOnce sync.Once
 
 	// slot serializes sends and interrupts, taken under the caller's ctx
-	// (takeSlot), so text arrives in the order it was sent; sent, held with
-	// it, is the last text typed, what an interrupt may clear.
+	// (takeSlot), so text arrives in the order it was sent.
 	slot chan struct{}
-	sent string
 
 	captureMu sync.Mutex
 	last      Capture
@@ -647,9 +640,6 @@ type procSpecTerminal struct {
 	// adapter made for this worker alone and nothing after it reads. It is
 	// not run when the start fails, which the adapter answers for itself.
 	cleanup func()
-	// sent is the first message the agent was started with, as typed, for
-	// an adapter that puts it on the command line.
-	sent string
 }
 
 // TerminalCommandLimit is the most bytes the arguments of the tmux command
@@ -764,7 +754,6 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		maxOut:   spec.maxOut,
 		typing:   typing,
 		slot:     make(chan struct{}, 1),
-		sent:     spec.sent,
 		done:     make(chan struct{}),
 		released: make(chan struct{}),
 	}
@@ -841,17 +830,12 @@ func TmuxStartCommandSize(t Terminal, dir, bin string, workerArgs []string) (int
 // that cannot be read for any other reason is read again rather than taken
 // for any state.
 func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error {
-	return w.awaitScreen(ctx, func(s screenState, _ string) bool { return ok(s) })
-}
-
-// awaitScreen is await with the screen ok is asked about beside its reading.
-func (w *tmuxWorker) awaitScreen(ctx context.Context, ok func(screenState, string) bool) error {
 	tick := time.NewTicker(terminalPoll)
 	defer tick.Stop()
 	for {
 		screen, err := w.screen(ctx)
 		switch {
-		case err == nil && ok(w.typing.read(screen), screen):
+		case err == nil && ok(w.typing.read(screen)):
 			return nil
 		case errors.Is(err, ErrTerminalClientTimedOut):
 			return fmt.Errorf("%w: %w", ErrTerminalNotReady, err)
@@ -1084,7 +1068,6 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 	cmd.Stdin = bytes.NewReader(framed)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	w.sent = string(framed)
 	if err := runTmux(ctx, tmuxTypeBound, "the client typing a send", cmd); err != nil {
 		// runTmux's answer is returned whole rather than replaced, so the
 		// client's own failure stays beside the caller's cancellation; a ctx
@@ -1105,12 +1088,6 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 		return fmt.Errorf("typing into the terminal: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
-}
-
-// key types the key tmux names name into the pane.
-func (w *tmuxWorker) key(ctx context.Context, name string) error {
-	return runTmux(ctx, tmuxTypeBound, "the client typing "+name, procgroup.Command(w.terminal.Tmux,
-		"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, name))
 }
 
 // takeSlot takes the slot under ctx and returns its release; ctx ending
@@ -1150,32 +1127,15 @@ func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
 	if read == screenReady {
 		return false, nil
 	}
-	if err := w.key(ctx, w.typing.interrupt); err != nil {
+	if err := runTmux(ctx, tmuxTypeBound, "the client typing an interrupt", procgroup.Command(w.terminal.Tmux,
+		"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, w.typing.interrupt)); err != nil {
 		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
 			return false, ErrWorkerEnded
 		}
 		return false, fmt.Errorf("typing the interrupt into the terminal: %w", err)
 	}
-	for {
-		// Input that is not what this handle typed is waited past, never
-		// cleared: the CLI drew it for a moment after a press, and a person's.
-		var after screenState
-		if err := w.awaitScreen(ctx, func(s screenState, text string) bool {
-			after = s
-			return s == screenReady ||
-				(s == screenTyped && w.typing.clear != "" && w.typing.held != nil && w.typing.held(text, w.sent))
-		}); err != nil {
-			if after == screenTyped {
-				return false, fmt.Errorf("the interrupt was typed and the input holds text this worker was not sent, which is left as it is: %w", err)
-			}
-			return false, fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err)
-		}
-		if after == screenReady {
-			break
-		}
-		if err := w.key(ctx, w.typing.clear); err != nil {
-			return false, fmt.Errorf("the interrupt was typed and the message it put back in the input was not cleared: %w", err)
-		}
+	if err := w.await(ctx, func(s screenState) bool { return s == screenReady }); err != nil {
+		return false, fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err)
 	}
 	select {
 	case <-w.done:

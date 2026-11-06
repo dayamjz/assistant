@@ -174,19 +174,27 @@ func TestAPersonsOwnOrphanedCoordinatorCommandIsRefusedUnplaced(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	withService(t, h, func(running serviceUnderTest) {
-		if _, code := callDetached(t, running, ipc.MethodWakesList, machine.WakesRequest{}); code != "" {
-			t.Fatalf("wakes.list from a detached child of a test at a terminal answered %q, want it served", code)
-		}
-		code, message := orphanedCall(t, running.service.Socket(), ipc.MethodWakesList, machine.WakesRequest{}, nil,
-			func(script string) {
-				starter := exec.Command("/bin/sh", "-c", "/bin/sh -c "+shellQuote(script)+" </dev/null >/dev/null 2>&1 &")
-				starter.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-				if raw, err := starter.CombinedOutput(); err != nil {
-					t.Fatalf("starting the orphan: %v: %s", err, raw)
-				}
-			})
-		if code != ipc.CodeUnplaced {
-			t.Fatalf("wakes.list from a person's orphaned command answered %q (%s), want %q", code, message, ipc.CodeUnplaced)
+		for _, call := range []struct {
+			method ipc.Method
+			params any
+		}{
+			{ipc.MethodWakesList, machine.WakesRequest{}},
+			{ipc.MethodCoordinatorCatchUp, struct{}{}},
+		} {
+			if _, code := callDetached(t, running, call.method, call.params); code != "" {
+				t.Fatalf("%s from a detached child of a test at a terminal answered %q, want it served", call.method, code)
+			}
+			code, message := orphanedCall(t, running.service.Socket(), call.method, call.params, nil,
+				func(script string) {
+					starter := exec.Command("/bin/sh", "-c", "/bin/sh -c "+shellQuote(script)+" </dev/null >/dev/null 2>&1 &")
+					starter.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+					if raw, err := starter.CombinedOutput(); err != nil {
+						t.Fatalf("starting the orphan: %v: %s", err, raw)
+					}
+				})
+			if code != ipc.CodeUnplaced {
+				t.Fatalf("%s from a person's orphaned command answered %q (%s), want %q", call.method, code, message, ipc.CodeUnplaced)
+			}
 		}
 	})
 }

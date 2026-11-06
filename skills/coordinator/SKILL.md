@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, verify supervision, and delegate a domain of tasks to a subordinate coordinator
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, verify supervision, reset a session from one catch-up read, and delegate a domain of tasks to a subordinate coordinator
 ---
 
 # coordinator
@@ -29,6 +29,7 @@ below: read one yourself, before you act, whenever its trigger applies.
 
 | Reference | Read it when |
 | --- | --- |
+| [references/catch-up.md](references/catch-up.md) | your session starts, your host cleared or compacted it, or it grew long and you reset it: start from `assistant --json coordinator catch-up` |
 | [references/tasks.md](references/tasks.md) | you create a task with `--overlaps`, `--delivery` or `--mode`, read a task's `policy` or `record.blocker_task`, or read the `watch` digest |
 | [references/workers.md](references/workers.md) | you message, interrupt, peek at, stop or relaunch a worker; a wake is `terminal-gone`, `message-unacknowledged`, `stall-closed` or a stall hold; a command is refused `unplaced`, `unplaceable` or `not-at-terminal` |
 | [references/promotion.md](references/promotion.md) | an investigation reads `reported` or `held`: you read its report, promote it, or record its findings relayed |

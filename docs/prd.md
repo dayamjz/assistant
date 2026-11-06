@@ -3095,14 +3095,14 @@ the recent output of a worker; relaunching a task; recording that a reported inv
 findings were relayed; listing, awaiting, subscribing to, and acknowledging the wake queue, for
 its domain's rows alone; and arm verification. It is refused, with a typed refusal naming it as
 a subordinate: promoting a task; answering a hold, because a hold waits on a person; marking
-the catch-up read seen; <kbd>proposed</kbd> creating a [housekeeping](#housekeeping) pass; starting, rerunning, or cancelling a run; synchronizing a branch;
+the catch-up read seen; the coordinator's catch-up read; <kbd>proposed</kbd> creating a [housekeeping](#housekeeping) pass; starting, rerunning, or cancelling a run; synchronizing a branch;
 stopping or restarting the service; and the two delegation methods. A task outside its domain
 is refused with a typed refusal of its own. It records no delivery posture: a task it creates
 takes its delegation's, as section 6 says.
 
 These methods, with listing, awaiting, and acknowledging the wake queue, reading a worker's
-recent output, recording that a reported investigation's findings were relayed, and arm
-verification, are reached
+recent output, recording that a reported investigation's findings were relayed, arm
+verification, and the coordinator's catch-up read, are reached
 through `assistant coordinator …`, a client dispatched beside the table on the same
 terms as `assistant gate` and `assistant host`. It adds no row. It is the
 interface the coordinator requires, and the third command outside the table by the owner's
@@ -3115,7 +3115,7 @@ What is reached beside the table rather than as a verb is two clients. The coord
 subcommands are `create`, `tasks`, `message`, `stop`,
 `peek`, `relaunch`, `promote`, `relayed`,
 `answer`, `wakes`, `await`, `listen`,
-`acknowledge`, `supervision`, `delegate`, and
+`acknowledge`, `supervision`, `catch-up`, `delegate`, and
 `end-delegation`. `tasks` is `tasks.list`, or `task.get`
 when a task is named, the listing `assistant tasks` answers; a subordinate coordinator
 is answered its own domain's tasks alone. `answer` is `task.respond`, the
@@ -3124,7 +3124,18 @@ coordinator it is refused and the ask recorded as an escalation, handed up to th
 coordinator. `listen` holds the wake stream, `wakes.subscribe`, printing each
 wake as it is queued and handing out none. `delegate` is `domain.delegate` and
 `end-delegation` is `domain.end`, each one service method, coordinator-only,
-and refused for a subordinate coordinator as for a worker. No verb is added. `await` blocks until the wake
+and refused for a subordinate coordinator as for a worker. No verb is added. `catch-up` is
+`coordinator.catchup`, the coordinator's catch-up read: one bounded document a session that
+keeps no memory of the fleet acts from, holding arm verification's verdict, the queued wakes on
+offer to the coordinator, handed out or not, each named as `acknowledge` takes it and carrying
+what it is acted on by, the open
+holds with the answer that closes each and, for a held run, its decision and the findings behind
+it, every task's resolved state, and the open kept work.
+Each is a compact row read from the record that owns it on that read (P8), and each list is
+bounded by a fixed count in the program, not a setting, with how many rows it left out; the tasks
+a listed wake, hold or kept work entry names are listed first. It hands out no wake, acknowledges
+none, answers nothing, and marks nothing seen, so it is not section 8's drain and not the
+person's catch-up read below. It is refused for a worker and for a subordinate coordinator. `await` blocks until the wake
 queue holds a wake on offer to the caller, or until a bound the caller gives elapses, and then
 hands those wakes out, acknowledging nothing: only `acknowledge` closes one, and when
 a wake handed out is handed out again is section 8's `wake` row. Each of the queue's shapes

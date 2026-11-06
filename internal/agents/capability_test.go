@@ -364,7 +364,7 @@ const interruptProbeMessage = "conformance: a turn long enough to interrupt"
 // interrupt probe. Every stand-in the suite runs a terminal adapter over
 // carries it.
 var interruptProbeExchange = standin.Exchange{Contains: interruptProbeMessage, Reply: "conformance: the long turn ended by itself",
-	Turn: time.Hour}
+	Turn: time.Hour, Progress: "conformance: the long turn has begun"}
 
 // countProbePrompt is what the count probe asks an adapter, and the landmark
 // countProbeStep answers it by.

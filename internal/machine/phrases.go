@@ -2077,7 +2077,7 @@ var PhraseNoReading = Phrase{
 // planned and carried out and as status prints it, a row per refusal, and a
 // row per step, and the coordinator client's: a created task begun and one
 // recorded behind other work, a promotion, a relaunch, a drain with and
-// without notices, an acknowledgement, and arm verification's three. A templated row is listed with its
+// without notices, an acknowledgement, arm verification's three, and catch-up's counts rows. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
 // strings.
 func TablePhrases() []Phrase {

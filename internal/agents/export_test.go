@@ -32,7 +32,7 @@ func ListUnder(ctx context.Context, dir string) ([]Identity, error) {
 }
 
 // ReadClaudeScreen is claudeScreen's reading of a screen as a word, "not
-// drawn", "drawn", "ready", "busy" or "typed", so a test can hold the reader to
+// drawn", "drawn", "ready" or "busy", so a test can hold the reader to
 // screens the CLI drew.
 func ReadClaudeScreen(screen string) string {
 	switch claudeScreen(screen) {
@@ -42,8 +42,6 @@ func ReadClaudeScreen(screen string) string {
 		return "ready"
 	case screenBusy:
 		return "busy"
-	case screenTyped:
-		return "typed"
 	}
 	return "not drawn"
 }

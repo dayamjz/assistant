@@ -921,7 +921,7 @@ func (s *hkSubject) settleQueue(t *testing.T) {
 // underWay reports whether the catch-up read lists the task under way.
 func (s *hkSubject) underWay(t *testing.T, id string) bool {
 	t.Helper()
-	read, err := s.service.catchUp(t.Context())
+	read, err := s.service.catchUp(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("reading the catch-up: %v", err)
 	}

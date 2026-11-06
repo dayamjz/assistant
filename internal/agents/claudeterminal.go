@@ -144,7 +144,6 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 		grace:   r.settings.grace,
 		maxOut:  r.settings.maxOut,
 		cleanup: remove,
-		sent:    defused(spec.Instructions),
 	}, "", r.terminalTyping())
 	if err != nil {
 		remove()
@@ -286,17 +285,16 @@ var ErrNoCredential = errors.New("agents: the agent's credential is not in its e
 // terminalTyping is the Claude Code adapter's terminal typing, on the terms
 // StartInTerminal and CapabilityTerminalInterrupt state.
 func (r *claudeRunner) terminalTyping() terminalTyping {
-	return terminalTyping{frame: claudeTerminalMessage, bracketed: true, read: claudeScreen,
-		interrupt: claudeInterruptKey, clear: claudeClearKey, held: claudeHeld}
+	return terminalTyping{frame: claudeTerminalMessage, bracketed: true, read: claudeScreen, interrupt: claudeInterruptKey}
 }
 
-// claudeInterruptKey ends a running turn, observed of Claude Code 2.1.308;
-// once per line, claudeClearKey took a message the key put back in the input
-// out of it, and on an empty input it changed nothing.
-const (
-	claudeInterruptKey = "Escape"
-	claudeClearKey     = "C-u"
-)
+// claudeInterruptKey ends a running turn, observed of Claude Code 2.1.308:
+// pressed once the turn had drawn part of its reply, the CLI drew its
+// interrupted line and left the input empty; pressed before that (Control-C
+// too), it put the message back in the input, where nothing can tell it from
+// a person's text afterwards, so claudeScreen reads busy only once a reply
+// has begun.
+const claudeInterruptKey = "Escape"
 
 // claudeTerminalCredential is env holding exactly one of the two credentials
 // StartInTerminal accepts, with the API key it holds, empty when the
@@ -447,14 +445,16 @@ const (
 	claudeInputMark  = "$"
 )
 
-// claudeScreen reads a Claude Code terminal worker's visible screen. With no
-// line carrying claudeFooterMark it is screenNotDrawn. Otherwise, with the
-// input claudeInput reads empty, it is screenBusy when the footer carries
-// claudeBusyMark and screenReady when it does not; holding text, it is
-// screenTyped when the footer does not carry it; it is screenDrawn in every
-// other case, no prompt below the footer among them. The last footer is
-// read because the CLI redraws its footer below the conversation, so a line
-// of the conversation that quotes it is above it.
+// claudeReplied are the prefixes of the lines a turn's reply was drawn with,
+// its text and its tool calls, below the "you: " line of its message.
+var claudeReplied = []string{"claude: ", "tool: ", "tool error: "}
+
+// claudeScreen reads a Claude Code terminal worker's visible screen, laid
+// out by claudeLayout. With no footer it is screenNotDrawn. With a prompt
+// below it and nothing in the input it is screenReady when the footer does
+// not carry claudeBusyMark, and screenBusy when it does and the running
+// turn has drawn part of its reply; it is screenDrawn in every other case,
+// text in the input or no prompt among them.
 //
 // The input is read because the footer alone was seen to read idle while
 // the input still showed the message the worker had just been sent, and in
@@ -465,67 +465,52 @@ const (
 // failed that way since. An input holding text a person typed and did not
 // send reads the same way, so a send never types into it.
 func claudeScreen(screen string) screenState {
-	footer, input, found := claudeInput(screen)
-	busy := strings.Contains(footer, claudeBusyMark)
+	lines, footer, prompt := claudeLayout(screen)
 	switch {
-	case footer == "":
+	case footer < 0:
 		return screenNotDrawn
-	case !found || len(input) > 0 && busy:
+	case prompt < 0 || strings.TrimRight(lines[prompt], " \u00a0") != claudeInputMark ||
+		strings.TrimSpace(strings.Join(lines[prompt+1:], "")) != "":
 		return screenDrawn
-	case len(input) > 0:
-		return screenTyped
-	case busy:
-		return screenBusy
+	case !strings.Contains(lines[footer], claudeBusyMark):
+		return screenReady
 	}
-	return screenReady
+	you := -1
+	for i, line := range lines[:footer] {
+		if strings.HasPrefix(line, "you: ") {
+			you = i
+		}
+	}
+	for _, line := range lines[you+1 : footer] {
+		for _, prefix := range claudeReplied {
+			if strings.HasPrefix(line, prefix) {
+				return screenBusy
+			}
+		}
+	}
+	return screenDrawn
 }
 
-// claudeInput is the footer, the last line carrying claudeFooterMark with a
-// prompt below it so an input line quoting the mark is not taken for it, and
-// the input from the prompt's line down, the prompt and blank trailing lines
-// taken off. found is false when no footer has a prompt below it.
-func claudeInput(screen string) (footer string, input []string, found bool) {
-	lines := strings.Split(screen, "\n")
-	for f := len(lines) - 1; f >= 0; f-- {
-		if !strings.Contains(lines[f], claudeFooterMark) {
+// claudeLayout is the screen's lines, its footer's index and its prompt's:
+// the footer is the first line carrying claudeFooterMark whose first prompt
+// line below, the prompt alone or with a no-break space after it, has no
+// other such line before it, so a conversation line quoting the footer
+// above it, or input lines quoting it and the prompt below it, are neither
+// taken for it. With no such footer, footer is the last line carrying the
+// mark and prompt is -1; with no line carrying it, both are -1.
+func claudeLayout(screen string) (lines []string, footer, prompt int) {
+	lines = strings.Split(screen, "\n")
+	footer = -1
+	for f, line := range lines {
+		if !strings.Contains(line, claudeFooterMark) {
 			continue
 		}
-		if footer == "" {
-			footer = lines[f]
-		}
-		for i := f + 1; i < len(lines); i++ {
-			line := strings.TrimRight(lines[i], " ")
-			if line != claudeInputMark && !strings.HasPrefix(line, claudeInputMark+"\u00a0") {
-				continue
+		footer = f
+		for i := f + 1; i < len(lines) && !strings.Contains(lines[i], claudeFooterMark); i++ {
+			if l := strings.TrimRight(lines[i], " "); l == claudeInputMark || strings.HasPrefix(l, claudeInputMark+"\u00a0") {
+				return lines, f, i
 			}
-			input = append([]string{strings.TrimLeft(strings.TrimPrefix(line, claudeInputMark), " \u00a0")}, lines[i+1:]...)
-			for len(input) > 0 && strings.TrimSpace(input[len(input)-1]) == "" {
-				input = input[:len(input)-1]
-			}
-			return lines[f], input, true
 		}
 	}
-	return footer, nil, false
-}
-
-// claudeHeld reports whether the input is sent's first lines, what each
-// clear leaves of it, or the CLI's placeholder for a paste of sent's line
-// count; lines compare without trailing spaces, the first without leading.
-func claudeHeld(screen, sent string) bool {
-	_, input, found := claudeInput(screen)
-	if !found || sent == "" {
-		return false
-	}
-	want := strings.Split(sent, "\n")
-	want[0] = strings.TrimLeft(want[0], " ")
-	if len(input) == 1 && len(want) > 1 && strings.HasPrefix(input[0], "[Pasted text #") &&
-		strings.HasSuffix(input[0], fmt.Sprintf(" +%d lines]", len(want)-1)) {
-		return true
-	}
-	for i, line := range input {
-		if i >= len(want) || strings.TrimRight(line, " ") != strings.TrimRight(want[i], " ") {
-			return false
-		}
-	}
-	return true
+	return lines, footer, -1
 }

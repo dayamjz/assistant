@@ -102,6 +102,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 | --- | --- |
 | `assistant doctor` | Diagnose setup and learn the next safe step |
 | `assistant coordinator supervision` | Check that task supervision is live |
+| `assistant --json coordinator catch-up` | Start a fresh coordinator session from one bounded read of the fleet |
 | `assistant coordinator create` | Register a delivery or investigation task |
 | `assistant tasks` | Inspect task work |
 | `assistant watch` | Follow validation and pending decisions |
