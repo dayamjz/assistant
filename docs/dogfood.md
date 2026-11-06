@@ -71,21 +71,33 @@ git push mirror main:main
 The mirror needs the default branch before a run reaches the pull request stage,
 because that is the base the gate opens against.
 
-**Decide about the mirror's Actions before the first run.** The workflows come
-with the clone, and `ci.yml` and `repeat.yml` both trigger on every pull
-request, so a pull request the gate opens on the mirror starts the full matrix
-there. On a public repository hosted runner minutes are not billed; on a private
-mirror they are, and the macOS job is both the longest and the most expensive.
-Either accept that cost deliberately, or turn Actions off on the mirror:
+**Decide about the mirror's Actions before the first run, and decide it with
+the checks stage in mind.** The workflows come with the clone, and `ci.yml` and
+`repeat.yml` both trigger on every pull request, so a pull request the gate
+opens on the mirror starts the full matrix there. On a public repository hosted
+runner minutes are not billed; on a private mirror they are, and the macOS job
+is both the longest and the most expensive.
+
+Leaving Actions on is what gives the checks stage something to settle on, and
+is the only option that validates against this repository's real checks.
+
+Turning them off takes a second step. An empty check list is not a pass: the
+run **waits** in the checks stage, re-reading, until `checks_timeout` elapses
+(global-only, default `168h`) or you end the run, as
+[Keep your CI required](operators.md#keep-your-ci-required) describes. A
+repository with no CI has to say so with `no_ci`, which is a trusted key, so it
+can be set either on the mirror's default branch or in the home's own
+`config.yaml`. The home's file is the one to use here, because it leaves the
+heads you are validating exactly as they are:
 
 ```sh
 gh api -X PUT repos/dayamjz/assistant-gate-mirror/actions/permissions -F enabled=false
+mkdir -p "$HOME_ROOT" && printf 'no_ci: true\n' >> "$HOME_ROOT/config.yaml"
 ```
 
-With Actions off, the gate's checks stage meets a pull request that has no
-checks and holds for your decision, which is the behavior of any repository
-with no CI registered. It is not the same as validating against this
-repository's real checks; say which one you did when you report a comparison.
+A declaration of `no_ci` is read at run start, so set it before the first push,
+and say in any comparison you report that the checks stage settled on a
+declaration rather than on checks.
 
 ## 5. Set the gate up
 
@@ -94,18 +106,26 @@ repository's real checks; say which one you did when you report a comparison.
   --upstream https://github.com/dayamjz/assistant-gate-mirror.git
 ```
 
-It prints the gate it created, the upstream row `doctor` prints, the default
-branch it recorded and the commands it found in the checkout. It writes no
-commands: `init` offers `commands.test` and `commands.lint` from the `Makefile`
-and leaves them for you, and this repository's default branch carries no
-`assistant.json`, so **every run holds at the test, lint and document stages**
-until you configure them or answer each one. For a shadow comparison that is
-usually what you want, because the gate's findings then come from the review
-stage, which is what an existing review is comparable with.
+It prints the gate it created, the upstream row `doctor` prints and the default
+branch it recorded, and it offers the `commands.test` and `commands.lint` it
+found in the `Makefile`. **At a terminal it prompts `[y/N]` for each one**, and
+a `y` writes that command into `assistant.json` in the working copy, where it
+reaches no run until it is committed on the recorded default branch. Answer `N`
+to both, or pass `--json`, which never prompts; `--accept-commands` writes them
+all without asking.
 
-Do not configure `commands.test` as this repository's full suite on a machine
-that runs other work: the suite takes every core and the stage runs it outside
-whatever scheduling the rest of the machine uses.
+Leave them unwritten and **every run holds at the test, lint and document
+stages**, because this repository's default branch carries no `assistant.json`
+for a run to read them from. For a shadow comparison that is usually what you
+want: the gate's findings then come from the review stage, which is what an
+existing review is comparable with.
+
+If you do configure `commands.test`, do not point it at this repository's full
+suite on a machine that runs other work.
+[Keep `commands.test` targeted](operators.md#keep-commandstest-targeted) is the
+reason: the service starts a stage command at its own scheduling priority and
+lowers nothing, so a full-repository command can use every core and saturate
+the host by itself.
 
 Check the result and keep these two facts, because the next steps and the
 teardown both need them:
@@ -171,16 +191,22 @@ apart.
 is at, and, when the run is held, the findings holding it in full. `--json` adds
 the findings behind the holding one, each with the name to select it by.
 
-Do not use `assistant watch` in a script or a non-interactive session: it holds
-the stream open and prints nothing until it is interrupted.
+`assistant watch` prints the fleet catch-up and then follows the event stream
+until it is interrupted, so in a script use `assistant watch --once`, which
+prints that read and exits.
 
 ## 9. Answer a hold, or end the run
 
 From the branch's own registered checkout:
 
 ```sh
-./bin/assistant --home "$HOME_ROOT" --answer approved      # or skipped, cancelled, fix
+./bin/assistant --home "$HOME_ROOT" --answer approved      # or skipped, or cancelled
 ```
+
+`fix` is the fourth answer and is not a bare word: it takes the findings for the
+round to resolve, as
+`--answer fix --select ID[,ID...]` with the names `--json status` shows. See
+[Answering a hold](operators.md#answering-a-hold) for the whole set.
 
 **This is the part of the setup that bites.** The answer is resolved from the
 directory you type it in: it needs the working copy `init` registered, standing
