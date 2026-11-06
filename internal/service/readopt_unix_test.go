@@ -63,6 +63,10 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 	if err := running.client.Call(t.Context(), ipc.MethodServiceRestart, machine.LifecycleRequest{}, &answer); err != nil {
 		t.Fatalf("asking the service to restart: %v", err)
 	}
+	if !answer.Accepted || !answer.Restarting {
+		t.Fatalf("the restart was answered %+v, want it accepted as a restart", answer)
+	}
+	awaitRestarting(t, running.service)
 	closeFirst()
 	homeIsFree(t, h)
 	for id, ref := range first {
@@ -212,5 +216,21 @@ func TestARestartBehindTmuxServersThatDoNotAnswerWaitsOnThemOnce(t *testing.T) {
 		if attempts := attemptsOf(t, h, id); len(attempts) != 1 {
 			t.Fatalf("task %s has attempts %+v, want its one launch and no relaunch of a worker still present", id, attempts)
 		}
+	}
+}
+
+// awaitRestarting waits for the service to take the restart it answered.
+// The restart verb stops the service only once its answer is written, so a
+// caller that closes the service as soon as it reads the answer can close
+// it first, as a plain stop, which ends every worker; the service's own
+// loop closes only after Serve returns, which the stop is what ends.
+func awaitRestarting(t *testing.T, s *service.Service) {
+	t.Helper()
+	deadline := time.Now().Add(launchWait)
+	for !s.Restarting() {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the service answered the restart and had not taken it %v later", launchWait)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
