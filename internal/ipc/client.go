@@ -257,21 +257,25 @@ func (c *Client) SubscribeTo(ctx context.Context, method Method, params any) (*S
 
 // beat renews a leased stream's lease every interval for as long as this
 // client routes the stream, which ends when the stream is closed, ended by
-// the service or the client ends. It returns as the stream's queue ends,
-// which each of those does, rather than at the next beat, so a closed
-// stream holds no goroutine or ticker for up to a beat after it closed. It
+// the service or the client ends. Its waits, for the next beat and for its
+// turn at the connection's writer, end when the stream's queue ends, which
+// each of those does, or when the client ends, so a closed stream holds no
+// goroutine or ticker past its close, even while a call holds the writer. A
+// beat that already has its turn finishes writing, as every frame does, so
+// one a peer has stopped reading holds until the connection closes. It
 // renews nothing while the process is stopped, which is what lets the
 // service read a stopped holder as gone. A beat the connection fails under
 // ends the beating, and the connection's end is what the stream then
 // reports.
 func (c *Client) beat(id uint64, sub *Subscription, every time.Duration) {
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
+	defer context.AfterFunc(sub.ended, cancel)()
 	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-c.ctx.Done():
-			return
-		case <-sub.ended:
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
@@ -281,7 +285,7 @@ func (c *Client) beat(id uint64, sub *Subscription, every time.Duration) {
 		if !routed {
 			return
 		}
-		if err := c.w.write(c.ctx, frame{ID: id, Beat: true}); err != nil {
+		if err := c.w.write(ctx, frame{ID: id, Beat: true}); err != nil {
 			return
 		}
 	}

@@ -318,9 +318,11 @@ type Subscription struct {
 	done    bool
 	err     error
 	ready   chan struct{}
-	// ended is closed once, when the subscription ends, so a goroutine
-	// serving it can wait on its end without consuming ready.
-	ended chan struct{}
+	// ended is done once the subscription ends, cancelled by end, so a
+	// goroutine serving it can wait on its end without consuming ready, or
+	// bound a wait of its own by it.
+	ended context.Context
+	stop  context.CancelFunc
 }
 
 // newSubscription builds a subscription with a fixed queue depth.
@@ -331,11 +333,13 @@ type Subscription struct {
 // marker the service put at the head of that stream is the opening gap, and
 // raising a second one here would only make a consumer reconcile twice.
 func newSubscription(backlog int, gapped bool) *Subscription {
+	ended, stop := context.WithCancel(context.Background())
 	return &Subscription{
 		ring:  make([]Event, backlog),
 		gap:   gapped,
 		ready: make(chan struct{}, 1),
-		ended: make(chan struct{}),
+		ended: ended,
+		stop:  stop,
 	}
 }
 
@@ -412,13 +416,12 @@ func (s *Subscription) finish(err error) {
 	s.signal()
 }
 
-// end marks the subscription ended with err and closes ended, unless it has
-// already ended, so the first reason is kept and ended is closed once. The
-// caller holds mu.
+// end marks the subscription ended with err and cancels ended, unless it
+// has already ended, so the first reason is kept. The caller holds mu.
 func (s *Subscription) end(err error) {
 	if !s.done {
 		s.done, s.err = true, err
-		close(s.ended)
+		s.stop()
 	}
 }
 

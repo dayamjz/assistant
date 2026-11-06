@@ -220,17 +220,18 @@ const beatOwner = "beat-owner"
 
 // ownBeats labels the calling test's goroutine and returns a wait for the
 // count of live goroutines beating a leased stream under that label, read
-// from the runtime's goroutine profile, to be want. A beat another test left
+// from the runtime's goroutine profile, to be want; frames, when given, are
+// functions every counted beat's stack must also be in. A beat another test left
 // exiting carries no such label and is never counted. The profile lists a
 // goroutine only once it has run, so a beat is not counted the moment
 // SubscribeTo returns; a test that waits for a stream's beat to be counted
 // before ending the stream knows its count of none is a beat gone, not one
 // not yet run.
-func ownBeats(t *testing.T) func(want int, what string) {
+func ownBeats(t *testing.T) func(want int, what string, frames ...string) {
 	t.Helper()
 	pprof.SetGoroutineLabels(pprof.WithLabels(context.Background(), pprof.Labels(beatOwner, t.Name())))
 	label := fmt.Sprintf("%q:%q", beatOwner, t.Name())
-	count := func() int {
+	count := func(frames []string) int {
 		var profile bytes.Buffer
 		if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
 			t.Fatalf("reading the goroutine profile: %v", err)
@@ -242,6 +243,13 @@ func ownBeats(t *testing.T) func(want int, what string) {
 			if !strings.Contains(record, "internal/ipc.(*Client).beat+") || !strings.Contains(record, label) {
 				continue
 			}
+			in := true
+			for _, frame := range frames {
+				in = in && strings.Contains(record, frame)
+			}
+			if !in {
+				continue
+			}
 			var n int
 			if _, err := fmt.Sscanf(record, "%d @", &n); err != nil {
 				t.Fatalf("reading a goroutine count from %q: %v", record, err)
@@ -250,11 +258,11 @@ func ownBeats(t *testing.T) func(want int, what string) {
 		}
 		return total
 	}
-	return func(want int, what string) {
+	return func(want int, what string, frames ...string) {
 		t.Helper()
 		deadline := time.Now().Add(5 * time.Second)
 		for {
-			got := count()
+			got := count(frames)
 			if got == want {
 				return
 			}
@@ -302,4 +310,59 @@ func TestAnEndedLeasedStreamStopsBeatingAtOnce(t *testing.T) {
 	beats(1, "a held leased stream with a one-event queue")
 	publish(t, h.events, control("stopping"))
 	beats(0, "a leased stream whose client queue stalled")
+}
+
+// A leased stream's beat waiting for the connection's writer stops waiting
+// when the stream ends: closing the stream releases it while a call still
+// holds the writer, rather than leaving it until the writer frees or the
+// client closes. The peer acknowledges the stream as the server does a
+// leased one, with its beat, and then reads nothing, so the call it began
+// reading holds the writer and the beat that follows waits behind it. The
+// control is that same beat counted as waiting in the writer before the
+// stream closes.
+func TestAClosedLeasedStreamsBeatStopsWaitingForTheWriter(t *testing.T) {
+	beats := ownBeats(t)
+	peer, clientSide := net.Pipe()
+	defer peer.Close()
+	c := ipc.NewClient(clientSide, ipc.ClientConfig{})
+	defer c.Close()
+	r := bufio.NewReader(peer)
+
+	ctx, cancel := callCtx(t)
+	defer cancel()
+	opened := make(chan *ipc.Stream, 1)
+	go func() {
+		stream, err := c.Subscribe(ctx, nil)
+		if err != nil {
+			t.Errorf("Subscribe: %v", err)
+		}
+		opened <- stream
+	}()
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("reading the subscribe request: %v", err)
+	}
+	var request wireFrame
+	if err := json.Unmarshal(line, &request); err != nil || request.Method != string(ipc.MethodEventsSubscribe) {
+		t.Fatalf("the first frame is %q, want the subscribe request", line)
+	}
+
+	// One byte of the call's frame read is the call holding the writer: the
+	// pipe hands its writer the rest only as it is read, and nothing reads it.
+	go func() { _ = c.Call(context.Background(), "status", nil, nil) }()
+	if _, err := peer.Read(make([]byte, 1)); err != nil {
+		t.Fatalf("reading the call's first byte: %v", err)
+	}
+	beat := 20 * time.Millisecond
+	ack := fmt.Sprintf(`{"id":%d,"result":{"lease":{"beat":%d}}}`+"\n", request.ID, beat)
+	if _, err := peer.Write([]byte(ack)); err != nil {
+		t.Fatalf("acknowledging the stream: %v", err)
+	}
+	stream := <-opened
+	if stream == nil {
+		t.FailNow()
+	}
+	beats(1, "a leased stream whose beat waits behind a call", "internal/ipc.(*frameWriter).write+")
+	stream.Close()
+	beats(0, "a closed leased stream whose beat was waiting for the writer")
 }
