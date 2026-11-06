@@ -15,7 +15,6 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -336,7 +335,7 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 	// An explicit retry while the backup is still unavailable must produce a
 	// new visible decision, rather than only logging the failed launch.
 	s.cfg.RelaunchAttempts = 5
-	firstRetry, retryErr := s.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
+	firstRetry, retryErr := s.respondTask(t.Context(), coordinatorRequest(t), machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
 	if retryErr != nil || firstRetry.Effect != machine.AnswerRedispatched {
 		fatalUnlessSweepsStoppedClearing(t, unestablished, "unavailable retry: %+v %v", firstRetry, retryErr)
 	}
@@ -353,7 +352,7 @@ func TestFailedBackupRaisesAHoldAndRetryPreservesTheCopy(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	s.catalog = agents.NewCatalog(fixedRunner{runner: primary.Runner()}, fixedRunner{runner: backup.Runner()})
-	answered, err := s.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
+	answered, err := s.respondTask(t.Context(), coordinatorRequest(t), machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
 	if err != nil || answered.Effect != machine.AnswerRedispatched {
 		fatalUnlessSweepsStoppedClearing(t, unestablished, "retry: %+v %v", answered, err)
 	}
@@ -404,7 +403,7 @@ func TestARetryCutShortAfterItsRedispatchSettlesTheSlot(t *testing.T) {
 	requestCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.afterBackupRedispatch = func(string) { cancel() }
-	answered, err := s.respondTask(requestCtx, ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
+	answered, err := s.respondTask(requestCtx, coordinatorRequest(t), machine.TaskRespondRequest{Task: sub.task, Hold: key, Answer: machine.AnswerRetry})
 	if err == nil && answered.Effect == machine.AnswerRedispatched {
 		fatalUnlessSweepsStoppedClearing(t, unestablished, "the cut-short retry reports %+v, want it not begun", answered)
 	}

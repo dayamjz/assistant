@@ -405,12 +405,15 @@
 // a chain the kernel rewrote when an intermediate process exited, which
 // places a worker's command as not the worker's. The same walk reads the
 // terminal's foreground group of every process it passes, and gate.admit
-// alone asks the three-way answer: a worker, a shell at a terminal (a
-// chain with no worker and a terminal's foreground on it), or neither,
-// which it refuses with ipc.ErrUnplaceable before any reference moves, so
-// a rewritten chain, a daemon's and git-receive-pack's under sshd are
-// refused rather than admitted as a person's; the coordinator's methods
-// keep asking only whether the peer is a worker. It is
+// and the coordinator's methods ask the whole answer: a worker, a
+// subordinate coordinator for the latter, a shell at a terminal (a chain
+// with neither and a terminal's foreground on it), or nobody, which
+// gate.admit refuses with ipc.ErrUnplaceable before any reference moves
+// and a coordinator method with ipc.ErrUnplaced before it decides
+// anything, so a rewritten chain, a daemon's and git-receive-pack's under
+// sshd are refused rather than admitted as a person's or served as the
+// coordinator's; task.event keeps asking only whether the peer is a
+// worker. It is
 // applied by handlers, not by internal/ipc's access class, and that table
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a

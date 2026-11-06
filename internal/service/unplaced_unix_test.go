@@ -19,9 +19,6 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 )
 
-// unplaced is the wire code a coordinator method refuses an orphan with.
-const unplaced = ipc.Code("unplaced")
-
 // detach is `setsid -f` for a platform that ships no setsid command: it
 // forks, the parent exits at once, and the child starts a session of its
 // own, with no controlling terminal, and runs the rest of its arguments.
@@ -149,8 +146,8 @@ func TestACoordinatorMethodFromAWorkersDetachedCommandIsRefusedUnplaced(t *testi
 					t.Fatalf("the worker's detach exited %d: %s%s", ran.Exit, ran.Stdout, ran.Stderr)
 				}
 			})
-		if code != unplaced {
-			t.Fatalf("task.create from the worker's detached command answered %q (%s), want %q", code, message, unplaced)
+		if code != ipc.CodeUnplaced {
+			t.Fatalf("task.create from the worker's detached command answered %q (%s), want %q", code, message, ipc.CodeUnplaced)
 		}
 		if !strings.Contains(message, "process ") {
 			t.Errorf("the refusal does not name the chain that was read: %s", message)
@@ -188,8 +185,8 @@ func TestAPersonsOwnOrphanedCoordinatorCommandIsRefusedUnplaced(t *testing.T) {
 					t.Fatalf("starting the orphan: %v: %s", err, raw)
 				}
 			})
-		if code != unplaced {
-			t.Fatalf("wakes.list from a person's orphaned command answered %q (%s), want %q", code, message, unplaced)
+		if code != ipc.CodeUnplaced {
+			t.Fatalf("wakes.list from a person's orphaned command answered %q (%s), want %q", code, message, ipc.CodeUnplaced)
 		}
 	})
 }

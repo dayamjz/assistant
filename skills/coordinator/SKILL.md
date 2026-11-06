@@ -588,18 +588,23 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   which also ends any worker and removes the copy once that is proven safe;
   a relayed one cannot be promoted. A reported investigation reads
   `reported`, never `complete`, until then.
-- **An orphaned command is placed as yours.** The service decides who is a
-  worker by walking the caller's parent chain to the first process in a
-  worker group, or that is itself a worker, so a worker's command in a
-  process group of its own is still refused. A chain the service cannot
-  read is refused too. What it cannot place is a command whose parent
-  exited, so the kernel moved it under another process: that call is placed
-  as the coordinator's and served. A push to the gate is the one request
-  held to more: it is admitted only from a worker or from a chain with a
-  terminal's foreground on it, which your host's tool command has when your
-  host runs in a person's terminal, and refused with code `unplaceable` from
-  a host with no terminal or from a command the kernel moved. A worker's
-  grant allows git and its own `assistant worker` route without asking, and
+- **Your commands are served only with a terminal above them.** The
+  service decides who is a worker by walking the caller's parent chain to
+  the first process in a worker group, or that is itself a worker, so a
+  worker's command in a process group of its own is still refused. A chain
+  the service cannot read is refused too. A command whose chain has no
+  worker on it is yours only if some process on it is in the foreground of
+  a terminal, which your host's tool command has when your host runs in a
+  person's terminal or a tmux pane. Anything else, a command whose parent
+  exited so the kernel moved it under another process (`setsid`, `nohup`
+  with `&`, a double fork) among them, is refused with code `unplaced`
+  before anything is recorded, and the refusal names the processes read;
+  run it again without detaching it. A push to the gate
+  is held to the same chain and refused with code `unplaceable`. What the
+  service establishes is a terminal's foreground, not you: a worker's
+  command that detaches and then opens a terminal of its own (`script`, a
+  second tmux server) is still placed as yours and served. A worker's grant
+  allows git and its own `assistant worker` route without asking, and
   denies nothing else.
 - **A local landing is approved at a terminal, and the service checks the
   terminal, not the person.** The one hold you cannot answer, a local task's

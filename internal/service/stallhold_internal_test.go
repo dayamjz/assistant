@@ -447,7 +447,7 @@ func assertClosedByProgram(t *testing.T, s *stallSubject, key, word, read string
 // over the socket.
 func answerStallHold(t *testing.T, s *Service, task, answer, note string) (machine.TaskAnswered, error) {
 	t.Helper()
-	return s.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: answer, Note: note})
+	return s.respondTask(t.Context(), coordinatorRequest(t), machine.TaskRespondRequest{Task: task, Answer: answer, Note: note})
 }
 
 // PRD section 6's approve: the worker keeps running, the answer is recorded
@@ -613,7 +613,7 @@ func TestATaskStopWithAStallHoldOpenClosesItOnItsDeadReading(t *testing.T) {
 	hold := s.toHold(t)
 
 	terminals.dead(ref)
-	stopped, err := l.service.stopTask(t.Context(), ipc.Request{}, machine.TaskRequest{Task: task})
+	stopped, err := l.service.stopTask(t.Context(), coordinatorRequest(t), machine.TaskRequest{Task: task})
 	if err != nil || stopped.Hold.Key != stoppedKey(task, 1) || !stopped.Hold.Open() {
 		t.Fatalf("task.stop = %+v (%v), want the stop's hold for attempt 1", stopped, err)
 	}
@@ -651,7 +651,7 @@ func TestAnApproveDuringAStallStopIsRefused(t *testing.T) {
 			approved := false
 			l.service.afterStallStopEnded = func() {
 				approved = true
-				_, approveErr = l.service.respondTask(t.Context(), ipc.Request{},
+				_, approveErr = l.service.respondTask(t.Context(), coordinatorRequest(t),
 					machine.TaskRespondRequest{Task: task, Hold: hold.Key, Answer: machine.AnswerApprove})
 			}
 			answered, err := answerStallHold(t, l.service, task, word, "")

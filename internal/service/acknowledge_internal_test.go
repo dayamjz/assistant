@@ -47,14 +47,14 @@ func TestAMixedAcknowledgementIsRefusedWholeAndClosesNothing(t *testing.T) {
 		return false
 	}
 
-	_, err = sub.service.acknowledgeWakes(ctx, ipc.Request{}, machine.AcknowledgeRequest{Wakes: []int64{id}, DomainWakes: []int64{9999}})
+	_, err = sub.service.acknowledgeWakes(ctx, coordinatorRequest(t), machine.AcknowledgeRequest{Wakes: []int64{id}, DomainWakes: []int64{9999}})
 	if !errors.Is(err, ipc.ErrInvalidRequest) || !errors.Is(err, store.ErrWakeUnknown) {
 		t.Fatalf("the mixed acknowledgement = %v, want ErrInvalidRequest naming the unknown domain wake", err)
 	}
 	if !queued() {
 		t.Fatal("the refused batch closed the valid task wake")
 	}
-	acknowledged, err := sub.service.acknowledgeWakes(ctx, ipc.Request{}, machine.AcknowledgeRequest{Wakes: []int64{id}})
+	acknowledged, err := sub.service.acknowledgeWakes(ctx, coordinatorRequest(t), machine.AcknowledgeRequest{Wakes: []int64{id}})
 	if err != nil || len(acknowledged.Wakes) != 1 {
 		t.Fatalf("the batch less the bad row = %+v, %v; want the task wake closed", acknowledged, err)
 	}

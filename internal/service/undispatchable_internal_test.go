@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -35,7 +34,7 @@ func TestARetryOnARecordThatCannotBeDispatchedSaysNothingBeginsItAndNothingDoes(
 	ctx := t.Context()
 	answer := func(s *Service, task string) machine.TaskAnswered {
 		t.Helper()
-		out, err := s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry})
+		out, err := s.respondTask(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry})
 		if err != nil {
 			t.Fatalf("answering task %s's hold retry: %v", task, err)
 		}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -58,7 +57,7 @@ func TestKeepDispatchesWhenSteerReleasesBetweenGiveBackAndNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("claimSteer: %v", err)
 	}
-	if _, err := s.answerRetirement(ctx, ipc.Request{}, machine.TaskRespondRequest{
+	if _, err := s.answerRetirement(ctx, coordinatorRequest(t), machine.TaskRespondRequest{
 		Task: sub.task, Answer: machine.AnswerKeep,
 	}, h, rh); err != nil {
 		release()
