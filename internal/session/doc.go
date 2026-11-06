@@ -98,7 +98,9 @@
 // service restart the new provider holds no handle, so a survivor it can
 // confirm exists is one it cannot capture from or send to, and reporting it
 // Live would absorb wakes on a worker nobody can see, which is P9's named
-// failure. Such a survivor reads Unobserved until it is gone, and then Dead.
+// failure. Such a survivor reads Unobserved until it is gone, and then Dead,
+// unless Tmux.Readopt holds it again, which gives the provider a handle and
+// so reads Live through that handle, never through the identity.
 //
 // The process this provider holds is the agent itself. The agents runner
 // starts the configured binary directly as the leader of its own process
@@ -233,25 +235,36 @@
 //
 // # Restart
 //
-// Nothing here arranges for the worker to end with the service. A survivor
-// after a hard kill is an orphan the new service holds no handle to, and
-// "terminal gone with the copy preserved" is the normal answer for it rather
-// than an error: it probes Unobserved for as long as it stands, is never
-// relaunched beside, and is surfaced to a person as internal/service's
-// terminal-gone wake with the unobservable case, at once and again per
-// escalation window, then as the dead case once it is gone, after which a
-// restart relaunches it. That package's tmuxkill_unix_test.go drives both
-// halves under tmux, the server killed outright and the service's worker
-// outliving the service, and nothing re-adopts a survivor: a session this
-// provider did not create is not one it can capture, type into or attach
-// to, so there is no handle to hold again. Two windows are stated rather than closed. The record-first
-// order PRD section 8 gives a launch means the attempt row is written before
-// the process starts and the reference is filled after Create returns, so a
+// A pipe's worker cannot outlive the handle whose pipes it reads and writes,
+// so Release and Readopt are ErrNotDurable there, and a survivor of a hard
+// kill of the service is an orphan the next provider holds no handle to: it
+// probes Unobserved for as long as it stands, is never relaunched beside,
+// and is surfaced to a person as internal/service's terminal-gone wake with
+// the unobservable case, then as the dead case once it is gone, after which
+// a restart relaunches it.
+//
+// A tmux-hosted worker can outlive it, owned meanwhile by the attempt's
+// recorded reference, which names the socket of the worker's own server
+// (Reference.Terminal, the terminal2 format), and by that server; #763 has
+// the service release such workers on a restart and hold them again. Release lets a held session go with
+// the worker and server running, and Readopt, on a later provider, holds it
+// again once agents.AdoptTerminalWorker has verified it: the pane's process
+// present with the recorded start time, the server on the named socket
+// answering with that process as its pane, and the process leading its own
+// group under that server. Only then is a handle made, so Live is still
+// answered only through a handle. A survivor that does not verify, and one
+// whose reference names no socket, which every reference written before the
+// format existed is, reads as a pipe's survivor does above.
+//
+// Two windows are stated rather than closed. The record-first order PRD
+// section 8 gives a launch means the attempt row is written before the
+// process starts and the reference is filled after Create returns, so a
 // crash between the two leaves a process no record names. And an orphan
-// whose record does name it is observable but not reachable. Only an
-// identity-based sweep reaches either, and that is agents.Sweeper's and not
-// this package's: internal/service asks it of the standing copy before it
-// starts another worker there, and it lists only on Linux and macOS.
+// whose record does name it, and that does not verify, is observable but
+// not reachable. Only an identity-based sweep reaches either, and that is
+// agents.Sweeper's and not this package's: internal/service asks it of the
+// standing copy before it starts another worker there, and it lists only on
+// Linux and macOS.
 //
 // # Residual gaps
 //
@@ -266,7 +279,13 @@
 //     starting; nothing here enforces that of a caller, and nothing here
 //     closes the step that remains.
 //   - Nothing bounds how long an orphan goes on executing, and nothing here
-//     ends one: Close ends the sessions this provider holds and no other.
+//     ends one: Close ends the sessions this provider holds and no other. A
+//     released tmux worker that no later provider holds again is such an
+//     orphan.
+//   - Readopt's verification is as of its reads: a pane process that exits
+//     and whose identifier is reused at the same start tick, under a server
+//     answering on the same socket, is the coincidence the reference's start
+//     time narrows and does not close.
 //   - On Windows, Close delivers what agents' tree termination delivers
 //     there and no more: a descendant that outlives a leader which exited
 //     on its own is not ended, as internal/agents states for that platform.
