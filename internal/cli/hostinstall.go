@@ -50,7 +50,7 @@ const (
 // a change in the host's configuration, and neither did running this command
 // without the flag.
 //
-// Its second job is PRD section 8's host wake: run inside a tmux pane, the
+// Its second job is PRD section 6's host wake: run inside a tmux pane, the
 // answer also carries the notify.command line for that pane, through
 // offerHostWake, which only ever prints it whatever --write says;
 // hostwake.go owns that line and why it is never written.

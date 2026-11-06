@@ -16,7 +16,7 @@ import (
 )
 
 // A pane this package did not start: the coordinator's host in a tmux pane
-// of a person's own server, which PRD section 8's host wake types a notice
+// of a person's own server, which PRD section 6's host wake types a notice
 // into. It is the terminal worker's typing without the worker: one reading
 // of who holds the pane, and one client that checks the pane, pastes the
 // text and sends Enter, each under its kind's bound (tmuxReadBound,

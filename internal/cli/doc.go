@@ -195,7 +195,7 @@
 //
 // # The host wake is the service's
 //
-// hostHooks also holds "assistant host wake", PRD section 8's host wake,
+// hostHooks also holds "assistant host wake", PRD section 6's host wake,
 // which nothing types and the host does not run: the service runs it as the
 // notify command, once per queued wake, from the line the installer prints
 // when it runs inside the coordinator's tmux pane. It is under this verb for

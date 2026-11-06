@@ -45,7 +45,7 @@ import (
 // socket. The push does not reach into the coordinator's host, a terminal or
 // a hook, to start a turn; a coordinator that holds no stream is woken by
 // nothing pushed, and its own wait or drain is what reaches the queue. The
-// one path into the host is PRD section 8's host wake, which is the notify
+// one path into the host is PRD section 6's host wake, which is the notify
 // command notify.go runs set to the line internal/cli's hostwake.go owns,
 // and reaches a host in a tmux pane only.
 //

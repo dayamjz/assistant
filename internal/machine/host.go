@@ -128,7 +128,7 @@ type HostInstall struct {
 	// Detail says what was wrong with the file when the line was refused, and
 	// is empty otherwise.
 	Detail string `json:"detail,omitempty"`
-	// WakeCommand is PRD section 8's host wake for the tmux pane the
+	// WakeCommand is PRD section 6's host wake for the tmux pane the
 	// installer ran in: the command line that, set as notify.command in the
 	// home's configuration, has the service type a notice into that pane for
 	// every wake it queues. It is machine text a person copies, and it is
@@ -154,7 +154,7 @@ type HostInstall struct {
 	WakeInstallerForeground bool `json:"wake_installer_foreground,omitempty"`
 }
 
-// HostWake is the answer of PRD section 8's host wake, which the service
+// HostWake is the answer of PRD section 6's host wake, which the service
 // runs as its notify command for each wake it queues: the notice it typed
 // into the coordinator's tmux pane, and which pane. It answers only for a
 // notice typed; a pane that could not be read, or that no longer belongs to

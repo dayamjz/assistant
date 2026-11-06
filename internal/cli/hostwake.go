@@ -15,7 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 )
 
-// PRD section 8's host wake: the service types a notice into the tmux pane
+// PRD section 6's host wake: the service types a notice into the tmux pane
 // the coordinator's host runs in, so a coordinator holding neither a stream
 // nor a wait still gets a turn when something needs it.
 //
@@ -63,7 +63,7 @@ import (
 //   - The start time is tmux's, in whole seconds, so a later server given
 //     the same process identifier within the same second as the one the
 //     installer read is not told apart from it.
-//   - The wake reaches a host in a tmux pane and no other; PRD section 8's
+//   - The wake reaches a host in a tmux pane and no other; PRD section 6's
 //     host wake table says which hosts that leaves without one.
 
 // The flags hostWake takes, which hostWakeLine writes.

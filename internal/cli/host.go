@@ -135,7 +135,7 @@ const hostBlockCode machine.Code = 2
 // never types it, which predates the installer; that is a finding against
 // the specification, raised where this row was added, and not settled here.
 // wake is the one the service runs, as the notify command install offers
-// for PRD section 8's host wake, and it is here for install's reason: the
+// for PRD section 6's host wake, and it is here for install's reason: the
 // line install prints is the command beside it.
 var hostHooks = []struct {
 	name    string

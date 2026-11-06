@@ -155,7 +155,7 @@ func (p paneHost) typedLines() []string {
 }
 
 // A worker's exit wakes a coordinator whose host runs in a tmux pane, with
-// no listen held and no wait armed: PRD section 8's host wake, which keeps
+// no listen held and no wait armed: PRD section 6's host wake, which keeps
 // P10's supervision cycle alive when the coordinator's own wait is gone.
 //
 // The host is a pane running this binary as a stand-in host, which runs
