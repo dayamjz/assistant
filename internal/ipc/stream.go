@@ -73,8 +73,11 @@ type Publisher struct {
 // holder, so granting a stream the lease ends the stream that held it with
 // ErrStreamReplaced. The holder beats every Beat, and a stream that goes
 // Expiry without a beat loses the lease at once and ends with
-// ErrLeaseExpired. What stops a process from beating (a stop signal, a
-// hang, a severed connection) is not distinguished: each reads as no beat.
+// ErrLeaseExpired. The first Expiry counts from the grant, which comes
+// before the stream's acknowledgement is written, so the time the
+// acknowledgement takes to be written and read is part of it. What stops
+// a process from beating (a stop signal, a hang, a severed connection) is
+// not distinguished: each reads as no beat.
 type Lease struct {
 	// Beat is how often the holder's client beats. It is told to the client
 	// in the stream's acknowledgement.

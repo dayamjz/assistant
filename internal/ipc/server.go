@@ -175,10 +175,11 @@ type ServerConfig struct {
 	StreamFor func(m Method, name string) (*Publisher, error)
 	// Leases names the streaming methods whose streams are held under a
 	// lease, and its terms. A stream of one is granted its publisher's
-	// lease when it is acknowledged, after a restricted stream's admission,
-	// and its acknowledgement tells the client the beat, so a client of
-	// this package beats without being asked to; a method left out is held
-	// by no lease and is never attached (Publisher.Attachment).
+	// lease before its acknowledgement is written, after a restricted
+	// stream's admission, and its acknowledgement tells the client the
+	// beat, so a client of this package beats without being asked to; a
+	// method left out is held by no lease and is never attached
+	// (Publisher.Attachment).
 	Leases map[Method]Lease
 	// Backlog is the per-subscriber queue depth. Zero means DefaultBacklog.
 	Backlog int
@@ -782,10 +783,20 @@ type leaseOffer struct {
 
 // acknowledgeStream tells the caller its stream is open and starts pumping
 // it. The acknowledgement goes out before the first event, so a caller
-// learns synchronously that its stream is open. A stream of a leased method
-// is granted its publisher's lease first, so a caller that read the
-// acknowledgement is attached, and its expiry is armed; one that could not
-// be granted it, because it ended meanwhile, is refused as closed.
+// learns synchronously that its stream is open.
+//
+// A stream of a leased method is granted its publisher's lease, and its
+// expiry armed, before the acknowledgement is written; one that could not
+// be granted it, because it ended meanwhile, is refused as closed. So a
+// caller that reads a lease's acknowledgement learns it was granted the
+// lease, not that it still holds it: the lease may have been lost to its
+// expiry or to another stream by then, as at any moment after. Losing it
+// ends the stream, and the stream is pumped only once the acknowledgement
+// is written, so the caller reads that end after the acknowledgement,
+// behind what the stream had queued, unless the connection ends first.
+// Arming the expiry after the write instead would let an acknowledgement
+// nobody reads, a client stopped right after it asked, hold the lease for
+// as long as the write waits.
 func (c *conn) acknowledgeStream(f frame, sub *Subscription) {
 	var opened streamOpened
 	if terms, leased := c.srv.cfg.Leases[f.Method]; leased {

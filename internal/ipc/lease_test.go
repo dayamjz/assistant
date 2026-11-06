@@ -55,13 +55,13 @@ func readWire(t *testing.T, conn net.Conn, r *bufio.Reader) leaseFrame {
 	return f
 }
 
-// A leased stream is attached from its acknowledgement, which tells the
-// client the beat. A holder that sends nothing after opening, as a stopped
-// process sends nothing, loses the lease once its expiry passes, and is
-// sent its stream's end as lease-expired after its gap; the publisher
-// reports no attachment from then on. The control is a client of this
-// package holding a second stream for several expiries: it beats, and keeps
-// the same lease throughout.
+// A leased stream is granted its lease before its acknowledgement, which
+// tells the client the beat. A holder that sends nothing after opening, as
+// a stopped process sends nothing, loses the lease once its expiry passes,
+// and is sent its stream's end as lease-expired after its gap; the
+// publisher reports no attachment from then on. The control is a client of
+// this package holding a second stream for several expiries: it beats, and
+// keeps the same lease throughout.
 func TestALeasedStreamThatStopsBeatingLosesItsLease(t *testing.T) {
 	h := leasedEvents(t)
 	conn, err := net.Dial("unix", h.socket)
@@ -365,4 +365,78 @@ func TestAClosedLeasedStreamsBeatStopsWaitingForTheWriter(t *testing.T) {
 	beats(1, "a leased stream whose beat waits behind a call", "internal/ipc.(*frameWriter).write+")
 	stream.Close()
 	beats(0, "a closed leased stream whose beat was waiting for the writer")
+}
+
+// A lease is counted from its grant, before its acknowledgement is written,
+// so a holder that sends nothing after asking, as a process stopped right
+// after it asked sends nothing, loses the lease while its acknowledgement
+// is still unread. Reading the acknowledgement late tells the holder only
+// that it was granted the lease: the lease's end follows on the stream,
+// after the gap, as lease-expired. Over a local socket the acknowledgement
+// is already written when the lease expires; over a pipe, which hands the
+// writer its bytes only as they are read, the write itself is still waiting,
+// which is the case an expiry armed after the write would never end.
+func TestALeaseIsCountedFromItsGrantNotFromItsAcknowledgement(t *testing.T) {
+	transports := map[string]func(t *testing.T) (*ipc.Publisher, net.Conn){
+		"socket": func(t *testing.T) (*ipc.Publisher, net.Conn) {
+			h := leasedEvents(t)
+			conn, err := net.Dial("unix", h.socket)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			return h.events, conn
+		},
+		"pipe": func(t *testing.T) (*ipc.Publisher, net.Conn) {
+			events := publisher(t, ipc.PublisherConfig{})
+			srv, err := ipc.NewServer(ipc.ServerConfig{
+				Handler:  &recordingHandler{},
+				Ancestry: &recordingAncestry{},
+				Events:   events,
+				Leases:   map[ipc.Method]ipc.Lease{ipc.MethodEventsSubscribe: testLease},
+			})
+			if err != nil {
+				t.Fatalf("NewServer: %v", err)
+			}
+			serverSide, peer := net.Pipe()
+			l := &pipeListener{conn: serverSide, done: make(chan struct{})}
+			go func() { _ = srv.Serve(l) }()
+			t.Cleanup(func() {
+				srv.Close()
+				l.Close()
+			})
+			return events, peer
+		},
+	}
+	for name, open := range transports {
+		t.Run(name, func(t *testing.T) {
+			events, conn := open(t)
+			defer conn.Close()
+			if _, err := conn.Write([]byte(`{"id":1,"method":"events.subscribe"}` + "\n")); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				n, held := events.Attachment()
+				if n == 1 && !held {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("with its acknowledgement unread the publisher reports attachment %d open=%v, want lease 1 granted and expired", n, held)
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			r := bufio.NewReader(conn)
+			ack := readWire(t, conn, r)
+			if ack.Error != nil || !bytes.Contains(ack.Result, []byte(`"lease"`)) {
+				t.Fatalf("the late acknowledgement is %+v, want the lease it was granted", ack)
+			}
+			if gap := readWire(t, conn, r); gap.Event == nil || gap.Event.Type != ipc.TypeGap {
+				t.Fatalf("the stream opened with %+v, want its gap", gap)
+			}
+			end := readWire(t, conn, r)
+			if !end.Done || end.Error == nil || end.Error.Code != ipc.CodeLeaseExpired {
+				t.Fatalf("after the late acknowledgement the holder was sent %+v, want its stream ended as %s", end, ipc.CodeLeaseExpired)
+			}
+		})
+	}
 }
