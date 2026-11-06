@@ -40,6 +40,15 @@ func FreshnessFor(interval time.Duration) Freshness {
 	return Freshness{Window: StalenessMultiple * interval, Ahead: BeaconAheadTolerance}
 }
 
+// ListenLeaseFor derives the lease a coordinator's wake stream is held
+// under from the configured interval: its holder beats once per interval,
+// and the stream loses its lease after StalenessMultiple intervals with no
+// beat, the window at which a beacon reads stale, so a stopped listen is
+// read as gone on the same terms as a stopped loop.
+func ListenLeaseFor(interval time.Duration) (beat, expiry time.Duration) {
+	return interval, StalenessMultiple * interval
+}
+
 // FirstBeaconWait is how long arm verification waits for a loop's first
 // beacon at the configured interval: FirstBeaconWaitMultiple intervals.
 func FirstBeaconWait(interval time.Duration) time.Duration {

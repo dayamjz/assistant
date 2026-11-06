@@ -401,7 +401,7 @@ func (s *Service) publishTaskEvent(event store.TaskEvent) {
 // listWakes drains the queue for the coordinator that asks, on
 // store.DrainWakes' terms and wakewait.go's: oldest first, bounded, handing
 // out the rows on offer to the caller's acknowledger under the wake
-// stream's open stretch, and closing none. The route is the caller's
+// stream's held lease, and closing none. The route is the caller's
 // placement, subordinates.go's wakeRouteOf: a subordinate is handed its
 // domain's actable rows and the coordinator every other row. A worker is
 // refused before anything is read or written.

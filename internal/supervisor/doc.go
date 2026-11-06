@@ -35,7 +35,9 @@
 // StalenessMultiple intervals and the first-beacon wait is
 // FirstBeaconWaitMultiple intervals, derived through FreshnessFor and
 // FirstBeaconWait rather than configured apart, and BeaconAheadTolerance is
-// the one constant beside them. All three numbers are chosen, not measured.
+// the one constant beside them. The wake stream's lease derives from the
+// same interval through ListenLeaseFor: a beat each interval, and expiry at
+// the staleness window. All three numbers are chosen, not measured.
 //
 // # The three readers of Assess
 //

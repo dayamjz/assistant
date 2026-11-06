@@ -263,7 +263,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 
 	// The coordinator holds the wake stream before the worker ends, so the
 	// wake the loop queues when it does is pushed to it. The stream opens
-	// with a gap, which is how a listener learns it is attached.
+	// with a gap, which is how a listener learns its stream is open.
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
