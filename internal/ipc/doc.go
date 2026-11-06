@@ -72,6 +72,12 @@
 // including one published while the decision was open; the refusal closes the
 // subscription unread.
 //
+// # A leased stream
+//
+// A method ServerConfig.Leases names is held under a Lease, granted as the
+// server acknowledges a stream and so only after a restricted stream's
+// admission; Lease owns its terms and Publisher.Attachment what it reports.
+//
 // What this does not cover is which publisher a producer chooses. Nothing here
 // stops a producer from publishing a coordinator's wake on the open stream;
 // that is internal/service's to get right, and its wake producer publishes on

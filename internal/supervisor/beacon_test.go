@@ -70,8 +70,10 @@ func TestARecordNotWrittenWholeIsUnreadable(t *testing.T) {
 	}
 }
 
-// The two windows derive from the one interval by the named multiples, so
-// configuring the interval configures both and neither can be set apart.
+// The windows derive from the one interval by the named multiples, so
+// configuring the interval configures every one and none can be set apart:
+// the staleness window, the first-beacon wait, and the wake stream's lease,
+// which beats each interval and expires at the staleness window.
 func TestFreshnessDerivesFromTheOneInterval(t *testing.T) {
 	t.Parallel()
 	interval := 10 * time.Second
@@ -84,6 +86,10 @@ func TestFreshnessDerivesFromTheOneInterval(t *testing.T) {
 	}
 	if got := supervisor.FirstBeaconWait(interval); got != supervisor.FirstBeaconWaitMultiple*interval {
 		t.Errorf("FirstBeaconWait = %v, want %d intervals", got, supervisor.FirstBeaconWaitMultiple)
+	}
+	beat, expiry := supervisor.ListenLeaseFor(interval)
+	if beat != interval || expiry != fresh.Window {
+		t.Errorf("ListenLeaseFor = beat %v expiry %v, want a beat each interval and expiry at the staleness window %v", beat, expiry, fresh.Window)
 	}
 	if supervisor.FirstBeaconWaitMultiple <= supervisor.StalenessMultiple {
 		t.Error("the first-beacon wait is not longer than the staleness window, so a loop still recovering would read stale before it could write")

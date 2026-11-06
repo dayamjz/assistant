@@ -239,8 +239,11 @@
 // polling. listen is the one stream: the service pushes each wake on it as
 // it is queued, and it prints each one until interrupted and hands out
 // nothing; holding it is what the service reads as the coordinator
-// attached. A service that stops under either ends it as
-// an operational failure that the caller arms again. The refusal rests on the
+// attached, under a lease its client renews by beating, so a listen that
+// stops beating is detached and a second listen replaces the first. A
+// service that stops under either ends it as an operational failure that
+// the caller arms again, and so do an expired lease and a replaced stream
+// under listen. The refusal rests on the
 // service's placement of its caller, and coordinatorVerbName names the gap
 // in that placement: a parent chain the kernel rewrote.
 //

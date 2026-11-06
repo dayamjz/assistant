@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"time"
 )
 
 // ClientConfig is what a client may be given. Every field has a usable
@@ -238,7 +239,55 @@ func (c *Client) SubscribeTo(ctx context.Context, method Method, params any) (*S
 			c.dropStream(id, ErrStreamClosed)
 			return nil, f.Error
 		}
+		var opened streamOpened
+		if err := json.Unmarshal(nullIfEmpty(f.Result), &opened); err != nil {
+			c.release(id, ErrStreamClosed)
+			return nil, fmt.Errorf("ipc: decoding the acknowledgement of the %s stream: %w", method, err)
+		}
+		if opened.Lease != nil {
+			if opened.Lease.Beat <= 0 {
+				c.release(id, ErrStreamClosed)
+				return nil, fmt.Errorf("ipc: the %s stream was leased with a beat of %s, which is not an interval", method, opened.Lease.Beat)
+			}
+			go c.beat(id, sub, opened.Lease.Beat)
+		}
 		return &Stream{id: id, c: c, sub: sub}, nil
+	}
+}
+
+// beat renews a leased stream's lease every interval for as long as this
+// client routes the stream, which ends when the stream is closed, ended by
+// the service or the client ends. Its waits, for the next beat and for its
+// turn at the connection's writer, end when the stream's queue ends, which
+// each of those does, or when the client ends, so a closed stream holds no
+// goroutine or ticker past its close, even while a call holds the writer. A
+// beat that already has its turn finishes writing, as every frame does, so
+// one a peer has stopped reading holds until the connection closes. It
+// renews nothing while the process is stopped, which is what lets the
+// service read a stopped holder as gone. A beat the connection fails under
+// ends the beating, and the connection's end is what the stream then
+// reports.
+func (c *Client) beat(id uint64, sub *Subscription, every time.Duration) {
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
+	defer context.AfterFunc(sub.ended, cancel)()
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		c.mu.Lock()
+		routed := c.streams[id] == sub
+		c.mu.Unlock()
+		if !routed {
+			return
+		}
+		if err := c.w.write(ctx, frame{ID: id, Beat: true}); err != nil {
+			return
+		}
 	}
 }
 

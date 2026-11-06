@@ -491,14 +491,18 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 // It hands out and records nothing, because a push is not a drain: a wake it
 // prints stays queued until coordinatorAcknowledge names it. Holding it is
 // what the service reads as the coordinator being attached, so a row a
-// drain hands out while it runs is not handed out again until it ends. The
-// stream opens with a gap, and a gap later on means wakes were missed;
+// drain hands out while it runs is not handed out again until it ends. It
+// holds the stream under the service's lease, which internal/ipc's client
+// renews by beating while the process runs: a listen stopped for the
+// lease's expiry is detached and ended, and a second listen ends the first.
+// The stream opens with a gap, and a gap later on means wakes were missed;
 // either is the coordinator's signal to drain, which gives back everything
 // still queued that it was not already handed.
 //
 // An interrupt ends it with success. The stream ending any other way, the
-// service stopping under it included, is an operational failure, so a host
-// watching it sees that it has to be armed again rather than a quiet exit.
+// service stopping under it, its lease expiring or another listen replacing
+// it included, is an operational failure, so a host watching it sees that it
+// has to be armed again rather than a quiet exit.
 func coordinatorListen(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags(coordinatorCommand("listen"), func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -524,6 +528,11 @@ func coordinatorListen(ctx context.Context, in *invocation) (any, error) {
 		case errors.Is(err, ipc.ErrStreamClosed):
 			return nil, fmt.Errorf("%w: the service ended the stream of notices; run assistant %s again once it is back",
 				ipc.ErrUnavailable, coordinatorCommand("listen"))
+		case errors.Is(err, ipc.ErrLeaseExpired):
+			return nil, fmt.Errorf("%w; the service detached this listen and offers again what was handed out under it, so run assistant %s again and drain",
+				err, coordinatorCommand("listen"))
+		case errors.Is(err, ipc.ErrStreamReplaced):
+			return nil, fmt.Errorf("%w; another listen holds the stream of notices now, so this one ended", err)
 		default:
 			return nil, err
 		}
