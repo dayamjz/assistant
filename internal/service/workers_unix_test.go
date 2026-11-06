@@ -503,7 +503,7 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 	t.Parallel()
 	launchedWorker(t, "task/three", func(w launched) {
 		running, task := w.running, w.task
-		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesPeek, ipc.MethodWakesAcknowledge, ipc.MethodWakesSubscribe, ipc.MethodSupervisionAssert} {
+		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesPeek, ipc.MethodWakesAcknowledge, ipc.MethodWakesSubscribe, ipc.MethodSupervisionAssert, ipc.MethodCoordinatorCatchUp} {
 			params := any(struct{}{})
 			if method == ipc.MethodWakesAcknowledge {
 				params = machine.AcknowledgeRequest{Wakes: []int64{1}}

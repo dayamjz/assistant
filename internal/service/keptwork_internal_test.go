@@ -132,7 +132,7 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	if after, err := l.records(t).KeptWorkEntry(ctx, entry.ID); err != nil || !after.SurfacedAt.IsKnown() || after.Answered() {
 		t.Fatalf("after the wake the entry reads %+v (%v), want it surfaced and still unanswered", after, err)
 	}
-	read, err := l.service.catchUp(ctx)
+	read, err := l.service.catchUp(ctx, nil)
 	if err != nil {
 		t.Fatalf("the catch-up read: %v", err)
 	}
