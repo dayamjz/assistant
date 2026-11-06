@@ -215,11 +215,22 @@ import (
 //   - The Claude Code typing tells its interface from the conversation
 //     above it by the row tmux reports the cursor on, since the
 //     conversation carries text this package did not write. One shape is
-//     read as not ready whichever it is: a conversation line quoting the
+//     read as not ready whichever it is: a conversation row quoting the
 //     footer and then one quoting the prompt with the no-break space the
 //     CLI draws before input text. Sends are refused, nothing typed, for
 //     as long as the pane draws it, and claudeLayout says why no reading
 //     tells it from a draft of several lines quoting the same two.
+//   - Whether a turn has begun its reply, which is what Interrupt presses
+//     the key on, is read from the conversation's rows the same way. A
+//     message this package sends draws none that read as a reply, because
+//     the typing defuses it, but one a person types at the pane is not
+//     defused: a message of theirs that draws a row beginning "claude: " or
+//     "tool: ", on a line of its own or where the CLI breaks a long line,
+//     reads as a reply begun before the model has sent anything. The key
+//     is then pressed on their turn, and the CLI answers it by putting
+//     their message back in the input, where it stays until they clear it,
+//     refusing sends. Nothing here reads the conversation for whose text
+//     it is, so this is a gap, not a measure.
 
 // TerminalWorkerRunner is a Runner that can be started as a terminal worker,
 // which is what CapabilityTerminalWorkers names: an adapter implements it
@@ -334,7 +345,10 @@ type TerminalWorker interface {
 	// just before the key. A turn that has drawn none of its reply is waited
 	// on, because the CLI answered the key there by putting the message
 	// back in the input, which nothing here takes out again; so is any
-	// other screen, text in the input among them. A wait ctx ends is an
+	// other screen, text in the input among them. Whether a reply has begun
+	// is read off the screen, which carries a message a person may have
+	// typed at the pane themselves, so the bullets below this interface say
+	// what that costs. A wait ctx ends is an
 	// error wrapping ErrTerminalNotReady saying whether the key was typed;
 	// also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
 	// adapter whose typing names no key. It never types anything but the
@@ -820,6 +834,12 @@ func commandSize(args []string) int {
 	return n
 }
 
+// terminalWidth is how many columns wide the pane a worker's server opens
+// is. An agent draws its interface to fit it and wraps what does not, so it
+// is how long a line of a message can be before the pane draws it over
+// several rows, which is a fact a screen reader has to answer for.
+const terminalWidth = 200
+
 // tmuxNewSessionArgs is the argument vector startTerminalWorker passes to tmux
 // when starting a worker in dir with bin and workerArgs.
 func tmuxNewSessionArgs(t Terminal, dir, bin string, workerArgs []string) ([]string, error) {
@@ -827,7 +847,7 @@ func tmuxNewSessionArgs(t Terminal, dir, bin string, workerArgs []string) ([]str
 		return nil, err
 	}
 	return append([]string{"-S", t.Socket, "-f", os.DevNull,
-		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", dir,
+		"new-session", "-d", "-s", terminalTarget, "-x", strconv.Itoa(terminalWidth), "-y", "50", "-c", dir,
 		"-P", "-F", "#{pane_pid} #{pid}", "--", bin}, workerArgs...), nil
 }
 
@@ -884,8 +904,10 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 }
 
 // screen is the pane's visible screen: the server's cursor row and then
-// its rows, asked for in one client call, so the pane processes no input of
-// its own between the two. The rows are taken as the pane holds them, one
+// its rows, asked for in one client call rather than two, so that this
+// package does not pair readings it asked for at different times. What the
+// server does between the two commands of one call it does not say, and
+// nothing here checks it. The rows are taken as the pane holds them, one
 // to a line, rather than with the lines tmux wrapped joined back, so that a
 // row's index is the row the cursor is reported on; a pane too narrow to
 // draw the reader's marks on one row therefore reads as no interface, which

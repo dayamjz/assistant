@@ -51,6 +51,10 @@ func ReadClaudeScreen(screen string, cursor int) string {
 	return "not drawn"
 }
 
+// TerminalWidth is how many columns wide the pane a worker's server opens
+// is, so a test can build a line the pane draws over more than one row.
+const TerminalWidth = terminalWidth
+
 // ClaudeObservedVersion is the Claude Code version the terminal mode's
 // observations were made on.
 const ClaudeObservedVersion = claudeObservedVersion

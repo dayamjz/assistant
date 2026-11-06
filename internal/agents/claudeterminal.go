@@ -394,29 +394,27 @@ func sessionIdentifier() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// defused is text with a space before any part of it the CLI or its screen
-// reader would take for something other than one message's text, and the
-// model receives each with that space.
+// defused is text the CLI will not take for something other than one
+// message's text, and whose rows claudeScreen will not take for the
+// interface's own. The model receives both changes below.
 //
-// Text beginning with "!" or "/" is one: typed into an empty input, the CLI
-// was observed to take a "!" as a shell command, run outside the worker's
-// grant, and a "/" as a slash command rather than a message, and a leading
-// space to leave either a message.
+// Text beginning with "!" or "/" gets a space before it: typed into an
+// empty input, the CLI was observed to take a "!" as a shell command, run
+// outside the worker's grant, and a "/" as a slash command rather than a
+// message, and a leading space to leave either a message.
 //
-// A line beginning with one of claudeDrawn is the other: the CLI draws a
-// message's later lines on rows of their own from the row's start, so such
-// a line is a row claudeScreen would read as the interface drawing
-// something it is not. The space puts it one column in, where no reading
-// of the screen takes it.
+// Every claudeDrawn prefix in the text, wherever it sits, has its space
+// swapped by claudeDefused for one the reader does not match the prefix by.
+// Defusing the starts of lines is not enough: the CLI was observed to draw
+// a line too long for the pane over several rows, broken at its spaces, so
+// any word of a message can be the first thing on a row. With the prefixes
+// broken, none of a message's rows begins with one, wherever the CLI breaks
+// its lines.
 func defused(text string) string {
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		command := i == 0 && (strings.HasPrefix(line, "!") || strings.HasPrefix(line, "/"))
-		if command || slices.ContainsFunc(claudeDrawn, func(p string) bool { return strings.HasPrefix(line, p) }) {
-			lines[i] = " " + line
-		}
+	if strings.HasPrefix(text, "!") || strings.HasPrefix(text, "/") {
+		text = " " + text
 	}
-	return strings.Join(lines, "\n")
+	return claudeDefused.Replace(text)
 }
 
 // claudeDrawn are the prefixes a row of the interface this adapter reads
@@ -424,13 +422,31 @@ func defused(text string) string {
 // prompt of an input holding text.
 var claudeDrawn = append([]string{claudeTypedMark, claudeYouMark}, claudeReplied...)
 
+// claudeDefused swaps the space each claudeDrawn prefix carries: a plain
+// space for the prompt's no-break space, and a no-break space for the plain
+// one every other prefix ends with. Each swap leaves a prefix the reader
+// does not match, since it matches the space it observed the CLI draw, and
+// leaves what a person reads unchanged.
+var claudeDefused = func() *strings.Replacer {
+	swap := make([]string, 0, 2*len(claudeDrawn))
+	for _, prefix := range claudeDrawn {
+		if plain, typed := strings.CutSuffix(prefix, "\u00a0"); typed {
+			swap = append(swap, prefix, plain+" ")
+			continue
+		}
+		swap = append(swap, prefix, strings.TrimSuffix(prefix, " ")+"\u00a0")
+	}
+	return strings.NewReplacer(swap...)
+}()
+
 // claudeTerminalMessage is the Claude Code adapter's terminal framing: text
 // as it is to be pasted, refused with an error wrapping ErrInvalidInvocation
 // before anything is typed when it is not valid UTF-8, when it holds nothing
 // but white space, or when it carries a control character other than a
 // line break, which a terminal would deliver as a key rather than as text;
 // the paste's own end marker begins with one. The text is defused, so
-// neither the input nor the screen reader takes a part of it for its own.
+// neither the input nor the screen reader takes a part of it for its own,
+// and defused says what that leaves to a person typing at the pane.
 // It adds no newline: StartInTerminal's Enter is what submits it.
 func claudeTerminalMessage(text string) ([]byte, error) {
 	if !utf8.ValidString(text) {
@@ -490,13 +506,14 @@ var claudeReplied = []string{"claude: ", "tool: ", "tool error: "}
 // send reads the same way, so a send never types into it.
 //
 // A reply having begun is read from the rows between the last message's
-// claudeYouMark row and the footer, so it rests on what the conversation draws.
-// Every line this adapter types is defused, so no message it sends can
-// draw a row that reads as a reply. A message a person types at the pane
-// is not: one whose later lines begin with a reply's prefix reads as a
-// reply begun while the model has sent nothing, and the interrupt presses
-// the key the CLI answers there by putting their message back in the
-// input, which it then leaves theirs to clear.
+// claudeYouMark row and the footer, so it rests on what the conversation
+// draws. Every message this adapter sends is defused, so none of its rows
+// begins with a reply's prefix. A message a person types at the pane is
+// not: one that draws such a row, on a line of its own or where the CLI
+// breaks a long line, reads as a reply begun while the model has sent
+// nothing, and the interrupt presses the key the CLI answers there by
+// putting their message back in the input, which it then leaves theirs to
+// clear.
 func claudeScreen(screen terminalScreen) screenState {
 	lines, footer, prompt := claudeLayout(screen)
 	switch {
