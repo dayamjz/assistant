@@ -17,660 +17,131 @@ codes: `0` success, `1` an operational failure (a refusal, a service that is
 not running, an arm verification that found no live loop), `2` incorrect
 usage, which includes a request the service could not read as given.
 `assistant coordinator --help` lists the subcommands, and
-`assistant coordinator <subcommand> --help` lists one's flags.
+`assistant coordinator <subcommand> --help` lists one's flags. Every
+coordinator method is refused, with code `worker`, for a caller the service
+places inside a task's worker group, decided from the credentials the socket
+reports and never from anything the caller sends.
 
-Every coordinator method is refused for a caller the service places inside
-a task's worker group, decided from the credentials the socket reports and
-never from anything the caller sends. A refusal of that kind arrives as code
-`worker`.
+## References: read one when its trigger applies
+
+This file holds what every turn needs. The program loads none of the files
+below: read one yourself, before you act, whenever its trigger applies.
+
+| Reference | Read it when |
+| --- | --- |
+| [references/catch-up.md](references/catch-up.md) | your session starts, your host cleared or compacted it, or it grew long and you reset it: start from `assistant --json coordinator catch-up` |
+| [references/tasks.md](references/tasks.md) | you create a task with `--overlaps`, `--delivery` or `--mode`, read a task's `policy` or `record.blocker_task`, or read the `watch` digest |
+| [references/workers.md](references/workers.md) | you message, peek at, stop or relaunch a worker; a wake is `terminal-gone`, `message-unacknowledged`, `stall-closed` or a stall hold; a command is refused `unplaced`, `unplaceable` or `not-at-terminal` |
+| [references/promotion.md](references/promotion.md) | an investigation reads `reported` or `held`: you read its report, promote it, or record its findings relayed |
+| [references/kept-work.md](references/kept-work.md) | a `kept-work` wake or a `kept_work_wakes` row arrives, a task reads `dispatched` naming `kept_work`, or an answer carries `kept_work_unread` |
+| [references/housekeeping.md](references/housekeeping.md) | you create a housekeeping pass, a `housekeeping_wakes` row arrives, or a pass reports or offers a retirement hold |
+| [references/delegation.md](references/delegation.md) | you delegate or end a domain, a `domain_wakes` row or a `subordinate-*` wake arrives, or you are a subordinate |
+| [references/waking.md](references/waking.md) | you set up `listen`, `await` or the tmux host wake, one of them exits `1`, or the service restarted |
 
 ## Before you start
 
-- The service must be up: `assistant service start`.
-- The repository needs a gate: `assistant init` in its working copy.
-- Tasks name the repository by its record's identifier. Read it from
-  `assistant --json status` in the working copy, at `repository.id`.
+- The service must be up (`assistant service start`), and the repository
+  needs a gate (`assistant init` in its working copy). Tasks name the
+  repository by its record's identifier: `assistant --json status` in the
+  working copy, at `repository.id`.
 - At the start of every session, verify supervision:
   `assistant coordinator supervision`. Exit `0` means the service's watch
   over the fleet is live. Exit `1` means it is not; the answer says whether
   to start or restart the service. Do not create work while it is not live.
-  `assistant --json coordinator catch-up` carries the same verdict under
-  `supervision`, beside everything else a session starts from; see "Start
-  or reset a session".
 - The stop guard keeps your turn from ending while work is under way and
-  nothing is watching it. `assistant host install` prints the line your host
-  needs, and `assistant host install --write` adds it. For Codex use
-  `--host codex` (writes `~/.codex/hooks.json` or `$CODEX_HOME/hooks.json`);
-  the default `--host claude` writes Claude Code's settings. A Codex hook
-  written this way does not run until you review that exact hook in `/hooks`
-  and trust it. Ask the user before writing it.
+  nothing watches it: `assistant host install` prints your host's line and
+  `--write` adds it (ask the user first; `references/waking.md` for Codex).
 
-## Create a task
+## Create a task and read the fleet
 
 ```sh
 assistant coordinator create --shape delivery --project NAME \
-  --repository REPO_ID --branch task/NAME \
-  --instructions "what the worker is to do"
-
+  --repository REPO_ID --branch task/NAME --instructions "what to do"
 assistant coordinator create --shape investigation --project NAME \
   --repository REPO_ID --instructions-file brief.md
-```
-
-- `delivery` works on a branch and needs `--branch`. `investigation` names
-  no branch.
-- `--instructions` or `--instructions-file`, exactly one. A relative file is
-  read from the directory you ran the command in.
-- `--overlaps TASK` claims this task overlaps another, so it waits behind
-  it. With no `--overlaps` you claim independence; the program still queues
-  a delivery behind a live task on the same branch.
-- `--delivery gated` or `--delivery local` asks for a posture in place of the
-  project's. It may be stricter than the project's and never lighter. The
-  task as `assistant --json tasks ID` reads it carries `policy`, when its
-  record holds a posture and its repository is one a run can start against:
-  what its recorded posture requires (`validation`), publishes
-  (`publishes`), and who lands it (`lands`; a gated task reads `code-host`, or
-  `remote` for a local-path upstream). `local` reads `none`, `nothing`,
-  `approval-hold`, so its change is never validated.
-- `--mode` is recorded as given.
-
-The answer comes once the task is recorded and before any worker exists.
-`record.blocker_task` is set exactly when the task was queued behind other
-work. Whether the worker launched is read afterwards, from
-`assistant --json tasks ID`. A task queued behind an investigation is
-released, and its worker begun, as soon as that investigation's report is
-filed and it reads `reported`; one whose report raised decisions reads
-`held` until you answer them, and what was queued behind it is released at
-the service's next release, a run finishing or a restart, rather than at
-your answer.
-
-## Housekeeping passes
-
-A housekeeping pass keeps one repository's agent context true: the files its
-trusted `housekeeping.paths` names (by default the `AGENTS.md`, `CLAUDE.md`,
-`.claude/rules/**`, `.cursor/rules/**`, `README.md` and
-`assistant-knowledge.md` files). You create every pass; the program never
-does.
-
-```sh
-assistant coordinator create --housekeeping --project NAME \
-  --repository REPO_ID --instructions-file notes.md
-```
-
-- The program writes the first part of the pass's instructions: the scope,
-  the base of the last pass and when it was created, the decisions earlier
-  passes raised that are still open, and the rules. Your instructions follow
-  it as notes: the person's decisions and standing instructions since the
-  last pass, and anything you noticed may be stale. They are claims the
-  worker checks, not facts. Notes may be empty.
-- A pass is created as an investigation under the `housekeeping` role, which
-  resolves to the `roles` table's `housekeeping` row or else its `fix` row.
-  Do not pass `--shape` other than `investigation`, `--role`, `--branch`,
-  `--delivery` or `--overlaps`; each is refused as incorrect usage. No other
-  task may name the `housekeeping` role.
-- A repository has at most one open pass. A create while one is open is
-  refused naming the open pass, and so is one for a repository whose trusted
-  `housekeeping.paths` is empty. A subordinate coordinator is refused the
-  flag.
-- Read its report. When it lists factual drift, promote it in place
-  (`assistant coordinator promote`); setting the interval or asking for a
-  pass is the person's standing request to correct factual drift in those
-  files and nothing else. A report with no drift and no decision is recorded
-  as relayed with nothing said to the person. Its decisions (a question
-  about a rule, a principle or a specification) are holds for the person.
-- Every run of a promoted pass's branch, the one its push starts and a
-  person's push or rerun of it alike, holds at review with an `ask` for
-  every path its commits touched outside `housekeeping.paths`.
-- With the operator's global `housekeeping.interval` set, the program raises
-  a `housekeeping-due` wake about a repository once the interval has passed
-  since its newest pass was created, or it never had one, and its default
-  branch has moved past that pass's base; a check that could not read what it
-  needs raises it too, naming what. It is listed under `housekeeping_wakes`,
-  with `repository`, `pass` (the pass it follows) and `detail`, numbered
-  apart from every other shape and acknowledged as `hNUMBER`. Acknowledging
-  it creates nothing: create the pass with your notes, or do nothing. A due
-  wake whose `pass` is not the repository's newest pass, or that names none
-  while one exists, was raised before that pass was created: acknowledge it
-  and create nothing.
-
-- A pass open for a whole interval raises the same wake naming it and what it
-  waits on, again each interval. When something still moves it (a run not
-  ended, a worker that reads live or cannot be read), escalate it to the
-  person as a blocker; it is never retired on its own. When nothing moves
-  it, the program also offers it a retirement hold, answered
-  `assistant --task ID --answer retire` or `--answer keep`. `retire`
-  releases the pass's claim on its repository and answers `stop` on its
-  holds that would begin its worker again; it is refused, with the hold left
-  open, if a run started or the worker was begun again since. `keep` leaves
-  it open. The program retires no pass on its own: a pass whose run rebased
-  to nothing lands from the run's nothing-to-deliver record, as any delivery
-  task does, and is not retired. A retired pass is never relaunched or promoted, `retire` answered while a launch of the
-  pass is under way is refused with the hold open, and a retired pass no
-  longer counts as work in flight unless a run of its branch has not ended
-  or a wake about it is not yet acknowledged.
-
-## Start or reset a session
-
-Nothing about the fleet lives in your conversation: every fact is the
-service's, resolved when it is read. So a long session is mostly states that
-have since changed, and every turn pays to read them again. Shed it
-routinely: when your session grows long, or whenever your host clears or
-compacts it, end it or clear it and start the next one with one read:
-
-```sh
-assistant --json coordinator catch-up
-```
-
-Act from that document alone; do not try to recall what an earlier session
-did.
-
-- `supervision` is the verdict `assistant coordinator supervision` gives.
-  Do not create work unless its `outcome` is `attached` or `started`.
-- `wakes` are the queued wakes, handed out to an earlier session or not,
-  each with `id`, `kind`, `line` and what its shape is acted on by: `task`
-  and `marker` for a task's (a `terminal-gone`'s session reference is in
-  `marker`), `domain` for a domain's, `kept_work` (the entry's `id` under
-  `kept`) for kept work no task names, and `repository`, `pass` and
-  `detail` for housekeeping. Act on each as "Drain the wake queue" says,
-  then acknowledge it by its `id`, which is already the name `acknowledge`
-  takes (`12`, `d3`, `k5`, `h2`). Reading them here handed out none of them.
-- `holds` are the open decisions. `answer.args` is the command that closes
-  one: run `assistant` with those arguments followed by the answer, from
-  `answer.working_path` on `answer.branch` when they are set. `detail` is
-  the hold's own explanation and often names the answers it takes; a stop's
-  and a stall hold's answers are under "Stop a worker" and "Drain the wake
-  queue". A run held at a decision carries `run` and `decision`: its
-  `question`, its `options` and the `findings` behind it, as the stage
-  reported them. A local task's approval hold is the
-  person's: tell them it waits, as "Drain the wake queue" says.
-- `tasks` is each task's resolved state, `{id, project, branch, state,
-  line}`; `line` says its next action. Read one in full with
-  `assistant --json coordinator tasks ID` before acting on it, as always.
-- `kept` is the open kept work, by `id` and `key`; answer one as a kept-work
-  wake says.
-
-Each list holds at most 50 rows and `more_wakes`, `more_holds`,
-`more_tasks` and `more_kept` count exactly the rest. Tasks a listed wake,
-hold or kept entry names come first, so one is left out only when more than
-50 are named; read any task a row names and `tasks` does not list with
-`assistant --json coordinator tasks ID`. When `more_wakes` is not 0, drain
-for the rest. The read hands out, acknowledges, answers and marks nothing, so
-running it again is always safe. It is refused for a subordinate
-coordinator, with code `subordinate`.
-
-## Read the fleet
-
-```sh
 assistant tasks                 # every task and its resolved state
 assistant --json tasks ID       # one task in full, with what decided its state
 assistant watch --once          # what waits on you, what landed, what is under way
 ```
 
-The state is resolved from the records each time it is read. Do not infer it
-from the last event you saw.
+- `delivery` needs `--branch`; `investigation` names no branch. Give
+  `--instructions` or `--instructions-file`, exactly one; a relative file is
+  read from the directory you ran the command in.
+- The answer comes once the task is recorded, before any worker exists;
+  read whether the worker launched from `assistant --json tasks ID`.
+- The state is resolved from the records each time it is read. Do not infer
+  it from the last event you saw, and read the task before every act.
 
-`assistant --json watch --once` carries a `digest` of that read: counts of
-what waits on the person, what landed unseen, what is under way, what is being
-validated, and what stopped, plus `unconfirmed`, the tasks under way whose
-worker said it is at work while no live terminal was seen. Do not report
-unconfirmed work to the person as moving; read the task first. The digest
-acknowledges no wake, so it is no substitute for your own drain and
-acknowledgement.
+## Drain, act, acknowledge
 
-When an investigation has filed its report, `assistant --json tasks ID`
-carries it at `report`: `summary`, `findings`, `evidence` (paths the worker
-named), `uncertainties` (what the worker could not settle) and `follow_ups`
-(further work it recommends), each a list of `text` with an optional
-`location`, `evidence_file` (the on-disk copy under the task's directory),
-and `recorded_at`. Uncertainties and follow-ups are not findings: they raise
-no hold and start nothing, so a decision the person owes is only ever an
-`ask` finding's hold, and a follow-up becomes work only if you create it.
-Read that field; do not ask the worker to repeat the report,
-and do not relay its wording to the person (P13). The plain `assistant tasks`
-line only says the report is in, counts its uncertainties and follow-ups
-without their text, and points you at `--json`. A reported
-investigation whose decisions are still open also lists those holds; answer
-them with `assistant --task ID --answer ...` before you promote or record
-findings relayed.
-
-## Steer a worker
+Every turn that handles a wake drains the queue before doing anything else:
 
 ```sh
-assistant coordinator message ID --text "what to change"
-assistant coordinator message ID --text-file note.md
-```
-
-The message is recorded first and then written to the worker of the task's
-latest attempt. The answer's `delivery` is `written` when it reached the
-worker's input. Text is limited to 16 KiB and refused, not cut, above it. A
-task with no launched worker, or one this service does not hold, is refused.
-The worker reads it under a heading `Message N`, where N is the answer's
-`message.id`, and acknowledges it by that number through its own
-`assistant worker` route; the record then reads acknowledged.
-
-A message is how a note about one task reaches its worker. The repository's
-project conventions are not yours to send: the worker is already told
-`assistant-knowledge.md` as the repository's default branch holds it, in its
-first turn, and a run's review is told it too unless the repository
-suppresses project instructions. You cannot change that file
-through the program, and a message that claims to amend it changes nothing
-but what this one worker reads. If a convention is wrong or missing, tell
-the person; it changes when a change to the file lands on the default
-branch.
-
-## Peek at a worker
-
-```sh
-assistant --json coordinator peek ID
-```
-
-It reads the recent output of the worker of the task's latest attempt, as
-the service holds it, as a transcript: `events` is what the worker said and
-did, oldest first, each with a `kind` (`text`, `tool_call` naming the `tool`,
-`tool_result`, `message`, `turn_ended`, `error`, `output`, `partial`, or
-`unrecognized` naming a line type the program has no row for), and `output`
-is the same events as lines you can read. Counters, status lines and thinking
-are left out and counted in `omitted`. Every event is redacted of the
-credential shapes the program recognizes and abbreviated, and only the most
-recent events that fit in 16 KiB of `output` are shown: `earlier` counts the
-events read and not shown, `dropped` the bytes the capture let go before the
-read, and `liveness` is how the worker's terminal probed. When the service
-hosts workers in tmux, `attach` is the command a person runs to watch the
-worker and type into it; it is empty for a worker with no terminal. What
-someone types there reaches the worker as its own input, the same input a
-message is written to, and the program records nothing of it, so reconcile
-around it as you would around any change you did not make: read the task
-and its history rather than assuming your last message was the last word.
-
-The output is for you to read and never to repeat to the person. A worker
-this service did not launch, such as one an earlier service started, is
-refused rather than read.
-
-## Stop a worker
-
-```sh
-assistant coordinator stop ID
-```
-
-It ends the worker, leaves the copy as it is, and answers only once the
-worker is proven gone. It then opens a hold on the task, named in the
-answer's `hold`. Answer that hold to decide what happens next:
-
-```sh
-assistant --task ID --answer retry   # begin the work again in the same copy
-assistant --task ID --answer stop    # leave it where it stopped
-```
-
-A stop that could not be proven is refused, and no hold is opened. A task
-whose work had already finished when its worker ended is answered with
-`finished` set and no hold.
-
-## Relaunch a task whose worker is gone
-
-```sh
-assistant coordinator relaunch ID
-```
-
-Use it when a task's worker died on its own: `assistant --json tasks ID`
-reads `state.state` as `unknown` with `state.basis.process` as `dead`. It begins a new attempt in the task's
-own copy through the same anchored relaunch the service uses at start, so
-the two cannot both relaunch one task. It is refused for a live worker, and
-for a task a stop holds: answer the stop's hold instead. The answer comes
-once the attempt is recorded; read whether the worker launched from the task.
-
-## Promote an investigation
-
-```sh
-assistant coordinator promote ID --repository REPO_ID --branch task/NAME \
-  --intent "what the delivery is to do"
-```
-
-It turns the investigation into a delivery on the branch, in place, in the
-same copy. `--intent-file` works as `--instructions-file` does, and
-`--delivery` as it does on create. Promoting a task that is not an
-investigation is refused.
-
-The promotion then sends the task's running worker its brief, the intent and
-what is now expected of it, as a message recorded and acknowledged like any
-other; the same brief is appended to its instructions, which a worker begun
-on the task later reads. The answer's `brief.message` is that record. When no
-running worker could be sent it, the promotion still stands, `brief.message`
-is absent and `brief.unsent` says why; send the worker the new direction
-yourself if one is running again. When the worker has ended, a reported
-investigation's after its promotion window among them, the promotion
-relaunches one in the same copy on `relaunch`'s terms, begun with the brief
-and, for a reported investigation, the stored report: `relaunch` in the
-answer is the attempt claimed for it, and its worker is launched in the
-background, so whether it began shows in `assistant tasks`, as for `relaunch`. A
-relaunch that was refused (a hold still open on the task, the relaunch
-bound) is named in `brief.unsent` and leaves the promotion standing.
-
-## Record an investigation's findings relayed
-
-```sh
-assistant coordinator relayed ID
-```
-
-Once you have passed a reported investigation's findings on to the person,
-record it. The task then reads `complete` (`state.source` is `record`,
-`state.basis.relayed` is true): the service ends the worker it holds for it
-and removes its copy once that is proven safe, and the stored report and
-its decisions stay. It is refused for a task that is not an investigation
-reading `reported` from its report: a delivery task, an investigation with
-no report or with a decision still open, and one already recorded. A
-relayed investigation cannot be promoted, so promote first if you mean to.
-
-## Drain the wake queue
-
-The service queues a wake when something needs the coordinator. Every turn
-that handles a wake drains the queue before doing anything else:
-
-```sh
-assistant --json coordinator wakes          # hands you the queued wakes, oldest first
-assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
+assistant --json coordinator wakes            # hands you the queued wakes, oldest first
+assistant coordinator acknowledge --task 12 --domain 3   # after you acted on them
 ```
 
 - A drain hands wakes out and records none as handled. Always drain with
-  `--json`: without it, `wakes` is a person's listing that hands out
-  nothing.
+  `--json`: without it, `wakes` is a person's listing that hands out nothing.
+  `--limit N` bounds one drain (default 100); the rest stay queued.
 - Act keyed by `(task_id, kind, session-ref)`, never by `handouts`. Delivery
   is at least once, so the same wake id can reach you twice after a lost
-  ack; `handouts` only counts deliveries. Read the task before every act.
-- Act on each wake, then acknowledge it by its `id` - every id you acted on,
-  including one you decided needs nothing further after reading the task.
-  A row of `domain_wakes`, `kept_work_wakes` or `housekeeping_wakes` is
-  numbered apart from the task wakes, so name it `dNUMBER`, `kNUMBER` or
-  `hNUMBER`: a bare number always names
-  a task's wake, and would close a different wake or none.
-  Acknowledging is the only thing that records a wake as handled, and a wake
-  keeps its task counted as in flight until you do.
+  ack; `handouts` only counts deliveries.
+- Acknowledge every id you acted on, including one you decided needs nothing
+  further after reading the task. Acknowledging is the only thing that
+  records a wake as handled, and a wake keeps its task counted as in flight
+  until you do. It also closes a wake `listen` printed that you dealt with
+  without draining.
+- Name each wake by its shape: `--task N` for `wakes`, `--domain N` for
+  `domain_wakes`, `--kept N` for `kept_work_wakes`, `--housekeeping N` for
+  `housekeeping_wakes`, once per wake. The shapes are numbered apart; a bare
+  number another shape carries is refused with exit `2` and closes nothing.
+  Naming an id no wake has, or one already acknowledged, refuses the whole
+  batch with code `invalid-request`.
 - A wake you were handed and did not acknowledge is handed out again: after
-  a service restart, and on your next drain once you are no longer
-  attached. You are attached while you hold `listen`; if you hold no
-  `listen`, every drain hands you the wakes you have not acknowledged yet.
-- `--limit N` bounds one drain; the default is 100. Wakes past the limit
-  stay queued for the next drain.
-- Each wake names a `task_id` and a `kind`. For `terminal-gone`, the session
-  reference is in `marker` between the case and the unobserved-since
-  instant. If the task's latest attempt already names a different session,
-  or the program already relaunched that one, do not call `task.relaunch`
-  again. A marker carrying `:again:` is a resurface reminder for the same
-  silence, not a second relaunch. Case `unobservable` means probe or wait;
-  never `task.relaunch` on it; only `dead` is a crashed worker the program
-  relaunches. For `hold-opened`, answer with
-  `assistant --task ID --answer ...`, with one exception: a local delivery
-  task's approval hold, keyed `task/ID/local-approval/...`, is the person's
-  ("You approve", PRD section 6). The service takes an answer to it only
-  from a command in the foreground of a terminal, and a command you run is
-  refused with code `not-at-terminal`, recording nothing. Tell the person
-  the task waits on their approval and leave the hold open. A stall hold,
-  keyed `task/ID/stalled/...`, is a worker still running whose screen has
-  not changed through repeated inspections: nothing was ended. Relay it to
-  the person as a blocker. Its answers are `approve` (let it run and start
-  the count again), `stop` (end it and keep its copy; the stop's own hold
-  then asks whether to begin the work again) and `retry` (end it and begin
-  it again once in the same copy); any other word is refused. For
-  `stall-closed`, the program closed a stall hold itself because the
-  worker's screen changed: tell the person that decision is no longer
-  needed. For `message-unacknowledged`, the
-  worker has not acknowledged a message. For `kept-work`, the task's copy,
-  or the copy of a run attributed to it, was kept because its work is not
-  anywhere safe; the entry is in `assistant --json status` under
-  `kept_work` and in the catch-up read under `kept`. Tell the person: it is
-  theirs to decide. An answer is given like a hold's:
-  `assistant --task ID --answer land --hold kept-work/N`, or
-  `--run=RUN` in place of `--task` for a run's copy. Land validates the
-  copy's HEAD as a push would; `--answer carry-on` creates a new task of
-  the same project and branch in the kept copy, with a note, and names it
-  in the answer (`task`), so the old task stays as it ended; a run's copy
-  cannot be carried on; `--answer discard` shows what would be lost with a
-  digest, which you may read (each path and name also in `path_bytes` or
-  `name_bytes`, its exact bytes in base64, since a JSON string loses a byte
-  that is not UTF-8), and removes nothing: removing the copy on a
-  confirmation is not in this build, and `--confirm` is refused. A
-  confirmation is the person's alone: it is refused under `--json` and
-  from any process not in the foreground of a terminal, which your tool's
-  commands are not, so never try to give one. To let
-  the project's new tasks go ahead, tell the person their answers are land
-  and carry-on, or committing or removing its uncommitted work and pushing
-  its commits, after which the program removes the copy on that proof when
-  it next looks at it, which is not immediate, and with it, unchecked,
-  files git ignores, commits only a reflog reaches and the copy's hooks,
-  which the discard preview lists, so they should copy out what they want
-  first; removing it by hand leaves the entry open. Promoting an investigation
-  whose copy has an entry answers that entry carry on by itself. While the
-  project has an open entry, a task you create in it is recorded and not
-  started: it reads `dispatched` and its answer (`task.get`) names the
-  entries holding it under `kept_work`; it starts on its own once they are
-  answered or closed. An answer carrying `kept_work_unread` could not read
-  whether kept work holds the task, so it names no entry either way: ask
-  again rather than telling the person it is starting. Tasks in other projects, work already running and a
-  person's own push are not held. A kept entry no task names, such as the
-  run of the person's own push, reaches you as a `kept-work` wake about the
-  entry instead, listed under `kept_work_wakes` with the entry's id in
-  `kept_work`, its `project` and its `branch`, with numbers of its own, and
-  acknowledged as `kNUMBER`. Acknowledging it closes the wake and answers
-  nothing: the entry stays listed until it is answered or its work lands. The
-  program's own records of creating and dispatching a task wake nobody.
-- `acknowledge` also closes a wake `listen` printed that you dealt with
-  without draining. Naming an id no wake has, or one already acknowledged,
-  refuses the whole batch with code `invalid-request`.
+  a service restart, and on your next drain once you are no longer attached.
+  You are attached while you hold `listen`; if you hold no `listen`, every
+  drain hands you the wakes you have not acknowledged yet.
+- By `kind`: answer a `hold-opened` with `assistant --task ID --answer ...`,
+  except a local approval hold (`task/ID/local-approval/...`), the person's
+  (below), and a stall hold (`task/ID/stalled/...`), a blocker to relay. Every
+  other kind is in the reference its trigger names; never `task.relaunch` on
+  a `terminal-gone` of case `unobservable`. The program's own records of
+  creating and dispatching a task wake nobody.
 
-## Be woken by the service
+## Wait for the next wake
 
-The service pushes each wake to a coordinator holding its wake stream:
+The specification has the coordinator hold exactly one supervision wait
+while work is in flight, resumed as the last action of every turn: end each
+turn by keeping `listen` running or arming one `await`. The build does not
+enforce one (a second wait is served too); keeping to one is yours.
 
 ```sh
-assistant --json coordinator listen     # one line per wake, until interrupted
+assistant --json coordinator listen              # one line per wake, until interrupted
+assistant --json coordinator await --timeout 5m  # blocks, then drains
 ```
 
-- Run it in the background if your tool can start a turn on a background
-  command's output, and keep one running while work is in flight.
-- It hands out and records nothing. Each line it prints is a notice that a
-  wake is queued; drain to be handed it, and acknowledge it once you acted.
-- Holding it is what makes you attached: wakes a drain hands you while it
-  runs are not handed out again under you. When it ends, whatever you were
-  handed and did not acknowledge comes back on the next drain.
-- It beats to the service once per `supervision_beacon_interval` (10s unless
-  configured). A `listen` that sends no beat for three intervals, because
-  its process was stopped or hung, is detached: what you were handed comes
-  back on the next drain, and the `listen`, if it runs again, exits `1`
-  saying its lease expired.
-- Hold one `listen` at a time. Starting a second ends the first, which
-  exits `1` saying another listen took the stream; what was handed out
-  under the first comes back on your next drain.
-- Its first line is a gap marker, and a gap later on means pushes were
-  missed. On either, drain: the drain gives back every wake still queued
-  that you were not already handed.
-- If the service stops or the lease expires, `listen` exits `1`. Run
-  `assistant coordinator supervision`, then start `listen` again and drain.
+- Run `listen` in the background if your tool can start a turn on a
+  background command's output. Each line is a notice that a wake is queued;
+  it hands out nothing, so drain to be handed it.
+- Otherwise block on `await` instead of polling. It drains as soon as a wake
+  is on offer to you, or answers an empty list once the bound passes. A wake
+  it returned waits until you acknowledge it: wait, act, acknowledge, wait
+  again. `--timeout` is `1s` to `1h` (default `5m`), shorter than your tool's
+  own limit on one command.
+- If `listen` or `await` exits `1`, run `assistant coordinator supervision`,
+  then arm again and drain; `references/waking.md` says why it ended.
 
-## Be woken in a tmux pane
+## When to escalate to the person
 
-If your host runs in a tmux pane, the service can type a notice into it for
-every wake, so a wait you forgot to arm or a `listen` that died does not
-leave you unwoken. Run, from inside your host (your shell tool, so it runs
-in your pane):
-
-```sh
-assistant host install
-```
-
-- Run it yourself, through your shell tool. Typed at the pane's shell it
-  would be the pane's foreground program and read itself as the pane's,
-  so it offers no line and says so.
-- Besides the stop guard's line, it prints a `notify.command` line naming
-  `assistant host wake` and your pane. It writes neither to the
-  configuration; ask the user to add that line under `notify: command:` in
-  the home's `config.yaml` and run `assistant service restart`. It replaces
-  any command that key already names.
-- The notice is the same line `listen` prints: drain with
-  `assistant --json coordinator wakes`, act, acknowledge. It hands nothing
-  out by itself.
-- It types only while the pane's tmux server and foreground program are the
-  ones the installer read, and while the pane is not in copy mode, not
-  synchronized with other panes, and taking input; nothing is typed
-  otherwise, and that wake is not typed again. If tmux restarts
-  or you move to another pane, run the installer again and update the line.
-- `listen` and `await` stay the fast path; keep one armed as before.
-
-## Wait for a wake
-
-If you cannot hold `listen`, block on the queue instead of polling. The
-specification has the coordinator hold exactly one supervision wait whenever
-work is in flight, resumed as the last action of every turn: end each turn
-by arming one `await` (or by keeping `listen` running). The build does not
-enforce one: a second wait armed beside the first is served too, and keeping
-to one is yours.
-
-```sh
-assistant --json coordinator await --timeout 5m   # blocks, then drains
-```
-
-- It answers as soon as the queue holds a wake on offer to you, draining it
-  as `wakes --json` does, or once the bound passes with an empty list. An
-  empty list always means the bound passed. It drains with or without
-  `--json`.
-- A wake it returned is still waiting until you acknowledge it. So the loop
-  is: wait, act on each wake it returned, acknowledge them, wait again. A
-  wait armed before you acknowledge answers at once with the same wakes
-  when you hold no `listen`.
-- `--timeout` is whole seconds from `1s` to `1h`; the default is `5m`.
-  Anything else is refused as incorrect usage, exit `2`, and nothing is
-  clamped. Choose a bound shorter than the limit your own tool puts on one
-  command, or run it in the background if your tool allows that.
-- `--limit N` bounds the answer, as on `wakes`.
-- If the service stops or restarts while you wait, the command exits `1`.
-  Run `assistant coordinator supervision` to confirm the watch is live
-  again, then arm the wait again; wakes still queued are drained at once,
-  the ones you were handed before the restart and did not acknowledge
-  included.
-  A restart can change the queue first: on start the service relaunches a
-  task whose worker's terminal is gone and whose work has not landed, up
-  to `relaunch_attempts` times (2 unless configured), and records that
-  task's queued `terminal-gone` wake about the replaced worker as handled
-  by the program, so the wait no longer returns it. After a restart read
-  `assistant tasks` as well as the queue.
-
-## Delegate a domain
-
-```sh
-assistant coordinator delegate DOMAIN --delivery gated --instructions "what the domain is for"
-assistant coordinator end-delegation DOMAIN
-```
-
-`delegate` records a domain of tasks as delegated and has the service start
-a subordinate coordinator for it, in this home, with the instructions you
-give and the posture every task of the domain takes (`--delivery` is
-required; the subordinate records no posture of its own). The answer comes
-once the records are written and before the subordinate exists. The
-subordinate is placed by its process, as a worker is: it creates tasks that
-are written into its domain, and it holds `create`, `tasks`, `message`,
-`stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
-`listen` and `supervision` over that domain's tasks alone, with `tasks`
-listing the domain alone and `listen` its own domain's stream. It is refused
-`promote`, `answer`, `create --housekeeping`, both delegation subcommands, `catch-up`, marking the catch-up read,
-the run commands, `sync`, and the service's stop and restart, with code
-`subordinate`; a task outside its domain is refused with `outside-domain`.
-Its grant denies editing and git and allows the `assistant coordinator`
-prefix, which is why `tasks` and `answer` are subcommands here as well as
-the `assistant tasks` and `assistant --task --answer` a first coordinator
-runs. With the Claude Code adapter a subordinate starts only under the pipe
-session provider; under `tmux` its start is refused and logged. With Cursor
-it starts under the same grant; with Codex its start is refused and logged.
-While a subordinate is starting, your own coordinator calls may answer
-`unavailable` for the few moments the start takes; ask again.
-
-While a delegation stands, wakes about the domain's tasks that the
-subordinate can act on are handed to it and not to you, and decisions about
-them, holds among them, are handed to you and not to it. A promotion or a
-hold's answer it asks for arrives as a `subordinate-escalated` wake, with
-its words on the task's `--json` answer under `escalations`; act on it or
-not, and acknowledge the wake. `end-delegation` takes the domain back: the
-subordinate's session is ended, and from the next drain on its rows are
-yours. If you are a subordinate yourself, the program told you so when it
-started you; keep to your domain and ask for a promotion when you want one.
-
-A subordinate whose session ends reaches you as a `subordinate-gone` wake
-about the domain, once per `escalation_window` while it stays gone; the
-service relaunches it at a restart up to `relaunch_attempts` times, and past
-that the delegation holds for you as a `hold-opened` wake about the domain.
-`end-delegation` answers that hold `stop` as it ends the delegation.
-A subordinate still running across a restart is placed from its record and
-its process, so it stays the subordinate of its domain and `end-delegation`
-ends it.
-Wakes about a domain are listed under `domain_wakes` with numbers of their
-own and acknowledged as `dNUMBER`; wakes about kept work no task names are
-listed under `kept_work_wakes` and acknowledged as `kNUMBER`:
-
-```sh
-assistant coordinator acknowledge 12 d3 k5
-assistant --domain DOMAIN --answer retry     # begin its coordinator once more
-assistant --domain DOMAIN --answer stop      # end the delegation
-```
-
-## Known gaps in this build
-
-- **Waking depends on the watch.** A push and a wait both follow the
-  service's supervision recording a wake, so how soon either reaches you
-  after a worker stops is the supervision's cadence. Check
-  `assistant coordinator supervision` at session start and after any exit
-  `1` from `await` or `listen`.
-- **Being attached is your stream, not you.** The service sees `listen`,
-  not your session. A stopped or hung `listen` is detached three beat
-  intervals after its last beat, and a new `listen` replaces an old one at
-  once, but a `listen` left running after your session died keeps beating
-  and keeps what you were handed until that process ends or another
-  `listen` replaces it. If you hold `listen` and never acknowledge what you
-  acted on, you are not handed it again, and it keeps the work counted as
-  in flight: acknowledge as you go, and do not leave a detached `listen`
-  running.
-- **The service types into your host only in a tmux pane.** With the host
-  wake set up (see "Be woken in a tmux pane"), each wake types a notice into
-  your pane even when you hold neither `listen` nor `await`. Outside a tmux
-  pane, or without it set up, a coordinator holding neither is woken by
-  nothing. The notice is typed whatever the pane shows, so text left in your
-  input is sent with it, and a burst of wakes types one notice each.
-- **A reported investigation's worker is kept for the promotion window.**
-  Once a worker files its report through `assistant worker`, the task reads
-  `reported` (`state.source` is `report`) whether its worker is still
-  running or has ended. The program does not relaunch it, and the wake queue
-  does not report its ended terminal as gone. Decisions the report raised
-  are holds, and the task reads `held` until you answer them with
-  `assistant --task ID --answer ...`. The service keeps the worker for the
-  operator's `promotion_window` (1h unless configured) after the report is
-  stored, so promote within it to continue that worker; past it the worker
-  is ended and its copy is kept, and a promotion relaunches a worker there
-  from the stored report. Once the worker has ended, inside the window or
-  past it, a copy that holds work the default branch lacks is a kept-work
-  entry, which holds new tasks in the project until it is answered;
-  promoting the investigation answers it carry on. The copy stays until
-  you record the findings relayed with `assistant coordinator relayed ID`,
-  which also ends any worker and removes the copy once that is proven safe;
-  a relayed one cannot be promoted. A reported investigation reads
-  `reported`, never `complete`, until then.
-- **Your commands are served only with a terminal above them.** The
-  service decides who is a worker by walking the caller's parent chain to
-  the first process in a worker group, or that is itself a worker, so a
-  worker's command in a process group of its own is still refused. A chain
-  the service cannot read is refused too. A command whose chain has no
-  worker on it is yours only if some process on it is in the foreground of
-  a terminal, which your host's tool command has when your host runs in a
-  person's terminal or a tmux pane. Anything else, a command whose parent
-  exited so the kernel moved it under another process (`setsid`, `nohup`
-  with `&`, a double fork) among them, is refused with code `unplaced`
-  before anything is recorded, and the refusal names the processes read;
-  run it again without detaching it. A push to the gate
-  is held to the same chain and refused with code `unplaceable`. What the
-  service establishes is a terminal's foreground, not you: a worker's
-  command that detaches and then opens a terminal of its own (`script`, a
-  second tmux server) is still placed as yours and served. A worker's grant
-  allows git and its own `assistant worker` route without asking, and
-  denies nothing else.
-- **A local landing is approved at a terminal, and the service checks the
-  terminal, not the person.** The one hold you cannot answer, a local task's
-  approval, is refused to any command outside the foreground of a terminal,
-  and your host runs your commands outside one. That is the whole of the
-  check: it does not name you, and it does not know who is at a terminal.
-- **No interrupt.** The service refuses `task.interrupt` on every call,
-  because no adapter declares what it needs, so the client offers none.
-  Stop the worker instead.
+- A decision the person owes: an `ask` finding's hold, a decision a report
+  or a housekeeping pass raised, and kept work. Relay the decision, never
+  the worker's wording or its `peek` output (P13).
+- A local delivery task's approval hold ("You approve", PRD section 6). The
+  service takes an answer to it only from a command in the foreground of a
+  terminal; yours is refused with code `not-at-terminal`, recording nothing.
+  Tell the person the task waits on their approval and leave the hold open.
+- Blockers: a stall hold, and a housekeeping pass something still moves
+  after a whole interval. Also supervision you cannot restore, and a project
+  convention (`assistant-knowledge.md`) that is wrong or missing, which no
+  message can change. Never report `unconfirmed` work as moving.

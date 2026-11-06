@@ -45,7 +45,7 @@ func TestAnUnacknowledgedHousekeepingWakeKeepsWorkInFlight(t *testing.T) {
 		t.Fatalf("with the housekeeping wake queued and no loop holding the lock the guard answered %s, want lock-free", got.Reason)
 	}
 	withDatabase(t, h, func(s *store.Store) {
-		if err := s.AcknowledgeAll(t.Context(), nil, nil, nil, []int64{wake}, store.AcknowledgedByCoordinator()); err != nil {
+		if err := s.AcknowledgeAll(t.Context(), nil, nil, nil, nil, []int64{wake}, store.AcknowledgedByCoordinator()); err != nil {
 			t.Fatal(err)
 		}
 	})

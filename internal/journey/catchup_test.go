@@ -172,7 +172,7 @@ func TestAFreshSessionActsFromCatchUpAlone(t *testing.T) {
 	observed.handoutsAfter = handouts()
 	observed.arm = read.Supervision.Outcome
 	for _, w := range read.Wakes {
-		observed.wakeIDs = append(observed.wakeIDs, w.ID)
+		observed.wakeIDs = append(observed.wakeIDs, w.Acknowledge)
 		observed.aboutStopped = observed.aboutStopped || w.Task == stoppedID
 	}
 	for _, task := range read.Tasks {
@@ -207,8 +207,8 @@ func TestAFreshSessionActsFromCatchUpAlone(t *testing.T) {
 		}
 	}
 	for _, w := range after.Wakes {
-		if slices.Contains(observed.wakeIDs, w.ID) {
-			observed.wakesAfter = append(observed.wakesAfter, w.ID)
+		if slices.Contains(observed.wakeIDs, w.Acknowledge) {
+			observed.wakesAfter = append(observed.wakesAfter, w.Acknowledge)
 		}
 	}
 

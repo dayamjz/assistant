@@ -11,10 +11,9 @@ import (
 )
 
 // coordinatorCatchUp answers coordinator.catchup for the first coordinator
-// alone (ErrWorker, ErrUnplaced, ErrSubordinate: it is not domain-scoped).
-// Its parts are feed.VerifyArm, one catchUp read and wakes.peek's reading,
-// so it hands out and answers nothing; the one write under it is
-// catchUpRuns' reconciliation, as every read of a run makes.
+// alone (ErrWorker, ErrUnplaced, ErrSubordinate: it is not domain-scoped). Its
+// parts are feed.VerifyArm, one catchUp read and wakes.peek's, so it hands out
+// and answers nothing; its one write is catchUpRuns' run reconciliation.
 func (s *Service) coordinatorCatchUp(ctx context.Context, req ipc.Request) (machine.CoordinatorCatchUp, error) {
 	if _, err := s.refuseSubordinate(req); err != nil {
 		return machine.CoordinatorCatchUp{}, err

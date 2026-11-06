@@ -52,7 +52,7 @@ func TestTheCoordinatorCatchUpPutsNamedAndUnfinishedTasksFirst(t *testing.T) {
 	if len(got.Wakes) != machine.CatchUpRows || got.MoreWakes != 4 {
 		t.Fatalf("the read lists %d wakes and %d more, want %d and 4", len(got.Wakes), got.MoreWakes, machine.CatchUpRows)
 	}
-	if got.Wakes[0].ID != "1" || got.Wakes[0].Task != "named-landed" {
+	if got.Wakes[0].ID != 1 || got.Wakes[0].Acknowledge != "--task=1" || got.Wakes[0].Task != "named-landed" {
 		t.Fatalf("the first wake row is %+v, want wake 1 about named-landed", got.Wakes[0])
 	}
 	if len(got.Holds) != 1 || got.Holds[0].Key != hold.Key || got.Holds[0].Answer.Args[1] != "running-07" {
@@ -142,9 +142,9 @@ func TestEveryWakeRowCarriesWhatItIsActedOnBy(t *testing.T) {
 	}
 	got := machine.CoordinatorCatchUpOf(supervisor.Arm{}, queued, nil, nil, nil).Wakes
 	want := []machine.WakeRow{
-		{ID: "1", Task: "t", Kind: string(supervisor.KindTerminalGone), Marker: "terminal-gone:dead:ref"},
-		{ID: "d2", Kind: string(supervisor.KindSubordinateGone), Domain: "alpha"},
-		{ID: "h3", Kind: "housekeeping-due", Repository: "repo", Pass: "pass1", Detail: "why"},
+		{ID: 1, Acknowledge: "--task=1", Task: "t", Kind: string(supervisor.KindTerminalGone), Marker: "terminal-gone:dead:ref"},
+		{ID: 2, Acknowledge: "--domain=2", Kind: string(supervisor.KindSubordinateGone), Domain: "alpha"},
+		{ID: 3, Acknowledge: "--housekeeping=3", Kind: "housekeeping-due", Repository: "repo", Pass: "pass1", Detail: "why"},
 	}
 	for i := range want {
 		got[i].Line = ""
