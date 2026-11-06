@@ -171,8 +171,10 @@ paths: ["internal/service/**"]
   the queue and the markers are the loop's, under its fence.
 - Stopping: `shutdown.go` is P15's stop half. `Shutdown` is `Close` under
   `stop_grace`; past it, or on a forced stop, it ends every group it
-  registered by force and the caller exits; a restart first lets go of every
-  worker that can outlive it. Its header owns which groups and the gaps.
+  registered by force and the caller exits; a restart lets go of every
+  worker that can outlive it once the protocol server is closed, under the
+  lock the force claims its groups under. Its header owns which groups and
+  the gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps.
 

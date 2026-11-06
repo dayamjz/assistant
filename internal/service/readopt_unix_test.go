@@ -5,13 +5,16 @@ package service_test
 import (
 	"os"
 	"os/exec"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -134,5 +137,80 @@ func TestASurvivorOfAHardStopIsHeldAgainAndAPlainStopEndsIt(t *testing.T) {
 	}
 	if presence, err := (agents.Identity{PID: first.PID, Start: first.Start}).Presence(); err != nil || presence == agents.PresencePresent {
 		t.Fatalf("the worker reads %q (%v) after a plain stop of the service holding it, want it ended", presence, err)
+	}
+}
+
+// A restart whose workers' tmux servers have stopped answering is held back
+// by them once, not once per worker: each re-adoption asks its server under
+// a bound of its own, and the service does not serve until reconciliation is
+// done, so asking them one after another would cost a bound per worker
+// before the first readiness answer, past the wait a restart gives its
+// successor. Four workers outlive a hard stop and their servers are then
+// stopped, so each pane is present and its server never answers. The next
+// service must open within three of the one bound, where one after another
+// takes at least four; it holds none of the workers, since none verifies,
+// and relaunches none, since each is present.
+//
+// It does not run in parallel: it bounds how long Open takes from above,
+// and the package's other tests beside it would be measuring their load.
+func TestARestartBehindTmuxServersThatDoNotAnswerWaitsOnThemOnce(t *testing.T) {
+	tmux := standin.Tmux(t)
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	if err := os.WriteFile(h.ConfigFile(), []byte(tmuxGlobal+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	subject := newSubject(t)
+	quietMaintenance(t, subject)
+	repository := recordRepository(t, h, subject)
+	ids := []string{
+		recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/unanswered-one"),
+		recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/unanswered-two"),
+		recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/unanswered-three"),
+		recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/unanswered-four"),
+	}
+	var servers []int
+	o, _ := workerOptions(t, h)
+	withServiceOptions(t, o, func(running serviceUnderTest) {
+		for _, id := range ids {
+			provider, launched := launchedSession(t, running.service, id)
+			waitCapture(t, provider, launched, "worker ready")
+			socket := socketOf(t, provider, launched)
+			t.Cleanup(func() { _ = exec.Command(tmux, "-S", socket, "kill-server").Run() })
+			server := launched.Host()
+			if server.PID <= 0 {
+				t.Fatalf("task %s's session names no server process: %+v", id, server)
+			}
+			servers = append(servers, server.PID)
+		}
+		running.service.AbandonSessionsForTest(t)
+	})
+	homeIsFree(t, h)
+	for _, pid := range servers {
+		if err := syscall.Kill(pid, syscall.SIGSTOP); err != nil {
+			t.Fatalf("stopping tmux server %d: %v", pid, err)
+		}
+		// Registered after the server's kill-server, so it runs first and
+		// the server can answer that.
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGCONT) })
+	}
+
+	o, _ = workerOptions(t, h)
+	began := time.Now()
+	running, closeSecond := openService(t, o)
+	took := time.Since(began)
+	defer closeSecond()
+	t.Logf("the service behind %d tmux servers that do not answer opened in %v", len(servers), took)
+	if limit := time.Duration(len(servers)-1) * service.ReadoptBound; took >= limit {
+		t.Fatalf("the service behind %d tmux servers that do not answer took %v to open, want under %v: the re-adoptions waited one after another",
+			len(servers), took, limit)
+	}
+	for _, id := range ids {
+		if _, _, held := running.service.SessionOf(id); held {
+			t.Fatalf("task %s's worker is held although its server never answered", id)
+		}
+		if attempts := attemptsOf(t, h, id); len(attempts) != 1 {
+			t.Fatalf("task %s has attempts %+v, want its one launch and no relaunch of a worker still present", id, attempts)
+		}
 	}
 }

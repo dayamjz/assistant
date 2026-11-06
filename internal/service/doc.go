@@ -502,8 +502,9 @@
 // The sessions a launch creates are held per task, one per attempt, beside
 // the tmux workers an earlier service let go across a restart, which
 // recovery holds again (reconcile.go's readoptWorkers); Close ends exactly
-// the sessions held, except that a restart first lets go of every one that
-// can outlive it (launch.go's releaseForRestart).
+// the sessions held, except that a restart lets go of every one that can
+// outlive it once the protocol server is closed (launch.go's
+// releaseForRestart), and a forced stop never signals one it let go.
 //
 // Four things about the launch are stated rather than implied, and launch.go
 // owns each. Nothing here writes an event to say Running, and the task

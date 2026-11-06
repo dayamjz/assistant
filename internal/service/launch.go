@@ -565,8 +565,11 @@ func (s *Service) sessionOf(id string) (session.Host, *session.Session, bool) {
 // provider can leave it running, when the stop under way is a restart
 // (Stop(true), the restart verb): the worker and its tmux server go on, the
 // attempt's recorded reference owns it, and the next service holds it again
-// (readoptWorkers). It runs before anything a stop forces or ends, so neither
-// the forced stop's groups nor its hurry reach a released worker. A session
+// (readoptWorkers). Close runs it once the protocol server is closed, since
+// a worker let go is placed as a person's, and again before closeSessions.
+// Each release is made under restartRelease's lock, which a forced stop's
+// claimForce takes, so the force never signals a worker let go, and nothing
+// is let go once it has claimed. A session
 // whose reference is still being recorded is not released, so no worker is
 // left running behind a record that may not name it; it, every worker a
 // provider cannot release (a pipe's, session.ErrNotDurable), and one whose
@@ -586,7 +589,18 @@ func (s *Service) releaseForRestart() {
 	}
 	s.mu.Unlock()
 	for id, launched := range held {
+		names := sessionLeaders(launched.session)
+		s.restartRelease.mu.Lock()
+		if s.restartRelease.forced {
+			s.restartRelease.mu.Unlock()
+			s.log.Printf("the stop was forced before every worker was released for the restart, so the rest are ended with it")
+			return
+		}
 		err := launched.host.Release(launched.session)
+		if err == nil {
+			s.restartRelease.let = append(s.restartRelease.let, names...)
+		}
+		s.restartRelease.mu.Unlock()
 		switch {
 		case errors.Is(err, session.ErrNotDurable):
 			continue

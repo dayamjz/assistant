@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -28,18 +29,20 @@ import (
 // nothing it waits on should be running, and returns *StopForcedError so the
 // caller exits rather than waiting any longer.
 //
-// A restart (Stop(true)) is a stop that first lets go of every worker that
-// can outlive it, a tmux-hosted worker, before anything here reads a group
-// or hurries a termination (launch.go's releaseForRestart), so neither the
-// forceful signal nor the hurry reaches it: its attempt's record and its own
-// server own it until the next service holds it again. A stop that is not a
-// restart lets go of nothing, and ends every worker as below.
+// A restart (Stop(true)) is a stop that lets go of every worker that can
+// outlive it, a tmux-hosted worker, once the protocol server is closed
+// (launch.go's releaseForRestart). The force claims its groups under the
+// lock each release takes (claimForce), so its signal never reaches a worker
+// let go, and its hurry does not either, since a released handle no longer
+// answers one: its attempt's record and its own server own it until the next
+// service holds it again. Nothing is let go once the stop is forced. A stop
+// that is not a restart lets go of nothing, and ends every worker as below.
 //
 // The groups it forces are the ones this service registered and can name by
 // a verified identity: every agent invocation containRunner registered, read
 // both when the stop began and when it was forced, and the leader of every
 // worker and subordinate coordinator session it launched, read when the stop
-// began, because Close forgets a session before it ends it.
+// began, because Close forgets a session before it ends it, less those let go.
 //
 // # Residual gaps
 //
@@ -60,6 +63,9 @@ import (
 //     forceSettle and then exits whether or not they are done.
 //   - A tmux-hosted worker is forced by its session's reference and by its
 //     server's identity; anything else the server started is not reached.
+//   - A restart forced before Close has closed the protocol server lets go
+//     of no worker: each is ended, and the next start reads it dead and
+//     relaunches it on reconcile.go's table.
 //   - The exit is within stop_grace plus forceSettle, not within stop_grace:
 //     the forceful step and the last wait for Close come after the grace.
 //   - What Close was still doing is abandoned with the process, so the store
@@ -114,9 +120,6 @@ func (e *StopForcedError) Is(target error) bool { return target == ErrStopForced
 func (s *Service) Shutdown(force <-chan struct{}) error {
 	grace := s.cfg.StopGrace
 	deadline := s.stopDeadline()
-	// A restart lets its terminal-hosted workers go before the groups a
-	// forced stop would signal are read, so none of them is among them.
-	s.releaseForRestart()
 	known := s.knownGroups()
 	done := make(chan error, 1)
 	go func() { done <- s.Close() }()
@@ -136,8 +139,9 @@ func (s *Service) Shutdown(force <-chan struct{}) error {
 	}
 	settled := time.NewTimer(forceSettle)
 	defer settled.Stop()
+	targets := s.claimForce(append(known, s.registry.leaders()...))
 	s.registry.hurryTerminations()
-	forced := s.forceGroups(append(known, s.registry.leaders()...))
+	forced := s.forceGroups(targets)
 	stop := &StopForcedError{Grace: grace, Early: early, Waiting: waiting, Forced: forced}
 	s.log.Printf("%s", stop.account())
 	select {
@@ -164,6 +168,15 @@ func (s *Service) knownGroups() []agents.Identity {
 		known = append(known, sessionLeaders(launched.session)...)
 	}
 	return known
+}
+
+// claimForce ends a restart's releases and returns groups less every process
+// a worker let go names, under the lock each release takes.
+func (s *Service) claimForce(groups []agents.Identity) []agents.Identity {
+	s.restartRelease.mu.Lock()
+	defer s.restartRelease.mu.Unlock()
+	s.restartRelease.forced = true
+	return slices.DeleteFunc(groups, func(id agents.Identity) bool { return slices.Contains(s.restartRelease.let, id) })
 }
 
 // sessionLeaders is the agent process a session's reference names and the
@@ -240,4 +253,9 @@ func (s *Service) stopDeadline() time.Time {
 }
 
 // closingAt records the step Close is in, for Shutdown to name.
-func (s *Service) closingAt(step string) { s.closing.Store(step) }
+func (s *Service) closingAt(step string) {
+	s.closing.Store(step)
+	if s.atCloseStep != nil {
+		s.atCloseStep(step)
+	}
+}

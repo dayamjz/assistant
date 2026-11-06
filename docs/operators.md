@@ -1398,8 +1398,10 @@ tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
 ```
 
 Under `session_provider: tmux`, a worker outlives a restart of the service.
-`assistant service restart` lets it go rather than ending it, and the next
-service holds it again as it starts: the same worker, with its context,
+`assistant service restart` lets it go rather than ending it, once the
+service has stopped answering requests, and the next service holds it again
+as it starts (a restart forced past `stop_grace` before that point ends it
+as a stop does, and it is relaunched in place): the same worker, with its context,
 answers through the next service, and no relaunch is recorded, so a restart
 does not count toward `relaunch_attempts`. A service killed outright leaves
 it running the same way, and the next start holds it again too. Before it
