@@ -316,6 +316,51 @@ type TerminalWorker interface {
 	// answers Capture with its last screen, and its Close ends the worker's
 	// group and server by their verified identities and touches no path.
 	Release() error
+
+	// Interrupt ends the turn the worker is running and keeps the worker,
+	// for an adapter whose typing names an interrupt key, which is what
+	// CapabilityTerminalInterrupt declares; InterruptTerminalWorker is the
+	// route that reads the declaration first. It waits, under ctx, for the
+	// screen to read either a turn running with nothing in the input or
+	// the interface ready. Ready, no turn is running: it answers false and
+	// presses nothing. Running, it presses the key once and answers true
+	// once the screen reads ready again with the worker not ended, which is
+	// the proof the turn ended; the proof is that a turn ended, which the
+	// key or the turn itself may have done in the time between the reading
+	// and the key. An agent that puts the turn's message back in its input
+	// on the key, as Claude Code does for a turn that has drawn no reply
+	// yet, is read so, no turn shown running and text in the input, and the
+	// adapter's clear key is pressed and the screen read again until it
+	// reads ready, which takes that message back out a line at a time; a
+	// reading that lags a press costs one press more on an input already
+	// empty, which the CLI was observed to ignore. Before the key, any other
+	// screen, an input holding text or a prompt drawn over the interface,
+	// is waited on and, when ctx ends first, refused with
+	// ErrTerminalNotReady with nothing pressed, because the key was
+	// observed to act otherwise there. A key typed and no ready
+	// screen read after it within ctx is an error wrapping
+	// ErrTerminalNotReady that says the key was typed. ErrWorkerEnded when
+	// the worker is gone, ErrWorkerReleased on a released handle, and a
+	// *CapabilityError from an adapter whose typing names no key. It is
+	// serialized with Send, so nothing is typed between the reading and
+	// the key.
+	Interrupt(ctx context.Context) (bool, error)
+}
+
+// InterruptTerminalWorker ends the turn w is running and keeps it, on
+// TerminalWorker.Interrupt's terms, for a worker r started. It reads r's
+// declaration first, as OpenTerminalWorker does: an adapter that has not
+// declared CapabilityTerminalInterrupt is refused with a *CapabilityError
+// naming it and nothing is read or pressed.
+func InterruptTerminalWorker(ctx context.Context, r Runner, w TerminalWorker) (bool, error) {
+	if !r.Capabilities().Has(CapabilityTerminalInterrupt) {
+		return false, &CapabilityError{
+			Agent:      r.Name(),
+			Capability: CapabilityTerminalInterrupt,
+			Path:       "interrupting a terminal worker's turn",
+		}
+	}
+	return w.Interrupt(ctx)
 }
 
 // ErrWorkerEnding is Release's refusal of a worker whose end has already
@@ -532,6 +577,15 @@ const (
 	// screenReady is the interface drawn with no turn running and nothing
 	// in its input, which is the one state a send types into.
 	screenReady
+	// screenBusy is the interface drawn with a turn running and nothing in
+	// its input, which is the one state an interrupt presses its key on.
+	screenBusy
+	// screenTyped is the interface drawn with text in its input and no turn
+	// shown running, which an agent may also draw while a turn runs, so it
+	// says nothing about a turn by itself. Right after an interrupt's key,
+	// from a screen that read screenBusy, Interrupt takes it for the turn's
+	// message put back in the input.
+	screenTyped
 )
 
 // terminalTyping is how an adapter types into a terminal worker: the bytes
@@ -552,6 +606,24 @@ type terminalTyping struct {
 	// types only once it reads screenReady. Nil, nothing is read and every
 	// send is typed at once.
 	read func(screen string) screenState
+	// interrupt is the tmux name of the key that ends a running turn and
+	// keeps the agent, which Interrupt presses on a screen read reads as
+	// screenBusy, and empty for an adapter that has none or no read to
+	// prove the turn ended by. It is what CapabilityTerminalInterrupt's
+	// row reads.
+	interrupt string
+	// clear is the tmux name of the key that takes the input's last line
+	// out, which Interrupt presses until the input reads empty when its key
+	// put the turn's message back there, and empty for an adapter whose
+	// interrupt never does.
+	clear string
+}
+
+// terminalTyper is a runner whose terminal workers are typed into with the
+// typing it answers, which every start and adoption it makes uses, so the
+// capability table reads the same value the workers do.
+type terminalTyper interface {
+	terminalTyping() terminalTyping
 }
 
 // tmuxWorker is the TerminalWorker over one tmux server this package
@@ -1045,6 +1117,60 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 		return fmt.Errorf("typing into the terminal: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// Interrupt ends the turn the worker is running and keeps the worker, on
+// the terms TerminalWorker.Interrupt states.
+func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
+	if w.typing.interrupt == "" || w.typing.read == nil {
+		return false, &CapabilityError{Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"}
+	}
+	w.sendMu.Lock()
+	defer w.sendMu.Unlock()
+	select {
+	case <-w.done:
+		return false, ErrWorkerEnded
+	default:
+	}
+	if w.isReleased() {
+		return false, ErrWorkerReleased
+	}
+	var read screenState
+	if err := w.await(ctx, func(s screenState) bool { read = s; return s == screenBusy || s == screenReady }); err != nil {
+		return false, err
+	}
+	if read == screenReady {
+		return false, nil
+	}
+	if err := runTmux(ctx, tmuxTypeBound, "the client typing an interrupt", procgroup.Command(w.terminal.Tmux,
+		"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, w.typing.interrupt)); err != nil {
+		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
+			return false, ErrWorkerEnded
+		}
+		return false, fmt.Errorf("typing the interrupt into the terminal: %w", err)
+	}
+	for {
+		var after screenState
+		if err := w.await(ctx, func(s screenState) bool {
+			after = s
+			return s == screenReady || (s == screenTyped && w.typing.clear != "")
+		}); err != nil {
+			return false, fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err)
+		}
+		if after == screenReady {
+			break
+		}
+		if err := runTmux(ctx, tmuxTypeBound, "the client clearing the input after an interrupt", procgroup.Command(w.terminal.Tmux,
+			"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, w.typing.clear)); err != nil {
+			return false, fmt.Errorf("the interrupt was typed and the message it put back in the input was not cleared: %w", err)
+		}
+	}
+	select {
+	case <-w.done:
+		return false, ErrWorkerEnded
+	default:
+	}
+	return true, nil
 }
 
 // Capture reads the pane on the terms the mechanism states.

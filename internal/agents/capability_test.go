@@ -255,7 +255,116 @@ var probes = append([]probe{{
 				refusal.Capability, refusal.Agent, agents.CapabilityTerminalWorkers, r.Name())
 		}
 	},
+}, {
+	capability: agents.CapabilityTerminalInterrupt,
+	declared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.TerminalWorkerRunner); !ok {
+			t.Errorf("%s declares %s and is no TerminalWorkerRunner, so it has no terminal worker to interrupt",
+				r.Name(), agents.CapabilityTerminalInterrupt)
+			return
+		}
+		// A terminal worker is sent a turn far longer than the probe waits
+		// and interrupted: the interrupt answers that a turn ran, the worker
+		// is still running, an interrupt with no turn running answers so,
+		// and the worker reads its next send. Without tmux it is not asked.
+		term := agents.Terminal{Tmux: standin.Tmux(t), Socket: filepath.Join(standin.SocketDir(t), "i")}
+		dir, err := standin.TempDir("intr")
+		if err != nil {
+			t.Fatalf("making a directory for the worker: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		const instructions = "conformance: a terminal worker is being started"
+		typed := []string{instructions, interruptProbeMessage}
+		own := func(w agents.Worker) int64 { return ownLines(w, typed) }
+		start, cancel := bounded(t.Context())
+		worker, err := agents.OpenTerminalWorker(start, r, term, agents.WorkerSpec{Dir: dir, Instructions: instructions})
+		cancel()
+		if err != nil {
+			t.Errorf("%s declares %s and OpenTerminalWorker could not start one: %v", r.Name(), agents.CapabilityTerminalInterrupt, err)
+			return
+		}
+		defer worker.Close()
+		send, cancel := bounded(t.Context())
+		err = worker.Send(send, interruptProbeMessage)
+		cancel()
+		if err != nil {
+			t.Errorf("%s's terminal worker refused the long turn: %v", r.Name(), err)
+			return
+		}
+		// An interrupt asked before the agent drew the turn finds none and
+		// presses nothing, so it is asked until it finds the turn running.
+		wait, cancel := bounded(t.Context())
+		defer cancel()
+		for {
+			interrupted, err := agents.InterruptTerminalWorker(wait, r, worker)
+			if err != nil {
+				t.Errorf("%s declares %s and the interrupt of a running turn failed: %v\n%s",
+					r.Name(), agents.CapabilityTerminalInterrupt, err, worker.Capture().Text)
+				return
+			}
+			if interrupted {
+				break
+			}
+			select {
+			case <-wait.Done():
+				t.Errorf("%s's interrupt never found the long turn running:\n%s", r.Name(), worker.Capture().Text)
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		select {
+		case <-worker.Done():
+			t.Errorf("%s's terminal worker ended on the interrupt", r.Name())
+			return
+		default:
+		}
+		idle, cancel := bounded(t.Context())
+		interrupted, err := agents.InterruptTerminalWorker(idle, r, worker)
+		cancel()
+		if err != nil || interrupted {
+			t.Errorf("%s's interrupt with no turn running answered %t, %v, want false and no error", r.Name(), interrupted, err)
+			return
+		}
+		const after = "conformance: a message after the interrupt"
+		typed = append(typed, after)
+		mark := own(worker)
+		send, cancel = bounded(t.Context())
+		err = worker.Send(send, after)
+		cancel()
+		if err != nil {
+			t.Errorf("%s's interrupted terminal worker refused its next send: %v", r.Name(), err)
+			return
+		}
+		if !reacted(t, worker, mark, own) {
+			t.Errorf("%s's interrupted terminal worker did not read its next send:\n%s", r.Name(), worker.Capture().Text)
+		}
+	},
+	undeclared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		_, err := agents.InterruptTerminalWorker(t.Context(), r, nil)
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s has not declared %s and InterruptTerminalWorker answered %v, want a *CapabilityError",
+				r.Name(), agents.CapabilityTerminalInterrupt, err)
+		}
+		if refusal.Capability != agents.CapabilityTerminalInterrupt || refusal.Agent != r.Name() {
+			t.Errorf("the refusal names %q on %q, want %q on %q",
+				refusal.Capability, refusal.Agent, agents.CapabilityTerminalInterrupt, r.Name())
+		}
+	},
 }}, countProbes()...)
+
+// interruptProbeMessage is the turn the terminal interrupt probe
+// interrupts, and the landmark interruptProbeExchange, and the installed-CLI
+// test's local model, answer with a turn longer than the probe waits.
+const interruptProbeMessage = "conformance: a turn long enough to interrupt"
+
+// interruptProbeExchange is the stand-in's long turn for the terminal
+// interrupt probe. Every stand-in the suite runs a terminal adapter over
+// carries it.
+var interruptProbeExchange = standin.Exchange{Contains: interruptProbeMessage, Reply: "conformance: the long turn ended by itself",
+	Turn: time.Hour}
 
 // countProbePrompt is what the count probe asks an adapter, and the landmark
 // countProbeStep answers it by.
@@ -632,7 +741,8 @@ func TestEveryShippedAdapterConformsToItsDeclaration(t *testing.T) {
 // command lines apart.
 var overTheWire = map[string]func(t *testing.T) agents.Runner{
 	agents.ClaudeName: func(t *testing.T) agents.Runner {
-		return standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep}},
+		return standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep},
+			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{interruptProbeExchange}}},
 			agents.WithTerminationGrace(300*time.Millisecond),
 			agents.WithBaseEnvironment(withStandinKey(os.Environ())),
 		).Runner()
@@ -758,8 +868,8 @@ func TestTheScriptedAdapterConformsToItsDeclaration(t *testing.T) {
 
 // What the scripted adapter declares is a fact about it too: the three
 // mechanisms it carries and the four token counts the Claude Code envelope it
-// reads carries, and not suppression. The last holds for the reason the
-// shipped adapter's does.
+// reads carries, and not suppression, which holds for the reason the shipped
+// adapter's does, nor a terminal interrupt, since its typing reads no screen.
 func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 	declared := newWorkerRunner(t).Capabilities()
 	want := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
@@ -776,8 +886,8 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 }
 
 // What the shipped adapter declares is a fact about it, so it is asserted
-// rather than derived. Claude Code has resumable sessions, worker sessions
-// and terminal workers, and reads all four token counts, and it has no
+// rather than derived. Claude Code has resumable sessions, worker sessions,
+// terminal workers and their interrupt, and reads all four token counts, and it has no
 // instruction-suppression mechanism, so a run configured to suppress a
 // repository's own instructions is refused against it. Of the others, only
 // OpenAI declares it does not report a count: it reads no cache count.
@@ -791,7 +901,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	claudeDeclared := claude.Capabilities()
 	counts := agents.CountCapabilities()
 	wantClaude := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
-		agents.CapabilityTerminalWorkers}, counts...)
+		agents.CapabilityTerminalWorkers, agents.CapabilityTerminalInterrupt}, counts...)
 	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
 		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}
@@ -904,6 +1014,15 @@ func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.
 			name:      "terminal-boaster",
 			available: true,
 			declares:  []agents.Capability{agents.CapabilityTerminalWorkers},
+		},
+		want: "carries no mechanism",
+	}, {
+		name: "declares a terminal interrupt it cannot type",
+		factory: &stubFactory{
+			name:      "interrupt-boaster",
+			available: true,
+			declares:  []agents.Capability{agents.CapabilityTerminalWorkers, agents.CapabilityTerminalInterrupt},
+			terminals: true,
 		},
 		want: "carries no mechanism",
 	}, {

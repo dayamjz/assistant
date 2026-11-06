@@ -96,7 +96,10 @@ func askInstalled(ctx context.Context, bound time.Duration, bin string, env []st
 
 // fakeMessages is a local stand-in for the model's Messages API: it answers
 // every message request with a short reply, streamed or not as asked, and
-// keeps the text of the last user message of each request. It keeps no
+// keeps the text of the last user message of each request. A streamed
+// request whose last user message carries interruptProbeMessage is answered
+// with a reply that keeps streaming until the client goes away, which it
+// counts in cancelled, or until the request has run past probeWait. It keeps no
 // header, so whatever credential a request carried is never held: it keeps
 // only how each message request presented one, compared against want as it
 // arrives, in presented.
@@ -107,6 +110,7 @@ type fakeMessages struct {
 	mu        sync.Mutex
 	texts     []string
 	presented []string
+	cancelled int
 }
 
 // The ways a message request was seen to present a credential, as
@@ -193,6 +197,26 @@ func (f *fakeMessages) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	event("message_start", map[string]any{"type": "message_start", "message": message})
 	event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
 		"content_block": map[string]string{"type": "text", "text": ""}})
+	if strings.Contains(text, interruptProbeMessage) {
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		bound := time.NewTimer(probeWait)
+		defer bound.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				f.mu.Lock()
+				f.cancelled++
+				f.mu.Unlock()
+				return
+			case <-bound.C:
+				return
+			case <-tick.C:
+				event("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+					"delta": map[string]string{"type": "text_delta", "text": "still working. "}})
+			}
+		}
+	}
 	event("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
 		"delta": map[string]string{"type": "text_delta", "text": reply}})
 	event("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
@@ -216,6 +240,13 @@ func (f *fakeMessages) received(parts ...string) bool {
 		}
 	}
 	return false
+}
+
+// interruptsSeen is how many long turns the client went away from.
+func (f *fakeMessages) interruptsSeen() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cancelled
 }
 
 // presentedAs reports whether every message request so far presented the
@@ -266,7 +297,11 @@ func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...str
 // and then asks what the stand-in's model rests on: instructions beginning
 // with a dash reach the model, a multi-line send reaches it as one message,
 // and a send
-// beginning with "!" or "/" reaches it as a message and runs nothing. Last,
+// beginning with "!" or "/" reaches it as a message and runs nothing. Then
+// it runs the conformance suite's terminal interrupt probe, whose long turn
+// the local model streams until the CLI goes away from it, and asks that
+// the CLI did go away and that the message after the interrupt reached the
+// model. Last,
 // it asks how every message request presented the credential: the key as
 // x-api-key and the token as a bearer Authorization, each with the value
 // the probe gave, which is what shows the CLI authenticated with the one
@@ -368,6 +403,21 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	// The CLI kept its state in the worker's own directory, not the home's.
 	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the installed CLI wrote a state file under HOME: %v", err)
+	}
+	// The terminal interrupt probe, on its own worker: the long turn is
+	// the local model streaming without end, and the CLI's interrupt is
+	// seen from here as the request it went away from.
+	pi, _ := probeFor(agents.CapabilityTerminalInterrupt)
+	pi.declared(t, runner)
+	if !t.Failed() {
+		deadline := time.Now().Add(probeWait)
+		for api.interruptsSeen() == 0 && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if api.interruptsSeen() == 0 {
+			t.Errorf("the installed CLI was interrupted and never went away from the long turn's request")
+		}
+		api.awaitReceived(t, worker, "conformance: a message after the interrupt")
 	}
 	if seen, ok := api.presentedAs(presented); !ok {
 		t.Errorf("the message requests presented the credential as %q, want %q every time", seen, presented)
