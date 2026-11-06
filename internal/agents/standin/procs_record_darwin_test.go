@@ -317,13 +317,14 @@ func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 // and refuses, and ends and reaps the one the reading before started before
 // the kernel's table is read; that reading's records then hold, at the
 // ended sleep's number, staging, as if another process had been given the
-// number and recorded there. The first reading names gone instead, a number
-// with no record that identify reads as not running, so it is unsettled.
+// number and recorded there. The first reading, which has no sleep before
+// it, starts a second sleep beside its own and ends that one once the
+// kernel's table is read, so the reading meets a real unread exit and is
+// unsettled.
 type refusedNumberRecordedAgain struct {
 	kernel
 	t                *testing.T
 	staging          tableRecord
-	gone             int
 	current          *exec.Cmd
 	readings, staged int
 }
@@ -332,6 +333,10 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
 	previous := r.current
 	r.current = startSleep(r.t)
+	var exiting *exec.Cmd
+	if previous == nil {
+		exiting = startSleep(r.t)
+	}
 	if previous != nil {
 		_ = previous.Process.Kill()
 		_ = previous.Wait()
@@ -341,7 +346,9 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 		return nil, nil, err
 	}
 	if previous == nil {
-		return append(pids, r.gone), records, nil
+		_ = exiting.Process.Kill()
+		_ = exiting.Wait()
+		return pids, records, nil
 	}
 	number := previous.Process.Pid
 	if !slices.Contains(pids, number) {
@@ -352,13 +359,6 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 	records[number] = staged
 	r.staged++
 	return pids, records, nil
-}
-
-func (r *refusedNumberRecordedAgain) identify(pid int) (agents.Identity, bool, error) {
-	if pid == r.gone {
-		return agents.Identity{}, false, nil
-	}
-	return r.kernel.identify(pid)
 }
 
 // A process number that a reading read as a refused process does not pass
@@ -381,7 +381,6 @@ func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
 		t.Fatal(err)
 	}
 	table := &refusedNumberRecordedAgain{t: t, staging: endedBinaryRecord(t)}
-	table.gone = newGoneNumbers(80_001).take()
 	_, err = processesOfBinary(table, self)
 	if table.staged != table.readings-1 {
 		t.Fatalf("%d of the %d readings after the first met the staged record, so this shows nothing", table.staged, table.readings-1)
