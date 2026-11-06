@@ -59,7 +59,8 @@ func processesOfBinary(table processTable, binary string) ([]Process, error) {
 // a candidate when its record names it by the binary's recorded name, when
 // walking its recorded parents through the same records reaches a process
 // so named or this process, or when it or a parent on that walk has no
-// record. The walk only adds candidates, so a refused parent never makes
+// record, so the walk judges nothing by a record it does not hold. The
+// walk only adds candidates, so a refused parent never makes
 // its child one that could not be the binary's (#735 r1). The name is
 // recordedName's prediction, which a listing checks against this process's
 // record when this process runs the binary (checkSelf) and against a fresh
@@ -264,7 +265,10 @@ const settleReadings = 64
 // then what match reads, then its command line, then its identity again,
 // still the same running process), or is another user's and could not be
 // read, or was read as not running in the reading before too, which an
-// exited process nobody has reaped yet is, and which starts nothing. A
+// exited process nobody has reaped yet is, and which starts nothing, or, in
+// a listing given candidates, is one the reading's records judge no
+// candidate and that the reading read as not running, or as gone before it
+// was read whole. A
 // process that exits between two of those reads may have started another
 // the table read before its birth does not name, so a reading in which one
 // did is not settled. Nor is one in which a read of this user's running
@@ -325,8 +329,10 @@ const settleReadings = 64
 // candidate: that child may itself match.
 //
 // So every process of this user's running when a settled reading began was
-// read whole, as one match accepts or refuses, and a process that match
-// accepted, or that was never read whole, and that exited during an earlier
+// read whole, as one match accepts or refuses, except, in a listing given
+// candidates, one its records judge no candidate that the reading read as
+// gone before reading it whole; and a process that match accepted, or that
+// was never read whole and is a candidate, and that exited during an earlier
 // reading after starting another has that other read whole in a later one.
 // Processes never read whole that keep exiting, one in every reading, still
 // keep every reading from settling, unless the reading's records judge them
@@ -465,8 +471,14 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 			if failed != nil {
 				foreign, ferr = table.foreign(pid)
 			}
-			if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
-				if could || (merr == nil && matched) {
+			// The recheck that the process read is still the one running.
+			// One that fails says nothing of whether it runs, so only one
+			// that reads it gone may be passed over as no candidate's exit.
+			if now, still, perr := table.identify(pid); perr != nil || !still || now != id {
+				switch {
+				case perr != nil:
+					unsettle(pid, fmt.Errorf("%v could not be identified again once it was read: %w", id, perr))
+				case could || (merr == nil && matched):
 					unsettle(pid, fmt.Errorf("%v exited before it had been read whole", id))
 				}
 				continue

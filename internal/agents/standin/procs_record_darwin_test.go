@@ -664,3 +664,97 @@ func TestAWrongPredictionOfAnAcceptedProcessesNameTurnsTheRecordsOff(t *testing.
 	}
 	everyReadingUnsettled(t, "a listing whose prediction an accepted process's record contradicts", err, table.readings)
 }
+
+// recheckFails is a processTable that passes every read through to the
+// kernel but three, all of pick, a live process of the binary outside this
+// tree: each reading records it under renamed, the name a record read
+// before its exec carries; every read of its command line fails with EIO;
+// and identify, asked of it a second time in a reading, which is the check
+// after the reads that it is still the process read, fails with EIO.
+type recheckFails struct {
+	kernel
+	pick               int
+	renamed            string
+	asked              bool
+	readings, rechecks int
+}
+
+func (r *recheckFails) ids() ([]int, map[int]tableRecord, error) {
+	r.readings++
+	r.asked = false
+	pids, records, err := r.kernel.ids()
+	if record, ok := records[r.pick]; ok {
+		record.name = r.renamed
+		records[r.pick] = record
+	}
+	return pids, records, err
+}
+
+func (r *recheckFails) commandLine(pid int) (string, []string, error) {
+	if pid == r.pick {
+		return "", nil, syscall.EIO
+	}
+	return r.kernel.commandLine(pid)
+}
+
+func (r *recheckFails) identify(pid int) (agents.Identity, bool, error) {
+	if pid == r.pick {
+		if r.asked {
+			r.rechecks++
+			return agents.Identity{}, false, syscall.EIO
+		}
+		r.asked = true
+	}
+	return r.kernel.identify(pid)
+}
+
+// A process whose identity cannot be read again once it was read is not
+// taken for one that exited (P15, #722): a recheck that fails says nothing
+// of whether the process runs, so it unsettles the reading whatever the
+// record says. Here a live process of this binary outside this tree is
+// recorded under its shell's name, as a record read before its exec is,
+// so the record judges it no candidate; every read of its command line
+// fails, and so does the recheck of its identity. Before, the failed
+// recheck was read as the process gone, the exit of a process that is no
+// candidate was passed over, and the listing settled without the live
+// process. The controls are that every reading reached the recheck and
+// that the process runs throughout.
+func TestAFailedRecheckOfAProcessThatIsNoCandidateUnsettles(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := startOutside(t, []string{"STANDIN_TEST_HOLD_OPEN=1"}, self)
+	name := predictedName(t, self)
+	var pick agents.Identity
+	var renamed string
+	deadline := time.Now().Add(10 * time.Second)
+	for pick.PID == 0 {
+		_, records, err := readTable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records {
+			if record.parent == shell && record.name == name {
+				pick, renamed = record.Identity, records[shell].name
+			}
+		}
+		if pick.PID == 0 && !time.Now().Before(deadline) {
+			t.Fatal("the shell outside this tree started no process of the binary")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	table := &recheckFails{pick: pick.PID, renamed: renamed}
+	_, err = processesOfBinary(table, self)
+	if table.rechecks != table.readings {
+		t.Fatalf("%d of %d readings rechecked process %d's identity, so this shows nothing", table.rechecks, table.readings, pick.PID)
+	}
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.PID != pick.PID || unsettled.Readings != settleReadings || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("a listing whose recheck of the live process %d fails = %v; want every reading unsettled naming it and the EIO", pick.PID, err)
+	}
+	if presence, err := pick.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("process %v was not running once the listing returned (%v, %v)", pick, presence, err)
+	}
+}

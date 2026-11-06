@@ -765,11 +765,14 @@ func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
 }
 
 // An unread exit in every reading beside a refused process keeps every
-// reading from settling (P15): every reading names a refused sleep and a
-// new real process that exited before it was identified, and that exit
-// unsettles each of the 64, the open #722 gap when never-read-whole
-// processes keep exiting. Presence for the sleep is the kernel's, so the
-// fixture is not a fabricated identity.
+// reading from settling in a listing of this binary (P15, #722) when the
+// process that exited could be the binary's: every reading names a refused
+// sleep and a new real child of this process that exited before it was
+// identified, which on Darwin its record makes a candidate as this
+// process's descendant, and which on Linux, where no reading holds a
+// record, every process is. That exit unsettles each of the 64. Presence
+// for the sleep is the kernel's, so the fixture is not a fabricated
+// identity.
 // Not parallel: it starts and ends a real process in each of its 64
 // readings, which would keep other tests' listings from settling.
 func TestUnreadExitsBesideARefusedProcessStillPreventSettling(t *testing.T) {
