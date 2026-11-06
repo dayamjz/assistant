@@ -2,8 +2,17 @@
 
 This is a runbook for validating this repository's own pull requests with the
 gate while nothing the gate does reaches this repository. It is written to be
-followed from nothing: a fresh session with a checkout, a Go toolchain and `gh`
-signed in needs no other context.
+followed from nothing, and what it assumes you have is:
+
+- a Go toolchain and `git`;
+- `gh`, signed in to an account that can create a private repository;
+- **a coding agent this build can drive, installed and authenticated.** The
+  review and fix stages launch one, and a run cannot start without it:
+  `assistant doctor` reports the agent row as blocking and answers that no run
+  can start. The default resolution picks whichever supported agent is
+  runnable, so nothing has to be configured when one is installed; to use a
+  particular one, name it with `agent` in the home's `config.yaml`. Step 5
+  below runs `assistant doctor`, which is where you read that row.
 
 **Shadow** here means one thing only: the gate's recorded upstream is a private
 mirror repository rather than this one. Every stage still runs for real,
@@ -24,20 +33,33 @@ case.
 | A home of its own | The home holds the database, the gate repositories, the run copies and the service socket. A second home keeps the dogfood's runs, tasks and holds out of the one you use for real work. |
 | A private mirror as the upstream | The push stage always forwards. Pointing it at a mirror is what keeps a dogfood run from pushing a branch, opening a pull request or merging on the real repository. |
 
-## 1. Build the binary
+## 1. Clone the repository
 
-Build from the clone you are going to validate, so the gate under test is the
-build you are reading:
+The clone comes first, because every later step runs the binary built inside
+it. A binary built in the checkout you were already standing in is not on the
+path any of them use.
 
 ```sh
-make build        # writes bin/assistant
+git clone https://github.com/dayamjz/assistant.git assistant-dogfood
+cd assistant-dogfood
+```
+
+Leave `origin` as it is. `init` is told the upstream explicitly in step 5, so
+`origin` is only where the clone fetches from and is never a run's push target.
+
+## 2. Build the binary, in the clone
+
+```sh
+make build        # writes bin/assistant in the clone
 ./bin/assistant --version
 ```
 
-Every command below is that binary. It is written into the gate's hooks and into
-the service definition by absolute path, so build it where it can stay.
+The gate under test is then the build you are reading. Every command below is
+that binary, run from the clone's root as `./bin/assistant`. Its absolute path
+is written into the gate's hooks and into the service definition, so the clone
+has to stay where it is for as long as the gate does.
 
-## 2. Give it a home of its own
+## 3. Give it a home of its own
 
 The home root is `ASSISTANT_HOME`, or the `--home PATH` global flag, which is
 accepted before or after the verb. Prefer the flag in a runbook: an exported
@@ -49,16 +71,6 @@ HOME_ROOT=~/.assistant-dogfood
 ```
 
 Nothing creates it ahead of time; `init` does.
-
-## 3. Clone the repository
-
-```sh
-git clone https://github.com/dayamjz/assistant.git assistant-dogfood
-cd assistant-dogfood
-```
-
-Leave `origin` as it is. `init` is told the upstream explicitly in step 5, so
-`origin` is only where the clone fetches from and is never a run's push target.
 
 ## 4. Create the mirror and seed its default branch
 
@@ -95,9 +107,10 @@ gh api -X PUT repos/dayamjz/assistant-gate-mirror/actions/permissions -F enabled
 mkdir -p "$HOME_ROOT" && printf 'no_ci: true\n' >> "$HOME_ROOT/config.yaml"
 ```
 
-A declaration of `no_ci` is read at run start, so set it before the first push,
-and say in any comparison you report that the checks stage settled on a
-declaration rather than on checks.
+The service reads `config.yaml` when it starts, so write this before step 6 or
+restart the service after writing it; step 6 says so again. In any comparison
+you report, say that the checks stage settled on a declaration rather than on
+checks.
 
 ## 5. Set the gate up
 
@@ -127,13 +140,18 @@ reason: the service starts a stage command at its own scheduling priority and
 lowers nothing, so a full-repository command can use every core and saturate
 the host by itself.
 
-Check the result and keep these two facts, because the next steps and the
-teardown both need them:
+Then check the result, and keep these facts, because the next steps and the
+teardown need them:
 
 ```sh
+./bin/assistant --home "$HOME_ROOT" doctor           # read the agent row
 ./bin/assistant --home "$HOME_ROOT" --json status    # the repository record's id
 git remote -v                                        # the assistant remote's path
 ```
+
+`doctor`'s last line is its verdict on whether a run can start at all. A
+blocking agent row is the prerequisite above: install and authenticate one
+before going on, because a run cannot reach its review stage without it.
 
 ## 6. Hand the service to the operating system's service manager
 
@@ -160,6 +178,14 @@ credential, is written into it.
 Record the label or unit name, the definition's path and the pid somewhere your
 own process accounting can see, because a long-lived service is exactly what a
 leak audit is meant to notice.
+
+**The home's `config.yaml` is read when the service starts.** Write every key
+you mean to set, `no_ci` among them, before this step, or run
+`assistant service restart` after editing it, as
+[Bounding what one run spends](operators.md#bounding-what-one-run-spends) says
+of its own keys. A run pins the configuration it resolved at its start, so a
+key added under a running service reaches neither that service nor any run it
+has already begun.
 
 Logs, all under the home: `logs/service.log` is the bounded lifecycle log,
 `logs/managed-service.log` is what the service manager captures, and
@@ -207,6 +233,13 @@ From the branch's own registered checkout:
 round to resolve, as
 `--answer fix --select ID[,ID...]` with the names `--json status` shows. See
 [Answering a hold](operators.md#answering-a-hold) for the whole set.
+
+Answering the **review** stage `skipped` stops the run later rather than
+sooner: the push stage needs a durable record that a completed review approved
+a commit the head descends from, so it holds with `push-no-approval` and the
+head is never pushed. Answer the review `approved` when you mean the run to
+reach the push, pull request and checks stages; `skipped` is for the stages that
+had no command to run.
 
 **This is the part of the setup that bites.** The answer is resolved from the
 directory you type it in: it needs the working copy `init` registered, standing
