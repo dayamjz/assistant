@@ -28,8 +28,9 @@ import (
 //
 // # Configuration directory
 //
-// A fresh directory is made for this worker alone, owner-only under the
-// system's temporary directory, and given to the CLI as CLAUDE_CONFIG_DIR,
+// A fresh directory is made for this worker alone, owner-only, beside its
+// terminal's socket (claudeConfigFor), and given to the CLI as
+// CLAUDE_CONFIG_DIR,
 // which was observed to move the CLI's state file, .claude.json, there. The
 // state file is written before the CLI starts, holding three answers the CLI
 // would otherwise ask a person for on screens before its prompt: onboarding
@@ -124,7 +125,8 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	if err != nil {
 		return nil, fmt.Errorf("drawing the terminal worker's session identifier: %w", err)
 	}
-	configDir, err := seedClaudeConfig(spec.Dir, key)
+	configDir := claudeConfigFor(t)
+	err = seedClaudeConfig(spec.Dir, key, configDir)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +151,35 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	}
 	return worker, nil
 }
+
+// AdoptInTerminal holds again a Claude Code terminal worker on
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The
+// configuration directory it removes at the worker's end is the one its
+// start made beside the terminal's socket (claudeConfigFor), derived from
+// the socket the adoption verifies and never from anything the worker or
+// its server states, so nothing the worker can change names what is
+// removed.
+func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	configDir := claudeConfigFor(t)
+	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{
+		grace:   r.settings.grace,
+		maxOut:  r.settings.maxOut,
+		cleanup: func() { _ = os.RemoveAll(configDir) },
+	}, claudeTyping)
+	if err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+// claudeConfigFor is the configuration directory of the Claude Code worker
+// on t: the socket's path with a suffix, so it is a function of the
+// terminal alone, a start and an adoption of the same terminal name the
+// same directory, and it sits in the socket's owner-only directory.
+func claudeConfigFor(t Terminal) string { return t.Socket + ".claude" }
 
 // terminalLaunchSessionMeasure is the session identifier
 // TerminalLaunchCommandSize uses: the same length and shape sessionIdentifier
@@ -302,11 +333,12 @@ type claudeSeedKeys struct {
 	Rejected []string `json:"rejected"`
 }
 
-// seedClaudeConfig makes a terminal worker's configuration directory and
-// writes its state file, returning the directory. An empty key, which is a
-// worker on the OAuth token, approves no key. A directory it made and
-// could not finish is removed before it reports why.
-func seedClaudeConfig(dir, key string) (string, error) {
+// seedClaudeConfig makes a terminal worker's configuration directory at
+// configDir, which must not exist, and writes its state file. An empty key,
+// which is a worker on the OAuth token, approves no key. A directory it made
+// and could not finish is removed before it reports why; one standing at
+// configDir already is refused and left as it is.
+func seedClaudeConfig(dir, key, configDir string) error {
 	projects := map[string]claudeSeedProject{dir: {Trusted: true}}
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
 		projects[resolved] = claudeSeedProject{Trusted: true}
@@ -325,17 +357,19 @@ func seedClaudeConfig(dir, key string) (string, error) {
 		Keys:      claudeSeedKeys{Approved: approved, Rejected: []string{}},
 	})
 	if err != nil {
-		return "", fmt.Errorf("encoding the terminal worker's configuration: %w", err)
+		return fmt.Errorf("encoding the terminal worker's configuration: %w", err)
 	}
-	configDir, err := os.MkdirTemp("", "assistant-claude-")
-	if err != nil {
-		return "", fmt.Errorf("making the terminal worker's configuration directory: %w", err)
+	if err := os.MkdirAll(filepath.Dir(configDir), 0o700); err != nil {
+		return fmt.Errorf("making the terminal worker's configuration directory's parent: %w", err)
+	}
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		return fmt.Errorf("making the terminal worker's configuration directory: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, ".claude.json"), encoded, 0o600); err != nil {
 		_ = os.RemoveAll(configDir)
-		return "", fmt.Errorf("writing the terminal worker's configuration: %w", err)
+		return fmt.Errorf("writing the terminal worker's configuration: %w", err)
 	}
-	return configDir, nil
+	return nil
 }
 
 // sessionIdentifier draws a random version 4 UUID, the form --session-id

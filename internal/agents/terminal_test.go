@@ -331,3 +331,90 @@ func TestOpenTerminalWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T
 		t.Errorf("a boasting stub answered %v, want ErrAdapterDeclaration", err)
 	}
 }
+
+// A released terminal worker goes on running with its server, and a new
+// handle holds it again only once it verifies: the pane's identity with its
+// start time, the server on the terminal answering with that pane, and the
+// pane leading its own group under that server. The worker's identity on
+// another worker's terminal, one with no start time, and an adapter that
+// declares no terminal workers are each refused, the first two with
+// ErrTerminalUnverified, and nothing they touch is ended. The handle held
+// again names the same server as its host, is typed to as the started one
+// was, and ends the worker, its server and its socket on Close.
+func TestAReleasedTerminalWorkerIsHeldAgainOnlyOnceItVerifies(t *testing.T) {
+	script := standin.Script{Worker: &standin.WorkerScript{
+		Greeting:  "terminal stand-in ready",
+		Exchanges: []standin.Exchange{{Contains: "ping", Reply: "pong from the pane"}},
+	}}
+	released, term, agent := openTerminal(t, script, workerSpec(t))
+	other, otherTerm, _ := openTerminal(t, script, workerSpec(t))
+	awaitLines(t, agent, 1)
+	pane, found, err := agents.Identify(released.Group())
+	if err != nil || !found {
+		t.Fatalf("reading the worker's identity: found %v, %v", found, err)
+	}
+	host := released.Host()
+	otherID, found, err := agents.Identify(other.Group())
+	if err != nil || !found {
+		t.Fatalf("reading the other worker's identity: found %v, %v", found, err)
+	}
+
+	if err := released.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if err := released.Release(); err != nil {
+		t.Fatalf("a second Release: %v", err)
+	}
+	// The poll would have ended the server by now had Release not stopped it.
+	time.Sleep(500 * time.Millisecond)
+	if presence, err := pane.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the released worker reads %q (%v), want it still running", presence, err)
+	}
+	if _, err := os.Lstat(term.Socket); err != nil {
+		t.Fatalf("the released worker's socket: %v, want it still there", err)
+	}
+
+	if _, err := agents.AdoptTerminalWorker(t.Context(), agent.Runner(), otherTerm, pane); !errors.Is(err, agents.ErrTerminalUnverified) {
+		t.Fatalf("adopting the worker on another worker's terminal answered %v, want ErrTerminalUnverified", err)
+	}
+	if _, err := agents.AdoptTerminalWorker(t.Context(), agent.Runner(), term, agents.Identity{PID: pane.PID}); !errors.Is(err, agents.ErrTerminalUnverified) {
+		t.Fatalf("adopting with no start time answered %v, want ErrTerminalUnverified", err)
+	}
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t))).New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("building the cursor adapter: %v", err)
+	}
+	var refusal *agents.CapabilityError
+	if _, err := agents.AdoptTerminalWorker(t.Context(), cursor, term, pane); !errors.As(err, &refusal) {
+		t.Fatalf("adopting through an adapter with no terminal workers answered %v, want a *CapabilityError", err)
+	}
+	if presence, err := otherID.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the other worker reads %q (%v) after the refused adoptions, want it still running", presence, err)
+	}
+
+	held, err := agents.AdoptTerminalWorker(t.Context(), agent.Runner(), term, pane)
+	if err != nil {
+		t.Fatalf("adopting the released worker: %v", err)
+	}
+	if held.Group() != pane.PID || held.Host() != host {
+		t.Fatalf("the worker held again is group %d hosted by %v, want %d hosted by %v", held.Group(), held.Host(), pane.PID, host)
+	}
+	if err := held.Send(t.Context(), "ping"); err != nil {
+		t.Fatalf("Send to the worker held again: %v", err)
+	}
+	awaitLines(t, agent, 2)
+	held.Close()
+	if presence, err := pane.Presence(); err != nil || presence == agents.PresencePresent {
+		t.Fatalf("the worker reads %q (%v) after the handle held again closed it, want it ended", presence, err)
+	}
+	if _, err := os.Lstat(term.Socket); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the socket after Close: %v, want it removed", err)
+	}
+	// A Close of the released handle reads the end itself rather than
+	// waiting out its bound for the poll Release stopped.
+	began := time.Now()
+	released.Close()
+	if took := time.Since(began); took > 5*time.Second {
+		t.Fatalf("Close of the released handle took %v, want it to read the worker gone", took)
+	}
+}

@@ -130,6 +130,17 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 	return worker, nil
 }
 
+// AdoptInTerminal holds again a terminal worker of this adapter on
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is.
+func (r *scriptedRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
+	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{grace: r.settings.grace, maxOut: r.settings.maxOut},
+		terminalTyping{frame: terminalLines})
+	if err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
 func (r *scriptedRunner) TerminalLaunchCommandSize(Terminal, WorkerSpec) (int, bool, error) {
 	return 0, false, nil
 }
