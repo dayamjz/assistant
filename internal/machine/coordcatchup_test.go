@@ -13,10 +13,12 @@ import (
 )
 
 // The coordinator's catch-up read is bounded: every list holds at most
-// CatchUpRows rows and counts exactly the rest, and the task list's cut
-// never hides a task a listed wake or hold names, keeping unfinished tasks
-// ahead of finished ones.
-func TestTheCoordinatorCatchUpIsBoundedAndKeepsWhatIsOwedAnAct(t *testing.T) {
+// CatchUpRows rows and counts exactly the rest. The task list puts the tasks
+// a listed wake or hold names first, then unfinished tasks ahead of finished
+// ones, so with fewer named tasks than CatchUpRows, as here, the cut falls on
+// finished ones; TestTheCoordinatorCatchUpTaskListNeverPassesItsBound shows a
+// named task cut once more than CatchUpRows are named.
+func TestTheCoordinatorCatchUpPutsNamedAndUnfinishedTasksFirst(t *testing.T) {
 	base := time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
 	task := func(id string, state taskstate.State, age int) machine.Task {
 		return machine.Task{Record: store.Task{ID: id, Project: "p", CreatedAt: base.Add(-time.Duration(age) * time.Minute)},
@@ -72,22 +74,34 @@ func TestTheCoordinatorCatchUpIsBoundedAndKeepsWhatIsOwedAnAct(t *testing.T) {
 }
 
 // The task list holds at most CatchUpRows rows even when more tasks than
-// that are named by listed wakes and holds: the named ones come first and
-// the rest of them are counted, so the document's bound holds.
+// that are named by listed wakes and holds: the named ones come first,
+// newest first, and the rest are counted, so the document's bound holds and
+// a named task can be left out. Here the oldest named task, which only a
+// listed hold names, is the one cut: its hold is listed and its task is
+// counted in more_tasks, to be read with assistant --json coordinator tasks.
 func TestTheCoordinatorCatchUpTaskListNeverPassesItsBound(t *testing.T) {
+	base := time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC)
 	var tasks []machine.Task
 	var queued machine.QueuedWakes
 	for i := range machine.CatchUpRows {
 		id := fmt.Sprintf("woken-%02d", i)
-		tasks = append(tasks, machine.Task{Record: store.Task{ID: id}, State: taskstate.Resolution{State: taskstate.Unknown}})
+		tasks = append(tasks, machine.Task{Record: store.Task{ID: id, CreatedAt: base}, State: taskstate.Resolution{State: taskstate.Unknown}})
 		queued.Wakes = append(queued.Wakes, machine.QueuedWake{Wake: store.Wake{ID: int64(i + 1), TaskID: id, Kind: string(supervisor.KindTerminalGone)}})
 	}
-	tasks = append(tasks, machine.Task{Record: store.Task{ID: "held"}, State: taskstate.Resolution{State: taskstate.Held}})
+	tasks = append(tasks, machine.Task{Record: store.Task{ID: "held", CreatedAt: base.Add(-time.Hour)}, State: taskstate.Resolution{State: taskstate.Held}})
 	hold := store.Hold{Key: "task/held/stopped/1", TaskID: store.Known("held"), Subject: "whether to begin again"}
 
 	got := machine.CoordinatorCatchUpOf(supervisor.Arm{}, queued, []machine.Waiting{{Hold: &hold}}, tasks, nil)
 	if len(got.Tasks) != machine.CatchUpRows || got.MoreTasks != 1 {
 		t.Fatalf("the read lists %d tasks and %d more, want %d and 1", len(got.Tasks), got.MoreTasks, machine.CatchUpRows)
+	}
+	if len(got.Holds) != 1 || got.Holds[0].Task != "held" {
+		t.Fatalf("the read lists holds %+v, want the hold on the task it cut", got.Holds)
+	}
+	for _, row := range got.Tasks {
+		if row.ID == "held" {
+			t.Fatalf("the oldest named task was listed past %d newer named ones", machine.CatchUpRows)
+		}
 	}
 }
 
