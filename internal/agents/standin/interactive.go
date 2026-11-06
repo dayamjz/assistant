@@ -268,6 +268,13 @@ func (in *input) read(r io.Reader, out chan<- submission, escapes chan<- struct{
 		switch {
 		case b == 0x1b:
 			seq, lone := escape(src)
+			// An ESC right behind an ESC leaves the first one the Escape
+			// key alone and begins a sequence of its own, so keys written
+			// together are each a key, as the CLI took them.
+			for seq == "\x1b" {
+				escapes <- struct{}{}
+				seq, lone = escape(src)
+			}
 			if lone {
 				escapes <- struct{}{}
 				continue
