@@ -243,8 +243,10 @@ func TestARestartKeepsAnUnchangedReportedCopyForAPromotion(t *testing.T) {
 // in its copy and files its report under a one-hour promotion_window, and a
 // restart ends it. The next service reads the worker gone long before the
 // window passes and keeps the copy at once as one kept work entry, for the
-// worker that ended inside the window, which holds a delivery task created
-// in the same project. Waiting for the window instead, the copy sat with no
+// worker that ended inside the window, which holds a new investigation task
+// of the same project: an investigation's copy names no branch, so the entry
+// stands at the project's base and holds the tasks that name none. Waiting
+// for the window instead, the copy sat with no
 // entry for up to the window and the new task dispatched.
 func TestAWorkerGoneInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
 	t.Parallel()
@@ -263,8 +265,8 @@ func TestAWorkerGoneInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *tes
 		}
 		var created machine.TaskCreated
 		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/inside-the-window",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}

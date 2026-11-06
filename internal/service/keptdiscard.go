@@ -23,7 +23,7 @@ import (
 // A discard answer given no confirmation reads what would be lost through
 // internal/tasks' Loss, the same read a land decides from, and returns it
 // with its digest. Nothing is recorded and nothing is removed, and the
-// entry stays open and listed, holding its project's new tasks as before.
+// entry stays open and listed, holding its branch's new tasks as before.
 //
 // A discard answer given a confirmation is refused before the copy is read
 // or anything is written (the entry itself was read to find it, and an

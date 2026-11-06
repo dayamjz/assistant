@@ -407,7 +407,9 @@ What follows for whoever runs the service:
   the service log and left running. Once the worker is ended, a copy that
   holds something the default branch lacks, a commit or a file no commit
   records, is recorded as one kept-work entry (see Kept work below), and
-  like every entry it holds new tasks in the project until it is answered;
+  like every entry it holds the project's new tasks on its own branch until
+  it is answered, which for an investigation's copy, naming no branch, is the
+  project's new investigation tasks;
   a copy holding nothing the default branch lacks gets none. A promotion
   answers that entry carry on, since the relaunched worker continues in the
   same copy.
@@ -691,12 +693,19 @@ reserves the removal, and no new run of the repository starts until the
 eject finishes; a service that starts after an eject died releases that
 reservation.
 
-While a project has an open kept-work entry, no new task in that project
+While a project has an open kept-work entry, no new task of that project on
+the entry's branch
 starts: the task is recorded, `assistant --json tasks` shows it waiting and
 names the entries under `kept_work`, and it starts on its own once every
-entry is answered or closed. When whether kept work holds the task could not
+entry is answered or closed. A new task of the same project on another branch
+starts as usual, because the kept copy's work is not on its branch. The
+branches compared are the one the entry recorded, which `status` shows under
+`kept_work`, and the one the task was created with; a task that names no
+branch, an investigation's, is held by an entry whose owner named none and by
+no other. When whether kept work holds the task could not
 be read for an answer, the answer says so (`kept_work_unread`) and names no
-entry, rather than reading as a worker being launched. Kept work in one project never holds another,
+entry, rather than reading as a worker being launched. Kept work in one project never holds another, kept work on one branch never
+holds another,
 a task whose worker was already launched is not held (its relaunch goes
 ahead), and your own push always starts its run, whose answer names the
 project's open entries.
@@ -803,7 +812,7 @@ reports a change, a file or a stash; and a digest of exactly what is
 shown, each file by what it holds. It records and removes nothing.
 Removing the copy on that answer is not in this build: given again with
 `--confirm DIGEST` it is refused, with nothing read or changed, the copy
-and its entry exactly as they were, and new tasks in the project still
+and its entry exactly as they were, and new tasks on its branch still
 wait on it. A confirmation is accepted only from a terminal, in the
 foreground: under `--json`, from a script, a background job or an agent's
 tool it is refused first, with a line saying so, and the service decides

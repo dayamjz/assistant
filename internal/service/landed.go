@@ -78,7 +78,7 @@ import (
 // tasks.KeptPromotionWindow when the window has passed and
 // tasks.KeptPromotionWorkerEnded when the worker ended inside it, so it is
 // one kept work entry, surfaced as every other entry is and holding the
-// project's new tasks on dispatch.go's terms, unless internal/tasks reads
+// new tasks on its branch on dispatch.go's terms, unless internal/tasks reads
 // the copy as holding nothing the default branch lacks (NothingKept). A
 // promotion answers that entry carry on in its flip, as it answers any
 // open entry of its copy, and relaunches in the copy. Its cleanup is owed
@@ -178,7 +178,7 @@ import (
 //     reported in the log once per reference per service life and left
 //     running.
 //   - A reported investigation that is never promoted or relayed keeps its
-//     copy, and the entry the window wrote holds its project's new tasks,
+//     copy, and the entry the window wrote holds the new tasks on its branch,
 //     until a person answers the entry or a removal on a proof closes it.
 //   - A survivor whose end the window could not verify, or whose group did
 //     not end, gets no entry in this service's life, because it may still

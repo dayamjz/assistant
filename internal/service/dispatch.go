@@ -161,7 +161,8 @@ import (
 // # Kept work holds a new task's dispatch
 //
 // PRD section 6's "kept work is answered before new task work starts": while
-// the task's project has an open kept work entry, a task whose worker launch
+// the task's project has an open kept work entry on the task's own branch, a
+// task whose worker launch
 // was never claimed is not dispatched or launched. internal/store owns which
 // entries hold which task (keptworkhold.go), and three places ask it: this
 // file through KeptWorkHolding right after the task's resolution is read,

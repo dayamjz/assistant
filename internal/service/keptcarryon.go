@@ -75,7 +75,7 @@ import (
 // # A failed adoption, and every entry of the copy
 //
 // The claim names the new task, and until the task owns the copy the entry
-// stays open, listed and holding its project's dispatch, the new task's
+// stays open, listed and holding its branch's dispatch, the new task's
 // among it, by internal/store's hold predicate: an adoption that fails, a
 // rename the old task's directory refuses among the ways, leaves the claim
 // owed and the task undispatched, so no dispatch cuts it a fresh clone
@@ -122,7 +122,7 @@ import (
 // the task it names owns the copy. The identifier is minted first and claimed
 // on the entry with the copy's identity and who asked
 // (store.ClaimKeptWorkCarryOn), which leaves the entry open: status, the
-// catch-up read and the supervisor loop list it, and the project's new tasks,
+// catch-up read and the supervisor loop list it, and the new tasks on its branch,
 // the one it names among them, still wait on it. completeCarryOn then takes the
 // task's dispatch slot for that identifier before anything else, so no dispatch
 // pass cuts a fresh clone at the path the copy is about to stand at; between
@@ -554,7 +554,7 @@ func (s *Service) completeCarryOn(ctx context.Context, entry store.KeptWork) (ma
 		}); err != nil {
 			// The task could not be created, so nothing was moved: the
 			// claim is withdrawn and the entry is open again, listed and
-			// holding its project's dispatch as before. The store refuses
+			// holding its branch's dispatch as before. The store refuses
 			// the withdrawal if a row was written all the same, which
 			// leaves the claim standing for the next call to complete.
 			if _, withdrawErr := s.store.WithdrawKeptWorkCarryOn(ctx, entry.ID, id); withdrawErr != nil {

@@ -78,7 +78,8 @@ stored, so promote within it to continue that worker; past it the worker
 is ended and its copy is kept, and a promotion relaunches a worker there
 from the stored report. Once the worker has ended, inside the window or
 past it, a copy that holds work the default branch lacks is a kept-work
-entry, which holds new tasks in the project until it is answered;
+entry, which holds the project's new investigation tasks, which name no
+branch as its copy named none, until it is answered;
 promoting the investigation answers it carry on. The copy stays until
 you record the findings relayed with `assistant coordinator relayed ID`,
 which also ends any worker and removes the copy once that is proven safe;
