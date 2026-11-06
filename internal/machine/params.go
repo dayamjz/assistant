@@ -3,6 +3,7 @@ package machine
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -637,9 +638,15 @@ func (r WakeWaitRequest) Bounds() (time.Duration, int, error) {
 // surface, never read from a request, which internal/ipc's
 // Request.WakeAcknowledger states on the same terms as Request.HoldResolver.
 type AcknowledgeRequest struct {
+	// Bare are numbers the caller named without their shape. Each is a
+	// task wake unless a row of another shape, open or acknowledged,
+	// carries the same number, which refuses the whole batch as
+	// store.WakeAmbiguousError, because the number could name either row.
+	Bare []int64 `json:"bare,omitempty"`
 	// Wakes are the identifiers of the queued rows the caller acted on,
-	// handed out or not. A subset leaves the rest queued; an identifier no
-	// wake has, or one already acknowledged, refuses the whole batch.
+	// handed out or not, named as task wakes. A subset leaves the rest
+	// queued; an identifier no wake has, or one already acknowledged,
+	// refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
 	// DomainWakes are the identifiers of the queued rows about a domain the
 	// caller acted on, numbered apart from Wakes, on the same terms. A
@@ -658,43 +665,78 @@ type AcknowledgeRequest struct {
 	HousekeepingWakes []int64 `json:"housekeeping_wakes,omitempty"`
 }
 
-// The prefixes a wake of the queue's second and third shapes is named with
-// on the acknowledge command line, before its number. Each shape numbers its
-// rows apart from the others, so a task wake, a domain wake and a kept-work
-// wake can share a number: a bare number is always a task wake, one with
-// DomainWakePrefix always a domain wake, and one with KeptWorkWakePrefix
+// The prefixes a wake of the queue's second, third and fourth shapes may be
+// named with on the acknowledge command line, before its number, as each
+// shape's flag names it. Each shape numbers its rows apart from the others,
+// so a task wake, a domain wake and a kept-work wake can share a number: one
+// with DomainWakePrefix is always a domain wake, one with KeptWorkWakePrefix
 // always a wake about a kept work entry no task names, and one with
 // HousekeepingWakePrefix always a housekeeping wake about a repository. A
-// task's own wake about work kept in its copy is a task wake and takes no
-// prefix.
-// AcknowledgeNames writes them and internal/cli's acknowledge command reads
-// them, so the two cannot drift.
+// task's own wake about work kept in its copy is a task wake. A number with
+// no prefix and no flag is the request's Bare.
 const (
 	DomainWakePrefix       = "d"
 	KeptWorkWakePrefix     = "k"
 	HousekeepingWakePrefix = "h"
 )
 
+// The acknowledge command line's flags, one per shape, each taking one
+// number and given once per row. AcknowledgeNames writes them and
+// internal/cli's acknowledge command reads them, so the two cannot drift.
+const (
+	AcknowledgeTaskFlag         = "task"
+	AcknowledgeDomainFlag       = "domain"
+	AcknowledgeKeptWorkFlag     = "kept"
+	AcknowledgeHousekeepingFlag = "housekeeping"
+)
+
+// acknowledgeFlags names each shape's flag.
+var acknowledgeFlags = map[store.WakeShape]string{
+	store.WakeShapeTask:         AcknowledgeTaskFlag,
+	store.WakeShapeDomain:       AcknowledgeDomainFlag,
+	store.WakeShapeKeptWork:     AcknowledgeKeptWorkFlag,
+	store.WakeShapeHousekeeping: AcknowledgeHousekeepingFlag,
+}
+
+// acknowledgeName is one row named as the acknowledge command line takes
+// it: its shape's flag and its number.
+func acknowledgeName(shape store.WakeShape, id int64) string {
+	return "--" + acknowledgeFlags[shape] + " " + strconv.FormatInt(id, 10)
+}
+
 // AcknowledgeNames is every row of the drain w, named as the acknowledge
-// command line takes it: the task wakes by their numbers, then the domain
-// wakes, the kept-work wakes and the housekeeping wakes with their shape's
-// prefix, each shape
-// oldest first, as w holds them.
+// command line takes it, each by its shape's flag so that no name is a
+// bare number another shape could carry: the task wakes, then the domain
+// wakes, the kept-work wakes and the housekeeping wakes, each shape oldest
+// first, as w holds them.
 func AcknowledgeNames(w Wakes) []string {
 	names := make([]string, 0, len(w.Wakes)+len(w.DomainWakes)+len(w.KeptWorkWakes)+len(w.HousekeepingWakes))
 	for _, row := range w.Wakes {
-		names = append(names, strconv.FormatInt(row.ID, 10))
+		names = append(names, acknowledgeName(store.WakeShapeTask, row.ID))
 	}
 	for _, row := range w.DomainWakes {
-		names = append(names, DomainWakePrefix+strconv.FormatInt(row.ID, 10))
+		names = append(names, acknowledgeName(store.WakeShapeDomain, row.ID))
 	}
 	for _, row := range w.KeptWorkWakes {
-		names = append(names, KeptWorkWakePrefix+strconv.FormatInt(row.ID, 10))
+		names = append(names, acknowledgeName(store.WakeShapeKeptWork, row.ID))
 	}
 	for _, row := range w.HousekeepingWakes {
-		names = append(names, HousekeepingWakePrefix+strconv.FormatInt(row.ID, 10))
+		names = append(names, acknowledgeName(store.WakeShapeHousekeeping, row.ID))
 	}
 	return names
+}
+
+// AmbiguousWake is store.WakeAmbiguousError as the coordinator reads it:
+// the number, that the batch closed nothing, and the typed name of every
+// row carrying it, so the refusal says what to run instead. It wraps the
+// store's error.
+func AmbiguousWake(refused *store.WakeAmbiguousError) error {
+	names := make([]string, len(refused.Shapes))
+	for i, shape := range refused.Shapes {
+		names[i] = acknowledgeName(shape, refused.ID)
+	}
+	return fmt.Errorf("%w; a number named alone could name any of them, so nothing was acknowledged: name the wake you acted on as %s",
+		refused, strings.Join(names, " or "))
 }
 
 // DomainDelegateRequest delegates a named domain of tasks to a subordinate

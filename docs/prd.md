@@ -3124,7 +3124,10 @@ wake as it is queued and handing out none. `delegate` is `domain.delegate` and
 and refused for a subordinate coordinator as for a worker. No verb is added. `await` blocks until the wake
 queue holds a wake on offer to the caller, or until a bound the caller gives elapses, and then
 hands those wakes out, acknowledging nothing: only `acknowledge` closes one, and when
-a wake handed out is handed out again is section 8's `wake` row. `wakes`
+a wake handed out is handed out again is section 8's `wake` row. Each of the queue's shapes
+numbers its rows apart, so `acknowledge` names each wake by its shape; a number given alone
+is a task's wake only while no wake of another shape carries the same number, acknowledged or
+not, and otherwise the whole acknowledgement is refused as incorrect usage and closes nothing. `wakes`
 hands wakes out the same way in the machine interface, which is the coordinator's; in a person's
 rendering it is `wakes.peek`, a listing of the queued wakes that hands out nothing. `peek` reads a task's worker's recent output,
 redacted and bounded, and how to attach to its terminal where the provider offers that; the

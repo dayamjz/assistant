@@ -90,7 +90,7 @@ var coordinatorActions = []struct {
 	{"wakes", "", "With --json, drain the queued wakes, oldest first: hand them out, closing none; without it, list them and take none.", coordinatorWakes},
 	{"await", "", "Block until a wake is on offer or the bound elapses, then drain the queued wakes.", coordinatorAwait},
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
-	{"acknowledge", "<wake>...", "Record that the named wakes were acted on, which closes them, so no drain hands them out again.", coordinatorAcknowledge},
+	{"acknowledge", "[<wake>...]", "Record that the named wakes were acted on, which closes them, so no drain hands them out again; name each by its shape's flag.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
 	{"delegate", "<domain>", "Delegate a named domain of tasks to a coordinator of its own, begun by the service under the posture given.", coordinatorDelegate},
 	{"end-delegation", "<domain>", "End a domain's delegation, so its notices come back to you and its coordinator is ended.", coordinatorEndDelegation},
@@ -431,26 +431,42 @@ func coordinatorAwait(ctx context.Context, in *invocation) (any, error) {
 }
 
 // coordinatorAcknowledge is wakes.acknowledge, naming the wakes as
-// operands: the coordinator saying it acted on them, which is what closes a
-// row, one a drain handed it or one coordinatorListen printed. Who
-// acknowledged is derived by the service from the surface and is not
-// something this sends. A batch naming a wake no row has, or one already
-// acknowledged, is the store's refusal of the whole batch, answered as
-// ipc.ErrInvalidRequest.
+// operands and flags: the coordinator saying it acted on them, which is
+// what closes a row, one a drain handed it or one coordinatorListen
+// printed. Each shape numbers its rows apart, so a wake is named by its
+// shape's flag (--task, --domain, --kept, --housekeeping, each once per
+// row) or, for the three shapes beside a task's, its prefix; a number given
+// alone is sent as the request's Bare, which the store takes as a task
+// wake only when no row of another shape carries it. Who acknowledged is
+// derived by the service from the surface and is not something this
+// sends. A batch naming a wake no row has, one already acknowledged, or a
+// bare number another shape carries is the store's refusal of the whole
+// batch, answered as ipc.ErrInvalidRequest.
 func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	name := coordinatorCommand("acknowledge")
-	if err := in.parseArgs(name, math.MaxInt, func(*flag.FlagSet) {}); err != nil {
+	request := machine.AcknowledgeRequest{Wakes: []int64{}}
+	typed := func(into *[]int64) func(string) error {
+		return func(text string) error {
+			id, err := strconv.ParseInt(text, 10, 64)
+			if err != nil {
+				return fmt.Errorf("takes a wake's number, and %q is not one", printable(text))
+			}
+			*into = append(*into, id)
+			return nil
+		}
+	}
+	if err := in.parseArgs(name, math.MaxInt, func(set *flag.FlagSet) {
+		set.Func(machine.AcknowledgeTaskFlag, "a task's wake, by its number; give it once per wake", typed(&request.Wakes))
+		set.Func(machine.AcknowledgeDomainFlag, "a wake about a domain, by its number; give it once per wake", typed(&request.DomainWakes))
+		set.Func(machine.AcknowledgeKeptWorkFlag, "a wake about kept work no task names, by its number; give it once per wake", typed(&request.KeptWorkWakes))
+		set.Func(machine.AcknowledgeHousekeepingFlag, "a wake about a repository's housekeeping, by its number; give it once per wake", typed(&request.HousekeepingWakes))
+	}); err != nil {
 		return nil, err
 	}
-	if len(in.args) == 0 {
-		return nil, usagef("assistant %s names the wakes it acknowledges, as assistant %s --json lists them", name, coordinatorCommand("wakes"))
-	}
-	request := machine.AcknowledgeRequest{Wakes: make([]int64, 0, len(in.args))}
 	for _, arg := range in.args {
 		// A wake about a domain, a kept work entry no task names, or a
-		// repository's housekeeping is numbered apart from a task's and is
-		// named with its shape's prefix, machine's, which a drain's phrase
-		// names it with, so the shapes cannot be confused by number.
+		// repository's housekeeping may be named with its shape's prefix,
+		// machine's, as well as its flag.
 		text, domain := strings.CutPrefix(arg, machine.DomainWakePrefix)
 		text, kept := strings.CutPrefix(text, machine.KeptWorkWakePrefix)
 		text, housekeeping := strings.CutPrefix(text, machine.HousekeepingWakePrefix)
@@ -462,8 +478,9 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 			}
 		}
 		if err != nil || prefixes > 1 {
-			return nil, usagef("assistant %s takes wake identifiers, as a number, %sNUMBER for a notice about a domain, %sNUMBER for one about kept work no task names, or %sNUMBER for one about a repository's housekeeping, and %q is not one",
-				name, machine.DomainWakePrefix, machine.KeptWorkWakePrefix, machine.HousekeepingWakePrefix, printable(arg))
+			return nil, usagef("assistant %s takes wake identifiers, as --%s, --%s, --%s or --%s with a number, %sNUMBER for a notice about a domain, %sNUMBER for one about kept work no task names, %sNUMBER for one about a repository's housekeeping, or a number alone for a task's wake no other shape's number matches, and %q is not one",
+				name, machine.AcknowledgeTaskFlag, machine.AcknowledgeDomainFlag, machine.AcknowledgeKeptWorkFlag, machine.AcknowledgeHousekeepingFlag,
+				machine.DomainWakePrefix, machine.KeptWorkWakePrefix, machine.HousekeepingWakePrefix, printable(arg))
 		}
 		switch {
 		case domain:
@@ -473,8 +490,11 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 		case housekeeping:
 			request.HousekeepingWakes = append(request.HousekeepingWakes, id)
 		default:
-			request.Wakes = append(request.Wakes, id)
+			request.Bare = append(request.Bare, id)
 		}
+	}
+	if len(request.Bare)+len(request.Wakes)+len(request.DomainWakes)+len(request.KeptWorkWakes)+len(request.HousekeepingWakes) == 0 {
+		return nil, usagef("assistant %s names the wakes it acknowledges, as assistant %s --json lists them", name, coordinatorCommand("wakes"))
 	}
 	var acknowledged machine.Acknowledged
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)

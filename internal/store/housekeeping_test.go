@@ -810,7 +810,7 @@ func TestAHousekeepingWakeIsTheQueuesFourthShape(t *testing.T) {
 	if err != nil || len(drained.HousekeepingWakes) != 1 || drained.HousekeepingWakes[0].ID != first.Wake.ID {
 		t.Fatalf("the drain = %+v, %v, want the housekeeping row", drained, err)
 	}
-	if err := s.AcknowledgeAll(ctx, nil, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
+	if err := s.AcknowledgeAll(ctx, nil, nil, nil, nil, []int64{first.Wake.ID}, AcknowledgedByCoordinator()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AppendHousekeepingWake(ctx, inc, request, nil); !errors.Is(err, ErrWakeHandled) {
@@ -1091,5 +1091,92 @@ func TestARetirementHoldIsMarkedOnlyOnAHoldItsOfferCreated(t *testing.T) {
 	}
 	if h, err := s.Hold(ctx, retire.Key); err != nil || !h.Open() {
 		t.Fatalf("the retirement hold reads %+v, %v, want it still open", h, err)
+	}
+}
+
+// A number named without its shape is a task wake only while no row of
+// another shape carries it, read in the acknowledgement's transaction. With
+// task wake 1 and housekeeping wakes 1 and 2, a bare 1 is refused naming
+// both shapes and a bare 2 naming the housekeeping wake alone, rather than
+// as an unknown task wake, and neither batch closes anything; once
+// housekeeping wake 1 is closed by its shape, a bare 1 is still refused,
+// since the number can still be the one meant. A bare number no other
+// shape carries closes its task wake, the positive control.
+func TestABareNumberAnotherShapeCarriesIsRefusedWhole(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	seedTask(t, s, "abcdefghij23")
+	inc := incarnationOf(t, s)
+	taskWake := func(marker string) int64 {
+		t.Helper()
+		w, err := s.AppendWakeWithMarkers(ctx, inc, WakeRequest{TaskID: "abcdefghij23", Kind: "terminal-gone", Marker: marker}, MarkerAdvance{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.Wake.ID
+	}
+	housekeepingWake := func(marker string) int64 {
+		t.Helper()
+		w, err := s.AppendHousekeepingWake(ctx, inc, HousekeepingWakeRequest{Repository: "repo-1", Kind: "housekeeping-due",
+			Marker: marker, Detail: "no pass was ever created"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.Wake.ID
+	}
+	twin, alone := taskWake("m1"), housekeepingWake("due:none:1")
+	housekeptOnly := housekeepingWake("due:none:2")
+	if twin != alone || housekeptOnly == twin {
+		t.Fatalf("task wake %d, housekeeping wakes %d and %d; the test needs the first two numbered alike", twin, alone, housekeptOnly)
+	}
+	queued := func() int {
+		t.Helper()
+		rows, err := s.QueuedWakes(ctx, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, err := s.HousekeepingWakes(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := len(rows)
+		for _, row := range all {
+			if row.Queued() {
+				n++
+			}
+		}
+		return n
+	}
+	refused := func(id int64, want ...WakeShape) {
+		t.Helper()
+		before := queued()
+		err := s.AcknowledgeAll(ctx, []int64{id}, nil, nil, nil, nil, AcknowledgedByCoordinator())
+		var ambiguous *WakeAmbiguousError
+		if !errors.As(err, &ambiguous) || ambiguous.ID != id || !slices.Equal(ambiguous.Shapes, want) {
+			t.Fatalf("a bare %d = %v, want a WakeAmbiguousError naming %v", id, err, want)
+		}
+		if after := queued(); after != before {
+			t.Fatalf("the refused batch changed the queue from %d rows to %d", before, after)
+		}
+	}
+	refused(twin, WakeShapeTask, WakeShapeHousekeeping)
+	refused(housekeptOnly, WakeShapeHousekeeping)
+	if err := s.AcknowledgeAll(ctx, nil, nil, nil, nil, []int64{alone}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatal(err)
+	}
+	refused(twin, WakeShapeTask, WakeShapeHousekeeping)
+
+	taskWake("m2")
+	control := taskWake("m3")
+	if control == housekeptOnly {
+		t.Fatalf("task wake %d is numbered like a housekeeping wake; the control needs a number no other shape carries", control)
+	}
+	if err := s.AcknowledgeAll(ctx, []int64{control}, nil, nil, nil, nil, AcknowledgedByCoordinator()); err != nil {
+		t.Fatalf("a bare %d no other shape carries = %v, want it closed", control, err)
+	}
+	if rows, err := s.QueuedWakes(ctx, 10); err != nil || slices.ContainsFunc(rows, func(w Wake) bool { return w.ID == control }) {
+		t.Fatalf("the queue is %+v, %v after the control, want wake %d closed", rows, err, control)
 	}
 }

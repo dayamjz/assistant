@@ -23,11 +23,12 @@ import (
 // otherwise printed the count and nothing else; the coordinator's --json
 // drain carries it under kept_work_wakes; and the acknowledge command a
 // drain's plain answer prints, run as printed, closes exactly the two rows
-// it handed out, the task's as 1 and the kept-work wake as k1, and leaves
-// nothing queued. A drain that described the shapes in words instead left a
-// person to tell a task's notice about a kept copy from the third shape's,
-// and naming the task's k1 closed the wrong row or refused the batch.
-// Naming the kept-work wake again is refused as an invalid request.
+// it handed out, the task's as --task 1 and the kept-work wake as --kept 1,
+// and leaves nothing queued. A drain that described the shapes in words
+// instead left a person to tell a task's notice about a kept copy from the
+// third shape's, and naming the task's k1 closed the wrong row or refused
+// the batch; a bare 1 is refused now, since both shapes carry it. Naming
+// the kept-work wake again, by its prefix, is refused as an invalid request.
 func TestAKeptWorkWakeInTheRecordIsListedAndAcknowledgedAsKNumber(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -99,13 +100,13 @@ func TestAKeptWorkWakeInTheRecordIsListedAndAcknowledgedAsKNumber(t *testing.T) 
 	// A drain read by a person prints the acknowledge command for exactly
 	// the rows it handed out, so a person runs it as printed.
 	awaited := run(t, h, subject, "coordinator", "await", "--timeout", "5s")
-	printed := regexp.MustCompile(`assistant coordinator acknowledge((?: \w+)+)`).FindStringSubmatch(awaited.stdout)
+	printed := regexp.MustCompile(`assistant coordinator acknowledge((?: [-\w]+)+)`).FindStringSubmatch(awaited.stdout)
 	if printed == nil {
 		t.Fatalf("a drain's plain answer prints no acknowledge command to run:\n%s%s", awaited.stdout, awaited.stderr)
 	}
 	names := strings.Fields(printed[1])
 	named := "k" + strconv.FormatInt(appended.Wake.ID, 10)
-	if want := []string{strconv.FormatInt(tasked.Wake.ID, 10), named}; !slices.Equal(names, want) {
+	if want := []string{"--task", strconv.FormatInt(tasked.Wake.ID, 10), "--kept", strconv.FormatInt(appended.Wake.ID, 10)}; !slices.Equal(names, want) {
 		t.Fatalf("a drain's plain answer prints acknowledge %v, want %v:\n%s", names, want, awaited.stdout)
 	}
 	var acknowledged machine.Acknowledged
