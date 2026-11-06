@@ -132,6 +132,10 @@ func (r *terminalStubRunner) StartInTerminal(context.Context, agents.Terminal, a
 	return nil, errStubTerminalReached
 }
 
+func (r *terminalStubRunner) AdoptInTerminal(context.Context, agents.Terminal, agents.Identity) (agents.TerminalWorker, error) {
+	return nil, errStubTerminalReached
+}
+
 func (r *terminalStubRunner) TerminalLaunchCommandSize(agents.Terminal, agents.WorkerSpec) (int, bool, error) {
 	return 0, false, nil
 }

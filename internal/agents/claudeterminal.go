@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // StartInTerminal starts Claude Code as a terminal worker on t: the CLI's
@@ -149,6 +151,60 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	}
 	return worker, nil
 }
+
+// AdoptInTerminal holds again a Claude Code terminal worker on
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The
+// configuration directory StartInTerminal made for it is read off the
+// server's environment, where the start put it, and removed at the worker's
+// end as a started worker's is, but only when it is a directory that start
+// makes: a child of this process's temporary directory named as
+// seedClaudeConfig names one. Any other reading, or none, removes nothing,
+// and the directory is then left behind when the worker ends.
+func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
+	if err := t.Validate(); err != nil {
+		return nil, err
+	}
+	var cleanup func()
+	if dir := adoptedClaudeConfig(ctx, t); dir != "" {
+		cleanup = func() { _ = os.RemoveAll(dir) }
+	}
+	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{
+		grace:   r.settings.grace,
+		maxOut:  r.settings.maxOut,
+		cleanup: cleanup,
+	}, claudeTyping)
+	if err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+// adoptedClaudeConfig is the configuration directory the server on t was
+// started with, on AdoptInTerminal's terms, or empty.
+func adoptedClaudeConfig(ctx context.Context, t Terminal) string {
+	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the server's environment",
+		procgroup.Command(t.Tmux, "-S", t.Socket, "show-environment", "-g", claudeConfigVariable))
+	if err != nil {
+		return ""
+	}
+	return claudeConfigOf(string(out), os.TempDir())
+}
+
+// claudeConfigOf is the configuration directory a server's answer to
+// show-environment names, when it is a child of temp named as
+// seedClaudeConfig names one, and empty for any other answer.
+func claudeConfigOf(answer, temp string) string {
+	dir, ok := strings.CutPrefix(strings.TrimSpace(answer), claudeConfigVariable+"=")
+	if !ok || !filepath.IsAbs(dir) || filepath.Clean(dir) != dir || filepath.Dir(dir) != filepath.Clean(temp) ||
+		!strings.HasPrefix(filepath.Base(dir), claudeConfigPrefix) {
+		return ""
+	}
+	return dir
+}
+
+// claudeConfigPrefix is the name seedClaudeConfig gives a terminal worker's
+// configuration directory before the random part.
+const claudeConfigPrefix = "assistant-claude-"
 
 // terminalLaunchSessionMeasure is the session identifier
 // TerminalLaunchCommandSize uses: the same length and shape sessionIdentifier
@@ -327,7 +383,7 @@ func seedClaudeConfig(dir, key string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("encoding the terminal worker's configuration: %w", err)
 	}
-	configDir, err := os.MkdirTemp("", "assistant-claude-")
+	configDir, err := os.MkdirTemp("", claudeConfigPrefix+"*")
 	if err != nil {
 		return "", fmt.Errorf("making the terminal worker's configuration directory: %w", err)
 	}
