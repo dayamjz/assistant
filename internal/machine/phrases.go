@@ -1995,6 +1995,19 @@ var (
 		Consequence: "Nothing was received, and your branch is as you left it.",
 		Decision:    "Send it again from your own shell at a terminal, in the foreground; a process with no terminal above it, such as a daemon, a cron job or an ssh session without one, cannot send through the gate.",
 	}
+	// PhraseCoordinatorUnplaced is the row for a coordinator command refused
+	// because the service could place the process that made it as neither a
+	// task's worker, nor a subordinate coordinator, nor a shell at a
+	// terminal: the process and everything above it in the process tree is
+	// a daemon, a job with no terminal, or a process whose starter exited,
+	// a command a worker detached among them. Nothing was recorded, and the
+	// cure is to run it from a shell at a terminal; the process chain the
+	// service read follows the row.
+	PhraseCoordinatorUnplaced = Phrase{
+		Outcome:     "The service could not tell who ran this command, because the process that ran it is neither a task's worker nor a shell at a terminal, so it was not carried out.",
+		Consequence: "Nothing was recorded or changed.",
+		Decision:    "Run it again from your own shell at a terminal, or from the agent you coordinate with while it runs in one; a process with no terminal above it, such as a detached command, a daemon, a cron job or an ssh session without one, cannot coordinate.",
+	}
 	// PhraseNothingSent is the row for a change that moved no reference at
 	// all.
 	PhraseNothingSent = Phrase{
@@ -2108,7 +2121,7 @@ func TablePhrases() []Phrase {
 		phraseCancelUnknown, phraseCancelEnded)
 	out = append(out, InitPhrase(Init{Created: true}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
-	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy, PhraseSenderUnplaced)
+	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy, PhraseSenderUnplaced, PhraseCoordinatorUnplaced)
 	for _, standing := range CeilingStandings() {
 		out = append(out, CeilingPhrase(standing))
 		if standing.Refuses() {

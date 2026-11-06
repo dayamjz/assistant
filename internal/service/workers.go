@@ -42,7 +42,8 @@ import (
 // wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote,
 // task.relaunch and task.relay, steer.go's task.message, task.stop and task.interrupt,
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
-// coordinator's and refuse a worker, task.respond so that no worker answers a
+// coordinator's and refuse a worker, and a peer placed as nobody's on the
+// terms below, task.respond so that no worker answers a
 // hold, its own task's included, and catchup.mark so that no worker moves
 // what a person was shown;
 // gate.admit holds a worker's push to admit_workers.go's rule, admits a
@@ -105,53 +106,62 @@ import (
 // establish; the coordinator's methods refuse; task.event refuses; and
 // gate.notify records the run with no intent.
 //
-// The two rules read the answers differently, on purpose. The coordinator's
-// methods and task.event ask one question, worker or not, through workerOf:
-// a shell at a terminal and nobody are both "not a worker" there, so the
-// coordinator is served from a host's tool command with no terminal, from a
-// script, and from a process the kernel reparented alike, and no coordinator
-// method is refused for the shape of its chain. gate.admit asks the whole
-// three-way question through placePusher, because a push is the one request
-// that cannot be taken back once served: a worker's push is held to
-// admit_workers.go's rule, a shell's push is admitted on the terms every
-// push met before the worker rule existed, and a push placed as nobody's is
-// refused with ipc.ErrUnplaceable before any reference moves, naming the
-// chain that was read. That is PRD section 9's "authority comes from
-// authenticated process ancestry" applied to the one surface where "not a
-// worker" used to be read as "a person": the chain of a daemon, of a cron
-// job, of an ssh session with no pseudo-terminal, and of git-receive-pack
-// under sshd all end at init with no terminal on them, and each used to be
-// admitted as a person's.
+// The rules read the answers differently, on purpose. task.event asks one
+// question, worker or not, through workerOf: a shell at a terminal and
+// nobody are both "not a worker" there, and both are refused it. gate.admit
+// and the coordinator's methods ask the whole question, through placePusher
+// and subordinates.go's placeCoordinator, and refuse nobody: a worker's push
+// is held to admit_workers.go's rule, a shell's push is admitted on the
+// terms every push met before the worker rule existed, and a push placed as
+// nobody's is refused with ipc.ErrUnplaceable before any reference moves; a
+// coordinator method refuses a worker with ipc.ErrWorker, holds a
+// subordinate to its grant, serves a shell at a terminal, and refuses
+// nobody with ipc.ErrUnplaced before it decides anything (#765). Each
+// refusal names the chain that was read. That is PRD section 9's
+// "authority comes from authenticated process ancestry" applied to the two
+// surfaces where "not a worker" used to be read as "a person": the chain of
+// a daemon, of a cron job, of an ssh session with no pseudo-terminal, and
+// of git-receive-pack under sshd all end at init with no terminal on them,
+// and each used to be admitted as a person's and served as the
+// coordinator's. A coordinator whose host runs with no terminal above it
+// is refused with them, which is the price of the rule: a host's tool
+// command is served only while the host runs in a person's terminal or in
+// a terminal multiplexer's pane, either of which puts a terminal's
+// foreground on the command's chain.
 //
-// Nobody is also what placement.go's named shape now produces for a real
+// Nobody is also what placement.go's named shape produces for a real
 // worker: a chain the kernel rewrote when a process between the peer and
-// the worker exited. Such a push used to be admitted as a person's,
-// unconfined by admit_workers.go's rule, and started a run with no intent;
-// it is refused now, which is the safe side and not a regression. A refused
-// push loses nothing (P6): the commit stands in the worker's copy, the
-// refusal says what was read, and a push whose chain stands, one the worker
-// runs and waits for rather than backgrounds, is admitted under the worker
-// rule. An admitted stranger's push cannot be undone, and a worker's push
-// admitted as a person's was unconfined. Such a process may still call the
-// coordinator's methods, and task.event still refuses it; the coordinator's
-// refusal is the one rule this leaves open, and only for a process the
-// worker's own commands took out of its tree.
+// the worker exited, a command the worker detached with setsid, nohup or a
+// double fork among them. Such a push used to be admitted as a person's,
+// unconfined by admit_workers.go's rule, and started a run with no intent,
+// and such a command was served the coordinator's methods; both are
+// refused now, which is the safe side and not a regression. A refusal loses
+// nothing (P6): a push's commit stands in the worker's copy, a coordinator
+// method records nothing, the refusal says what was read, and a push whose
+// chain stands, one the worker runs and waits for rather than backgrounds,
+// is admitted under the worker rule. An admitted stranger's push cannot be
+// undone, and a worker's push admitted as a person's was unconfined.
 //
 // # Residual gaps
 //
 //   - The chain placement.go cannot follow, above, and the rest of what that
-//     file says it does not cover, a rewritten chain that still carries a
-//     terminal's foreground among them.
+//     file says it does not cover. A rewritten chain that still carries a
+//     terminal's foreground is placed as a shell's: a worker's command that
+//     detaches and then allocates a pseudo-terminal of its own, with script
+//     or a second tmux server, is admitted at the gate as a person's and
+//     served the coordinator's methods. Nothing the kernel attributes to
+//     such a process on macOS names the worker without privilege: setsid
+//     replaces its session, and the audit session is the whole login's.
 //   - The set is this service's memory. A worker an earlier service of this
-//     home launched is in no set here, so its push is placed by its chain
-//     alone, as a shell's if a terminal's foreground is above it and as
-//     nobody's otherwise, and its events are refused; launch.go says such a
-//     worker is an orphan.
+//     home launched is in no set here, so its push and its coordinator
+//     requests are placed by its chain alone, as a shell's if a terminal's
+//     foreground is above it and as nobody's otherwise, and its events are
+//     refused; launch.go says such a worker is an orphan.
 //   - With no worker launched the set is empty and workerOf reads no chain,
-//     so a peer whose chain cannot be read is refused by the coordinator's
-//     methods only while a worker is live; that is the same shape contain.go
-//     gives the registry. placePusher reads the chain for every push,
-//     worker or none, so the gate refuses an unreadable chain always.
+//     so a peer whose chain cannot be read is refused task.event as not a
+//     worker rather than as unavailable. placePusher and placeCoordinator
+//     read the chain for every request, worker or none, so the gate and the
+//     coordinator's methods refuse an unreadable chain always.
 //   - The containment registry is a separate relation and still reads the
 //     peer's own process group, so a command a stage's agent runs in a group
 //     of its own is not inside that stage; contain_unix.go's processGroup
@@ -285,15 +295,16 @@ func (s *Service) placePusher(req ipc.Request) (placement, error) {
 }
 
 // refuseWorker refuses a request from a peer placed as a task's worker, for the
-// coordinator's methods. It is ipc.ErrWorker naming the task.
+// coordinator's methods, with ipc.ErrWorker naming the task, and one placed
+// as nobody's with placeCoordinator's ipc.ErrUnplaced.
 func (s *Service) refuseWorker(req ipc.Request) error {
-	m, ok, err := s.workerPeer(req)
+	p, err := s.placeCoordinator(req)
 	if err != nil {
 		return err
 	}
-	if ok {
+	if p.isWorker {
 		return fmt.Errorf("%w: %s is the worker of task %s, and %s is the coordinator's", ipc.ErrWorker,
-			peerOf(req), m.Task, req.Method)
+			peerOf(req), p.worker.Task, req.Method)
 	}
 	return nil
 }

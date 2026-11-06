@@ -147,7 +147,7 @@ func (s *hkSubject) createPass(t *testing.T) error {
 // would with assistant --task --answer.
 func (s *hkSubject) answer(t *testing.T, id, hold, answer string) (machine.TaskAnswered, error) {
 	t.Helper()
-	return s.service.respondTask(t.Context(), ipc.Request{}, machine.TaskRespondRequest{Task: id, Hold: hold, Answer: answer})
+	return s.service.respondTask(t.Context(), coordinatorRequest(t), machine.TaskRespondRequest{Task: id, Hold: hold, Answer: answer})
 }
 
 // A pass whose run ended on the empty-diff short circuit, written by the
