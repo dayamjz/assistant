@@ -125,9 +125,11 @@ import (
 // # The tmux clients
 //
 // Every tmux command this package sends is one short-lived client program,
-// and each runs through procgroup.Run, PRD section 8's terms for an external
-// program: as the leader of a process group of its own, under a deadline,
-// with the group ended when the client returns or the deadline passes. The
+// and each the terminal worker sends runs through procgroup.Run, PRD section
+// 8's terms for an external program: as the leader of a process group of its
+// own, under a deadline, with the group ended when the client returns or the
+// deadline passes. A pane's clients (pane.go) run in their caller's group
+// instead, on the same bounds, for the reason that file gives. The
 // deadline is the caller's ctx where there is one and the bound of the
 // client's kind, whichever ends first, one bound per kind: tmuxStartBound
 // for the client that starts the server, tmuxTypeBound for a send,
@@ -444,9 +446,15 @@ var ErrTerminalClientTimedOut = errors.New("agents: a tmux client ran past its b
 // even when ctx or bound ended as it did. what names the client in the
 // error.
 func runTmux(ctx context.Context, bound time.Duration, what string, cmd *exec.Cmd) error {
+	return runTmuxBy(ctx, procgroup.Run, bound, what, cmd)
+}
+
+// runTmuxBy is runTmux with run, procgroup.Run or one on its terms, in
+// place of procgroup.Run.
+func runTmuxBy(ctx context.Context, run func(context.Context, *exec.Cmd, time.Duration) error, bound time.Duration, what string, cmd *exec.Cmd) error {
 	bounded, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
-	err := procgroup.Run(bounded, cmd, tmuxClientGrace)
+	err := run(bounded, cmd, tmuxClientGrace)
 	switch {
 	case err == nil:
 		return nil
@@ -460,9 +468,15 @@ func runTmux(ctx context.Context, bound time.Duration, what string, cmd *exec.Cm
 
 // tmuxOutput is runTmux for a client whose standard output is its answer.
 func tmuxOutput(ctx context.Context, bound time.Duration, what string, cmd *exec.Cmd) ([]byte, error) {
+	return tmuxOutputBy(ctx, procgroup.Run, bound, what, cmd)
+}
+
+// tmuxOutputBy is runTmuxBy for a client whose standard output is its
+// answer.
+func tmuxOutputBy(ctx context.Context, run func(context.Context, *exec.Cmd, time.Duration) error, bound time.Duration, what string, cmd *exec.Cmd) ([]byte, error) {
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	if err := runTmux(ctx, bound, what, cmd); err != nil {
+	if err := runTmuxBy(ctx, run, bound, what, cmd); err != nil {
 		return nil, err
 	}
 	return stdout.Bytes(), nil
