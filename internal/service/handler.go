@@ -190,7 +190,11 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodCatchUpRead:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (machine.CatchUp, error) {
-			return s.catchUp(ctx)
+			return s.catchUp(ctx, nil)
+		})
+	case ipc.MethodCoordinatorCatchUp:
+		return call(ctx, req, func(ctx context.Context, _ struct{}) (machine.CoordinatorCatchUp, error) {
+			return s.coordinatorCatchUp(ctx, req)
 		})
 	case ipc.MethodCatchUpMark:
 		return call(ctx, req, func(ctx context.Context, r machine.MarkSeenRequest) (machine.Marked, error) {

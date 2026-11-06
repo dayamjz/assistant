@@ -67,8 +67,10 @@ import (
 // record that it handled one, and nothing here reads or writes the queue
 // beyond the count the in-flight rule takes.
 
-// catchUp answers catchup.read on the terms above.
-func (s *Service) catchUp(ctx context.Context) (machine.CatchUp, error) {
+// catchUp answers catchup.read on the terms above. each, when it is not
+// nil, is handed every task as this read resolved it, so the coordinator's
+// catch-up lists the resolution its decisions were read beside.
+func (s *Service) catchUp(ctx context.Context, each func(machine.Task)) (machine.CatchUp, error) {
 	waiting, advancing, err := s.catchUpRuns(ctx)
 	if err != nil {
 		return machine.CatchUp{}, err
@@ -105,6 +107,9 @@ func (s *Service) catchUp(ctx context.Context) (machine.CatchUp, error) {
 	for _, o := range observed {
 		task := s.taskView(ctx, o)
 		byTask[task.Record.ID] = task
+		if each != nil {
+			each(task)
+		}
 		inFlight, decided := supervisor.TaskInFlight(o.State.State, unacknowledged[task.Record.ID], supervisor.RegardOf(o))
 		if inFlight || !decided {
 			out.UnderWay.Tasks = append(out.UnderWay.Tasks, task)

@@ -210,6 +210,11 @@ const (
 	// MethodWakesList's terms, which the handler decides from the caller's
 	// credentials against the worker group set.
 	MethodCatchUpMark Method = "catchup.mark"
+	// MethodCoordinatorCatchUp is the coordinator's catch-up read,
+	// machine.CoordinatorCatchUp. It hands out no wake and marks nothing
+	// seen; the handler refuses a worker, an unplaced caller and a
+	// subordinate coordinator.
+	MethodCoordinatorCatchUp Method = "coordinator.catchup"
 	// MethodUsageRead is PRD section 9's usage view: what the agent calls
 	// recorded in a window cost, totalled from section 8's agent invocation
 	// record by agent, model, purpose, role, provider, type, version, effort
@@ -343,6 +348,7 @@ var specs = []Spec{
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
+	{MethodCoordinatorCatchUp, KindRequest, AccessRestricted, "Read, for the coordinator, supervision, the queued wakes, open decisions, every task's state and kept work, compact and bounded."},
 	{MethodUsageRead, KindRequest, AccessOpen, "Read what the agent calls recorded in a window cost."},
 	{MethodRunLog, KindRequest, AccessOpen, "Read the end of one stage's log in one run."},
 	{MethodDomainDelegate, KindRequest, AccessRestricted, "Delegate a domain of tasks to a subordinate coordinator this service starts, for the coordinator."},

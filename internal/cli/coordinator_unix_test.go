@@ -212,6 +212,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		{"listen"},
 		{"acknowledge", "1"},
 		{"supervision"},
+		{"catch-up"},
 	} {
 		got := coordinateAs(t, group, h, subject, args...)
 		if got.code != machine.ExitFailure {

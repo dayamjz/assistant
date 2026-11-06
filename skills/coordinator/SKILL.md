@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, verify supervision, and delegate a domain of tasks to a subordinate coordinator
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, verify supervision, reset a session from one catch-up read, and delegate a domain of tasks to a subordinate coordinator
 ---
 
 # coordinator
@@ -34,6 +34,9 @@ never from anything the caller sends. A refusal of that kind arrives as code
   `assistant coordinator supervision`. Exit `0` means the service's watch
   over the fleet is live. Exit `1` means it is not; the answer says whether
   to start or restart the service. Do not create work while it is not live.
+  `assistant --json coordinator catch-up` carries the same verdict under
+  `supervision`, beside everything else a session starts from; see "Start
+  or reset a session".
 - The stop guard keeps your turn from ending while work is under way and
   nothing is watching it. `assistant host install` prints the line your host
   needs, and `assistant host install --write` adds it. For Codex use
@@ -144,6 +147,47 @@ assistant coordinator create --housekeeping --project NAME \
   pass is under way is refused with the hold open, and a retired pass no
   longer counts as work in flight unless a run of its branch has not ended
   or a wake about it is not yet acknowledged.
+
+## Start or reset a session
+
+Nothing about the fleet lives in your conversation: every fact is the
+service's, resolved when it is read. So a long session is mostly states that
+have since changed, and every turn pays to read them again. Shed it
+routinely: when your session grows long, or whenever your host clears or
+compacts it, end it or clear it and start the next one with one read:
+
+```sh
+assistant --json coordinator catch-up
+```
+
+Act from that document alone; do not try to recall what an earlier session
+did.
+
+- `supervision` is the verdict `assistant coordinator supervision` gives.
+  Do not create work unless its `outcome` is `attached` or `started`.
+- `wakes` are the queued wakes, handed out to an earlier session or not, as
+  `{id, task, kind, line}`. Act on each as "Drain the wake queue" says, then
+  acknowledge it by its `id`, which is already the name `acknowledge` takes
+  (`12`, `d3`, `k5`, `h2`). Reading them here handed out none of them.
+- `holds` are the open decisions. `answer.args` is the command that closes
+  one: run `assistant` with those arguments followed by the answer, from
+  `answer.working_path` on `answer.branch` when they are set. `detail` is
+  the hold's own explanation and often names the answers it takes; a stop's
+  and a stall hold's answers are under "Stop a worker" and "Drain the wake
+  queue". A local task's approval hold is the
+  person's: tell them it waits, as "Drain the wake queue" says.
+- `tasks` is each task's resolved state, `{id, project, branch, state,
+  line}`; `line` says its next action. Read one in full with
+  `assistant --json coordinator tasks ID` before acting on it, as always.
+- `kept` is the open kept work, by `id` and `key`; answer one as a kept-work
+  wake says.
+
+Each list holds at most 50 rows and `more_wakes`, `more_holds`,
+`more_tasks` and `more_kept` count exactly the rest; a task a listed wake,
+hold or kept entry names is always listed. When `more_wakes` is not 0, drain
+for the rest. The read hands out, acknowledges, answers and marks nothing, so
+running it again is always safe. It is refused for a subordinate
+coordinator, with code `subordinate`.
 
 ## Read the fleet
 
@@ -508,7 +552,7 @@ are written into its domain, and it holds `create`, `tasks`, `message`,
 `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
 `listen` and `supervision` over that domain's tasks alone, with `tasks`
 listing the domain alone and `listen` its own domain's stream. It is refused
-`promote`, `answer`, `create --housekeeping`, both delegation subcommands, marking the catch-up read,
+`promote`, `answer`, `create --housekeeping`, both delegation subcommands, `catch-up`, marking the catch-up read,
 the run commands, `sync`, and the service's stop and restart, with code
 `subordinate`; a task outside its domain is refused with `outside-domain`.
 Its grant denies editing and git and allows the `assistant coordinator`

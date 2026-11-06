@@ -209,8 +209,8 @@
 // coordinatorActions in coordinator.go holds "assistant coordinator" and its
 // subcommands, one for each of the coordinator's service methods that has
 // no command in the table: create, message, stop, relaunch and promote a
-// task, drain, wait on, listen to and acknowledge the wake queue, and verify
-// supervision. The
+// task, drain, wait on, listen to and acknowledge the wake queue, verify
+// supervision, and read the coordinator's catch-up document. The
 // owner decided on #227 to keep PRD section 9's table as it is and ship this
 // client beside it, as the gate and host verbs are, and section 9 says so
 // beside the table. It is one verb so the door beside the table is one door.

@@ -300,6 +300,9 @@ var renderings = []rendering{
 	{name: "wakes acknowledged", voice: VoicePhrased, of: typeOf[machine.Acknowledged](), render: func(w io.Writer, v any) {
 		writeln(w, machine.AcknowledgedPhrase(v.(machine.Acknowledged)))
 	}},
+	{name: "coordinator catch up", voice: VoicePhrased, of: typeOf[machine.CoordinatorCatchUp](), render: func(w io.Writer, v any) {
+		readOutCoordinatorCatchUp(w, v.(machine.CoordinatorCatchUp))
+	}},
 	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
@@ -792,6 +795,31 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	// status shows beside the repository.
 	for _, row := range q.HousekeepingWakes {
 		writef(w, "%s: %s %s\n", printable(row.Repository), machine.QueuedHousekeepingWakePhrase(row), machine.QueuedHousekeepingWakeStanding(row))
+	}
+}
+
+// readOutCoordinatorCatchUp prints the arm verdict's row, the counts row,
+// and one escaped line per listed row; identifiers and kinds are the
+// structured rendering's, which the counts row points at.
+func readOutCoordinatorCatchUp(w io.Writer, c machine.CoordinatorCatchUp) {
+	writeln(w, machine.ArmPhrase(c.Supervision))
+	writeln(w, machine.CoordinatorCatchUpPhrase(c))
+	for _, row := range c.Wakes {
+		writef(w, "  %s\n", printable(row.Line))
+	}
+	for _, row := range c.Holds {
+		// A run's subject is its decision's whole phrase.
+		line := row.Subject
+		if row.Key != "" {
+			line = machine.HoldPhrase(store.Hold{Key: row.Key, Subject: row.Subject}).Outcome
+		}
+		writef(w, "  %s\n", printable(line))
+	}
+	for _, row := range c.Tasks {
+		writef(w, "  %s: %s\n", printable(row.Project), printable(row.Line))
+	}
+	for _, row := range c.Kept {
+		writef(w, "  %s: %s\n", printable(row.Branch), machine.KeptWorkPhrase(store.KeptWork{}).Outcome)
 	}
 }
 

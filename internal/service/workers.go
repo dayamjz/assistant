@@ -433,6 +433,13 @@ func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	if err != nil {
 		return machine.QueuedWakes{}, err
 	}
+	return s.queuedWakes(ctx, p, limit)
+}
+
+// queuedWakes is peekWakes' reading for a placed caller, at most limit of
+// each shape, handing out nothing; a subordinate reads only its route's
+// task rows, since the other three shapes are the first coordinator's.
+func (s *Service) queuedWakes(ctx context.Context, p placedPeer, limit int) (machine.QueuedWakes, error) {
 	queued, err := s.store.QueuedWakesFor(ctx, limit, wakeRouteOf(p))
 	if err != nil {
 		return machine.QueuedWakes{}, err
