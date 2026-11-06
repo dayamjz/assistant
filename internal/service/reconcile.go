@@ -147,8 +147,8 @@ import (
 // Every probe is asked under reconcileProbeTimeout, on its own goroutine, and
 // a whole read of the fleet under reconcileProbeBound; a probe that has not
 // answered when either elapses reads Unobserved. The pass's re-adoptions are
-// asked first under the same reconcileProbeBound, on readoptWorkers' terms,
-// and the fleet read has what they leave. That is what keeps Open from
+// asked first under the same reconcileProbeBound, all of them within one
+// readoptBound on readoptWorkers' terms, and the fleet read has what is left. That is what keeps Open from
 // hanging with the home's lock held behind a provider that never answers,
 // and it is what the blocking-provider test holds Open to. A probe that
 // ignores its context is still bounded here, at the cost of a goroutine that
@@ -408,10 +408,6 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 // server that answers. Chosen, not measured beyond that.
 const readoptBound = 5 * time.Second
 
-// readoptParallel is how many verifications readoptWorkers asks at once.
-// Chosen, not measured: each is a tmux client of its own.
-const readoptParallel = 8
-
 // readoptWorkers holds again, before the table reads the fleet, every
 // worker that outlived the service before this one: a task whose latest
 // attempt records a reference naming its tmux server's socket, which no
@@ -424,9 +420,11 @@ const readoptParallel = 8
 // table on the probe's own reading, Dead and relaunched in place when its
 // process is proven gone, Unobserved and left alone otherwise. What it
 // cannot read it logs and leaves the same way. The verifications are asked
-// readoptParallel at once, each under readoptBound and all under bound, so a
-// server that does not answer costs the pass one readoptBound however many
-// there are, and never more than bound; one cut short holds nothing.
+// all at once under one readoptBound, within bound, so servers that do not
+// answer cost the pass one readoptBound however many there are; one cut
+// short holds nothing. A tmux client is started only for a worker whose
+// recorded process is present (agents.AdoptTerminalWorker reads that first),
+// so no more run at once than there are live workers.
 func (s *Service) readoptWorkers(ctx, bound context.Context) {
 	all, err := s.store.Tasks(ctx)
 	if err != nil {
@@ -434,9 +432,9 @@ func (s *Service) readoptWorkers(ctx, bound context.Context) {
 		return
 	}
 	var tmux string
+	verify, cancel := context.WithTimeout(s.registry.hurrying(bound), readoptBound)
 	var wg sync.WaitGroup
-	defer wg.Wait()
-	slots := make(chan struct{}, readoptParallel)
+	defer func() { wg.Wait(); cancel() }()
 	for _, task := range all {
 		attempts, err := s.store.TaskAttempts(ctx, task.ID)
 		if err != nil || len(attempts) == 0 {
@@ -469,19 +467,15 @@ func (s *Service) readoptWorkers(ctx, bound context.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			s.readoptOne(bound, task, latest.Sequence, host, ref, adapter)
+			s.readoptOne(verify, task, latest.Sequence, host, ref, adapter)
 		}()
 	}
 }
 
-// readoptOne is one of readoptWorkers' verifications, and holds the worker
-// when it verifies.
-func (s *Service) readoptOne(bound context.Context, task store.Task, attempt int64, host *session.Tmux, ref, adapter string) {
-	bounded, cancel := context.WithTimeout(s.registry.hurrying(bound), readoptBound)
-	held, err := host.Readopt(bounded, ref)
-	cancel()
+// readoptOne is one of readoptWorkers' verifications, under verify, and
+// holds the worker when it verifies.
+func (s *Service) readoptOne(verify context.Context, task store.Task, attempt int64, host *session.Tmux, ref, adapter string) {
+	held, err := host.Readopt(verify, ref)
 	if err != nil {
 		s.log.Printf("task %s's worker in terminal session %s was not held again: %v", task.ID, ref, err)
 		return
