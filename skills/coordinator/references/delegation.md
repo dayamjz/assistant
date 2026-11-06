@@ -18,7 +18,7 @@ are written into its domain, and it holds `create`, `tasks`, `message`,
 `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
 `listen` and `supervision` over that domain's tasks alone, with `tasks`
 listing the domain alone and `listen` its own domain's stream. It is refused
-`promote`, `answer`, `create --housekeeping`, both delegation subcommands, marking the catch-up read,
+`promote`, `answer`, `create --housekeeping`, both delegation subcommands, `catch-up`, marking the catch-up read,
 the run commands, `sync`, and the service's stop and restart, with code
 `subordinate`; a task outside its domain is refused with `outside-domain`.
 Its grant denies editing and git and allows the `assistant coordinator`

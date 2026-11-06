@@ -204,6 +204,20 @@ func WakesPhrase(w Wakes) Phrase {
 	}
 }
 
+// CoordinatorCatchUpPhrase is the counts row over a CoordinatorCatchUp's own lists.
+func CoordinatorCatchUpPhrase(c CoordinatorCatchUp) Phrase {
+	outcome := fmt.Sprintf("%d notice(s) are waiting, %d decision(s) are open, %d task(s) are listed and %d kept copies are open.",
+		len(c.Wakes), len(c.Holds), len(c.Tasks), len(c.Kept))
+	if more := c.MoreWakes + c.MoreHolds + c.MoreTasks + c.MoreKept; more > 0 {
+		outcome += fmt.Sprintf(" %d more are not shown.", more)
+	}
+	return Phrase{
+		Outcome:     outcome,
+		Consequence: "Reading this handed out none of the notices and answered nothing.",
+		Decision:    "Act on each from the --json form, which names each by what it is acted on with, and read one task in full with assistant --json coordinator tasks.",
+	}
+}
+
 // QueuedWakesPhrase is what a person reads above a listing of the queue:
 // how many rows wait, or that none do. The listing hands out nothing, and
 // the phrase says so, because the drain it replaced for a person took what
@@ -411,6 +425,8 @@ func coordinatorRows() []Phrase {
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
 		phraseDomainRetried, phraseDelegationEndedByAnswer,
+		CoordinatorCatchUpPhrase(CoordinatorCatchUp{Wakes: make([]WakeRow, 1)}),
+		CoordinatorCatchUpPhrase(CoordinatorCatchUp{Wakes: make([]WakeRow, 1), MoreTasks: 1}),
 	}
 }
 
