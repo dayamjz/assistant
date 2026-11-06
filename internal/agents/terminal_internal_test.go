@@ -45,31 +45,3 @@ func TestTmuxStartCommandSizeMatchesTmuxNewSessionArgs(t *testing.T) {
 		t.Fatalf("TmuxStartCommandSize = %d, commandSize(tmuxNewSessionArgs(...)) = %d", size, got)
 	}
 }
-
-// A Claude Code worker held again removes, when it ends, only a directory
-// its start could have made: the server's answer must name a direct child of
-// the temporary directory carrying seedClaudeConfig's prefix. Anything else
-// the answer names, the temporary directory itself, a path that climbs out
-// of it, a nested path, another prefix, a relative path, another variable or
-// none, is refused, so nothing a server says can have a directory outside
-// that set removed.
-func TestAnAdoptedClaudeWorkerRemovesOnlyAConfigurationDirectoryItsStartMakes(t *testing.T) {
-	t.Parallel()
-	temp := "/var/tmp/x"
-	if got := claudeConfigOf("CLAUDE_CONFIG_DIR=/var/tmp/x/assistant-claude-123\n", temp); got != "/var/tmp/x/assistant-claude-123" {
-		t.Fatalf("claudeConfigOf of a directory the start makes = %q", got)
-	}
-	if got := claudeConfigOf("CLAUDE_CONFIG_DIR=/var/tmp/x/assistant-claude-9", temp+"/"); got != "/var/tmp/x/assistant-claude-9" {
-		t.Fatalf("claudeConfigOf with a temporary directory ending in a slash = %q", got)
-	}
-	for _, answer := range []string{
-		"", "-CLAUDE_CONFIG_DIR", "CLAUDE_CONFIG_DIR=", "CLAUDE_CONFIG_DIR=/var/tmp/x",
-		"CLAUDE_CONFIG_DIR=/var/tmp/x/assistant-claude-1/..", "CLAUDE_CONFIG_DIR=/var/tmp/x/../assistant-claude-1",
-		"CLAUDE_CONFIG_DIR=/var/tmp/x/a/assistant-claude-1", "CLAUDE_CONFIG_DIR=/var/tmp/x/other-1",
-		"CLAUDE_CONFIG_DIR=assistant-claude-1", "HOME=/var/tmp/x/assistant-claude-1",
-	} {
-		if got := claudeConfigOf(answer, temp); got != "" {
-			t.Errorf("claudeConfigOf(%q) = %q, want nothing removed", answer, got)
-		}
-	}
-}

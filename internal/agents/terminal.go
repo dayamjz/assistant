@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -95,15 +96,9 @@ import (
 //
 // # Release and adoption
 //
-// Because the server, not this process, is the agent's parent, the worker can
-// outlive the handle: Release stops the poll and the hurry and ends nothing,
-// so the server and the agent go on, and AdoptTerminalWorker later makes a
-// new handle over them, with the adapter's typing, once it has verified the
-// pane's identity, the server answering on the socket with that pane, and
-// the pane leading its own group under that server. A handle made that way
-// ends the worker on the same terms as a started one. What it does not have
-// is the adapter's per-worker cleanup unless the adapter can find it again,
-// which AdoptInTerminal states per adapter.
+// The server, not this process, is the agent's parent, so the worker can
+// outlive its handle: TerminalWorker.Release and AdoptTerminalWorker state
+// how it is let go and held again.
 //
 // # Typing
 //
@@ -307,14 +302,27 @@ type TerminalWorker interface {
 	// documentation says why.
 	Host() Identity
 
-	// Release lets go of the worker without ending it: the handle stops
-	// watching the process and stops answering a hurry, the server and the
-	// agent in its pane go on running, and Done is not closed by it. It is
-	// what lets the worker outlive the service holding it, to be held again
-	// through AdoptTerminalWorker. A Close after a Release still ends the
-	// worker. It is idempotent.
-	Release()
+	// Release lets go of the worker without ending it, so it can be held
+	// again through AdoptTerminalWorker: the handle stops watching it and
+	// answering a hurry, the server and the agent go on, and Done stays
+	// open. Once an end has begun (Close, a hurry, the poll reading the
+	// process gone) it is refused with ErrWorkerEnding; once it has returned
+	// nil, only Close ends the worker through this handle, and a second
+	// Release returns nil. Since the socket may by then be another worker's,
+	// a released handle refuses Send with ErrWorkerReleased, answers Capture
+	// with its last screen, and its Close ends the server, the socket and the
+	// cleanup only once the server there answers with this handle's pane,
+	// otherwise only the group its identity still verifies.
+	Release() error
 }
+
+// ErrWorkerEnding is Release's refusal of a worker whose end has already
+// begun: it is being ended and cannot be let go alive.
+var ErrWorkerEnding = errors.New("agents: the worker is being ended, so it cannot be released")
+
+// ErrWorkerReleased is Send's refusal on a handle Release let go: the
+// handle no longer speaks for whatever runs on its socket.
+var ErrWorkerReleased = errors.New("agents: the worker's handle was released")
 
 // ErrTerminalUnverified is AdoptTerminalWorker's refusal of a worker it
 // could not verify as the one named: the pane's process is gone or was
@@ -323,18 +331,14 @@ type TerminalWorker interface {
 // held and nothing is ended.
 var ErrTerminalUnverified = errors.New("agents: the terminal worker could not be verified as the one recorded")
 
-// AdoptTerminalWorker holds again, through r, a terminal worker an earlier
-// handle released: pane is the identity its start read and t the terminal it
-// was started on. It starts and ends nothing. It reads the declaration first,
-// on OpenTerminalWorker's terms, and then verifies the worker before holding
-// it, refusing with an error wrapping ErrTerminalUnverified unless all of
-// these hold: pane carries a start time and its process is present with it;
-// the server listening on t.Socket answers, within tmuxReadBound, with
-// pane's identifier as its pane's process; and that process leads its own
-// process group and its parent is the server that answered. The handle then
-// is the one StartInTerminal returns, with the server as its Host, polled,
-// typed into, captured and closed on the same terms, and hurried by ctx's
-// hurry as a start's is.
+// AdoptTerminalWorker holds again, through r, the released terminal worker
+// whose start read identity pane on terminal t, starting and ending nothing.
+// It reads the declaration as OpenTerminalWorker does, then refuses with
+// ErrTerminalUnverified, wrapped, unless pane has a start time and is
+// present, the server on t.Socket answers within tmuxReadBound with pane as
+// its pane, and pane leads its own group as that server's child. The handle
+// is then a started one's in every term, the server its Host and ctx's
+// hurry its hurry.
 func AdoptTerminalWorker(ctx context.Context, r Runner, t Terminal, pane Identity) (TerminalWorker, error) {
 	if !r.Capabilities().Has(CapabilityTerminalWorkers) {
 		return nil, &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalWorkers, Path: "the terminal worker"}
@@ -537,10 +541,13 @@ type tmuxWorker struct {
 	done      chan struct{}
 	closeOnce sync.Once
 	endOnce   sync.Once
-	// released is closed by Release, which stops the poll and the hurry
-	// without ending anything.
-	released    chan struct{}
-	releaseOnce sync.Once
+	// released is closed by Release; stateMu orders it against ending, the
+	// start of an end, so exactly one wins; disowned makes end leave alone a
+	// socket a released handle's Close found hosting no pane of its own.
+	released chan struct{}
+	stateMu  sync.Mutex
+	ending   bool
+	disowned atomic.Bool
 
 	// sendMu serializes sends, the instructions among them, so text arrives
 	// in the order it was sent.
@@ -875,8 +882,34 @@ func (w *tmuxWorker) poll() {
 		if err != nil || presence == PresencePresent {
 			continue
 		}
-		w.end()
+		if w.claimEnd(true) {
+			w.end()
+		}
 		return
+	}
+}
+
+// claimEnd records that an end of the worker begins, under the lock Release
+// takes, and reports whether it may: an end on the handle's own account, a
+// hurry's or the poll's, is refused once Release has let the worker go,
+// and Close's is never refused.
+func (w *tmuxWorker) claimEnd(ownAccount bool) bool {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if ownAccount && w.isReleased() {
+		return false
+	}
+	w.ending = true
+	return true
+}
+
+// isReleased reports whether Release has let the worker go.
+func (w *tmuxWorker) isReleased() bool {
+	select {
+	case <-w.released:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -884,9 +917,11 @@ func (w *tmuxWorker) poll() {
 // server ended, the socket removed, and done closed. It runs once.
 func (w *tmuxWorker) end() {
 	w.endOnce.Do(func() {
-		killTerminalServer(w.terminal)
-		if w.cleanup != nil {
-			w.cleanup()
+		if !w.disowned.Load() {
+			killTerminalServer(w.terminal)
+			if w.cleanup != nil {
+				w.cleanup()
+			}
 		}
 		close(w.done)
 	})
@@ -913,6 +948,9 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 	case <-w.done:
 		return ErrWorkerEnded
 	default:
+	}
+	if w.isReleased() {
+		return ErrWorkerReleased
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -965,6 +1003,9 @@ func (w *tmuxWorker) Capture() Capture {
 	case <-w.done:
 		return w.last
 	default:
+	}
+	if w.isReleased() {
+		return w.last
 	}
 	ctx := context.Background()
 	screen, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the history", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
@@ -1021,15 +1062,49 @@ func (w *tmuxWorker) closeOnHurry() {
 	}
 	select {
 	case <-w.hurry:
-		w.Close()
+		if w.claimEnd(true) {
+			w.Close()
+		}
 	case <-w.done:
 	case <-w.released:
 	}
 }
 
 // Release lets go of the worker on TerminalWorker's terms.
-func (w *tmuxWorker) Release() {
-	w.releaseOnce.Do(func() { close(w.released) })
+func (w *tmuxWorker) Release() error {
+	w.stateMu.Lock()
+	defer w.stateMu.Unlock()
+	if w.isReleased() {
+		return nil
+	}
+	if w.ending {
+		return ErrWorkerEnding
+	}
+	close(w.released)
+	return nil
+}
+
+// hostsPane reports whether the server on the handle's socket answers, within
+// tmuxReadBound, with this handle's pane, and that pane is present by its
+// identity: the proof a released handle's Close needs before it touches the
+// socket, which may by then be another worker's.
+func (w *tmuxWorker) hostsPane() bool {
+	if presence, err := w.identity.Presence(); err != nil || presence != PresencePresent {
+		return false
+	}
+	pid, _, err := paneOf(context.Background(), w.terminal)
+	return err == nil && pid == w.identity.PID
+}
+
+// paneOf is the pane's process and the server's own, as the server on t
+// answers for them within tmuxReadBound.
+func paneOf(ctx context.Context, t Terminal) (pane, server int, err error) {
+	answer, err := tmuxOutput(ctx, tmuxReadBound, "the client asking the server for its pane", procgroup.Command(t.Tmux, "-S", t.Socket,
+		"display-message", "-p", "-t", terminalTarget, "#{pane_pid} #{pid}"))
+	if err != nil {
+		return 0, 0, err
+	}
+	return parseTerminalAnswer(string(answer))
 }
 
 // adoptTerminalWorker is AdoptInTerminal's mechanism for every adapter: it
@@ -1050,14 +1125,9 @@ func adoptTerminalWorker(ctx context.Context, t Terminal, pane Identity, spec pr
 	case presence != PresencePresent:
 		return nil, fmt.Errorf("%w: process %d reads %q", ErrTerminalUnverified, pane.PID, presence)
 	}
-	answer, err := tmuxOutput(ctx, tmuxReadBound, "the client asking the server for its pane", procgroup.Command(t.Tmux, "-S", t.Socket,
-		"display-message", "-p", "-t", terminalTarget, "#{pane_pid} #{pid}"))
+	pid, server, err := paneOf(ctx, t)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the server on %s did not answer: %w", ErrTerminalUnverified, t.Socket, err)
-	}
-	pid, server, err := parseTerminalAnswer(string(answer))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrTerminalUnverified, err)
+		return nil, fmt.Errorf("%w: the server on %s did not answer with its pane: %w", ErrTerminalUnverified, t.Socket, err)
 	}
 	if pid != pane.PID {
 		return nil, fmt.Errorf("%w: the server on %s hosts process %d, not %d", ErrTerminalUnverified, t.Socket, pid, pane.PID)
@@ -1110,11 +1180,21 @@ func (w *tmuxWorker) Close() {
 			return
 		default:
 		}
+		w.claimEnd(false)
+		// A released handle may name a socket another worker now holds, so
+		// it touches the socket only once the server there is its own.
+		if w.isReleased() && !w.hostsPane() {
+			w.disowned.Store(true)
+		}
 		// The screen is read before the end, so a Capture after Close
 		// answers what the worker last showed rather than nothing.
-		w.Capture()
+		if !w.disowned.Load() {
+			w.Capture()
+		}
 		_, _ = endGroup(w.identity, w.grace, w.hurry)
-		killTerminalServer(w.terminal)
+		if !w.disowned.Load() {
+			killTerminalServer(w.terminal)
+		}
 		timer := time.NewTimer(w.grace + terminalCommandTimeout)
 		defer timer.Stop()
 		tick := time.NewTicker(terminalPoll)

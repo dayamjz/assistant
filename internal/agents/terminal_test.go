@@ -359,8 +359,12 @@ func TestAReleasedTerminalWorkerIsHeldAgainOnlyOnceItVerifies(t *testing.T) {
 		t.Fatalf("reading the other worker's identity: found %v, %v", found, err)
 	}
 
-	released.Release()
-	released.Release()
+	if err := released.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if err := released.Release(); err != nil {
+		t.Fatalf("a second Release: %v", err)
+	}
 	// The poll would have ended the server by now had Release not stopped it.
 	time.Sleep(500 * time.Millisecond)
 	if presence, err := pane.Presence(); err != nil || presence != agents.PresencePresent {
