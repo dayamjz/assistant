@@ -63,7 +63,7 @@ import (
 // liveness is Dead, so a landed delivery task whose worker still reads
 // running refuses with ReasonTerminalLive and keeps its copy, one whose
 // terminal could not be observed, a worker an earlier service launched
-// among them, refuses with ReasonTerminalUnobserved, and one whose worker
+// and recovery did not hold again among them, refuses with ReasonTerminalUnobserved, and one whose worker
 // is gone is examined and removed on P12's proof. What the probe does
 // not close is the window after it: the liveness is as of the read, and a
 // worker that starts writing in the copy between the read and the removal

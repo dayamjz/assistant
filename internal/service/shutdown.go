@@ -28,6 +28,13 @@ import (
 // nothing it waits on should be running, and returns *StopForcedError so the
 // caller exits rather than waiting any longer.
 //
+// A restart (Stop(true)) is a stop that first lets go of every worker that
+// can outlive it, a tmux-hosted worker, before anything here reads a group
+// or hurries a termination (launch.go's releaseForRestart), so neither the
+// forceful signal nor the hurry reaches it: its attempt's record and its own
+// server own it until the next service holds it again. A stop that is not a
+// restart lets go of nothing, and ends every worker as below.
+//
 // The groups it forces are the ones this service registered and can name by
 // a verified identity: every agent invocation containRunner registered, read
 // both when the stop began and when it was forced, and the leader of every
@@ -107,6 +114,9 @@ func (e *StopForcedError) Is(target error) bool { return target == ErrStopForced
 func (s *Service) Shutdown(force <-chan struct{}) error {
 	grace := s.cfg.StopGrace
 	deadline := s.stopDeadline()
+	// A restart lets its terminal-hosted workers go before the groups a
+	// forced stop would signal are read, so none of them is among them.
+	s.releaseForRestart()
 	known := s.knownGroups()
 	done := make(chan error, 1)
 	go func() { done <- s.Close() }()
