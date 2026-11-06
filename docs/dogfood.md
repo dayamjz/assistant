@@ -209,6 +209,36 @@ The push answers at once and the run goes on in the service. The branch name is
 the gate's handle on the run, so one branch per pull request head keeps the runs
 apart.
 
+### A pushed run carries no intent, and two checks go quiet without one
+
+A run a push started has no intent recorded, and the stages after the first say
+so rather than inferring one. The intent stage reports `intent-absent`, and the
+review stage reports that the scope lens did not run, "the lens needs a recorded
+intent to trace a change to". So nothing in a pushed run says whether what the
+change touches was asked for. That is the gate being honest, not a defect, but
+it means a shadow run started by `git push` is a weaker run than one a person
+starts.
+
+Starting the run from the branch is what records one:
+
+```sh
+git checkout -B shadow/pr-<number> <the head>
+./bin/assistant --home "$HOME_ROOT" --intent 'what this change sets out to do'
+```
+
+The intent stage then reports it as authoritative acceptance criteria rather
+than a hint. That command attaches rather than returning, and says so: it blocks
+while the run advances. Interrupting it leaves the run going in the service,
+which is where the run lives either way, so reading it afterwards is step 8 and
+ending it is step 9.
+
+The review stage's decision-model checks are a separate thing and stay off here.
+They send nothing without `ASSISTANT_DECISION_MODEL_KEY` in the environment, and
+that is a consent rule rather than a setting: with no key no request leaves the
+machine in any mode. The review reports that they did not run. Note that step
+6's service definition carries `PATH` and nothing else, so a key exported in
+your own shell does not reach a service a service manager starts.
+
 ## 8. Read where it stands, and its findings
 
 ```sh
