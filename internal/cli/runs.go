@@ -508,9 +508,36 @@ func (in *invocation) activeRun(ctx context.Context, working, verb string) (stri
 		return "", err
 	}
 	if status.ActiveRun == nil {
-		return "", usagef("this branch has no active run to %s", verb)
+		return "", noRunInFlight(&status, working, verb)
 	}
 	return status.ActiveRun.Record.ID, nil
+}
+
+// noRunInFlight is the refusal when a status carries no run in flight, as
+// incorrect usage either way. It says which of the two absences it is, because
+// they are not the same thing to a caller and only one of them is about the
+// branch.
+//
+// A status whose Repository is absent came from a working copy the home has no
+// repository record for: a copy a task works in, a second worktree of a branch,
+// or a checkout never bound to a gate. The run that copy's branch is held at
+// may well exist, so saying the branch has none would be the opposite of the
+// fact the caller needs, and the refusal names what reaches a run with no bound
+// copy instead. The other case, a copy that is bound and whose branch has
+// nothing in flight, keeps the sentence it has.
+//
+// Neither sentence widens what a caller may do: both name commands this build
+// already has, and the one that resolves a run from the working path still
+// resolves it from the working path.
+func noRunInFlight(status *machine.Status, working, verb string) error {
+	if status.Repository == nil {
+		return usagef("%s has no repository record, so nothing there has a run to %s. "+
+			"A run is reached without a bound working copy by naming it: --cancel=RUN ends the run named, from any directory, "+
+			"and --task TASK --answer ANSWER --run answers the current run of a task. "+
+			"A checkout that should have a gate of its own is bound with assistant init",
+			working, verb)
+	}
+	return usagef("this branch has no active run to %s", verb)
 }
 
 // reportStatus reports repository, gate, service, active run, and local branch
