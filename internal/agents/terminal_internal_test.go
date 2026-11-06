@@ -1,8 +1,14 @@
 package agents
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // The line a new session answers is the pane's process and the server's,
@@ -43,5 +49,33 @@ func TestTmuxStartCommandSizeMatchesTmuxNewSessionArgs(t *testing.T) {
 	}
 	if got := commandSize(args); got != size {
 		t.Fatalf("TmuxStartCommandSize = %d, commandSize(tmuxNewSessionArgs(...)) = %d", size, got)
+	}
+}
+
+// A tmux client that runs past its bound is answered with what was ended:
+// one procgroup.Run started was ended with the process group it led, and
+// one procgroup.RunInCallersGroup started was ended alone, in its caller's
+// group, which goes on (#784). Each is still ErrTerminalClientTimedOut.
+func TestATimedOutTmuxClientSaysWhatWasEnded(t *testing.T) {
+	t.Parallel()
+	hang := filepath.Join(t.TempDir(), "hang")
+	if err := procgroup.WriteProgram(hang, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name      string
+		by        tmuxRun
+		says, not string
+	}{
+		{"its own group", inOwnGroup, "with the process group it led", "alone"},
+		{"its caller's group", inCallersGroup, "alone, in its caller's group", "process group"},
+	} {
+		err := runTmuxBy(context.Background(), c.by, 200*time.Millisecond, "the hanging client", procgroup.Command(hang))
+		if !errors.Is(err, ErrTerminalClientTimedOut) {
+			t.Fatalf("%s: answered %v, want ErrTerminalClientTimedOut", c.name, err)
+		}
+		if !strings.Contains(err.Error(), c.says) || strings.Contains(err.Error(), c.not) {
+			t.Errorf("%s: answered %q, want it to say the client was ended %s and not %q", c.name, err, c.says, c.not)
+		}
 	}
 }
