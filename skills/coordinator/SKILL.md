@@ -178,7 +178,9 @@ did.
   `answer.working_path` on `answer.branch` when they are set. `detail` is
   the hold's own explanation and often names the answers it takes; a stop's
   and a stall hold's answers are under "Stop a worker" and "Drain the wake
-  queue". A local task's approval hold is the
+  queue". A run held at a decision carries `run` and `decision`: its
+  `question`, its `options` and the `findings` behind it, as the stage
+  reported them. A local task's approval hold is the
   person's: tell them it waits, as "Drain the wake queue" says.
 - `tasks` is each task's resolved state, `{id, project, branch, state,
   line}`; `line` says its next action. Read one in full with

@@ -16,8 +16,7 @@ import (
 // so it hands out and answers nothing; the one write under it is
 // catchUpRuns' reconciliation, as every read of a run makes.
 func (s *Service) coordinatorCatchUp(ctx context.Context, req ipc.Request) (machine.CoordinatorCatchUp, error) {
-	p, err := s.refuseSubordinate(req)
-	if err != nil {
+	if _, err := s.refuseSubordinate(req); err != nil {
 		return machine.CoordinatorCatchUp{}, err
 	}
 	arm, err := feed.VerifyArm(ctx, s.home, s.cfg.SupervisionBeaconInterval, time.Now)
@@ -30,7 +29,7 @@ func (s *Service) coordinatorCatchUp(ctx context.Context, req ipc.Request) (mach
 		return machine.CoordinatorCatchUp{}, err
 	}
 	// Every queued row, so the count of the rows left out is exact.
-	queued, err := s.queuedWakes(ctx, p, math.MaxInt32)
+	queued, err := s.peekWakes(ctx, req, machine.WakesRequest{Limit: math.MaxInt32})
 	if err != nil {
 		return machine.CoordinatorCatchUp{}, err
 	}

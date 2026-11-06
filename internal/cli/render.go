@@ -807,9 +807,11 @@ func readOutCoordinatorCatchUp(w io.Writer, c machine.CoordinatorCatchUp) {
 		writef(w, "  %s\n", printable(row.Line))
 	}
 	for _, row := range c.Holds {
-		// A run's subject is its decision's whole phrase.
+		// A run's decision is read as the phrase table's row for it.
 		line := row.Subject
-		if row.Key != "" {
+		if row.Decision != nil {
+			line = machine.DecisionPhrase(*row.Decision).String()
+		} else if row.Key != "" {
 			line = machine.HoldPhrase(store.Hold{Key: row.Key, Subject: row.Subject}).Outcome
 		}
 		writef(w, "  %s\n", printable(line))

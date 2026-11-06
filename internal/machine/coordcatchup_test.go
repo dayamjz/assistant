@@ -3,9 +3,13 @@ package machine_test
 import (
 	"bytes"
 	"fmt"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
@@ -147,5 +151,37 @@ func TestEveryWakeRowCarriesWhatItIsActedOnBy(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("row %d reads %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// The catch-up read's counts row is a row of the phrase table, with and
+// without rows left out, so the table's vocabulary guard holds it.
+func TestTheCatchUpCountsRowIsInThePhraseTable(t *testing.T) {
+	table := machine.TablePhrases()
+	for _, read := range []machine.CoordinatorCatchUp{
+		{Wakes: make([]machine.WakeRow, 1)},
+		{Wakes: make([]machine.WakeRow, 1), MoreTasks: 1},
+	} {
+		if p := machine.CoordinatorCatchUpPhrase(read); !slices.Contains(table, p) {
+			t.Errorf("the counts row %q is not in TablePhrases", p)
+		}
+	}
+}
+
+// A run held at a decision is listed with the decision itself, the question
+// and the findings behind it as the stage reported them, so a session can
+// answer or relay it from the read alone.
+func TestAHeldRunsRowCarriesItsDecision(t *testing.T) {
+	const question = "Is deleting all customer backups intentional?"
+	decision := machine.Decision{Decision: graph.Decision{Node: "review", Question: question, Options: []string{"approved", "fix"}},
+		Stage: "review", Findings: []findings.Finding{{ID: "f1", Action: findings.ActionAsk, Description: question}}}
+	run := machine.Run{Record: store.Run{ID: "r1"}, Decision: &decision}
+	got := machine.CoordinatorCatchUpOf(supervisor.Arm{}, machine.QueuedWakes{}, []machine.Waiting{{Run: &run}}, nil, nil)
+	var b bytes.Buffer
+	if err := machine.NewEncoder(&b).Encode(got.Holds); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Holds) != 1 || got.Holds[0].Subject != question || !strings.Contains(b.String(), `"findings":[{"id":"f1"`) {
+		t.Fatalf("the held run reads %s, want its question as the subject and its findings", b.String())
 	}
 }

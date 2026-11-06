@@ -890,7 +890,8 @@ It answers one document, bounded whatever the fleet's history:
 - `holds`: every open decision, a task's hold or a run held at a decision,
   with its `subject`, its `detail` (the hold's own explanation, which often
   names the answers it takes) and `answer`, the existing `--answer` command
-  line that closes it;
+  line that closes it; a run held at a decision also carries `decision`, its
+  question, options and the findings behind it as the stage reported them;
 - `tasks`: each task's resolved state as `{id, project, branch, state,
   line}`, where `line` is the task's own reading and its next action;
 - `kept`: every open kept work entry, by `id`, `key` (what `--hold` names)

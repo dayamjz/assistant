@@ -425,6 +425,8 @@ func coordinatorRows() []Phrase {
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached, phraseDomainDelegated, phraseDelegationEnded,
 		phraseDomainRetried, phraseDelegationEndedByAnswer,
+		CoordinatorCatchUpPhrase(CoordinatorCatchUp{Wakes: make([]WakeRow, 1)}),
+		CoordinatorCatchUpPhrase(CoordinatorCatchUp{Wakes: make([]WakeRow, 1), MoreTasks: 1}),
 	}
 }
 

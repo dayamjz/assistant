@@ -48,14 +48,16 @@ type WakeRow struct {
 }
 
 // HoldRow is one open decision, a hold record or a held run (Run, no Key),
-// with the hold's own sentences and Answer, the existing answer path.
+// with Answer, the existing answer path. A held run's Subject is its question
+// and Decision its checkpoint's decision, the stage's findings among them.
 type HoldRow struct {
-	Key     string    `json:"key,omitempty"`
-	Task    string    `json:"task,omitempty"`
-	Run     string    `json:"run,omitempty"`
-	Subject string    `json:"subject"`
-	Detail  string    `json:"detail,omitempty"`
-	Answer  Answering `json:"answer"`
+	Key      string    `json:"key,omitempty"`
+	Task     string    `json:"task,omitempty"`
+	Run      string    `json:"run,omitempty"`
+	Subject  string    `json:"subject"`
+	Detail   string    `json:"detail,omitempty"`
+	Decision *Decision `json:"decision,omitempty"`
+	Answer   Answering `json:"answer"`
 }
 
 // TaskRow is one task's resolved state; Line is TaskPhrase's reading of it.
@@ -112,11 +114,11 @@ func CoordinatorCatchUpOf(arm supervisor.Arm, queued QueuedWakes, waiting []Wait
 			holds = append(holds, HoldRow{Key: w.Hold.Key, Task: w.Hold.TaskID.Or(""), Run: w.Hold.RunID.Or(""),
 				Subject: w.Hold.Subject, Detail: w.Hold.Detail, Answer: w.Answer})
 		case w.Run != nil:
-			subject := w.Run.Phrase()
+			row := HoldRow{Run: w.Run.Record.ID, Subject: w.Run.Phrase().String(), Decision: w.Run.Decision, Answer: w.Answer}
 			if w.Run.Decision != nil {
-				subject = DecisionPhrase(*w.Run.Decision)
+				row.Subject = w.Run.Decision.Question
 			}
-			holds = append(holds, HoldRow{Run: w.Run.Record.ID, Subject: subject.String(), Answer: w.Answer})
+			holds = append(holds, row)
 		}
 	}
 	out.Holds, out.MoreHolds = cut(out.Holds, holds)
