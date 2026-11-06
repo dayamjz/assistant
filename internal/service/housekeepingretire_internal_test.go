@@ -912,7 +912,7 @@ func (s *hkSubject) settleQueue(t *testing.T) {
 		if len(wakes)+len(domain)+len(kept)+len(housekeeping) == 0 {
 			return
 		}
-		if err := records.AcknowledgeAll(ctx, wakes, domain, kept, housekeeping, store.AcknowledgedByCoordinator()); err != nil {
+		if err := records.AcknowledgeAll(ctx, nil, wakes, domain, kept, housekeeping, store.AcknowledgedByCoordinator()); err != nil {
 			t.Fatalf("acknowledging the queue: %v", err)
 		}
 	}

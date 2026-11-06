@@ -17,8 +17,10 @@ paths: ["internal/cli/**", "cmd/assistant/**"]
   bounded tail of `home.StageLog`, which `internal/service`'s `stagelog.go`
   alone writes, best effort (around every body, fix round and agent call,
   redacted), and alone reads; it is evidence nothing decides from.
-- `skills/coordinator/SKILL.md` is what the coordinator's client tells a
-  coordinating agent, and claims only what the build does.
+- `skills/coordinator/SKILL.md` and its `references/` are what the
+  coordinator's client tells a coordinating agent, and claim only what the
+  build does. `skill_test.go` holds the core to 150 lines and to naming
+  every reference with its trigger; the program loads none of them.
 - `internal/service`'s `wakewait.go` owns the push, the wait, when a
   handed-out row is handed out again, and their gaps.
 - The push tests reach the surface the way a push does: the test binary

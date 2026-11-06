@@ -478,6 +478,45 @@ func (e *WakeIDError) Error() string {
 // Unwrap makes the error match its Reason.
 func (e *WakeIDError) Unwrap() error { return e.Reason }
 
+// WakeShape is one of the wake queue's four shapes. Each numbers its rows
+// apart from the others, so one number can name a row of each.
+type WakeShape string
+
+// The four shapes, in the order a drain lists them.
+const (
+	// WakeShapeTask is a wake about a task, the wake table's row.
+	WakeShapeTask WakeShape = "task"
+	// WakeShapeDomain is a wake about a delegated domain.
+	WakeShapeDomain WakeShape = "domain"
+	// WakeShapeKeptWork is a wake about a kept work entry no task names.
+	WakeShapeKeptWork WakeShape = "kept-work"
+	// WakeShapeHousekeeping is a wake about a repository's housekeeping.
+	WakeShapeHousekeeping WakeShape = "housekeeping"
+)
+
+// WakeAmbiguousError is AcknowledgeAll's refusal of a number named without
+// its shape when a row of a shape other than a task's carries that number,
+// open or acknowledged: such a number could name that row as well as a
+// task's, so the store does not choose. Nothing in the batch is written.
+type WakeAmbiguousError struct {
+	// ID is the number the batch named without its shape.
+	ID int64
+	// Shapes are the shapes with a row carrying ID, in the order of the
+	// WakeShape constants; a task's is among them only when a task wake
+	// carries ID.
+	Shapes []WakeShape
+}
+
+// Error names the number and every shape carrying it.
+func (e *WakeAmbiguousError) Error() string {
+	names := make([]string, len(e.Shapes))
+	for i, shape := range e.Shapes {
+		names[i] = string(shape)
+	}
+	return fmt.Sprintf("store: acknowledging wake %d: the number was named without its shape, and rows of these shapes carry it: %s",
+		e.ID, strings.Join(names, ", "))
+}
+
 // ErrReadOnly is returned by every accessor that writes when the store was
 // opened by OpenReadOnly. A read-only store has no writer connection at all,
 // so the refusal is this package's own condition rather than whatever the
