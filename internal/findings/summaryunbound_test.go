@@ -101,14 +101,55 @@ func TestEveryShapeOfTheEvidenceNoteSaysTheSummaryIsNotBound(t *testing.T) {
 // saysTheSummaryIsUnbound says whether the bound report tells a reader that
 // the comparison was on findings and not on the stage's summary. It asks the
 // report's own text, because that text is the whole of what a person gets.
+//
+// It looks for both halves of the claim, the scope and what the summary
+// escapes, and not for a word a sentence asserting the opposite would also
+// carry. TestThePredicateRejectsTextAssertingTheOpposite is its control.
 func saysTheSummaryIsUnbound(r findings.Report) bool {
 	for _, f := range r.Findings {
-		d := strings.ToLower(f.Description)
-		if strings.Contains(d, "summary") && strings.Contains(d, "not") {
+		if summaryEscapesTheComparison(f.Description) {
 			return true
 		}
 	}
 	return false
+}
+
+// summaryEscapesTheComparison is the predicate the two tests above rest on,
+// named so its own control can drive it directly.
+func summaryEscapesTheComparison(description string) bool {
+	d := strings.ToLower(description)
+	return strings.Contains(d, "on findings alone") &&
+		strings.Contains(d, "summary") &&
+		strings.Contains(d, "neither refused nor marked")
+}
+
+// The predicate the two tests above rest on has to be able to fail, or they
+// pass on any wording at all. Its negative controls are sentences a report
+// could plausibly carry instead: one saying the summary is held to the
+// comparison, which is the opposite claim, and one naming the summary for an
+// unrelated reason, which is what the report already says when a summary is
+// missing.
+func TestThePredicateRejectsTextAssertingTheOpposite(t *testing.T) {
+	t.Parallel()
+	for _, wording := range []string{
+		"The comparison is on findings alone. A stage's summary is held to it too, " +
+			"so a claim it makes about a path the review did not declare reading is refused.",
+		"The comparison covers every claim, the summary among them.",
+		"A report with no summary is refused rather than read as a clean pass.",
+		"",
+	} {
+		if summaryEscapesTheComparison(wording) {
+			t.Errorf("the predicate accepts text that does not say the summary escapes: %q", wording)
+		}
+	}
+	// The positive control for the predicate itself, so it is not a function
+	// that rejects everything.
+	stated := "The comparison is on findings alone. A stage's summary is prose with no path " +
+		"to test against, so a claim it makes about a path the review did not declare reading " +
+		"is carried as written and is neither refused nor marked."
+	if !summaryEscapesTheComparison(stated) {
+		t.Errorf("the predicate rejects the claim itself: %q", stated)
+	}
 }
 
 // everyDescription is what a failure above prints, so the reader of a failure
