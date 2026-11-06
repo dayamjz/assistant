@@ -463,7 +463,7 @@ func TestADomainsBoundHoldIsAnsweredGivenTheDomainAndClosedByItsEnd(t *testing.T
 
 	waitingOn := func() *machine.Waiting {
 		t.Helper()
-		read, err := l.service.catchUp(ctx)
+		read, err := l.service.catchUp(ctx, nil)
 		if err != nil {
 			t.Fatalf("catchUp: %v", err)
 		}
