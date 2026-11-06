@@ -90,8 +90,8 @@ import (
 // are a message rather than a flag, and so no flag before them takes them as
 // its value: --allowedTools takes every word after it up to the next flag
 // and was observed to take a prompt placed right after it as a tool name.
-// They are the first message as given, with the leading space the framing
-// below adds where they begin with "!" or "/".
+// They are the first message as given, defused as the framing below defuses
+// a send.
 // The command that starts the terminal is bounded by TerminalCommandLimit,
 // so instructions too long for it are refused before anything starts.
 //
@@ -394,26 +394,44 @@ func sessionIdentifier() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
-// defused is text with a space before it when it begins with "!" or "/".
-// Typed into an empty input, the CLI was observed to take a "!" as a shell
-// command, run outside the worker's grant, and a "/" as a slash command
-// rather than a message; a leading space was observed to leave either a
-// message, which reached the model with the space.
+// defused is text with a space before any part of it the CLI or its screen
+// reader would take for something other than one message's text, and the
+// model receives each with that space.
+//
+// Text beginning with "!" or "/" is one: typed into an empty input, the CLI
+// was observed to take a "!" as a shell command, run outside the worker's
+// grant, and a "/" as a slash command rather than a message, and a leading
+// space to leave either a message.
+//
+// A line beginning with one of claudeDrawn is the other: the CLI draws a
+// message's later lines on rows of their own from the row's start, so such
+// a line is a row claudeScreen would read as the interface drawing
+// something it is not. The space puts it one column in, where no reading
+// of the screen takes it.
 func defused(text string) string {
-	if strings.HasPrefix(text, "!") || strings.HasPrefix(text, "/") {
-		return " " + text
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		command := i == 0 && (strings.HasPrefix(line, "!") || strings.HasPrefix(line, "/"))
+		if command || slices.ContainsFunc(claudeDrawn, func(p string) bool { return strings.HasPrefix(line, p) }) {
+			lines[i] = " " + line
+		}
 	}
-	return text
+	return strings.Join(lines, "\n")
 }
+
+// claudeDrawn are the prefixes a row of the interface this adapter reads
+// begins with: a message of the conversation, a reply of one, and the
+// prompt of an input holding text.
+var claudeDrawn = append([]string{claudeTypedMark, claudeYouMark}, claudeReplied...)
 
 // claudeTerminalMessage is the Claude Code adapter's terminal framing: text
 // as it is to be pasted, refused with an error wrapping ErrInvalidInvocation
 // before anything is typed when it is not valid UTF-8, when it holds nothing
 // but white space, or when it carries a control character other than a
 // line break, which a terminal would deliver as a key rather than as text;
-// the paste's own end marker begins with one. Text beginning with "!" or
-// "/" is defused. It adds no newline: StartInTerminal's Enter is what
-// submits it.
+// the paste's own end marker begins with one. The text is defused, so
+// neither the input nor the screen reader takes a part of it for its own.
+// It adds no newline: StartInTerminal's Enter is what submits it.
 func claudeTerminalMessage(text string) ([]byte, error) {
 	if !utf8.ValidString(text) {
 		return nil, &invocationFieldError{field: "text", reason: "is not valid UTF-8"}
@@ -432,29 +450,35 @@ func claudeTerminalMessage(text string) ([]byte, error) {
 	return []byte(defused(text)), nil
 }
 
-// The pieces of the screen claudeScreen reads, as Claude Code 2.1.301 drew
-// them with --ax-screen-reader. footerMark was on the footer whenever the
-// interface was drawn, idle or running a turn, and on no first-run screen;
-// busyMark was on it while a turn ran with an empty input (2.1.308 dropped it
-// once text was typed); and the input began at the first line below it that
-// began with the prompt, the prompt alone when it was empty and the prompt,
-// a no-break space and the text, over as many lines as it had, when not.
+// The pieces of the screen claudeScreen reads, as Claude Code 2.1.301 and
+// then 2.1.308 drew them with --ax-screen-reader. footerMark was on the
+// footer whenever the interface was drawn, idle or running a turn, and on
+// no first-run screen; busyMark was on it while a turn ran with an empty
+// input (2.1.308 dropped it once text was typed); and the input began at
+// the first row below it that began with the prompt. An empty input was
+// that prompt and nothing else, and an input holding text was the prompt,
+// typedMark and the text, its first line there and every later line on a
+// row of its own from the row's start, so typedMark on the prompt's row is
+// the CLI saying the input holds text, which is what claudeLayout reads it
+// as. It is drawn for an input whose first line is empty too.
 const (
 	claudeFooterMark = "(shift+tab to cycle)"
 	claudeBusyMark   = "esc to interrupt"
 	claudeInputMark  = "$"
+	claudeTypedMark  = claudeInputMark + "\u00a0"
+	claudeYouMark    = "you: "
 )
 
-// claudeReplied are the prefixes of the lines a turn's reply was drawn with,
-// its text and its tool calls, below the "you: " line of its message.
+// claudeReplied are the prefixes of the rows a turn's reply was drawn with,
+// its text and its tool calls, below the claudeYouMark row of its message.
 var claudeReplied = []string{"claude: ", "tool: ", "tool error: "}
 
 // claudeScreen reads a Claude Code terminal worker's visible screen, laid
-// out by claudeLayout. With no footer it is screenNotDrawn. With a prompt
-// below it and nothing in the input it is screenReady when the footer does
-// not carry claudeBusyMark, and screenBusy when it does and the running
-// turn has drawn part of its reply; it is screenDrawn in every other case,
-// text in the input or no prompt among them.
+// out by claudeLayout. With no footer it is screenNotDrawn. With the
+// interface's prompt below it and nothing in the input it is screenReady
+// when the footer does not carry claudeBusyMark, and screenBusy when it
+// does and the running turn has drawn part of its reply; it is screenDrawn
+// in every other case, text in the input or no interface among them.
 //
 // The input is read because the footer alone was seen to read idle while
 // the input still showed the message the worker had just been sent, and in
@@ -464,20 +488,28 @@ var claudeReplied = []string{"claude: ", "tool: ", "tool error: "}
 // is not established; with the input read as well, that probe has not
 // failed that way since. An input holding text a person typed and did not
 // send reads the same way, so a send never types into it.
-func claudeScreen(screen string) screenState {
+//
+// A reply having begun is read from the rows between the last message's
+// claudeYouMark row and the footer, so it rests on what the conversation draws.
+// Every line this adapter types is defused, so no message it sends can
+// draw a row that reads as a reply. A message a person types at the pane
+// is not: one whose later lines begin with a reply's prefix reads as a
+// reply begun while the model has sent nothing, and the interrupt presses
+// the key the CLI answers there by putting their message back in the
+// input, which it then leaves theirs to clear.
+func claudeScreen(screen terminalScreen) screenState {
 	lines, footer, prompt := claudeLayout(screen)
 	switch {
 	case footer < 0:
 		return screenNotDrawn
-	case prompt < 0 || strings.TrimRight(lines[prompt], " \u00a0") != claudeInputMark ||
-		strings.TrimSpace(strings.Join(lines[prompt+1:], "")) != "":
+	case prompt < 0 || strings.TrimRight(lines[prompt], " ") != claudeInputMark:
 		return screenDrawn
 	case !strings.Contains(lines[footer], claudeBusyMark):
 		return screenReady
 	}
 	you := -1
 	for i, line := range lines[:footer] {
-		if strings.HasPrefix(line, "you: ") {
+		if strings.HasPrefix(line, claudeYouMark) {
 			you = i
 		}
 	}
@@ -491,23 +523,40 @@ func claudeScreen(screen string) screenState {
 	return screenDrawn
 }
 
-// claudeLayout is the screen's lines, its footer's index and its prompt's:
-// the footer is the first line carrying claudeFooterMark whose first prompt
-// line below, the prompt alone or with a no-break space after it, has no
-// other such line before it, so a conversation line quoting the footer
-// above it, or input lines quoting it and the prompt below it, are neither
-// taken for it. With no such footer, footer is the last line carrying the
-// mark and prompt is -1; with no line carrying it, both are -1.
-func claudeLayout(screen string) (lines []string, footer, prompt int) {
-	lines = strings.Split(screen, "\n")
-	footer = -1
+// claudeLayout is the screen's rows, the interface's footer row and its
+// prompt row. A candidate is a row carrying claudeFooterMark with a prompt
+// row below it, the prompt alone or with claudeTypedMark, and no other
+// footer row in between. Which candidate is the interface is settled by the
+// cursor, since a conversation row can carry any text, the footer's own
+// line and the prompt's among it, while the interface is the only part of
+// the screen the cursor sits in: a prompt row with claudeTypedMark is an
+// input holding text, whose last row is the cursor's, so the cursor is on
+// it or below it; a prompt row without it is an empty input, which is the
+// cursor's row itself. The first candidate the cursor allows is the
+// interface, and a prompt row the cursor is above, or a bare one it is not
+// on, is conversation text passed over. With no candidate the cursor
+// allows, footer is the last row carrying the mark and prompt is -1; with
+// no row carrying it, both are -1, and so they are for a screen read with
+// no cursor.
+//
+// One shape leaves two readings consistent with the cursor, and the first,
+// which this returns, is the one that reads as not ready: a draft of
+// several lines whose later lines quote the footer and then the prompt
+// draws the rows a conversation quoting both above an empty input draws.
+// Reading it as the draft refuses sends while it is on the screen; reading
+// it as the empty input would type into a person's text.
+func claudeLayout(screen terminalScreen) (lines []string, footer, prompt int) {
+	lines, footer = screen.rows, -1
 	for f, line := range lines {
 		if !strings.Contains(line, claudeFooterMark) {
 			continue
 		}
 		footer = f
 		for i := f + 1; i < len(lines) && !strings.Contains(lines[i], claudeFooterMark); i++ {
-			if l := strings.TrimRight(lines[i], " "); l == claudeInputMark || strings.HasPrefix(l, claudeInputMark+"\u00a0") {
+			switch l := strings.TrimRight(lines[i], " "); {
+			case l == claudeInputMark && i == screen.cursor:
+				return lines, f, i
+			case strings.HasPrefix(l, claudeTypedMark) && i <= screen.cursor:
 				return lines, f, i
 			}
 		}

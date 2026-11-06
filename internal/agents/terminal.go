@@ -212,6 +212,14 @@ import (
 //     made, so a caller whose bound is shorter than a turn has its text
 //     refused, nothing typed, rather than queued. The CLI was seen to queue
 //     a message pasted while a turn ran; nothing here relies on that.
+//   - The Claude Code typing tells its interface from the conversation
+//     above it by the row tmux reports the cursor on, since the
+//     conversation carries text this package did not write. One shape is
+//     read as not ready whichever it is: a conversation line quoting the
+//     footer and then one quoting the prompt with the no-break space the
+//     CLI draws before input text. Sends are refused, nothing typed, for
+//     as long as the pane draws it, and claudeLayout says why no reading
+//     tells it from a draft of several lines quoting the same two.
 
 // TerminalWorkerRunner is a Runner that can be started as a terminal worker,
 // which is what CapabilityTerminalWorkers names: an adapter implements it
@@ -563,6 +571,19 @@ const (
 	screenBusy
 )
 
+// terminalScreen is one reading of a terminal worker's pane: its visible
+// rows, one row per line as the pane holds them, and the row tmux reported
+// its cursor on, which is the row the agent's own input ends on. Any row
+// can read like the interface's own, since the rows carry a conversation
+// of text the agent was sent and text a model answered, while the cursor
+// is the server's answer rather than anything drawn, so it is the one part
+// of a reading text cannot write. cursor is -1 where the server reported
+// none, which no reader may take for a row.
+type terminalScreen struct {
+	rows   []string
+	cursor int
+}
+
 // terminalTyping is how an adapter types into a terminal worker: the bytes
 // one send is typed as, how they are pasted, and how its screen is read. It
 // is the adapter's and never the provider's, so the scripted adapter's line
@@ -580,7 +601,7 @@ type terminalTyping struct {
 	// start returns only once it reads other than screenNotDrawn, and a send
 	// types only once it reads screenReady. Nil, nothing is read and every
 	// send is typed at once.
-	read func(screen string) screenState
+	read func(screen terminalScreen) screenState
 	// interrupt is the tmux name of the key that ends a running turn, which
 	// Interrupt presses, empty for an adapter with none; it is what
 	// CapabilityTerminalInterrupt's row reads.
@@ -862,11 +883,33 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 	}
 }
 
-// screen is the pane's visible screen, with lines tmux wrapped joined back.
-func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
+// screen is the pane's visible screen: the server's cursor row and then
+// its rows, asked for in one client call, so the pane processes no input of
+// its own between the two. The rows are taken as the pane holds them, one
+// to a line, rather than with the lines tmux wrapped joined back, so that a
+// row's index is the row the cursor is reported on; a pane too narrow to
+// draw the reader's marks on one row therefore reads as no interface, which
+// waits and refuses rather than typing blind. An answer whose first line is
+// not a row number is read with no cursor, which no reader takes for ready.
+func (w *tmuxWorker) screen(ctx context.Context) (terminalScreen, error) {
 	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the screen", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
-		"capture-pane", "-p", "-J", "-t", terminalTarget))
-	return string(out), err
+		"display-message", "-p", "-t", terminalTarget, "#{cursor_y}", ";",
+		"capture-pane", "-p", "-t", terminalTarget))
+	return parseTerminalScreen(string(out)), err
+}
+
+// parseTerminalScreen reads what screen asked tmux for: the cursor's row on
+// the first line and the pane's rows after it.
+func parseTerminalScreen(answer string) terminalScreen {
+	where, rows, found := strings.Cut(answer, "\n")
+	if !found {
+		return terminalScreen{cursor: -1}
+	}
+	cursor, err := strconv.Atoi(strings.TrimSpace(where))
+	if err != nil || cursor < 0 {
+		cursor = -1
+	}
+	return terminalScreen{rows: strings.Split(rows, "\n"), cursor: cursor}
 }
 
 // parseTerminalAnswer reads the line the server prints for a new session,
