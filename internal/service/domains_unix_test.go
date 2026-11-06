@@ -317,6 +317,7 @@ func TestASubordinateHoldsTheCoordinatorsCommandsOverItsDomainAndNothingElse(t *
 			params any
 		}{
 			{ipc.MethodCatchUpMark, machine.MarkSeenRequest{Records: []store.SeenRecord{{Kind: store.SeenMerge, Key: "x"}}}},
+			{ipc.MethodCoordinatorCatchUp, struct{}{}},
 			{ipc.MethodRunStart, machine.StartRequest{}},
 			{ipc.MethodRunRerun, machine.RerunRequest{}},
 			{ipc.MethodRunCancel, machine.CancelRequest{Run: "nothing"}},
@@ -856,6 +857,7 @@ func TestASurvivingSubordinateIsPlacedFromItsRecordAfterARestartAndEndedByTheDom
 			{ipc.MethodDomainDelegate, machine.DomainDelegateRequest{Domain: "beta", Delivery: "gated", Instructions: "x"}},
 			{ipc.MethodTaskRespond, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerRetry}},
 			{ipc.MethodCatchUpMark, machine.MarkSeenRequest{Records: []store.SeenRecord{{Kind: store.SeenMerge, Key: "x"}}}},
+			{ipc.MethodCoordinatorCatchUp, struct{}{}},
 			{ipc.MethodServiceStop, machine.LifecycleRequest{}},
 		} {
 			if _, code := callAs(t, w, r.method, r.params); code != ipc.CodeSubordinate {

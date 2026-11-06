@@ -865,6 +865,57 @@ preview is open to any caller that may answer kept work, and a
 confirmation is refused for everyone in this build. Removal on a confirmed
 discard is deferred (docs/prd.md, sections 6 and 9).
 
+## Resetting a coordinator's session
+
+Fleet state lives in the service's records, never in a coordinator's
+conversation, so a long coordinator session is mostly a cache of states that
+have since changed, and every turn pays to read it again. The routine way to
+shed that context is to end or clear the coordinator's session and start the
+new one with one read:
+
+```sh
+assistant --json coordinator catch-up
+```
+
+It answers one document, bounded whatever the fleet's history:
+
+- `supervision`: the verdict `assistant coordinator supervision` gives, so
+  the new session does not create work while nothing watches it;
+- `wakes`: every queued wake on offer to the coordinator, handed out or not,
+  with `id`, its number within its shape, `acknowledge`, the one argument
+  `assistant coordinator acknowledge` takes for it (`--task=12`,
+  `--domain=3`, `--kept=5`, `--housekeeping=2`), `kind`, `line`, and the fields its
+  shape is acted on by: `task` and `marker` for a task's, `domain` for a
+  domain's, `kept_work` (the entry's `id` under `kept`) for kept work no
+  task names, and `repository`, `pass` and `detail` for housekeeping;
+- `holds`: every open decision, a task's hold or a run held at a decision,
+  with its `subject`, its `detail` (the hold's own explanation, which often
+  names the answers it takes) and `answer`, the existing `--answer` command
+  line that closes it; a run held at a decision also carries `decision`, its
+  question, options and the findings behind it as the stage reported them;
+- `tasks`: each task's resolved state as `{id, project, branch, state,
+  line}`, where `line` is the task's own reading and its next action;
+- `kept`: every open kept work entry, by `id`, `key` (what `--hold` names)
+  and the task or run whose copy it is.
+
+Each list holds at most 50 rows, a fixed count in the program and not a
+setting, and `more_wakes`, `more_holds`, `more_tasks` and `more_kept` count
+exactly the rows left out. Tasks are ordered so that limit falls last on
+what you owe an act on: tasks a listed wake, hold or kept entry names come
+first, then unfinished tasks newest first, then landed and complete ones
+newest first, so a named task is left out only when more than 50 are named.
+Read a task in full, listed or not, with `assistant --json coordinator tasks
+ID`.
+
+The read hands out no wake, acknowledges none, answers nothing and marks
+nothing seen, so the queue and `assistant watch` read the same after it as
+before. A wake listed there is still closed only by acknowledging it. It is
+the first coordinator's: a task's worker is refused with code `worker`, a
+command with no terminal above it with `unplaced`, and a subordinate
+coordinator with `subordinate`, since this build does not scope the read to a
+domain. Without `--json` it prints the same rows for a person, without
+identifiers.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not

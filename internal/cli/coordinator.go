@@ -92,6 +92,7 @@ var coordinatorActions = []struct {
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
 	{"acknowledge", "[<wake>...]", "Record that the named wakes were acted on, which closes them, so no drain hands them out again; name each by its shape's flag.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
+	{"catch-up", "", "Read in one bounded document what a fresh session acts from: supervision, waiting notices, open decisions, every task's state and kept work; it hands out nothing.", coordinatorCatchUp},
 	{"delegate", "<domain>", "Delegate a named domain of tasks to a coordinator of its own, begun by the service under the posture given.", coordinatorDelegate},
 	{"end-delegation", "<domain>", "End a domain's delegation, so its notices come back to you and its coordinator is ended.", coordinatorEndDelegation},
 }
@@ -570,6 +571,16 @@ func coordinatorSupervision(ctx context.Context, in *invocation) (any, error) {
 	var arm supervisor.Arm
 	err := in.callService(ctx, ipc.MethodSupervisionAssert, nil, &arm)
 	return arm, err
+}
+
+// coordinatorCatchUp is coordinator.catchup; who may read it is the service's.
+func coordinatorCatchUp(ctx context.Context, in *invocation) (any, error) {
+	if err := in.parseFlags(coordinatorCommand("catch-up"), func(*flag.FlagSet) {}); err != nil {
+		return nil, err
+	}
+	var read machine.CoordinatorCatchUp
+	err := in.callService(ctx, ipc.MethodCoordinatorCatchUp, nil, &read)
+	return read, err
 }
 
 // coordinatorDelegate is domain.delegate: the domain named as the operand,
