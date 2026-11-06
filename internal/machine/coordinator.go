@@ -185,11 +185,11 @@ func DelegationEndedPhrase(DelegationEnded) Phrase { return phraseDelegationEnde
 // nothing, so the phrase says the rows stay waiting until each is
 // acknowledged, and that a row not acknowledged comes back, and it gives the
 // acknowledge command that closes exactly the rows handed out, each named
-// as AcknowledgeNames names it. The command is spelled out rather than
-// described, because a description by what a notice is about cannot tell a
-// task's own notice about its kept copy, a task wake named by its number
-// alone, from a notice about a kept work entry no task names, which takes
-// KeptWorkWakePrefix. Which work each row is about and what kind of notice
+// as AcknowledgeNames names it, by its shape's flag. The command is spelled
+// out rather than described, because a description by what a notice is
+// about cannot tell a task's own notice about its kept copy, a task wake,
+// from a notice about a kept work entry no task names, a shape of its own.
+// Which work each row is about and what kind of notice
 // it is are the structured rendering's, because a kind is a word the
 // derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {

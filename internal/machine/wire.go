@@ -1260,7 +1260,8 @@ type QueuedWake struct {
 // and who the record says closed them, which is what the surface derived and
 // not what the caller said.
 type Acknowledged struct {
-	// Wakes are the identifiers the batch closed, as the request named them.
+	// Wakes are the task wake identifiers the batch closed: those the
+	// request named as task wakes, then those it named without a shape.
 	Wakes []int64 `json:"wakes"`
 	// DomainWakes are the domain wake identifiers the batch closed, as the
 	// request named them.
