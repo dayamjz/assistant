@@ -174,6 +174,15 @@ func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {
 		"a backlog that is not a queue depth": func(c *ipc.ServerConfig) { c.Backlog = -1 },
 		"a negative stream limit":             func(c *ipc.ServerConfig) { c.MaxStreams = -1 },
 		"a negative in-flight limit":          func(c *ipc.ServerConfig) { c.MaxInFlight = -1 },
+		"a lease of a method that does not stream": func(c *ipc.ServerConfig) {
+			c.Leases = map[ipc.Method]ipc.Lease{ipc.MethodStatus: {Beat: time.Second, Expiry: 3 * time.Second}}
+		},
+		"a lease with no beat": func(c *ipc.ServerConfig) {
+			c.Leases = map[ipc.Method]ipc.Lease{ipc.MethodWakesSubscribe: {Expiry: 3 * time.Second}}
+		},
+		"a lease that expires before its beat": func(c *ipc.ServerConfig) {
+			c.Leases = map[ipc.Method]ipc.Lease{ipc.MethodWakesSubscribe: {Beat: time.Second, Expiry: time.Second}}
+		},
 	}
 	for name, breakIt := range cases {
 		cfg := full
@@ -184,6 +193,10 @@ func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {
 	}
 	if _, err := ipc.NewServer(full); err != nil {
 		t.Errorf("NewServer with everything: %v", err)
+	}
+	full.Leases = map[ipc.Method]ipc.Lease{ipc.MethodWakesSubscribe: {Beat: time.Second, Expiry: 3 * time.Second}}
+	if _, err := ipc.NewServer(full); err != nil {
+		t.Errorf("NewServer with a lease: %v", err)
 	}
 }
 

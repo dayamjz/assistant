@@ -48,6 +48,7 @@ func TestMain(m *testing.M) {
 	hookMain()
 	callMain()
 	listenMain()
+	holdMain()
 	service.EarlierServiceMain()
 	// After every verb this binary answers as another process, because a
 	// hook, a call and an earlier service are the processes they are and
@@ -259,6 +260,60 @@ func listenMain() {
 		if event.Type == ipc.TypeWakeQueued {
 			fmt.Fprint(os.Stdout, string(event.Payload))
 			os.Exit(0)
+		}
+	}
+}
+
+// holdVerb is the first argument that makes this binary hold the wake
+// stream until the stream ends, as assistant coordinator listen does.
+const holdVerb = "ipc-hold"
+
+// holdMain lets this binary hold wakes.subscribe from a process a test
+// placed and can stop with a signal, as listenMain does, except that it
+// reads past every wake and ends only when the stream does. It takes the
+// socket and a file it creates once the stream opened with its gap marker;
+// when the stream ends it writes the wire code it ended with to standard
+// error and exits four, and a stream still held after two minutes exits
+// three. Nothing here decides anything: it is internal/ipc's client over
+// its arguments.
+func holdMain() {
+	if len(os.Args) != 4 || os.Args[1] != holdVerb {
+		return
+	}
+	socket, ready := os.Args[2], os.Args[3]
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	client, err := ipc.Dial(ctx, socket, ipc.ClientConfig{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dial:", err)
+		os.Exit(2)
+	}
+	defer func() { _ = client.Close() }()
+	stream, err := client.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "subscribe:", err)
+		os.Exit(2)
+	}
+	defer stream.Close()
+	for {
+		event, err := stream.Recv(ctx)
+		if ctx.Err() != nil {
+			os.Exit(3)
+		}
+		if err != nil {
+			var wire *ipc.Error
+			if errors.As(err, &wire) {
+				fmt.Fprint(os.Stderr, string(wire.Code))
+			} else {
+				fmt.Fprintln(os.Stderr, "recv:", err)
+			}
+			os.Exit(4)
+		}
+		if event.Type == ipc.TypeGap {
+			if err := os.WriteFile(ready, nil, 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, "ready:", err)
+				os.Exit(2)
+			}
 		}
 	}
 }

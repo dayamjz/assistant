@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 )
 
 // How the coordinator learns of a wake: the two ways PRD section 5's "write
@@ -59,25 +60,34 @@ import (
 // handed out still counts for the stop guard and the pull guard, because
 // both read store.UnacknowledgedWakes.
 //
-// Which rows a drain offers is decided by attachment and never by a clock.
-// The coordinator is attached while this service's wake stream is held:
-// wakeAttachment reads the stream publisher's ipc.Publisher.Attachment, a
-// stretch that begins when a subscription opens with none open and ends
-// when the last one closes, and names it by this service's instance and the
-// stretch's number. A drain made while the stream is held hands its rows out
-// under that stretch and holds it, so a later drain in the same stretch does
-// not offer them again: a coordinator that is still attached is not handed
-// its own rows twice. A row is offered again by the first drain after the
-// stretch it was handed out under is no longer the one open, which is three
-// cases:
+// Which rows a drain offers is decided by attachment. The coordinator is
+// attached while a wake stream holds the stream publisher's lease:
+// wakeHandout reads ipc.Publisher.Attachment, the lease internal/ipc granted
+// the stream as it acknowledged it, and names it by this service's instance
+// and the lease's number. Every wake stream, the coordinator's and each
+// domain's, is held under wakeStreamLease: its client beats every
+// supervision_beacon_interval, and a stream with no beat for
+// supervisor.StalenessMultiple intervals loses the lease. A publisher has
+// one holder, so a second stream replaces the first rather than overlapping
+// it. A drain made while the lease is held hands its rows out under that
+// lease and holds it, so a later drain under the same lease does not offer
+// them again: a coordinator that is still attached is not handed its own
+// rows twice. A row is offered again by the first drain after the lease it
+// was handed out under is no longer the one held, which is five cases:
 //
 //   - The coordinator went away: its stream ended, the process holding it
-//     died with it or was stopped, and the next drain, by a coordinator that
-//     attached again or by one that only polls, is offered the row.
-//   - The service restarted: the instance in every earlier stretch's name is
+//     died with it, and the next drain, by a coordinator that attached
+//     again or by one that only polls, is offered the row.
+//   - The stream stopped beating: the process holding it was stopped or
+//     hung, the lease expired after its window, and the next drain is
+//     offered the row, while the stream is ended as ipc.ErrLeaseExpired.
+//   - A second stream took the lease: the first is ended as
+//     ipc.ErrStreamReplaced, and a drain under the new lease is offered
+//     every row handed out under the old one.
+//   - The service restarted: the instance in every earlier lease's name is
 //     not this service's, so nothing handed out before is held.
 //   - A drain was made with no stream held at all: it is handed out under a
-//     name no stretch holds, so the next drain is offered it again. A
+//     name no lease holds, so the next drain is offered it again. A
 //     coordinator that only polls is never attached, so it is handed a row
 //     on every drain until it acknowledges it, which is the at-least-once
 //     delivery it gets in place of an attachment the service can observe.
@@ -106,8 +116,8 @@ import (
 // says the queue is worth reading again. The wait takes the bell's channel
 // before each read, so a row appended after the read rings a channel the
 // wait already holds and is not missed between the read and the block. A
-// row that came on offer by any path that does not ring the bell, a stretch
-// of the stream ending among them, is still found, by a read at least once
+// row that came on offer by any path that does not ring the bell, a lease
+// ending among them, is still found, by a read at least once
 // per wakeWaitRecheck; that bounds how late such a row can be answered and
 // is the whole of what the recheck is for.
 //
@@ -122,16 +132,21 @@ import (
 //
 // # Residual gaps
 //
-//   - The service cannot see a coordinator, only its stream. A coordinator
-//     whose stream outlives it, a listen process left running after its
-//     host died, holds what was handed out under it until that process
-//     ends; and two streams that overlap are one stretch, so a coordinator
-//     that went away while another stream was held, a person's own or a
-//     second coordinator's, is not noticed until every stream has closed.
-//     Nothing here expires or heartbeats a listen attachment: a zombie
-//     listen pins those handouts for as long as the process lives. That is
-//     GAP-05's residual on delivery attachment, stated in docs/operators.md
-//     rather than papered over with a clock that would invent detachment.
+//   - The service cannot see a coordinator, only its stream's client. A
+//     listen process left running and beating after the session that
+//     started it ended holds what was handed out under its lease until that
+//     process ends or another stream replaces it; the lease detaches a
+//     stream that stops beating, not one whose caller went quiet. That is
+//     what is left of GAP-05's residual on delivery attachment, stated in
+//     docs/operators.md.
+//   - A stream replaces the one before it whoever opened either, so a
+//     person's listen beside the coordinator's ends the coordinator's,
+//     which exits as a failure and has to be armed again.
+//   - A stopped stream is detached three intervals after its last beat,
+//     not after it stopped, and a client whose beats are delayed that long
+//     by its own load is detached as if it had stopped. How late its rows
+//     come back after that is a drain's own timing, a wait's recheck
+//     included.
 //   - A coordinator that holds the stream, drains and keeps running without
 //     acknowledging what it acted on is never handed those rows again by
 //     this service, and they keep their tasks in flight; that is the
@@ -140,12 +155,6 @@ import (
 //     on every drain, so it sees a row again even when it did act; it is
 //     acknowledging that stops that, and a wait it arms before
 //     acknowledging answers at once.
-//   - A subscription internal/ipc opened for a caller its admission then
-//     refuses, such as a task's worker, or moves onto a domain's stream,
-//     a subordinate's, is counted on the coordinator's stream for as long
-//     as the admission takes, so it can begin or extend a stretch of the
-//     coordinator's for that moment. That can only hold rows handed out in
-//     that moment, and only until the stretch ends.
 //   - A pushed wake reaches only a coordinator attached when it is
 //     published; one attached later learns of it from the gap marker it
 //     opens with and the drain that follows.
@@ -218,8 +227,8 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	defer recheck.Stop()
 	for {
 		rung := s.wakeBell.armed()
-		// The handout is composed per read, because the stretch it is
-		// made under is the one open now; the route is the placement's and
+		// The handout is composed per read, because the lease it is
+		// made under is the one held now; the route is the placement's and
 		// does not move.
 		handout = s.wakeHandout(req, p)
 		offered, err := s.store.OfferedWakes(ctx, handout.Held, handout.Route)
@@ -281,9 +290,9 @@ func (s *Service) drainAll(ctx context.Context, limit int, handout store.WakeHan
 
 // wakeHandout is what a coordinator's drain made now hands rows out as, on
 // the terms above: to who the caller's placement says, subordinates.go's
-// acknowledgerOf, on the route the placement gives, under the stretch of
-// the caller's own wake stream that is open, holding that stretch, or,
-// with no stretch open, under a name nothing holds and holding nothing.
+// acknowledgerOf, on the route the placement gives, under the lease of
+// the caller's own wake stream that is held, holding that lease, or,
+// with no lease held, under a name nothing holds and holding nothing.
 // The caller's own stream is the coordinator's for the coordinator and its
 // domain's for a subordinate, so a subordinate holding its stream is
 // attached on the same terms as the coordinator and one that only polls is
@@ -304,6 +313,14 @@ func (s *Service) wakeHandout(req ipc.Request, p placedPeer) store.WakeHandout {
 		h.Held = []string{h.Under}
 	}
 	return h
+}
+
+// wakeStreamLease is the lease every wake stream, the coordinator's and
+// each domain's, is held under: supervisor.ListenLeaseFor over the
+// operator's supervision_beacon_interval.
+func wakeStreamLease(interval time.Duration) ipc.Lease {
+	beat, expiry := supervisor.ListenLeaseFor(interval)
+	return ipc.Lease{Beat: beat, Expiry: expiry}
 }
 
 // admitWakeStream is the handler's half of wakes.subscribe: internal/ipc
@@ -356,7 +373,7 @@ func (s *Service) domainWakeStream(domain string) (*ipc.Publisher, error) {
 
 // existingDomainWakeStream is the domain's wake stream if one was made,
 // and nil otherwise: a push or a handout never makes one, since a stream
-// nobody subscribed to has nobody to wake and holds no stretch.
+// nobody subscribed to has nobody to wake and holds no lease.
 func (s *Service) existingDomainWakeStream(domain string) *ipc.Publisher {
 	s.domainWakesMu.Lock()
 	defer s.domainWakesMu.Unlock()

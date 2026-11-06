@@ -1026,6 +1026,7 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 		Ancestry: ancestry,
 		Events:   s.events,
 		Streams:  map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: s.wakes},
+		Leases:   map[ipc.Method]ipc.Lease{ipc.MethodWakesSubscribe: wakeStreamLease(s.cfg.SupervisionBeaconInterval)},
 		StreamFor: func(m ipc.Method, name string) (*ipc.Publisher, error) {
 			if m != ipc.MethodWakesSubscribe {
 				return nil, fmt.Errorf("%w: %s publishes no named stream", ipc.ErrUnavailable, m)

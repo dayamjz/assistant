@@ -40,6 +40,9 @@ type frame struct {
 	Params json.RawMessage `json:"params,omitempty"`
 	// Cancel is set on a request that ends a stream the caller opened.
 	Cancel bool `json:"cancel,omitempty"`
+	// Beat is set on a frame that renews the lease of a stream the caller
+	// holds, the stream its ID names.
+	Beat bool `json:"beat,omitempty"`
 	// Result is a successful answer.
 	Result json.RawMessage `json:"result,omitempty"`
 	// Error is a failed answer.

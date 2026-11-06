@@ -181,10 +181,12 @@ const (
 	// coordinator". It hands out and acknowledges nothing, because pushing
 	// is not draining. Holding it is also what the service reads as the
 	// coordinator being attached, so a row a drain handed out while it is
-	// held is not handed out again until it ends. It is restricted, and its
-	// handler refuses a task's worker on MethodWakesList's terms before
-	// anything is written, so neither a contained caller nor a worker is
-	// sent a coordinator's wake. A subordinate coordinator holds its own
+	// held is not handed out again until it ends. The service holds it
+	// under a lease (ServerConfig.Leases), so a stream whose client stops
+	// beating ends, and a second stream replaces the first. It is
+	// restricted, and its handler refuses a task's worker on
+	// MethodWakesList's terms before anything is written, so neither a
+	// contained caller nor a worker is sent a coordinator's wake. A subordinate coordinator holds its own
 	// domain's stream, the one its handler chooses through a StreamChoice,
 	// which carries the rows its drain is offered and no other.
 	MethodWakesSubscribe Method = "wakes.subscribe"
