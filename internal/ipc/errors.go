@@ -86,9 +86,21 @@ var (
 	// an ssh session with no pseudo-terminal, and of a process the kernel
 	// reparented when what started it exited. The one method that raises it
 	// is gate.admit, before any reference moves, and the message names the
-	// chain that was read. The coordinator's methods do not raise it: they
-	// refuse a worker and serve everyone else, which is a different rule.
+	// chain that was read. The coordinator's methods refuse the same chain
+	// with ErrUnplaced instead.
 	ErrUnplaceable = sentinelFor(CodeUnplaceable)
+	// ErrUnplaced reports a coordinator method refused because the service
+	// could place its peer as neither a task's worker, nor a domain's
+	// subordinate coordinator, nor a shell at a terminal, on the terms
+	// ErrUnplaceable states for a push: no process on the peer's parent
+	// chain, read from the kernel and never from the request, is any of
+	// them or is in the foreground of its controlling terminal. That is the
+	// chain of a worker's command that detached itself and was reparented
+	// when what started it exited, and equally of a person's daemon, cron
+	// job, or ssh session with no pseudo-terminal. It is raised before the
+	// method decides or records anything, and the message names the chain
+	// that was read.
+	ErrUnplaced = sentinelFor(CodeUnplaced)
 	// ErrRefused reports a request the handler decided against the records
 	// and refused: a task a coordinator method may not act on as it stands,
 	// such as one not in a state the method is made from, a branch another
@@ -160,6 +172,8 @@ const (
 	CodeNotAtTerminal Code = "not-at-terminal"
 	// CodeUnplaceable maps to ErrUnplaceable.
 	CodeUnplaceable Code = "unplaceable"
+	// CodeUnplaced maps to ErrUnplaced.
+	CodeUnplaced Code = "unplaced"
 	// CodeRefused maps to ErrRefused.
 	CodeRefused Code = "refused"
 	// CodeUnavailable maps to ErrUnavailable.
@@ -226,6 +240,7 @@ var codeRows = []struct {
 	{CodeOutsideDomain, "ipc: refused, the task is outside the caller's domain"},
 	{CodeNotAtTerminal, "ipc: refused, caller is not in the foreground of a terminal"},
 	{CodeUnplaceable, "ipc: refused, caller is placed as neither a task's worker nor a shell at a terminal"},
+	{CodeUnplaced, "ipc: refused, caller is placed as neither a task's worker, a subordinate coordinator, nor a shell at a terminal"},
 	{CodeRefused, "ipc: refused by the records the request was decided against"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},

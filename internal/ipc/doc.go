@@ -221,9 +221,11 @@
 // a cron job or an ssh session with no pseudo-terminal among them, is
 // refused with ErrUnplaceable before any reference moves, and the message
 // names the chain that was read. That is the one method the code is raised
-// by: the coordinator's methods serve a peer that is not a worker whatever
-// its chain ends at, and a person's push is the one request where "not a
-// worker" is not enough, because an admitted push cannot be taken back.
+// by. The coordinator-only methods ask the same chain the same question,
+// with a domain's subordinate coordinator as a fourth answer, and refuse a
+// peer placed as none of them with ErrUnplaced before deciding anything,
+// so a command whose parent exited and left it under init with no terminal
+// is not served as the coordinator's (#765).
 //
 // ErrRefused is a code of another kind, about no relation and not about the
 // caller at all: it is a handler deciding a request against the records and

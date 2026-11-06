@@ -128,7 +128,10 @@ import (
 //
 //   - The placement's gaps are workers.go's: a chain the kernel rewrote
 //     when a process between a subordinate and its tool command exited
-//     places that command as a person's, which the PRD's decision 20 names.
+//     places that command as nobody's, so the coordinator's methods refuse
+//     it with ipc.ErrUnplaced, and as a person's when a terminal's
+//     foreground is on what is left of the chain, the case the PRD's
+//     decision 20 names.
 //     A survivor's placement adds session.Survivors' own: on a platform
 //     reading no start time it cannot tell a reused identifier, of the
 //     survivor or of its terminal server, from the survivor, and places
@@ -185,9 +188,10 @@ func (p placedPeer) domain() string {
 // no launch here produces, is the worker, the side that claims less, and a
 // shell at a terminal and nobody are both neither here, as workerOf reads
 // them. No chain is read while no set holds anybody, no survivor is
-// adopted and no subordinate is starting, on workerOf's terms: the
-// coordinator is then the only peer there is, and a chain read against
-// empty sets could place nothing else.
+// adopted and no subordinate is starting, on workerOf's terms: a chain
+// read against empty sets could place nobody as a worker or a
+// subordinate. placeCoordinator reads it always, because the answer it
+// adds, nobody's, is there to read with no set holding anybody.
 // An unidentified peer is ipc.ErrUnidentifiedPeer and an ancestry that
 // could not be read is ipc.ErrUnavailable, both wrapped, so neither reads
 // as the coordinator. While a subordinate launch is in flight a peer
@@ -196,12 +200,27 @@ func (p placedPeer) domain() string {
 // returns, so in that window it is exactly such a peer, and the first
 // coordinator's own requests are refused with it until the start ends.
 func (s *Service) placeRequest(req ipc.Request) (placedPeer, error) {
+	return s.place(req, false)
+}
+
+// placeCoordinator is placeRequest for the coordinator's methods, which
+// also refuse a peer placed as nobody's: the chain is read for every
+// request, whoever any set holds, and one read to its end with no worker,
+// no subordinate and no terminal's foreground on it is refused with
+// ipc.ErrUnplaced, naming the chain, before the method decides anything.
+// workers.go says why that is the side a coordinator method errs toward.
+func (s *Service) placeCoordinator(req ipc.Request) (placedPeer, error) {
+	return s.place(req, true)
+}
+
+// place is placeRequest, and placeCoordinator when coordinator is set.
+func (s *Service) place(req ipc.Request, coordinator bool) (placedPeer, error) {
 	creds, err := req.Peer.Credentials()
 	if err != nil {
 		return placedPeer{}, err
 	}
 	starting := s.subordinatesStarting.Load() > 0
-	if !starting && s.workerSets().empty() && s.subordinateSets().empty() {
+	if !coordinator && !starting && s.workerSets().empty() && s.subordinateSets().empty() {
 		return placedPeer{}, nil
 	}
 	p, err := s.placeOf(creds)
@@ -220,6 +239,12 @@ func (s *Service) placeRequest(req ipc.Request) (placedPeer, error) {
 	if starting || s.subordinatesStarting.Load() > 0 {
 		return placedPeer{}, fmt.Errorf("%w: a subordinate coordinator is starting and has not yet joined its set, so %s cannot be told from it; ask again once it has started",
 			ipc.ErrUnavailable, creds)
+	}
+	if coordinator && p.kind == placedNobody {
+		return placedPeer{}, fmt.Errorf("%w: %s from %s was read along its parent chain, %s, and no process on it "+
+			"is a task's worker, a subordinate coordinator, the host of either's terminal, or in the foreground of "+
+			"its controlling terminal, so it is not the coordinator's. %s",
+			ipc.ErrUnplaced, req.Method, peerOf(req), p.read(), machine.PhraseCoordinatorUnplaced)
 	}
 	return placedPeer{}, nil
 }
@@ -301,7 +326,7 @@ func (sets subordinateSets) Hosted(host agents.Identity) (session.Placement, boo
 // for the methods PRD section 9 refuses a subordinate. It returns the
 // placement for a caller that goes on to use it.
 func (s *Service) refuseSubordinate(req ipc.Request) (placedPeer, error) {
-	p, err := s.placeRequest(req)
+	p, err := s.placeCoordinator(req)
 	if err != nil {
 		return placedPeer{}, err
 	}
@@ -320,7 +345,7 @@ func (s *Service) refuseSubordinate(req ipc.Request) (placedPeer, error) {
 // for the methods a subordinate holds over its domain; the placement says
 // which the caller is.
 func (s *Service) admitted(req ipc.Request) (placedPeer, error) {
-	p, err := s.placeRequest(req)
+	p, err := s.placeCoordinator(req)
 	if err != nil {
 		return placedPeer{}, err
 	}
@@ -745,7 +770,7 @@ func (s *Service) subordinateSection(d store.Delegation) string {
 // task that cannot be read, is refused the same way and nothing is
 // recorded, on the file comment's terms.
 func (s *Service) refuseDecision(ctx context.Context, req ipc.Request, taskID, text string) (placedPeer, error) {
-	p, err := s.placeRequest(req)
+	p, err := s.placeCoordinator(req)
 	if err != nil {
 		return placedPeer{}, err
 	}

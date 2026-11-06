@@ -91,8 +91,8 @@ import (
 // A walk costs one read per ancestor and ends at the first process with no
 // parent, or as an error past maxAncestry. The worker view, placeByAncestry,
 // runs only while the set holds a worker; the three-way view, placeAlongChain,
-// runs for every push, because a chain with no worker on it still has to be
-// read for a terminal. Every other platform refuses the read; internal/ipc
+// runs for every push and every coordinator request, because a chain with
+// no worker on it still has to be read for a terminal. Every other platform refuses the read; internal/ipc
 // identifies no peer on any of them, so the refusal is upstream of this one.
 //
 // # Under the tmux provider
@@ -142,7 +142,8 @@ import (
 //     no terminal on it. workers.go says which way each rule then goes: the
 //     gate refuses it, so a worker's push on such a chain is refused rather
 //     than admitted as a person's, which is the side an admission that
-//     cannot be taken back has to err toward. A
+//     cannot be taken back has to err toward, and the coordinator's
+//     methods refuse it rather than serve it as the coordinator's. A
 //     subreaper this service started as each worker's parent could keep such
 //     an orphan under the worker on Linux; nothing here builds one, on any
 //     platform.
@@ -150,7 +151,8 @@ import (
 //     second tmux server the worker starts on a socket of its own
 //     daemonizes, so the chain from a shell in one of its windows ends at
 //     init, and that shell is in the foreground of the pseudo-terminal the
-//     second server gave it: the walk places it as a person's. The host
+//     second server gave it: the walk places it as a person's, so the gate
+//     admits its push and the coordinator's methods serve it. The host
 //     above is the worker's own server and no other, and a terminal's
 //     foreground is not a person, which is the bound Lineage.Foreground
 //     states. The same holds of any program on a rewritten chain that

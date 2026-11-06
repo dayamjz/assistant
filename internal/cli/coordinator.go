@@ -31,15 +31,17 @@ import (
 // Every subcommand but tasks calls a restricted method: a caller placed
 // inside a task's worker group is refused every one of those; one placed as
 // a domain's subordinate coordinator is admitted the ones it holds over its
-// domain and refused the rest; one placed as neither is the coordinator.
+// domain and refused the rest; one placed as neither is the coordinator
+// while a terminal's foreground is on its chain, and is refused every one
+// of them otherwise.
 // tasks calls tasks.list and task.get, which internal/ipc's method table
 // makes open, the same reads assistant tasks makes for anyone: a worker is
 // answered them as any caller is, and a subordinate is answered its own
 // domain's tasks alone, which the service scopes. So this
 // command decides nothing about who may call it and holds no second copy
-// of that rule; a refusal arrives typed, ipc.ErrWorker, ipc.ErrSubordinate
-// or ipc.ErrOutsideDomain, and exits as an operational failure through
-// failureExit like every other refusal.
+// of that rule; a refusal arrives typed, ipc.ErrWorker, ipc.ErrSubordinate,
+// ipc.ErrOutsideDomain or ipc.ErrUnplaced, and exits as an operational
+// failure through failureExit like every other refusal.
 //
 // The refusal is only as good as that placement, which internal/service
 // owns: it walks the caller's parent chain to the first process a worker

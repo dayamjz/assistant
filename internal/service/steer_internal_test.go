@@ -151,7 +151,7 @@ func TestAStopTheProbeDoesNotProveRegistersNoHold(t *testing.T) {
 	defer func() { _ = l.service.Close() }()
 	ctx := t.Context()
 
-	_, err := l.service.stopTask(ctx, ipc.Request{}, machine.TaskRequest{Task: task})
+	_, err := l.service.stopTask(ctx, coordinatorRequest(t), machine.TaskRequest{Task: task})
 	var unverified *stopUnverified
 	if !errors.As(err, &unverified) || !errors.Is(err, ipc.ErrRefused) || unverified.Observation.Liveness != taskstate.Live {
 		t.Fatalf("a stop the probe reads live = %v, want *stopUnverified carrying the live reading", err)
@@ -161,7 +161,7 @@ func TestAStopTheProbeDoesNotProveRegistersNoHold(t *testing.T) {
 	}
 
 	terminals.dead(ref)
-	stopped, err := l.service.stopTask(ctx, ipc.Request{}, machine.TaskRequest{Task: task})
+	stopped, err := l.service.stopTask(ctx, coordinatorRequest(t), machine.TaskRequest{Task: task})
 	if err != nil || stopped.Hold.Key != stoppedKey(task, 1) || !stopped.Hold.Open() {
 		t.Fatalf("a stop the probe reads dead = %+v, %v, want the stop's hold for attempt 1", stopped, err)
 	}
