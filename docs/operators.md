@@ -1081,8 +1081,16 @@ What it does, and what it does not:
   server on the socket has the process identifier and the start time the
   installer read, so a later tmux server that happens to get the same
   identifier is refused (unless it started within the same second), and the
-  pane's foreground program has the name the installer read. Otherwise it types
-  nothing and the notification is recorded `failed` with the reason. After
+  pane's foreground program has the name the installer read. Right before it
+  pastes, the same tmux command checks that the pane is not in copy mode (or
+  any other tmux mode, which would take the Enter), that its window does not
+  have `synchronize-panes` on (the Enter would reach every pane), and that its
+  input is not disabled with `select-pane -d` (the paste would reach nothing).
+  Otherwise it types nothing and the notification is recorded `failed` with
+  the reason; a wake refused this way is not typed again, so leave copy mode
+  promptly in the coordinator's pane.
+  When the service ends the command, at its bound or as it stops, the tmux
+  commands it started end with it. After
   tmux restarts, or to move the coordinator to another pane, run the
   installer there again and replace the line.
 - It does not read the screen: text someone left in the pane's input is

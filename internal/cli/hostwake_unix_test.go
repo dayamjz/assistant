@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
+	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -99,6 +102,14 @@ func installWith(t *testing.T, h *home.Home, getenv func(string) string, out any
 	}
 	if err := json.Unmarshal(stdout.Bytes(), out); err != nil {
 		t.Fatalf("decoding assistant host install: %v\n%s", err, stdout.String())
+	}
+}
+
+// tmuxRun runs one tmux client on the host's server.
+func (p paneHost) tmuxRun(t *testing.T, args ...string) {
+	t.Helper()
+	if raw, err := exec.Command(p.tmux, append([]string{"-S", p.socket}, args...)...).CombinedOutput(); err != nil {
+		t.Fatalf("tmux %q: %v: %s", args, err, raw)
 	}
 }
 
@@ -244,9 +255,11 @@ func wakePane(t *testing.T, flags ...string) invocation {
 // the socket that is not the process it read, one that is that process but
 // did not start when the one it read did, which is a later server given a
 // reused process identifier, or a pane whose program is not the one it
-// read, is refused with nothing typed, and the same command with what was
-// read types the notice once, as the positive control that the refusals
-// were not refusing everything.
+// read, is refused with nothing typed. So is the pane read, while tmux has
+// its input disabled (select-pane -d), where a paste reaches nothing and
+// tmux still answers success. The same command with what was read, the
+// input enabled again, types the notice once, as the positive control that
+// the refusals were not refusing everything.
 func TestTheHostWakeTypesOnlyIntoThePaneTheInstallerRead(t *testing.T) {
 	t.Parallel()
 	pane := startPaneHost(t)
@@ -266,7 +279,13 @@ func TestTheHostWakeTypesOnlyIntoThePaneTheInstallerRead(t *testing.T) {
 			t.Fatalf("host wake %q exited %s, want an operational failure saying nothing was typed:\n%s%s", wrong, got.code, got.stdout, got.stderr)
 		}
 	}
-	got := wakePane(t, append(base, "--server-pid", pane.pid, "--server-start", pane.start, "--program", "cat")...)
+	read := append(base, "--server-pid", pane.pid, "--server-start", pane.start, "--program", "cat")
+	pane.tmuxRun(t, "select-pane", "-d", "-t", pane.pane)
+	if got := wakePane(t, read...); got.code != machine.ExitFailure || !strings.Contains(got.stderr, "nothing was typed") {
+		t.Fatalf("host wake into a pane whose input tmux disabled exited %s, want an operational failure saying nothing was typed:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	pane.tmuxRun(t, "select-pane", "-e", "-t", pane.pane)
+	got := wakePane(t, read...)
 	if got.code != machine.ExitOK {
 		t.Fatalf("host wake with what was read exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
@@ -294,5 +313,88 @@ func TestHostInstallOutsideTmuxOffersNoHostWake(t *testing.T) {
 	}, &answer)
 	if answer.WakeCommand != "" || !strings.Contains(answer.WakeAbsent, "tmux pane") || answer.Line == "" {
 		t.Fatalf("host install outside tmux answered %+v, want the stop line, no wake and why", answer)
+	}
+}
+
+// Ending the notify command ends every tmux client host wake started, P15's
+// "ended together with everything it started": the notifier ends a notify
+// command it gave up on, at its bound or as the service stops, by sending
+// its process group SIGKILL, which leaves host wake no moment to end a
+// client itself, so a client is ended only if that signal reaches it.
+//
+// The tmux server is stopped with SIGSTOP, so host wake's first client
+// connects and waits on an answer that does not come. The wake line runs
+// through stages.RunOperatorCommand, the notifier's own call, and is ended
+// once that client runs. Each client is started through a wrapper that
+// writes its own process identifier and then execs tmux, so each is looked
+// for afterwards by its identifier, and none may still run five seconds
+// after the call returned, half of the client's own ten-second read bound,
+// which a client left without host wake has nobody to enforce.
+func TestEndingTheNotifyCommandEndsTheHostWakesTmuxClients(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	pane := startPaneHost(t)
+	dir := t.TempDir()
+	clients, wrapper := filepath.Join(dir, "clients"), filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho $$ >> " + procgroup.ShellQuote(clients) + "\nexec " + procgroup.ShellQuote(pane.tmux) + ` "$@"` + "\n"
+	if err := procgroup.WriteProgram(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	server, err := strconv.Atoi(pane.pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Kill(server, syscall.SIGSTOP); err != nil {
+		t.Fatal(err)
+	}
+	// Registered after startPaneHost's, so it runs first and the server
+	// answers the kill-server that ends it.
+	t.Cleanup(func() { _ = syscall.Kill(server, syscall.SIGCONT) })
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.Join([]string{procgroup.ShellQuote(executable), "host", "wake",
+		"--tmux", procgroup.ShellQuote(wrapper), "--socket", procgroup.ShellQuote(pane.socket), "--pane", pane.pane,
+		"--server-pid", pane.pid, "--server-start", pane.start, "--program", "cat"}, " ")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan stages.OperatorResult, 1)
+	go func() {
+		done <- stages.RunOperatorCommand(ctx, stages.OperatorCommand{Line: line, Dir: dir, Grace: time.Second})
+	}()
+	started := func() []int {
+		raw, _ := os.ReadFile(clients)
+		var pids []int
+		for _, field := range strings.Fields(string(raw)) {
+			if pid, err := strconv.Atoi(field); err == nil {
+				pids = append(pids, pid)
+			}
+		}
+		return pids
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for len(started()) == 0 {
+		if !time.Now().Before(deadline) {
+			cancel()
+			t.Fatalf("host wake started no tmux client within 30s: %+v", <-done)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if res := <-done; res.Exited && res.Code == 0 {
+		t.Fatalf("host wake answered success against a stopped tmux server: %+v", res)
+	}
+
+	gone := time.Now().Add(5 * time.Second)
+	for _, pid := range started() {
+		for syscall.Kill(pid, 0) == nil {
+			if !time.Now().Before(gone) {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+				t.Fatalf("tmux client %d was still running 5s after the notify command was ended, with no host wake left to end it", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 }

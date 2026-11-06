@@ -444,7 +444,9 @@ assistant host install
   `assistant --json coordinator wakes`, act, acknowledge. It hands nothing
   out by itself.
 - It types only while the pane's tmux server and foreground program are the
-  ones the installer read, and nothing is typed otherwise. If tmux restarts
+  ones the installer read, and while the pane is not in copy mode, not
+  synchronized with other panes, and taking input; nothing is typed
+  otherwise, and that wake is not typed again. If tmux restarts
   or you move to another pane, run the installer again and update the line.
 - `listen` and `await` stay the fast path; keep one armed as before.
 

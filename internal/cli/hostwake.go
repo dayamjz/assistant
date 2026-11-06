@@ -32,12 +32,15 @@ import (
 // start time the installer read and the pane's program is the one it read,
 // so a pane identifier a later server reused, under a reused process
 // identifier too, or a host that exited back to its shell, is refused with
-// nothing typed. The notice is machine.HostWakeNotice, the sentence
-// listen prints for a queued wake.
+// nothing typed; so is a pane internal/agents' TypeIntoPane refuses, one in
+// copy mode, synchronized with others, or with its input disabled. The
+// notice is machine.HostWakeNotice, the sentence listen prints for a queued
+// wake. Its tmux clients run in host wake's own process group, so the
+// notifier ending the command by its group ends them with it.
 //
 // The gaps, beside internal/agents' Pane's (the screen is not read, so a
 // person's half-typed input is sent with the notice, and the reading and
-// the paste are two clients):
+// the paste are two clients, so a change between them is not seen):
 //
 //   - One notice per wake: notify.command runs once per wake, so a burst of
 //     wakes types a notice for each, and what a host does with input typed
@@ -112,6 +115,10 @@ func hostWake(ctx context.Context, in *invocation) (any, error) {
 	}
 	notice := machine.HostWakeNotice()
 	if err := agents.TypeIntoPane(ctx, pane, notice); err != nil {
+		var refused *agents.PaneRefusal
+		if errors.As(err, &refused) {
+			return nil, fmt.Errorf("nothing was typed, because %w", err)
+		}
 		return nil, err
 	}
 	return machine.HostWake{Pane: pane.ID, Program: facts.Program, Typed: notice}, nil
