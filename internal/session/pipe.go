@@ -56,7 +56,7 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker: %w", err)
 	}
-	return p.adopt(spec.TaskID, worker, nil, agents.Identity{})
+	return p.adopt(spec.TaskID, worker, nil, agents.Identity{}, "")
 }
 
 // Subordinates is the set of live subordinate coordinators this provider
@@ -108,3 +108,16 @@ func (p *Pipe) Probe(ctx context.Context, ref string) Observation { return p.pro
 
 // Close ends the session on the terms Provider.Close states.
 func (p *Pipe) Close(s *Session) error { return p.release(s) }
+
+// Release is ErrNotDurable for a session this provider holds, which it goes
+// on holding, and ErrNotHeld for any other: a pipe's worker cannot outlive
+// the handle whose pipes it reads and writes.
+func (p *Pipe) Release(s *Session) error {
+	if !p.holds(s) {
+		return ErrNotHeld
+	}
+	return ErrNotDurable
+}
+
+// Readopt is ErrNotDurable: no pipe's worker is held again.
+func (p *Pipe) Readopt(context.Context, string) (*Session, error) { return nil, ErrNotDurable }
