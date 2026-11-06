@@ -79,10 +79,11 @@ func (h *held) newSession(ref Reference, worker agents.Worker, attach []string, 
 
 // adopt makes worker a held session of task: it reads the worker's identity,
 // joins its group, and its host when the provider names one, to the set for
-// the process's lifetime, and records the session under its reference. A
+// the process's lifetime, and records the session under its reference, which
+// names terminal when the worker's server listens on a socket of that name. A
 // worker whose identity cannot be read is ended and refused with
 // ErrIdentity, as Provider.Create states.
-func (h *held) adopt(task string, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
+func (h *held) adopt(task string, worker agents.Worker, attach []string, host agents.Identity, terminal string) (*Session, error) {
 	pid := worker.Group()
 	// The identity is internal/agents' PID-reuse check, read once here and
 	// carried in the reference; a platform with no read records zero.
@@ -97,22 +98,53 @@ func (h *held) adopt(task string, worker agents.Worker, attach []string, host ag
 		worker.Close()
 		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
 	}
-	s, err := h.newSession(Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start}, worker, attach, host)
+	return h.hold(Reference{Home: h.marker, Task: task, PID: pid, Start: identity.Start, Terminal: terminal}, worker, attach, host)
+}
+
+// hold makes worker the held session ref names: its group, and its host,
+// join the set for the process's lifetime, on adopt's terms.
+func (h *held) hold(ref Reference, worker agents.Worker, attach []string, host agents.Identity) (*Session, error) {
+	s, err := h.newSession(ref, worker, attach, host)
 	if err != nil {
 		return nil, err
 	}
-	// The group is a member from here until the process ends: Member reads
-	// the done signal itself, and the goroutine takes the entry out once it
-	// has closed, so the set does not grow with workers that have gone.
-	s.leave = h.workers.join(Membership{Task: task, Group: pid, Host: host}, worker.Done())
+	// The group is a member from here until the process ends or the
+	// session is let go: Member reads the done signal itself, and the
+	// goroutine takes the entry out once either has happened, so the set
+	// does not grow with workers that have gone.
+	s.released = make(chan struct{})
+	s.leave = h.workers.join(Membership{Task: ref.Task, Group: ref.PID, Host: host}, worker.Done())
 	go func() {
-		<-worker.Done()
+		select {
+		case <-worker.Done():
+		case <-s.released:
+		}
 		s.leave()
 	}()
 	h.mu.Lock()
 	h.sessions[s.key] = s
 	h.mu.Unlock()
 	return s, nil
+}
+
+// letGo forgets s without ending its worker, on the terms Host.Release
+// states for a worker that can outlive its handle.
+func (h *held) letGo(s *Session, worker agents.TerminalWorker) error {
+	if s == nil || s.owner != h.owner {
+		return ErrNotHeld
+	}
+	h.mu.Lock()
+	current, ok := h.sessions[s.key]
+	if ok && current == s {
+		delete(h.sessions, s.key)
+	}
+	h.mu.Unlock()
+	if !ok || current != s {
+		return ErrNotHeld
+	}
+	worker.Release()
+	close(s.released)
+	return nil
 }
 
 // holds reports whether s is a session this provider created and still

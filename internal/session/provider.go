@@ -31,6 +31,12 @@ var ErrIdentity = errors.New("session: the worker's identity could not be read a
 // session Pipe holds is.
 var ErrNotAttachable = errors.New("session: this session's worker has no terminal to attach to")
 
+// ErrNotDurable is the answer of Release and Readopt on a provider whose
+// workers cannot outlive the handle holding them: a pipe's worker reads and
+// writes over pipes the service holds, so it is neither let go alive nor
+// held again. Nothing is ended or held.
+var ErrNotDurable = errors.New("session: this provider's workers do not outlive the handle holding them")
+
 // Host is a Provider as the service that launches through it holds one: the
 // five operations, the worker group set the provider produces, and the two
 // reads a caller holding only a recorded reference makes, a capture and the
@@ -70,6 +76,18 @@ type Host interface {
 	// held session ref names, the binary first; ErrNotAttachable for a held
 	// session with no terminal, ErrNotHeld for any other reference.
 	AttachReference(ref string) ([]string, error)
+	// Release lets go of a held worker's session without ending its worker,
+	// so the worker outlives this provider and its reference, which the
+	// attempt records, is what owns it until Readopt holds it again. A
+	// released reference probes as one this provider never held. It is
+	// ErrNotHeld for a session this provider does not hold and
+	// ErrNotDurable, with the session still held, on a provider whose
+	// workers cannot outlive their handle.
+	Release(s *Session) error
+	// Readopt holds again the worker a released reference names, on
+	// Tmux.Readopt's terms, and is ErrNotDurable on a provider whose
+	// workers cannot outlive their handle.
+	Readopt(ctx context.Context, ref string) (*Session, error)
 }
 
 // Provider is PRD section 8's terminal session provider: the five operations
@@ -155,8 +173,12 @@ type Session struct {
 	// for a worker with none.
 	host agents.Identity
 	// leave takes the worker's group out of the provider's Workers; it is
-	// idempotent and runs when the process ends and when Close ends it.
+	// idempotent and runs when the process ends, when Close ends it and
+	// when Release lets it go.
 	leave func()
+	// released is closed when Release lets the session go, and nil for a
+	// subordinate coordinator's session, which is never let go.
+	released chan struct{}
 }
 
 // Reference is the session's identity, which the caller records as the
