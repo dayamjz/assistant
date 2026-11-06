@@ -67,9 +67,8 @@ import (
 // record that it handled one, and nothing here reads or writes the queue
 // beyond the count the in-flight rule takes.
 
-// catchUp answers catchup.read on the terms above. each, when it is not
-// nil, is handed every task as this read resolved it, so the coordinator's
-// catch-up lists the resolution its decisions were read beside.
+// catchUp answers catchup.read on the terms above, handing each (when not
+// nil) every task as this read resolved it, for the coordinator's catch-up.
 func (s *Service) catchUp(ctx context.Context, each func(machine.Task)) (machine.CatchUp, error) {
 	waiting, advancing, err := s.catchUpRuns(ctx)
 	if err != nil {

@@ -882,8 +882,11 @@ It answers one document, bounded whatever the fleet's history:
 - `supervision`: the verdict `assistant coordinator supervision` gives, so
   the new session does not create work while nothing watches it;
 - `wakes`: every queued wake on offer to the coordinator, handed out or not,
-  as `{id, task, kind, line}`, where `id` is the name `assistant coordinator
-  acknowledge` takes (`12`, or `d3`, `k5`, `h2` for the other shapes);
+  with `id`, the name `assistant coordinator acknowledge` takes (`12`, or
+  `d3`, `k5`, `h2` for the other shapes), `kind`, `line`, and the fields its
+  shape is acted on by: `task` and `marker` for a task's, `domain` for a
+  domain's, `kept_work` (the entry's `id` under `kept`) for kept work no
+  task names, and `repository`, `pass` and `detail` for housekeeping;
 - `holds`: every open decision, a task's hold or a run held at a decision,
   with its `subject`, its `detail` (the hold's own explanation, which often
   names the answers it takes) and `answer`, the existing `--answer` command
@@ -895,11 +898,12 @@ It answers one document, bounded whatever the fleet's history:
 
 Each list holds at most 50 rows, a fixed count in the program and not a
 setting, and `more_wakes`, `more_holds`, `more_tasks` and `more_kept` count
-exactly the rows left out. Tasks are ordered so that limit never hides one
-you owe an act on: a task a listed wake, hold or kept entry names comes first
-and is never cut, then unfinished tasks newest first, then landed and
-complete ones newest first. Read a task in full with `assistant --json
-coordinator tasks ID`.
+exactly the rows left out. Tasks are ordered so that limit falls last on
+what you owe an act on: tasks a listed wake, hold or kept entry names come
+first, then unfinished tasks newest first, then landed and complete ones
+newest first, so a named task is left out only when more than 50 are named.
+Read a task in full, listed or not, with `assistant --json coordinator tasks
+ID`.
 
 The read hands out no wake, acknowledges none, answers nothing and marks
 nothing seen, so the queue and `assistant watch` read the same after it as

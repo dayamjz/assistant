@@ -12,9 +12,9 @@ import (
 // CoordinatorCatchUp is assistant coordinator catch-up: the arm verdict, the
 // queued wakes, the open decisions, every task's state and the open kept
 // work, as compact rows a session with no memory of the fleet acts from. It
-// hands out, acknowledges, answers and marks nothing, and is not CatchUp, the
-// person's read. Each list holds at most CatchUpRows rows, its More count is
-// exactly how many were left out, and CoordinatorCatchUpOf owns which are kept.
+// hands out, answers and marks nothing, and is not CatchUp, the person's read.
+// Each list holds at most CatchUpRows rows and its More count is exactly how
+// many were left out; CoordinatorCatchUpOf owns which are kept.
 type CoordinatorCatchUp struct {
 	// Supervision is the verdict assistant coordinator supervision gives.
 	Supervision supervisor.Arm `json:"supervision"`
@@ -31,18 +31,24 @@ type CoordinatorCatchUp struct {
 // CatchUpRows bounds each list of CoordinatorCatchUp; it is not a setting.
 const CatchUpRows = 50
 
-// WakeRow is one queued wake. ID is the name acknowledge takes, prefixed for
-// the three shapes no task names; Line is the phrase table's row for it.
+// WakeRow is one queued wake: ID is the name acknowledge takes, Line the
+// phrase table's row, and the rest what its shape is acted on by, as the
+// queue holds it (a task's marker carries a terminal-gone's session).
 type WakeRow struct {
-	ID   string `json:"id"`
-	Task string `json:"task,omitempty"`
-	Kind string `json:"kind"`
-	Line string `json:"line"`
+	ID         string `json:"id"`
+	Task       string `json:"task,omitempty"`
+	Kind       string `json:"kind"`
+	Marker     string `json:"marker,omitempty"`
+	Domain     string `json:"domain,omitempty"`
+	KeptWork   int64  `json:"kept_work,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Pass       string `json:"pass,omitempty"`
+	Detail     string `json:"detail,omitempty"`
+	Line       string `json:"line"`
 }
 
-// HoldRow is one open decision: a hold record, or a run held at a decision
-// its checkpoint records, which names Run and no Key. Subject and Detail
-// are the hold's own sentences, and Answer is the existing answer path.
+// HoldRow is one open decision, a hold record or a held run (Run, no Key),
+// with the hold's own sentences and Answer, the existing answer path.
 type HoldRow struct {
 	Key     string    `json:"key,omitempty"`
 	Task    string    `json:"task,omitempty"`
@@ -52,8 +58,7 @@ type HoldRow struct {
 	Answer  Answering `json:"answer"`
 }
 
-// TaskRow is one task's resolved state; Line is TaskPhrase's reading of it,
-// with its next action.
+// TaskRow is one task's resolved state; Line is TaskPhrase's reading of it.
 type TaskRow struct {
 	ID      string          `json:"id"`
 	Project string          `json:"project"`
@@ -73,29 +78,30 @@ type KeptRow struct {
 	Reason string `json:"reason"`
 }
 
-// CoordinatorCatchUpOf compacts and bounds what the service resolved: the
-// queue as wakes.peek reads it, the decisions as CatchUp lists them, every
-// task and the open kept work. Wakes, holds and kept work keep their order.
-// Tasks a listed wake, hold or kept row names come first and are never cut,
-// then unfinished tasks newest first, then Landed and Complete ones newest
-// first, and the cut takes from the end.
+// CoordinatorCatchUpOf compacts and bounds what the service resolved; wakes,
+// holds and kept work keep their order. Tasks a listed row names come first,
+// then unfinished ones newest first, then Landed and Complete ones newest
+// first, and the cut at CatchUpRows takes from the end, so a named task is
+// cut only when more than CatchUpRows are named.
 func CoordinatorCatchUpOf(arm supervisor.Arm, queued QueuedWakes, waiting []Waiting, tasks []Task, kept []store.KeptWork) CoordinatorCatchUp {
 	out := CoordinatorCatchUp{Supervision: arm, Wakes: []WakeRow{}, Holds: []HoldRow{}, Tasks: []TaskRow{}, Kept: []KeptRow{}}
 	var wakes []WakeRow
-	row := func(prefix string, id int64, task, kind, line string) {
-		wakes = append(wakes, WakeRow{ID: prefix + strconv.FormatInt(id, 10), Task: task, Kind: kind, Line: line})
-	}
+	name := func(prefix string, id int64) string { return prefix + strconv.FormatInt(id, 10) }
 	for _, w := range queued.Wakes {
-		row("", w.Wake.ID, w.Wake.TaskID, w.Wake.Kind, QueuedWakePhrase(w).Outcome)
+		wakes = append(wakes, WakeRow{ID: name("", w.Wake.ID), Task: w.Wake.TaskID, Kind: w.Wake.Kind, Marker: w.Wake.Marker,
+			Line: QueuedWakePhrase(w).Outcome})
 	}
 	for _, w := range queued.DomainWakes {
-		row(DomainWakePrefix, w.ID, "", w.Kind, w.Domain+": "+QueuedDomainWakePhrase(w).Outcome)
+		wakes = append(wakes, WakeRow{ID: name(DomainWakePrefix, w.ID), Kind: w.Kind, Domain: w.Domain,
+			Line: w.Domain + ": " + QueuedDomainWakePhrase(w).Outcome})
 	}
 	for _, w := range queued.KeptWorkWakes {
-		row(KeptWorkWakePrefix, w.ID, "", w.Kind, QueuedKeptWorkWakePhrase(w).Outcome)
+		wakes = append(wakes, WakeRow{ID: name(KeptWorkWakePrefix, w.ID), Kind: w.Kind, KeptWork: w.KeptWork,
+			Line: QueuedKeptWorkWakePhrase(w).Outcome})
 	}
 	for _, w := range queued.HousekeepingWakes {
-		row(HousekeepingWakePrefix, w.ID, "", w.Kind, w.Repository+": "+QueuedHousekeepingWakePhrase(w).Outcome)
+		wakes = append(wakes, WakeRow{ID: name(HousekeepingWakePrefix, w.ID), Kind: w.Kind, Repository: w.Repository,
+			Pass: w.Pass.Or(""), Detail: w.Detail, Line: w.Repository + ": " + QueuedHousekeepingWakePhrase(w).Outcome})
 	}
 	out.Wakes, out.MoreWakes = cut(out.Wakes, wakes)
 
@@ -153,7 +159,7 @@ func CoordinatorCatchUpOf(arm supervisor.Arm, queued QueuedWakes, waiting []Wait
 		return ordered[i].Record.ID < ordered[j].Record.ID
 	})
 	for i, t := range ordered {
-		if rank(t) != 0 && i >= CatchUpRows {
+		if i >= CatchUpRows {
 			out.MoreTasks = len(ordered) - i
 			break
 		}

@@ -210,10 +210,8 @@ const (
 	// MethodWakesList's terms, which the handler decides from the caller's
 	// credentials against the worker group set.
 	MethodCatchUpMark Method = "catchup.mark"
-	// MethodCoordinatorCatchUp is the coordinator's catch-up read,
-	// machine.CoordinatorCatchUp. It hands out no wake and marks nothing
-	// seen; the handler refuses a worker, an unplaced caller and a
-	// subordinate coordinator.
+	// MethodCoordinatorCatchUp is machine.CoordinatorCatchUp, a read the
+	// handler refuses to all but the first coordinator.
 	MethodCoordinatorCatchUp Method = "coordinator.catchup"
 	// MethodUsageRead is PRD section 9's usage view: what the agent calls
 	// recorded in a window cost, totalled from section 8's agent invocation

@@ -544,8 +544,7 @@ func coordinatorSupervision(ctx context.Context, in *invocation) (any, error) {
 	return arm, err
 }
 
-// coordinatorCatchUp is coordinator.catchup, machine.CoordinatorCatchUp: it
-// takes no flags, and who may read it is the service's to decide.
+// coordinatorCatchUp is coordinator.catchup; who may read it is the service's.
 func coordinatorCatchUp(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags(coordinatorCommand("catch-up"), func(*flag.FlagSet) {}); err != nil {
 		return nil, err

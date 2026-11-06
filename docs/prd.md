@@ -3124,11 +3124,12 @@ wake as it is queued and handing out none. `delegate` is `domain.delegate` and
 and refused for a subordinate coordinator as for a worker. No verb is added. `catch-up` is
 `coordinator.catchup`, the coordinator's catch-up read: one bounded document a session that
 keeps no memory of the fleet acts from, holding arm verification's verdict, the queued wakes on
-offer to the coordinator, handed out or not, each named as `acknowledge` takes it, the open
+offer to the coordinator, handed out or not, each named as `acknowledge` takes it and carrying
+what it is acted on by, the open
 holds with the answer that closes each, every task's resolved state, and the open kept work.
 Each is a compact row read from the record that owns it on that read (P8), and each list is
-bounded by a fixed count in the program, not a setting, with how many rows it left out; a task a
-listed wake, hold or kept work entry names is never left out. It hands out no wake, acknowledges
+bounded by a fixed count in the program, not a setting, with how many rows it left out; the tasks
+a listed wake, hold or kept work entry names are listed first. It hands out no wake, acknowledges
 none, answers nothing, and marks nothing seen, so it is not section 8's drain and not the
 person's catch-up read below. It is refused for a worker and for a subordinate coordinator. `await` blocks until the wake
 queue holds a wake on offer to the caller, or until a bound the caller gives elapses, and then

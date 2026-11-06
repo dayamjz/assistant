@@ -10,13 +10,11 @@ import (
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
 )
 
-// coordinatorCatchUp answers coordinator.catchup. It is the first
-// coordinator's alone (ipc.ErrWorker, ErrUnplaced, ErrSubordinate before
-// anything is read: this build does not scope it to a domain). Each part is
-// its usual owner's: supervision.assert's feed.VerifyArm, one catchUp read
-// for the decisions and every task, and wakes.peek's reading of the queue,
-// which hands out nothing. It answers no hold and moves no seen mark; the one
-// write under it is catchUpRuns' reconciliation, as every read of a run makes.
+// coordinatorCatchUp answers coordinator.catchup for the first coordinator
+// alone (ErrWorker, ErrUnplaced, ErrSubordinate: it is not domain-scoped).
+// Its parts are feed.VerifyArm, one catchUp read and wakes.peek's reading,
+// so it hands out and answers nothing; the one write under it is
+// catchUpRuns' reconciliation, as every read of a run makes.
 func (s *Service) coordinatorCatchUp(ctx context.Context, req ipc.Request) (machine.CoordinatorCatchUp, error) {
 	p, err := s.refuseSubordinate(req)
 	if err != nil {

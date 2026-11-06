@@ -798,9 +798,8 @@ func readOutQueuedWakes(w io.Writer, q machine.QueuedWakes) {
 	}
 }
 
-// readOutCoordinatorCatchUp prints the arm verdict's row, the counts row,
-// and one escaped line per listed row; identifiers and kinds are the
-// structured rendering's, which the counts row points at.
+// readOutCoordinatorCatchUp prints the arm and counts rows and one escaped
+// line per row; identifiers and kinds are the structured rendering's.
 func readOutCoordinatorCatchUp(w io.Writer, c machine.CoordinatorCatchUp) {
 	writeln(w, machine.ArmPhrase(c.Supervision))
 	writeln(w, machine.CoordinatorCatchUpPhrase(c))

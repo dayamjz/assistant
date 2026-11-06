@@ -165,10 +165,14 @@ did.
 
 - `supervision` is the verdict `assistant coordinator supervision` gives.
   Do not create work unless its `outcome` is `attached` or `started`.
-- `wakes` are the queued wakes, handed out to an earlier session or not, as
-  `{id, task, kind, line}`. Act on each as "Drain the wake queue" says, then
-  acknowledge it by its `id`, which is already the name `acknowledge` takes
-  (`12`, `d3`, `k5`, `h2`). Reading them here handed out none of them.
+- `wakes` are the queued wakes, handed out to an earlier session or not,
+  each with `id`, `kind`, `line` and what its shape is acted on by: `task`
+  and `marker` for a task's (a `terminal-gone`'s session reference is in
+  `marker`), `domain` for a domain's, `kept_work` (the entry's `id` under
+  `kept`) for kept work no task names, and `repository`, `pass` and
+  `detail` for housekeeping. Act on each as "Drain the wake queue" says,
+  then acknowledge it by its `id`, which is already the name `acknowledge`
+  takes (`12`, `d3`, `k5`, `h2`). Reading them here handed out none of them.
 - `holds` are the open decisions. `answer.args` is the command that closes
   one: run `assistant` with those arguments followed by the answer, from
   `answer.working_path` on `answer.branch` when they are set. `detail` is
@@ -183,8 +187,10 @@ did.
   wake says.
 
 Each list holds at most 50 rows and `more_wakes`, `more_holds`,
-`more_tasks` and `more_kept` count exactly the rest; a task a listed wake,
-hold or kept entry names is always listed. When `more_wakes` is not 0, drain
+`more_tasks` and `more_kept` count exactly the rest. Tasks a listed wake,
+hold or kept entry names come first, so one is left out only when more than
+50 are named; read any task a row names and `tasks` does not list with
+`assistant --json coordinator tasks ID`. When `more_wakes` is not 0, drain
 for the rest. The read hands out, acknowledges, answers and marks nothing, so
 running it again is always safe. It is refused for a subordinate
 coordinator, with code `subordinate`.

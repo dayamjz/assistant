@@ -204,8 +204,7 @@ func WakesPhrase(w Wakes) Phrase {
 	}
 }
 
-// CoordinatorCatchUpPhrase is the counts row above the coordinator's
-// catch-up read, counted off the read's own lists and More counts.
+// CoordinatorCatchUpPhrase is the counts row over a CoordinatorCatchUp's own lists.
 func CoordinatorCatchUpPhrase(c CoordinatorCatchUp) Phrase {
 	outcome := fmt.Sprintf("%d notice(s) are waiting, %d decision(s) are open, %d task(s) are listed and %d kept copies are open.",
 		len(c.Wakes), len(c.Holds), len(c.Tasks), len(c.Kept))
