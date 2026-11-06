@@ -160,3 +160,50 @@ func TestAStaleReleasedHandleLeavesAReplacementOnItsSocket(t *testing.T) {
 		t.Fatalf("the replacement's socket after the stale Close: %v, want it still there", err)
 	}
 }
+
+// Review r2 of #778: a released handle's Close never ends a worker that
+// starts on its socket while the Close runs. A released handle has given its
+// socket up, so the replacement is started the moment the closing handle's
+// server has gone or its socket is gone, the socket file freed as the
+// handle that holds the worker again would free it, inside the Close; it is
+// still running, with its socket, once the Close returns.
+func TestAReleasedHandlesCloseLeavesAReplacementStartedDuringIt(t *testing.T) {
+	script := standin.Script{Worker: &standin.WorkerScript{Greeting: "ready"}}
+	for attempt := range 5 {
+		released, term, agent := openTerminal(t, script, workerSpec(t))
+		server := released.Host()
+		if err := released.Release(); err != nil {
+			t.Fatalf("Release: %v", err)
+		}
+		closed := make(chan struct{})
+		go func() { defer close(closed); released.Close() }()
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if _, err := os.Lstat(term.Socket); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if p, err := server.Presence(); err == nil && p != agents.PresencePresent {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("attempt %d: the closing handle's server never went", attempt)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		_ = os.Remove(term.Socket)
+		replacement, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+		if err != nil {
+			<-closed
+			t.Fatalf("attempt %d: the replacement on the freed socket was ended or refused as it started: %v", attempt, err)
+		}
+		t.Cleanup(replacement.Close)
+		next := identityOf(t, replacement)
+		<-closed
+		if !presentWithin(next, 300*time.Millisecond) {
+			t.Fatalf("attempt %d: the released handle's Close ended the replacement started during it", attempt)
+		}
+		if _, err := os.Lstat(term.Socket); err != nil {
+			t.Fatalf("attempt %d: the replacement's socket after the Close: %v, want it still there", attempt, err)
+		}
+	}
+}

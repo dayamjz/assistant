@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -308,11 +307,11 @@ type TerminalWorker interface {
 	// open. Once an end has begun (Close, a hurry, the poll reading the
 	// process gone) it is refused with ErrWorkerEnding; once it has returned
 	// nil, only Close ends the worker through this handle, and a second
-	// Release returns nil. Since the socket may by then be another worker's,
-	// a released handle refuses Send with ErrWorkerReleased, answers Capture
-	// with its last screen, and its Close ends the server, the socket and the
-	// cleanup only once the server there answers with this handle's pane,
-	// otherwise only the group its identity still verifies.
+	// Release returns nil. It gives the socket and the cleanup up to
+	// whoever holds the worker again, and the socket may by then be another
+	// worker's, so a released handle refuses Send with ErrWorkerReleased,
+	// answers Capture with its last screen, and its Close ends the worker's
+	// group and server by their verified identities and touches no path.
 	Release() error
 }
 
@@ -542,12 +541,13 @@ type tmuxWorker struct {
 	closeOnce sync.Once
 	endOnce   sync.Once
 	// released is closed by Release; stateMu orders it against ending, the
-	// start of an end, so exactly one wins; disowned makes end leave alone a
-	// socket a released handle's Close found hosting no pane of its own.
+	// start of an end, so exactly one wins, and guards cleanup.
 	released chan struct{}
 	stateMu  sync.Mutex
 	ending   bool
-	disowned atomic.Bool
+	// serverOnce makes endServer run once, so nothing acts on the socket's
+	// path after this handle has freed it.
+	serverOnce sync.Once
 
 	// sendMu serializes sends, the instructions among them, so text arrives
 	// in the order it was sent.
@@ -704,8 +704,11 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		}
 	}
 	// The cleanup is set once the start has succeeded, so a start that
-	// fails leaves it to the adapter, which made what it removes.
+	// fails leaves it to the adapter, which made what it removes; under the
+	// lock, since the poll may already be ending the worker.
+	w.stateMu.Lock()
 	w.cleanup = spec.cleanup
+	w.stateMu.Unlock()
 	return w, nil
 }
 
@@ -914,16 +917,34 @@ func (w *tmuxWorker) isReleased() bool {
 }
 
 // end records that the process has gone: the last screen is kept, the
-// server ended, the socket removed, and done closed. It runs once.
+// server ended (endServer), and done closed. It runs once.
 func (w *tmuxWorker) end() {
 	w.endOnce.Do(func() {
-		if !w.disowned.Load() {
-			killTerminalServer(w.terminal)
-			if w.cleanup != nil {
-				w.cleanup()
-			}
-		}
+		w.endServer()
 		close(w.done)
+	})
+}
+
+// endServer ends the worker's server, once. A handle that still holds the worker
+// ends it through its socket, removes the socket and runs the cleanup; no
+// other worker can be on that path while the socket stands, since a start
+// refuses a socket that exists. A released handle has given the socket and
+// the cleanup up to whoever holds the worker again, and the path may by now
+// be another worker's, so it ends the server by its identity alone, which
+// endGroup verifies before it signals, and touches no path.
+func (w *tmuxWorker) endServer() {
+	w.serverOnce.Do(func() {
+		if w.isReleased() {
+			_, _ = endGroup(w.host, w.grace, w.hurry)
+			return
+		}
+		killTerminalServer(w.terminal)
+		w.stateMu.Lock()
+		cleanup := w.cleanup
+		w.stateMu.Unlock()
+		if cleanup != nil {
+			cleanup()
+		}
 	})
 }
 
@@ -1084,18 +1105,6 @@ func (w *tmuxWorker) Release() error {
 	return nil
 }
 
-// hostsPane reports whether the server on the handle's socket answers, within
-// tmuxReadBound, with this handle's pane, and that pane is present by its
-// identity: the proof a released handle's Close needs before it touches the
-// socket, which may by then be another worker's.
-func (w *tmuxWorker) hostsPane() bool {
-	if presence, err := w.identity.Presence(); err != nil || presence != PresencePresent {
-		return false
-	}
-	pid, _, err := paneOf(context.Background(), w.terminal)
-	return err == nil && pid == w.identity.PID
-}
-
 // paneOf is the pane's process and the server's own, as the server on t
 // answers for them within tmuxReadBound.
 func paneOf(ctx context.Context, t Terminal) (pane, server int, err error) {
@@ -1181,20 +1190,11 @@ func (w *tmuxWorker) Close() {
 		default:
 		}
 		w.claimEnd(false)
-		// A released handle may name a socket another worker now holds, so
-		// it touches the socket only once the server there is its own.
-		if w.isReleased() && !w.hostsPane() {
-			w.disowned.Store(true)
-		}
 		// The screen is read before the end, so a Capture after Close
 		// answers what the worker last showed rather than nothing.
-		if !w.disowned.Load() {
-			w.Capture()
-		}
+		w.Capture()
 		_, _ = endGroup(w.identity, w.grace, w.hurry)
-		if !w.disowned.Load() {
-			killTerminalServer(w.terminal)
-		}
+		w.endServer()
 		timer := time.NewTimer(w.grace + terminalCommandTimeout)
 		defer timer.Stop()
 		tick := time.NewTicker(terminalPoll)
