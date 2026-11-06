@@ -103,9 +103,13 @@ git fetch origin main && git push mirror origin/main:main
 **Decide about the mirror's Actions before the first run, and decide it with
 the checks stage in mind.** The workflows come with the clone, and `ci.yml` and
 `repeat.yml` both trigger on every pull request, so a pull request the gate
-opens on the mirror starts the full matrix there. On a public repository hosted
-runner minutes are not billed; on a private mirror they are, and the macOS job
-is both the longest and the most expensive.
+opens on the mirror starts the full matrix there. `stress.yml`'s own comment is
+what this tree says about the cost: hosted minutes are unbilled **because this
+repository is public**. A private mirror is not, so check what a private
+repository's minutes cost you, and what a macOS minute costs against a Linux
+one, against GitHub's own billing documentation rather than against this page.
+`ci.yml` bounds its `check` job, which runs on both platforms, at 50 minutes,
+so one pull request's matrix is not small.
 
 Leaving Actions on is what gives the checks stage something to settle on, and
 is the only option that validates against this repository's real checks.
@@ -121,8 +125,16 @@ heads you are validating exactly as they are:
 
 ```sh
 gh api -X PUT repos/dayamjz/assistant-gate-mirror/actions/permissions -F enabled=false
-mkdir -p "$HOME_ROOT" && printf 'no_ci: true\n' >> "$HOME_ROOT/config.yaml"
+mkdir -p "$HOME_ROOT"
+grep -q '^no_ci:' "$HOME_ROOT/config.yaml" 2>/dev/null ||
+  printf 'no_ci: true\n' >> "$HOME_ROOT/config.yaml"
 ```
+
+The `grep` guard is there because the append is not idempotent and the
+configuration is strict about it: a key appearing more than once in an object
+"is refused rather than resolved to one of its values". So a second run of a
+bare `>>` leaves a file that will not parse, and `service start` reads the same
+resolution the service makes and refuses before launching anything.
 
 The service reads `config.yaml` when it starts, so write this before step 6 or
 restart the service after writing it; step 6 says so again. In any comparison
