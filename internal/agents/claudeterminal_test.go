@@ -493,6 +493,8 @@ func TestTheClaudeScreenReaderReadsScreensTheCLIDrew(t *testing.T) {
 			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\nSLOWSTART: think for a long time before answering\n\n\n", "typed"},
 		{"its first line left after one clear, 2.1.308", "claude: ack 5:\nCooked for 0s · done 3:55 AM\n" +
 			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\n\n\n", "typed"},
+		{"a message put back in the input that quotes the footer", "claude: the reply\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n(shift+tab to cycle)\n", "typed"},
 		{"a notice below the footer", "claude: the reply\nWorked for 0s · done 10:53 PM\n" +
 			"accept edits on (shift+tab to cycle)\n" +
 			"tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking\n" +
@@ -650,5 +652,68 @@ func interruptOneTurn(t *testing.T, progress string) {
 	if call.Lines[3] != "half a thought" || call.IdleEscapes != 0 || strings.Contains(worker.Capture().Text, "the long turn's reply") {
 		t.Fatalf("the worker answered %q with %d idle Escape keys, want the person's text as typed and none:\n%s",
 			call.Lines, call.IdleEscapes, worker.Capture().Text)
+	}
+}
+
+// An interrupt takes out of the input only the message this worker was
+// sent: a turn a person started by typing into the pane, whose message the
+// interrupt puts back in the input, is ended and its text is left where it
+// is, and the interrupt is refused with ErrTerminalNotReady saying so.
+func TestAClaudeTerminalInterruptLeavesAPersonsMessageInTheInput(t *testing.T) {
+	const theirs = "a person's own long turn"
+	worker, term, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: theirs, Reply: "their reply", Turn: time.Hour},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), "settle"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	typeAsAPerson(t, term, theirs)
+	awaitInteractive(t, agent, answered(3))
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var err error
+	for interrupted := false; !interrupted && err == nil; {
+		interrupted, err = agents.InterruptTerminalWorker(ctx, agent.Runner(), worker)
+	}
+	if !errors.Is(err, agents.ErrTerminalNotReady) {
+		t.Fatalf("an interrupt of a person's turn answered %v, want ErrTerminalNotReady", err)
+	}
+	if screen := worker.Capture().Text; !strings.Contains(screen, "$\u00a0"+theirs) {
+		t.Fatalf("the person's message is not in the input after the interrupt:\n%s", screen)
+	}
+}
+
+// An interrupt waits its turn behind a send that waits for the running turn
+// to end, and only for as long as its own context allows: it is refused
+// with ErrTerminalNotReady and the context's error when that ends first. The
+// send is given a moment to take its turn first; an interrupt that takes it
+// first anyway ends the turn, which is also an answer within its deadline.
+func TestAClaudeTerminalInterruptBehindAWaitingSendKeepsItsDeadline(t *testing.T) {
+	const long = "a turn to wait behind"
+	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: long, Reply: "the long reply", Turn: time.Hour},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), long); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	pending, stop := context.WithCancel(t.Context())
+	defer stop()
+	go func() { _ = worker.Send(pending, "queued behind the turn") }()
+	time.Sleep(500 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := agents.InterruptTerminalWorker(ctx, agent.Runner(), worker); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil && (!errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded)) {
+			t.Fatalf("an interrupt behind a waiting send answered %v, want ErrTerminalNotReady and the deadline", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("an interrupt behind a waiting send was still waiting long after its deadline")
 	}
 }

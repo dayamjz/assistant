@@ -93,32 +93,18 @@ const (
 	// and reads its input differently is not caught that way.
 	CapabilityTerminalWorkers Capability = "terminal_workers"
 	// CapabilityTerminalInterrupt is an adapter whose terminal workers can
-	// have the turn they are running ended while the agent goes on, with
-	// the end read off the screen: TerminalWorker.Interrupt is the
-	// mechanism and InterruptTerminalWorker the route to it, PRD section
-	// 6's interrupt under the tmux provider. Its mechanism is visible in
-	// the runner's type, the interrupt key its terminal typing names, so
-	// Resolve holds a declaration to it in both directions.
-	//
-	// The Claude Code adapter declares it over Escape, observed of Claude
-	// Code 2.1.308 in a tmux pane against a local server standing in for
-	// the model: pressed while a turn ran with an empty input, the CLI drew
-	// its interrupted line, dropped the turn's request, ended a running
-	// tool, read ready again and answered the next message; pressed twice
-	// with no turn running it opened a menu a send cannot type into, and
-	// over text in the input it offered to clear that text. Interrupt's
-	// rule, one key and only on a screen that reads a turn running with an
-	// empty input, is drawn from those. The scripted adapter does not
-	// declare it: its typing reads no screen, so it could prove nothing.
-	//
-	// It is a claim about terminal workers only. An interrupt over a pipe,
-	// a protocol's own cancel answered by the protocol, is a different
-	// mechanism with a different proof, and no adapter in this build
-	// declares one. The conformance suite's terminal interrupt probe holds
-	// the declaration to the stand-in's interactive mode, whose model of
-	// the key is drawn from the same observation, and the installed-CLI
-	// test runs the same probe against a real CLI where one is on PATH, on
-	// CapabilityTerminalWorkers' terms.
+	// have a running turn ended while the agent goes on, with the end read
+	// off the screen: PRD section 6's interrupt under the tmux provider.
+	// TerminalWorker.Interrupt is the mechanism, InterruptTerminalWorker
+	// the route, and the interrupt key the adapter's terminal typing names
+	// is what Resolve checks a declaration against. Claude Code declares it
+	// over Escape, on the observations claudeterminal.go records; the
+	// scripted adapter reads no screen, so it could prove nothing and does
+	// not. It is a claim about terminal workers only: an interrupt over a
+	// pipe is a protocol's cancel with a proof of its own, and nothing in
+	// this build declares one. The conformance suite holds it to the
+	// stand-in's model of the CLI and, where one is on PATH, to the
+	// installed CLI, on CapabilityTerminalWorkers' terms.
 	CapabilityTerminalInterrupt Capability = "terminal_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token
