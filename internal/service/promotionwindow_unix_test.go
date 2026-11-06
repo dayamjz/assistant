@@ -363,8 +363,9 @@ func TestAReportedCopyHoldingWorkPastThePromotionWindowIsOneKeptWorkEntry(t *tes
 
 // PRD section 6's "kept work is answered before new task work starts" and
 // P15, for the entry the window writes: past a one-second promotion_window
-// over a copy holding a commit, a delivery task created in the same project
-// is not dispatched. It has no attempt through several passes, the service
+// over a copy holding a commit, a new investigation task of the same project
+// is not dispatched: an investigation's copy names no branch, so the entry
+// stands at the project's base and holds the tasks that name none. It has no attempt through several passes, the service
 // log says it waits, and task.get names the window's entry. Promoting the
 // investigation answers the entry carry on, naming the investigation itself
 // as the task that carries it on, relaunches a worker in the copy from the
@@ -385,8 +386,8 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 
 		var created machine.TaskCreated
 		if err := running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/after-the-window",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}
@@ -436,8 +437,8 @@ func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t
 		}
 		var created machine.TaskCreated
 		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/after-the-exit",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}

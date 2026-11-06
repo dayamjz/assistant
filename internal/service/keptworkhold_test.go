@@ -28,7 +28,9 @@ import (
 // the next service's recovery removes the copy on the remote-branch proof,
 // which closes the entry, with nothing but the kept work record deciding
 // either way (P8). What the entry does hold, and what releases it, is
-// TestAnEntryHoldsTheNewTasksOnItsBranchUntilItIsAnswered.
+// TestAnEntryNamingNoBranchHoldsTheInvestigationsOfItsProject; the branch
+// the entry records is compared with the task's in
+// store.TestOpenKeptWorkHoldsANewTasksDispatchOnItsBranchOnly.
 func TestKeptWorkOnOneBranchHoldsNoNewTaskOnAnother(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
