@@ -228,7 +228,7 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 	next.sweepCopy = sweepUnsupported
 	_, err = next.relaunchTask(ctx, sub.task)
 	waitingOn(err)
-	_, err = next.relaunchTaskFor(ctx, ipc.Request{}, machine.TaskRequest{Task: sub.task})
+	_, err = next.relaunchTaskFor(ctx, coordinatorRequest(t), machine.TaskRequest{Task: sub.task})
 	if !errors.Is(err, ipc.ErrRefused) {
 		t.Fatalf("task.relaunch with no sweep answered %v, want it refused", err)
 	}
@@ -352,7 +352,7 @@ func TestTheNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	answer := func(s *Service, task, text string) (machine.TaskAnswered, error) {
-		return s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: text})
+		return s.respondTask(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: task, Answer: text})
 	}
 	held, err := answer(sub.restart, sub.task, machine.AnswerRetry)
 	if err != nil {
@@ -576,7 +576,7 @@ func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	answer := func(s *Service, task, text string) (machine.TaskAnswered, error) {
-		return s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: text})
+		return s.respondTask(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: task, Answer: text})
 	}
 
 	sub, restart := crashedDispatch(t)
@@ -642,7 +642,7 @@ func TestARetryReportsTheRefusalItMetAndPromisesNoRestartItCannotKeep(t *testing
 	ctx := t.Context()
 	answer := func(s *Service, task string) machine.TaskAnswered {
 		t.Helper()
-		out, err := s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry})
+		out, err := s.respondTask(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry})
 		if err != nil {
 			t.Fatalf("answering task %s's hold retry: %v", task, err)
 		}

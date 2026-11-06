@@ -116,7 +116,7 @@ func TestARetiredPassIsNeverRelaunched(t *testing.T) {
 		Subject: "whether to begin the work again", Detail: "d"}); err != nil {
 		t.Fatal(err)
 	}
-	answered, err := sub.restart.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: sub.task,
+	answered, err := sub.restart.respondTask(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: sub.task,
 		Hold: relaunchBoundKey(sub.task, 1), Answer: machine.AnswerRetry})
 	if err != nil || !answered.Effect.RetryNotBegun() {
 		t.Fatalf("a retry on a relaunch hold of a retired pass answered %+v, %v, want the retry recorded and nothing begun", answered, err)

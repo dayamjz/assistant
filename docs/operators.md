@@ -958,7 +958,15 @@ Neither `await` nor `listen` keeps anything between calls, so after a service
 restart, which ends either as an operational failure, starting them again
 reads the same durable queue; `assistant coordinator supervision` confirms
 the service is watching the fleet again first. Like the other coordinator
-subcommands, all of these are refused for a task's worker.
+subcommands, all of these are refused for a task's worker, and for any
+command with no terminal's foreground on its parent chain: one whose parent
+exited so the kernel moved it under `init` (a worker's command detached with
+`setsid`, `nohup ... &` or a double fork among them), a cron job, a daemon,
+or an `ssh` session with no pseudo-terminal. That refusal carries code
+`unplaced`, records nothing, and names every process the service read; run
+the command from your shell, or from a coordinator host running in a
+terminal or a tmux pane. A command that opens a terminal of its own is
+placed as a shell's, so this is a check for a terminal and not for you.
 
 A restart does not leave that queue exactly as it was. When the service
 starts it first holds again every worker that went on running in tmux

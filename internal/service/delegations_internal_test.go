@@ -482,7 +482,7 @@ func TestADomainsBoundHoldIsAnsweredGivenTheDomainAndClosedByItsEnd(t *testing.T
 		t.Fatalf("catch-up answers the domain's hold with %q, want %q", w.Answer.Args, want)
 	}
 
-	ended, err := l.service.endDelegation(ctx, ipc.Request{}, machine.DomainEndRequest{Domain: "alpha"})
+	ended, err := l.service.endDelegation(ctx, coordinatorRequest(t), machine.DomainEndRequest{Domain: "alpha"})
 	if err != nil {
 		t.Fatalf("domain.end: %v", err)
 	}
@@ -603,7 +603,7 @@ func TestAStopAnswerAndTheDelegationsEndAreOneWrite(t *testing.T) {
 		t.Fatalf("after the refused answer the delegation reads %+v (%v), want it standing", latest, err)
 	}
 
-	answered, err := l.service.respondDomain(ctx, ipc.Request{}, machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerStop})
+	answered, err := l.service.respondDomain(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Domain: "alpha", Answer: machine.AnswerStop})
 	if err != nil || answered.Effect != machine.AnswerStopped {
 		t.Fatalf("the stop = %+v, %v; want the delegation stopped", answered, err)
 	}
@@ -648,7 +648,7 @@ func TestAnEndAnswersTheHoldOfADelegationWhoseFirstAttemptWasNeverRecorded(t *te
 	if attempts, err := l.records(t).DelegationAttempts(ctx, d.ID); err != nil || len(attempts) != 0 {
 		t.Fatalf("the delegation's attempts are %+v (%v), want none", attempts, err)
 	}
-	ended, err := l.service.endDelegation(ctx, ipc.Request{}, machine.DomainEndRequest{Domain: "alpha"})
+	ended, err := l.service.endDelegation(ctx, coordinatorRequest(t), machine.DomainEndRequest{Domain: "alpha"})
 	if err != nil {
 		t.Fatalf("domain.end: %v", err)
 	}
@@ -696,7 +696,7 @@ func TestABoundHoldRegisteredAtRecoveryReachesTheDrain(t *testing.T) {
 	}
 	l.nextPass(t)
 	l.pass(t)
-	drained, err := l.service.drainAll(ctx, 10, l.service.wakeHandout(ipc.Request{}, placedPeer{}))
+	drained, err := l.service.drainAll(ctx, 10, l.service.wakeHandout(coordinatorRequest(t), placedPeer{}))
 	if err != nil {
 		t.Fatal(err)
 	}

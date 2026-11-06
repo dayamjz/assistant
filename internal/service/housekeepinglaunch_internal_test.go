@@ -10,7 +10,6 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -221,7 +220,7 @@ func TestARetireAnsweredWhileItsPassIsLaunchingIsRefusedAndThePassStaysInFlight(
 	}
 	hold := offerRetirementHoldOf(t, w.records, w.task)
 	retire := machine.TaskRespondRequest{Task: w.task, Answer: machine.AnswerRetire}
-	if _, err := s.answerRetirement(ctx, ipc.Request{}, retire, hold, rh); !errors.Is(err, store.ErrPassMoves) {
+	if _, err := s.answerRetirement(ctx, coordinatorRequest(t), retire, hold, rh); !errors.Is(err, store.ErrPassMoves) {
 		t.Fatalf("retire answered with the worker recorded and live = %v, want ErrPassMoves on the probe", err)
 	}
 	if h, err := w.records.Hold(ctx, hold.Key); err != nil || !h.Open() {
@@ -642,7 +641,7 @@ func TestAPassWhoseWorkerFailedToStartIsOfferedItsRetirementHold(t *testing.T) {
 		t.Fatalf("the offered hold's key %s does not parse as the pass's retirement hold", h.Key)
 	}
 	s.terminals = heldTerminals{s}
-	if _, err := s.answerRetirement(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: sub.task, Answer: machine.AnswerKeep}, h, rh); err != nil {
+	if _, err := s.answerRetirement(ctx, coordinatorRequest(t), machine.TaskRespondRequest{Task: sub.task, Answer: machine.AnswerKeep}, h, rh); err != nil {
 		t.Fatalf("answering keep: %v", err)
 	}
 	deadline := time.Now().Add(30 * time.Second)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -66,14 +65,14 @@ func TestKeepDispatchesAfterAConcurrentRetireReleasesTheSettledSlot(t *testing.T
 		}
 		close(steering)
 		<-kept // keep has resolved the hold and noted or dispatched under this steer
-		_, _ = s.answerRetirement(ctx, ipc.Request{}, machine.TaskRespondRequest{
+		_, _ = s.answerRetirement(ctx, coordinatorRequest(t), machine.TaskRespondRequest{
 			Task: sub.task, Answer: machine.AnswerRetire,
 		}, h, rh)
 		release()
 		close(released)
 	}()
 	<-steering
-	if _, err := s.answerRetirement(ctx, ipc.Request{}, machine.TaskRespondRequest{
+	if _, err := s.answerRetirement(ctx, coordinatorRequest(t), machine.TaskRespondRequest{
 		Task: sub.task, Answer: machine.AnswerKeep,
 	}, h, rh); err != nil {
 		t.Fatalf("keep: %v", err)
