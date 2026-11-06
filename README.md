@@ -79,7 +79,7 @@ assistant --json coordinator peek TASK_ID
 assistant coordinator message TASK_ID --text "Clarification for this task"
 ```
 
-A worker can be held, stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md) and [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
+A worker can be held, stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md), a short core that names the reference file to read for each of those situations, and the [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
 
 ## Quick start: validate a branch
 
@@ -353,7 +353,7 @@ A Go service owns Assistant's state, and the gate is first-class. No controlled 
 
 - [Operator guide](docs/operators.md): setup, pushes, decisions, and recovery
 - [Multi-agent support](docs/multi-agent-support.md): adapters, roles, model pins, and fallback behavior
-- [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features
+- [Product requirements](docs/prd.md): principles, contracts, limitations, and deferred features; its [proposed features table](docs/prd.md#proposed-features) lists every feature marked proposed and what this build does for it
 - [End-to-end verification](internal/journey/README.md): what the tests establish
 - [Caliper evaluation plan](docs/caliper-evaluation-plan.md): Q1-Q4 questions, including the Q4 replay pilot for new model releases
 

@@ -639,8 +639,8 @@ about a run no task names, such as the run your own push started. The
 second is a wake of its own shape: the notify command's line names the
 entry in `kept_work` and its `project` and `branch` rather than a
 `task_id`, `assistant coordinator wakes` lists it under the project and
-then the branch, and the coordinator acknowledges it as `kNUMBER`, a
-number of its own. Acknowledging the wake answers nothing: the entry is
+then the branch, and the coordinator acknowledges it as `--kept NUMBER`
+(or `kNUMBER`), a number of its own. Acknowledging the wake answers nothing: the entry is
 listed until it is answered or closed.
 
 If the copy's work later turns up somewhere safe, for example once you push
@@ -678,7 +678,7 @@ about one of the repository's entries is still unacknowledged, even once
 the entry is closed, because the wake stays actionable until the coordinator
 acknowledges it, and forgetting the repository would delete it. The refusal
 names the wake by its number; once the coordinator acknowledges it as
-`kNUMBER`, eject removes the closed entry, its wake and the wake's
+`--kept NUMBER`, eject removes the closed entry, its wake and the wake's
 notification record with the run.
 
 Eject is also refused while any run copy of the repository still stands on
@@ -901,6 +901,8 @@ to act again. Act keyed by `(task_id, kind, session-ref)`:
   `task.relaunch` again.
 - Acknowledge every wake id you acted on, including one you decided needs no
   further action after reading the task. An unacked row stays in flight.
+  Name each by its shape, since each shape numbers its rows from 1 on its
+  own: `--task`, `--domain`, `--kept` or `--housekeeping`, once per wake.
 - A resurface whose marker carries `:again:` is the same silence reminded
   once the escalation window elapsed. It is not a second crash and must not
   start a second relaunch when the first surface was already handled or the
@@ -962,7 +964,16 @@ those wakes again, and they keep the work counted as in flight.
 
 `assistant coordinator acknowledge` closes the wakes it names, whether a drain
 handed them out or `listen` printed them. Naming a wake already acknowledged
-is refused as incorrect usage, and so is naming a number no wake has.
+is refused as incorrect usage, and so is naming a number no wake has. Each
+of the queue's four shapes numbers its rows apart, so a task wake, a domain
+wake, a kept-work wake and a housekeeping wake can all be 12: name each wake
+by its shape's flag, `--task 12`, `--domain 12`, `--kept 12` or
+`--housekeeping 12`, once per wake (`d12`, `k12` and `h12` name the last
+three too). A number given alone is a task's wake only while no wake of
+another shape carries that number, acknowledged or not; otherwise the
+whole batch is refused as incorrect usage, nothing is closed, and the
+refusal names the typed form of every wake carrying it. The acknowledge
+command a drain prints for a person names each wake by its flag.
 
 Neither `await` nor `listen` keeps anything between calls, so after a service
 restart, which ends either as an operational failure, starting them again
@@ -1178,10 +1189,10 @@ it stays gone, and once it has been relaunched `relaunch_attempts` times
 the delegation holds for you, which reaches you as a `hold-opened` wake on
 the domain; both are wakes about a domain rather than a task, listed under
 `domain_wakes` in the structured answers with numbers of their own, and
-acknowledged as `dNUMBER`:
+acknowledged as `--domain NUMBER`:
 
 ```sh
-assistant coordinator acknowledge 12 d3        # wake 12, and domain wake 3
+assistant coordinator acknowledge --task 12 --domain 3   # task wake 12, and domain wake 3
 assistant --domain DOMAIN --answer retry        # begin its coordinator once more
 assistant --domain DOMAIN --answer stop         # end the delegation instead
 ```

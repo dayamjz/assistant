@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -949,8 +950,13 @@ func acknowledgeWakesTx(ctx context.Context, tx *sql.Tx, ids []int64, who, now s
 // already acknowledged closes nothing, which is the whole-batch refusal an
 // acknowledgement naming several shapes is held to. A batch naming no row
 // of any shape is refused.
-func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWorkWakes, housekeepingWakes []int64, by Acknowledger) error {
-	if len(wakes)+len(domainWakes)+len(keptWorkWakes)+len(housekeepingWakes) == 0 {
+//
+// bare are numbers the caller named without their shape. Each is a task
+// wake unless a row of another shape, open or acknowledged, carries the
+// same number, read in the same transaction; then the batch is refused
+// with a *WakeAmbiguousError and closes nothing.
+func (s *Store) AcknowledgeAll(ctx context.Context, bare, wakes, domainWakes, keptWorkWakes, housekeepingWakes []int64, by Acknowledger) error {
+	if len(bare)+len(wakes)+len(domainWakes)+len(keptWorkWakes)+len(housekeepingWakes) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")
 	}
 	who, err := acknowledgerText(by)
@@ -959,6 +965,16 @@ func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWork
 	}
 	now := encodeTime(nowUTC())
 	return s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, id := range bare {
+			shapes, err := wakeShapesCarryingTx(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if slices.ContainsFunc(shapes, func(shape WakeShape) bool { return shape != WakeShapeTask }) {
+				return &WakeAmbiguousError{ID: id, Shapes: shapes}
+			}
+		}
+		wakes := append(slices.Clip(wakes), bare...)
 		if len(wakes) > 0 {
 			if err := acknowledgeWakesTx(ctx, tx, wakes, who, now); err != nil {
 				return err
@@ -979,6 +995,25 @@ func (s *Store) AcknowledgeAll(ctx context.Context, wakes, domainWakes, keptWork
 		}
 		return nil
 	})
+}
+
+// wakeShapesCarryingTx is every shape with a row numbered id, open or
+// acknowledged, in the order of the WakeShape constants.
+func wakeShapesCarryingTx(ctx context.Context, tx *sql.Tx, id int64) ([]WakeShape, error) {
+	tables := []untaskedShape{{table: "wake", noun: "wake", shape: WakeShapeTask}, domainWakeShape, keptWorkWakeShape, housekeepingWakeShape}
+	var out []WakeShape
+	for _, sh := range tables {
+		var one int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM `+sh.table+` WHERE id = ?`, id).Scan(&one)
+		switch {
+		case isNoRows(err):
+		case err != nil:
+			return nil, fmt.Errorf("store: reading whether a %s carries number %d: %w", sh.noun, id, err)
+		default:
+			out = append(out, sh.shape)
+		}
+	}
+	return out, nil
 }
 
 const wakeColumns = `SELECT id, task_id, kind, marker, created_at, handled_at, acknowledged_by,
