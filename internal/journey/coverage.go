@@ -427,7 +427,7 @@ func Coverage() []Established {
 // enumeration, so a renderer added or rerouted there fails here rather than
 // leaving the note to drift.
 var (
-	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
+	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install", "host wake",
 		"decision", "doctor", "lifecycle", "managed removal", "init", "plan", "eject", "health", "admission", "notification",
 		"kept work answer", "task answer", "catch up", "marked seen", "task created", "task message", "task stop", "task peek", "task relaunch", "task relay",
 		"task promotion", "wakes", "queued wakes", "wakes acknowledged", "supervision", "domain delegated", "delegation ended",

@@ -8,7 +8,10 @@
 // forceful tree kill, lsof and its tmux clients, internal/managed launchctl
 // and systemctl, and internal/journey the build of the binary it tests.
 // internal/procgroup/guard fails the build on a program started anywhere
-// else that its exception list does not name.
+// else that its exception list does not name. RunInCallersGroup is the one
+// variation: the program joins the caller's own group instead of leading
+// one, for a command line another program runs and ends by its group,
+// internal/cli's host wake under the service's notifier.
 //
 // A program this module writes and then starts, in a test or not, is written
 // by WriteProgram, whose doc comment owns why: a write that races a start is
@@ -49,8 +52,10 @@
 //     including one a program started on purpose to outlive the call. What
 //     that costs is whatever that descendant was for.
 //   - When this process itself is killed outright, nothing here runs, and a
-//     group it started goes on until it exits by itself. No record names the
-//     group, so no later incarnation reclaims it.
+//     group Run started goes on until it exits by itself. No record names the
+//     group, so no later incarnation reclaims it. A program RunInCallersGroup
+//     started is ended with this process only when what killed this process
+//     signalled its group.
 //   - A leader SIGKILL does not end within the grace is left to a goroutine
 //     that reaps it once it exits, and Run answers ErrAbandoned without it.
 //     Its exit status is then nobody's: the goroutine reaps it without

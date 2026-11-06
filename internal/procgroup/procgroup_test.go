@@ -18,12 +18,14 @@ import (
 // installed. Its value says what the stand-in does: standInHang waits a
 // minute, which a test's deadline ends first, standInPrint writes a line to
 // standard output and exits, standInPrintFail writes the same line and exits
-// with status 1, and anything else exits 0 at once.
+// with status 1, standInGroup prints its process group and exits, and
+// anything else exits 0 at once.
 const (
 	standInMode      = "PROCGROUP_TEST_STAND_IN"
 	standInHang      = "hang"
 	standInPrint     = "print"
 	standInPrintFail = "print-fail"
+	standInGroup     = "group"
 )
 
 func TestMain(m *testing.M) {
@@ -35,6 +37,8 @@ func TestMain(m *testing.M) {
 		os.Exit(3)
 	case standInPrint:
 		_, _ = os.Stdout.WriteString("stand-in output\n")
+	case standInGroup:
+		printGroup()
 	case standInPrintFail:
 		_, _ = os.Stdout.WriteString("stand-in output\n")
 		os.Exit(1)

@@ -424,6 +424,35 @@ assistant --json coordinator listen     # one line per wake, until interrupted
 - If the service stops, `listen` exits `1`. Run `assistant coordinator
   supervision`, then start `listen` again and drain.
 
+## Be woken in a tmux pane
+
+If your host runs in a tmux pane, the service can type a notice into it for
+every wake, so a wait you forgot to arm or a `listen` that died does not
+leave you unwoken. Run, from inside your host (your shell tool, so it runs
+in your pane):
+
+```sh
+assistant host install
+```
+
+- Run it yourself, through your shell tool. Typed at the pane's shell it
+  would be the pane's foreground program and read itself as the pane's,
+  so it offers no line and says so.
+- Besides the stop guard's line, it prints a `notify.command` line naming
+  `assistant host wake` and your pane. It writes neither to the
+  configuration; ask the user to add that line under `notify: command:` in
+  the home's `config.yaml` and run `assistant service restart`. It replaces
+  any command that key already names.
+- The notice is the same line `listen` prints: drain with
+  `assistant --json coordinator wakes`, act, acknowledge. It hands nothing
+  out by itself.
+- It types only while the pane's tmux server and foreground program are the
+  ones the installer read, and while the pane is not in copy mode, not
+  synchronized with other panes, and taking input; nothing is typed
+  otherwise, and that wake is not typed again. If tmux restarts
+  or you move to another pane, run the installer again and update the line.
+- `listen` and `await` stay the fast path; keep one armed as before.
+
 ## Wait for a wake
 
 If you cannot hold `listen`, block on the queue instead of polling. The
@@ -535,9 +564,12 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   If you hold `listen` and never acknowledge what you acted on, you are not
   handed it again, and it keeps the work counted as in flight: acknowledge
   as you go, and do not leave a detached `listen` running.
-- **The service pushes only to `listen`.** It does not start a turn in your
-  host by itself; a coordinator holding neither `listen` nor `await` is
-  woken by nothing.
+- **The service types into your host only in a tmux pane.** With the host
+  wake set up (see "Be woken in a tmux pane"), each wake types a notice into
+  your pane even when you hold neither `listen` nor `await`. Outside a tmux
+  pane, or without it set up, a coordinator holding neither is woken by
+  nothing. The notice is typed whatever the pane shows, so text left in your
+  input is sent with it, and a burst of wakes types one notice each.
 - **A reported investigation's worker is kept for the promotion window.**
   Once a worker files its report through `assistant worker`, the task reads
   `reported` (`state.source` is `report`) whether its worker is still

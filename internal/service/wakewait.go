@@ -40,11 +40,14 @@ import (
 // evicts it only into the gap marker, and a coordinator that receives the
 // marker, the first delivery of every attach included, drains the queue.
 //
-// The narrowest reading of "wake the coordinator" is what is built: the
-// service pushes to a coordinator client that is attached to this socket. It
-// does not reach into the coordinator's host, a terminal or a hook, to start
-// a turn; a coordinator that holds no stream is woken by nothing pushed, and
-// its own wait or drain is what reaches the queue.
+// The narrowest reading of "wake the coordinator" is what the push builds:
+// the service pushes to a coordinator client that is attached to this
+// socket. The push does not reach into the coordinator's host, a terminal or
+// a hook, to start a turn; a coordinator that holds no stream is woken by
+// nothing pushed, and its own wait or drain is what reaches the queue. The
+// one path into the host is PRD section 6's host wake, which is the notify
+// command notify.go runs set to the line internal/cli's hostwake.go owns,
+// and reaches a host in a tmux pane only.
 //
 // # The drain hands out, and the acknowledgement closes
 //
