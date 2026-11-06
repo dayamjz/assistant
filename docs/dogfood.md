@@ -9,11 +9,11 @@ followed from nothing, and what it assumes you have is:
 - **a coding agent this build can drive, installed and authenticated.** The
   review and fix stages launch one, and a run cannot start without it:
   `assistant doctor` reports the agent row as blocking and answers that no run
-  can start. The default `auto` resolves Claude Code and nothing else, because
-  Claude is the only adapter declaring itself auto-eligible, so Codex, Cursor
-  or Grok on their own leave that row blocking until you name one with `agent`
-  in the home's `config.yaml`. Step 5 below runs `assistant doctor`, which is
-  where you read that row.
+  can start.   The default `auto` resolves Claude Code and nothing else, because Claude is
+  the only adapter declaring itself auto-eligible, so **any other adapter on
+  its own** leaves that row blocking until you name it with `agent` in the
+  home's `config.yaml`. Step 5 below runs `assistant doctor`, which is where
+  you read that row.
 
 **Shadow** here means one thing only: the gate's recorded upstream is a private
 mirror repository rather than this one. Every stage still runs for real,
