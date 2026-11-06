@@ -48,7 +48,7 @@ func claudeTerminalWorker(t *testing.T, body func(w launched, agent *standin.Age
 		}},
 		Worker: &standin.WorkerScript{
 			Exchanges: []standin.Exchange{
-				{Contains: longTurn, Reply: "the long work finished", Turn: time.Hour},
+				{Contains: longTurn, Reply: "the long work finished", Turn: time.Hour, Progress: "the long work begins"},
 				{Contains: "git rev-parse --show-toplevel", Reply: "the instructions were read"},
 				{Contains: "status", Reply: "heard: status"},
 			},

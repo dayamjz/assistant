@@ -75,10 +75,11 @@ done. It is served only for a worker hosted in tmux whose agent declares
 `terminal_interrupt`, which Claude Code does; anything else is refused with
 nothing done, and stopping is the path left. A worker whose input holds text
 someone typed into its terminal is not interrupted either, so their text
-stays theirs. A message the worker had not begun to answer is taken back out
-of its conversation by the interrupt, so it is never acknowledged and
-surfaces once as unacknowledged: say again in the next message what you
-still want done.
+stays theirs. A turn that has not yet begun its reply is not interrupted:
+the agent would put that message back in its input, where nothing can tell
+it from a person's text, so the interrupt waits about half a minute for the
+reply to begin and is refused if it does not; ask again once the worker has
+started answering, or stop it.
 
 ## Stop a worker
 

@@ -122,8 +122,8 @@ import (
 // interruptBound, and answers only once that Interrupt read the turn ended
 // and the terminal probe then answered Live. What reads the turn ended is
 // internal/agents' agents.InterruptTerminalWorker: the key is pressed once
-// on a screen that reads a turn running with an empty input, and the screen
-// reads ready again after it; a screen that reads ready before it is
+// on a screen that reads a turn running that has begun its reply, with an
+// empty input, and the screen reads ready again after it; a screen that reads ready before it is
 // answered as no turn running, with nothing pressed. Only the tmux provider
 // can type a key, so the answer is refused, typed and with nothing pressed,
 // for a worker whose adapter has not declared
@@ -165,9 +165,10 @@ import (
 //     CLI was observed to ignore. A key a person pressed in that window too
 //     is a second one, which the CLI was observed to answer with a menu,
 //     and the interrupt is then refused unread.
-//   - Text a person types into the worker's input between the key and the
-//     screen read after it reads as the turn's message put back there, and
-//     the adapter's clear key takes it out with the message.
+//   - A turn that has not begun its reply is not interrupted: the
+//     interrupt waits for the reply under interruptBound and is refused
+//     when it does not begin, so a turn that thinks or waits longer than
+//     that before drawing anything cannot be interrupted.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 
