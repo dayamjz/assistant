@@ -22,6 +22,11 @@ package is P15's per-package check (CI fails when any process a test started
 outlives its package): go test runs each package's test binary through it,
 and it fails that package for every process the binary started that is
 still running once the binary exits, with other packages running beside it.
+A task's worker in a tmux server of its own outlives a restart of the
+service by design (PRD decision 33), owned by its task's record rather than
+the service; that sets nothing aside here, because the record a test writes
+is the test's, so a test owns every worker it starts, one a restart let go
+included, and must end it before its package ends.
 Linux ties a process to its package with the child subreaper, macOS with a
 sandbox profile the package's processes inherit; package_run says how, and
 what neither sees.
@@ -1027,7 +1032,8 @@ def package_run(command):
     outlives its package). go test runs this as -exec, once per package, in
     that package's directory, and other packages run beside it. Once the
     binary has exited, a process the package started that is still running
-    fails the package: it is printed as a LEAK line naming the package, and
+    fails the package, a worker a service restart let go included (the
+    module docstring says why): it is printed as a LEAK line naming the package, and
     ended. How a process is tied to its package:
 
     - Linux: this process makes itself the child subreaper of its

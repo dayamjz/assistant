@@ -25,7 +25,7 @@ import (
 // terminal sessions, one per worker": each launch builds a session.Host over
 // the adapter agents.Route selected for that worker (which may differ from
 // the run agent), and the sessions it creates are held here per task, one
-// per attempt, until Close ends them.
+// per attempt, until Close ends them or a restart lets them go.
 //
 // # The proof is made again at launch
 //
@@ -152,15 +152,17 @@ import (
 // of a fact the process tier owns.
 //
 // One launch per attempt per service, and a launched task is never
-// dispatched again. A restart holds no session and no slot, and what it
-// does about a task whose latest attempt names a session is reconcile.go's
-// question and not dispatch's: the terminal is probed, a dead one is
-// relaunched in place by relaunch.go as a new attempt over the standing
-// copy with the same instructions plus a note, and an unobserved one is
-// left alone, which is PRD section 11's ambiguous liveness. dispatchDue
-// passes such a task over and dispatchClaimed refuses it with
-// errTaskLaunched, so a restart cannot start a second worker beside one it
-// cannot see. The earlier attempt's process, if it is still running, is an
+// dispatched again. A restart holds no slot, and no session but the tmux
+// workers recovery holds again, and what it does about a task whose latest
+// attempt names a session is reconcile.go's question and not dispatch's: a
+// tmux worker the previous service let go or left, which verifies, is held
+// again and reads Live, the terminal is probed, a dead one is relaunched in
+// place by relaunch.go as a new attempt over the standing copy with the
+// same instructions plus a note, and an unobserved one is left alone, which
+// is PRD section 11's ambiguous liveness. dispatchDue passes such a task
+// over and dispatchClaimed refuses it with errTaskLaunched, so a restart
+// cannot start a second worker beside one it cannot see. The earlier
+// attempt's process, if it is still running and was not held again, is an
 // orphan the new service holds no handle to and does not end; its reference
 // probes Unobserved while it stands and Dead once it is gone, and only then
 // is the task relaunched, after the sweep sweep.go reads has been asked of
@@ -559,11 +561,53 @@ func (s *Service) sessionOf(id string) (session.Host, *session.Session, bool) {
 	}
 }
 
+// releaseForRestart lets go of every worker this service holds whose
+// provider can leave it running, when the stop under way is a restart
+// (Stop(true), the restart verb): the worker and its tmux server go on, the
+// attempt's recorded reference owns it, and the next service holds it again
+// (readoptWorkers). It runs before anything a stop forces or ends, so neither
+// the forced stop's groups nor its hurry reach a released worker. A session
+// whose reference is still being recorded is not released, so no worker is
+// left running behind a record that may not name it; it and every worker a
+// provider cannot release (a pipe's, session.ErrNotDurable) are ended by
+// closeSessions as on any stop. On a stop that is not a restart it does
+// nothing. It is idempotent.
+func (s *Service) releaseForRestart() {
+	if !s.Restarting() {
+		return
+	}
+	s.mu.Lock()
+	held := make(map[string]launchedWorker, len(s.launched))
+	for id, launched := range s.launched {
+		if launched.recording == nil && launched.host != nil && launched.session != nil {
+			held[id] = launched
+		}
+	}
+	s.mu.Unlock()
+	for id, launched := range held {
+		err := launched.host.Release(launched.session)
+		switch {
+		case errors.Is(err, session.ErrNotDurable):
+			continue
+		case err != nil:
+			s.log.Printf("the worker of task %s was not released for the restart: %v", id, err)
+			continue
+		}
+		s.mu.Lock()
+		if current, ok := s.launched[id]; ok && current.session == launched.session {
+			delete(s.launched, id)
+		}
+		s.mu.Unlock()
+		s.log.Printf("the worker of task %s goes on in terminal session %s across the restart", id, launched.session.Reference())
+	}
+}
+
 // closeSessions ends every session this service launched and still holds,
 // on the terms session.Provider.Close states, and forgets them. It is
-// Close's, and it ends nothing this service's provider did not create: a
-// worker an earlier service of this home launched is an orphan this one
-// never held.
+// Close's, and it ends nothing this service does not hold: a worker an
+// earlier service of this home launched is an orphan this one never held
+// unless recovery held it again, and a worker releaseForRestart let go is
+// no longer held.
 func (s *Service) closeSessions() []error {
 	s.mu.Lock()
 	held := s.launched

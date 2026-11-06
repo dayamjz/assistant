@@ -423,8 +423,10 @@ type Service struct {
 	// through the driver's provider alone. It is this service's memory,
 	// like the slot above: the attempt's record carries the session's
 	// reference and nothing durable carries the handle, so a service that
-	// restarts holds none of these and relaunches. Close ends every
-	// session here, and launch.go owns the map.
+	// restarts holds none of these until recovery holds again the tmux
+	// workers that verify (readoptWorkers), and relaunches the dead ones.
+	// Close ends every session here, after a restart has let go of the ones
+	// that can outlive it, and launch.go owns the map.
 	launched map[string]launchedWorker
 	// delegated holds, per domain, the session host and session
 	// subordinates.go started for the domain's subordinate coordinator and
@@ -1103,6 +1105,9 @@ func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.stopDeadline()
 		s.Stop(false)
+		// On a restart, the workers that can outlive this service are let
+		// go first, before anything this close waits on could hurry them.
+		s.releaseForRestart()
 		var errs []error
 		s.closingAt("closing the protocol server, which waits for every request in flight")
 		if s.server != nil {
@@ -1117,14 +1122,17 @@ func (s *Service) Close() error {
 		s.work.Wait()
 		s.closingAt("stopping the supervisor loop")
 		errs = append(errs, s.stopSupervision())
-		// The workers this service launched are ended here, after the work
+		// The workers this service holds are ended here, after the work
 		// that could record against them and before the store they were
 		// recorded in closes. What that ends is exactly the sessions this
-		// service's provider created and still holds, on the terms
-		// session.Provider.Close states; a worker an earlier service of this
-		// home launched is no session of this one and goes on, which
-		// launch.go states.
+		// service's providers hold, on the terms session.Provider.Close
+		// states, a worker held again at recovery among them; a restart has
+		// already let go of every one that can outlive it, and a worker an
+		// earlier service launched that was not held again is no session of
+		// this one and goes on, which launch.go states.
 		s.closingAt("ending the workers it launched")
+		// Again, for a worker a launch under way recorded since the first.
+		s.releaseForRestart()
 		errs = append(errs, s.closeSessions()...)
 		s.closingAt("ending the subordinate coordinators it launched")
 		errs = append(errs, s.closeSubordinates()...)

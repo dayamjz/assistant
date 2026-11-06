@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -157,10 +159,11 @@ import (
 // reconciliation sees of a terminal is what a person listing tasks sees and
 // what the loop acts on. In production that is the service's own session
 // provider, on terminals.go's terms: a service that restarts holds no
-// session, so every reference it finds is answered by identity, Dead for a
-// worker whose process is gone and Unobserved for one still present, which
-// is exactly the reading the two relaunch rows and the ambiguous-liveness
-// row are keyed on. A test may pass a double on Options.Terminals instead.
+// session but the tmux workers readoptWorkers held again just before the
+// read, which read Live, so every other reference it finds is answered by
+// identity, Dead for a worker whose process is gone and Unobserved for one
+// still present, which is exactly the reading the two relaunch rows and the
+// ambiguous-liveness row are keyed on. A test may pass a double on Options.Terminals instead.
 //
 // # Residual gaps
 //
@@ -345,6 +348,8 @@ func (s *Service) boundedProbe(bound context.Context) func(ctx context.Context, 
 func (s *Service) reconcileTasks(ctx context.Context) {
 	if s.terminals == nil {
 		s.log.Printf("reconciliation: this service has no terminal seam, so every terminal reads unobserved and nothing is relaunched")
+	} else {
+		s.readoptWorkers(ctx)
 	}
 	queued, err := s.store.QueuedWakes(ctx, reconcileDrainLimit)
 	switch {
@@ -389,6 +394,75 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 				s.log.Printf("task %s is not relaunched: %s", r.Record.ID, decision.reason)
 			}
 		}
+	}
+}
+
+// readoptBound bounds holding one worker again: its verification is one
+// tmux client and a few kernel reads, which take milliseconds against a
+// server that answers. Chosen, not measured beyond that.
+const readoptBound = 5 * time.Second
+
+// readoptWorkers holds again, before the table reads the fleet, every
+// worker that outlived the service before this one: a task whose latest
+// attempt records a reference naming its tmux server's socket, which no
+// session of this service holds, is handed to a tmux provider over the
+// adapter the attempt recorded, whose Readopt verifies the worker on
+// session.Tmux.Readopt's terms. A worker that verifies is held as a launch
+// holds one, with its fallback watched as a launch's is, so its terminal
+// probes Live and the table leaves it alone: it is not relaunched. One that
+// does not verify, and every reference that names no socket, is left to the
+// table on the probe's own reading, Dead and relaunched in place when its
+// process is proven gone, Unobserved and left alone otherwise. What it
+// cannot read it logs and leaves the same way.
+func (s *Service) readoptWorkers(ctx context.Context) {
+	all, err := s.store.Tasks(ctx)
+	if err != nil {
+		s.log.Printf("reconciliation: no worker was held again, because the tasks could not be read: %v", err)
+		return
+	}
+	var tmux string
+	for _, task := range all {
+		attempts, err := s.store.TaskAttempts(ctx, task.ID)
+		if err != nil || len(attempts) == 0 {
+			continue
+		}
+		latest := attempts[len(attempts)-1]
+		ref, recorded := latest.SessionRef.Get()
+		if !recorded {
+			continue
+		}
+		if parsed, err := session.ParseReference(ref); err != nil || parsed.Terminal == "" {
+			continue
+		}
+		if _, _, held := s.sessionOf(task.ID); held {
+			continue
+		}
+		adapter, _ := latest.Adapter.Get()
+		if tmux == "" {
+			if tmux, err = tmuxBinary(); err != nil {
+				s.log.Printf("reconciliation: no worker was held again, because no tmux binary could be resolved: %v", err)
+				return
+			}
+		}
+		selection, err := agents.Route(ctx, s.catalog, []string{adapter}, agents.NeedForWorker(true), adapter)
+		if err != nil {
+			s.log.Printf("task %s's worker in terminal session %s was not held again: its adapter %q: %v", task.ID, ref, adapter, err)
+			continue
+		}
+		host := session.NewTmux(s.home, selection.Resolution.Runner, tmux)
+		bounded, cancel := context.WithTimeout(s.registry.hurrying(ctx), readoptBound)
+		held, err := host.Readopt(bounded, ref)
+		cancel()
+		if err != nil {
+			s.log.Printf("task %s's worker in terminal session %s was not held again: %v", task.ID, ref, err)
+			continue
+		}
+		s.mu.Lock()
+		s.launched[task.ID] = launchedWorker{host: host, session: held}
+		s.mu.Unlock()
+		s.log.Printf("task %s attempt %d: its worker in terminal session %s outlived the last service and is held again",
+			task.ID, latest.Sequence, ref)
+		s.watchWorkerFallback(task, latest.Sequence, host, held, adapter)
 	}
 }
 
