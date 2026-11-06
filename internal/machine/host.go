@@ -142,9 +142,16 @@ type HostInstall struct {
 	// types only into the program the person installed it from.
 	WakeProgram string `json:"wake_program,omitempty"`
 	// WakeAbsent says why no host wake was offered: the installer did not
-	// run inside a tmux pane, or the pane could not be read. Empty when
-	// WakeCommand is set.
+	// run inside a tmux pane, the pane could not be read, or the installer
+	// was itself the pane's foreground program, as WakeInstallerForeground
+	// says. Empty when WakeCommand is set.
 	WakeAbsent string `json:"wake_absent,omitempty"`
+	// WakeInstallerForeground says no host wake was offered because the
+	// installer led the foreground process group of the pane's terminal, as
+	// a command typed at the pane's shell does, so the program tmux named for
+	// the pane was the installer itself, which no host started there later
+	// would match.
+	WakeInstallerForeground bool `json:"wake_installer_foreground,omitempty"`
 }
 
 // HostWake is the answer of PRD section 8's host wake, which the service
@@ -178,8 +185,11 @@ func HostWakePhrase(HostWake) Phrase { return phraseHostWakeTyped }
 // installer offered beside the stop guard's line, or about why it offered
 // none.
 func HostInstallWakePhrase(h HostInstall) Phrase {
-	if h.WakeCommand != "" {
+	switch {
+	case h.WakeCommand != "":
 		return phraseHostWakeOffered
+	case h.WakeInstallerForeground:
+		return phraseHostWakeInstallerForeground
 	}
 	return phraseHostWakeAbsent
 }

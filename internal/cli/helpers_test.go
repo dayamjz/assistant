@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -45,6 +47,7 @@ func TestMain(m *testing.M) {
 	standin.WatchOwner()
 	standin.Main()
 	standInManagerMain()
+	paneHostMain()
 	hookMain()
 	holdLockMain()
 	spawnerMain()
@@ -125,8 +128,59 @@ func runQuietly(m *testing.M) int {
 // binary: see managed_standin_test.go. "host" first is the host wake a
 // service runs as its notify command, the line host install prints with
 // this binary's path: see hostwake_unix_test.go.
+// paneHostVar names, in a pane's environment, the directory paneHostMain
+// writes to; paneHostInstalled is the installer's answer's name in it.
+const (
+	paneHostVar       = "ASSISTANT_TEST_PANE_HOST"
+	paneHostInstalled = "installed"
+)
+
+// paneHostMain is a coordinator's host in a tmux pane, for the host wake's
+// tests, when paneHostVar names a directory: it runs this binary as
+// assistant --json host install as its child, in this process's group and
+// without handing it the terminal, so the host keeps the pane's foreground
+// as a host's shell tool does; it writes the answer into the directory, and
+// then appends every line typed into the pane to the file typed there, as
+// cat does.
+func paneHostMain() {
+	dir := os.Getenv(paneHostVar)
+	if dir == "" {
+		return
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the pane host cannot resolve its own path:", err)
+		os.Exit(1)
+	}
+	// The child is the installer, not another pane host, so it is not
+	// given the variable that made this process one.
+	install := exec.Command(executable, "--json", "host", "install")
+	for _, variable := range os.Environ() {
+		if !strings.HasPrefix(variable, paneHostVar+"=") {
+			install.Env = append(install.Env, variable)
+		}
+	}
+	answer, err := install.Output()
+	if err != nil {
+		answer = []byte(fmt.Sprintf("host install failed: %v: %s", err, answer))
+	}
+	partial := filepath.Join(dir, paneHostInstalled+".partial")
+	if err := os.WriteFile(partial, answer, 0o600); err != nil || os.Rename(partial, filepath.Join(dir, paneHostInstalled)) != nil {
+		fmt.Fprintln(os.Stderr, "the pane host cannot write the installer's answer:", err)
+		os.Exit(1)
+	}
+	typed, err := os.OpenFile(filepath.Join(dir, "typed"), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the pane host cannot open its typed file:", err)
+		os.Exit(1)
+	}
+	_, _ = io.Copy(typed, os.Stdin)
+	os.Exit(0)
+}
+
 func hookMain() {
 	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator" && os.Args[1] != "worker" && os.Args[1] != "host" &&
+		(len(os.Args) < 3 || os.Args[1] != "--json" || os.Args[2] != "host") &&
 		(len(os.Args) < 4 || os.Args[1] != "--home" || (os.Args[3] != "worker" && os.Args[3] != "service"))) {
 		return
 	}

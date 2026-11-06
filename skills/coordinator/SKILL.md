@@ -435,6 +435,9 @@ in your pane):
 assistant host install
 ```
 
+- Run it yourself, through your shell tool. Typed at the pane's shell it
+  would be the pane's foreground program and read itself as the pane's,
+  so it offers no line and says so.
 - Besides the stop guard's line, it prints a `notify.command` line naming
   `assistant host wake` and your pane. It writes neither to the
   configuration; ask the user to add that line under `notify: command:` in

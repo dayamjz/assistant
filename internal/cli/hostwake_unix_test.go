@@ -28,26 +28,42 @@ import (
 )
 
 // paneHost is a coordinator's host in a tmux pane of the test's own: a
-// server on a socket in a short directory, whose one pane runs cat appending
-// every line typed into it to a file, which is how the test reads what
-// reached the host's input. cat reads its terminal line by line, so a line
-// is in the file once Enter was typed after it.
+// server on a socket in a short directory, whose one pane runs a program
+// that appends every line typed into it to a file, which is how the test
+// reads what reached the host's input. Such a program reads its terminal
+// line by line, so a line is in the file once Enter was typed after it.
 type paneHost struct {
-	tmux, socket, pane, pid, start, typed string
+	tmux, socket, pane, pid, start, dir, typed string
 }
 
-// startPaneHost starts the pane, and ends its server when the test ends.
+// startPaneHost starts a pane running cat as the host.
 func startPaneHost(t *testing.T) paneHost {
+	t.Helper()
+	p := newPane(t)
+	return p.run(t, nil, "/bin/sh", "-c", "exec cat >> "+procgroup.ShellQuote(p.typed))
+}
+
+// newPane names a pane's server and files, and starts nothing.
+func newPane(t *testing.T) paneHost {
 	t.Helper()
 	tmux := standin.Tmux(t)
 	dir := standin.SocketDir(t)
-	p := paneHost{tmux: tmux, socket: filepath.Join(dir, "s"), typed: filepath.Join(dir, "typed")}
-	if raw, err := exec.Command(tmux, "-S", p.socket, "new-session", "-d", "-x", "200", "-y", "40", "--",
-		"/bin/sh", "-c", "exec cat >> "+p.typed).CombinedOutput(); err != nil {
+	return paneHost{tmux: tmux, socket: filepath.Join(dir, "s"), dir: dir, typed: filepath.Join(dir, "typed")}
+}
+
+// run starts p's server with one pane running argv, with environment
+// set in it beside what tmux sets, and ends the server when the test ends.
+func (p paneHost) run(t *testing.T, environment []string, argv ...string) paneHost {
+	t.Helper()
+	args := []string{"-S", p.socket, "new-session", "-d", "-x", "200", "-y", "40"}
+	for _, variable := range environment {
+		args = append(args, "-e", variable)
+	}
+	if raw, err := exec.Command(p.tmux, append(append(args, "--"), argv...)...).CombinedOutput(); err != nil {
 		t.Fatalf("starting the host's pane: %v: %s", err, raw)
 	}
-	t.Cleanup(func() { _ = exec.Command(tmux, "-S", p.socket, "kill-server").Run() })
-	raw, err := exec.Command(tmux, "-S", p.socket, "display-message", "-p", "#{pid} #{start_time} #{pane_id}").Output()
+	t.Cleanup(func() { _ = exec.Command(p.tmux, "-S", p.socket, "kill-server").Run() })
+	raw, err := exec.Command(p.tmux, "-S", p.socket, "display-message", "-p", "#{pid} #{start_time} #{pane_id}").Output()
 	fields := strings.Fields(string(raw))
 	if err != nil || len(fields) != 3 {
 		t.Fatalf("reading the host's pane: %v: %q", err, raw)
@@ -56,26 +72,42 @@ func startPaneHost(t *testing.T) paneHost {
 	return p
 }
 
-// environment is what a command run by the host from inside the pane sees:
-// tmux's two variables as tmux sets them, a PATH that finds tmux, and HOME.
-func (p paneHost) environment(userHome string) func(string) string {
-	vars := map[string]string{
-		"TMUX":      p.socket + "," + p.pid + ",0",
-		"TMUX_PANE": p.pane,
-		"PATH":      filepath.Dir(p.tmux) + ":/usr/bin:/bin",
-		"HOME":      userHome,
-	}
-	return func(name string) string { return vars[name] }
+// paneEnvironment is what a pane's program needs set to run this binary
+// as assistant against h: the home, a HOME of the test's own, so the
+// settings file named is not the user's, and a PATH that finds tmux.
+func (p paneHost) paneEnvironment(h *home.Home) []string {
+	return []string{home.Var + "=" + h.Root(), "HOME=" + p.dir, "ENV=", "PATH=" + filepath.Dir(p.tmux) + ":/usr/bin:/bin"}
 }
 
-// installFromPane runs assistant host install as the host would from inside
-// the pane, through cli.Run with the pane's environment, and returns its
-// document decoded loosely, so a member it does not carry reads empty.
-func installFromPane(t *testing.T, h *home.Home, p paneHost) map[string]any {
+// startInstalledPaneHost starts a pane whose host is this binary as
+// paneHostMain: it runs assistant --json host install against h as its
+// child, as a host's own shell tool runs a command, keeping the pane's
+// foreground, and then appends what is typed into the pane to p.typed. It
+// returns the pane and the installer's answer, decoded loosely, so a member
+// it does not carry reads empty.
+func startInstalledPaneHost(t *testing.T, h *home.Home) (paneHost, map[string]any) {
 	t.Helper()
-	var answer map[string]any
-	installWith(t, h, p.environment(filepath.Dir(p.socket)), &answer)
-	return answer
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := newPane(t)
+	p = p.run(t, append(p.paneEnvironment(h), paneHostVar+"="+p.dir), executable)
+	installed := filepath.Join(p.dir, paneHostInstalled)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if raw, err := os.ReadFile(installed); err == nil {
+			var answer map[string]any
+			if err := json.Unmarshal(raw, &answer); err != nil {
+				t.Fatalf("decoding the pane host's host install: %v\n%s", err, raw)
+			}
+			return p, answer
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the pane host wrote no host install answer within 30s")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // installWith runs assistant --json host install through cli.Run with the
@@ -126,10 +158,11 @@ func (p paneHost) typedLines() []string {
 // no listen held and no wait armed: PRD section 8's host wake, which keeps
 // P10's supervision cycle alive when the coordinator's own wait is gone.
 //
-// The host is a pane running cat, so what reaches its input is read back
-// from a file rather than stated. assistant host install, run with the
-// pane's environment as a command the host started there would be, prints
-// the notify.command line; the home is served with that line configured and
+// The host is a pane running this binary as a stand-in host, which runs
+// assistant host install as its child, as a host's shell tool runs a
+// command inside the pane, and then appends what is typed into the pane to
+// a file, so what reaches its input is read back rather than stated. The
+// installer prints the notify.command line; the home is served with that line configured and
 // a one-second supervision interval, and nothing else: no listen, no await.
 // A delivery task's worker is launched and ended through the client's own
 // message. The worker's own output before that may queue a wake of its own,
@@ -146,14 +179,13 @@ func TestAWorkerExitWakesACoordinatorInATmuxPaneWithNoListen(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
 	principles.Cite(t, principles.P10)
-	pane := startPaneHost(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	if err := h.Create(); err != nil {
 		t.Fatal(err)
 	}
 
-	installed := installFromPane(t, h, pane)
+	pane, installed := startInstalledPaneHost(t, h)
 	wake, _ := installed["wake_command"].(string)
 	if wake == "" {
 		t.Fatalf("assistant host install from inside a tmux pane printed no host wake line, so nothing the service runs can wake the host: %v", installed)
@@ -316,6 +348,34 @@ func TestHostInstallOutsideTmuxOffersNoHostWake(t *testing.T) {
 	}
 }
 
+// host install run with a pane's tmux variables but outside that pane,
+// as a program started from the pane and running elsewhere inherits them,
+// offers no host wake and says why: the variables name where its starter
+// ran, not where it runs, and the pane's program is not its host. Here that
+// program is this test process, which the pane's tmux server did not start.
+// The same pane's own host, run by this binary as a stand-in that runs the
+// installer as its child inside the pane, is offered the line, as the
+// positive control that the refusal is not refusing every pane.
+func TestHostInstallOutsideThePaneItsVariablesNameOffersNoWake(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	pane, inside := startInstalledPaneHost(t, h)
+	if wake, _ := inside["wake_command"].(string); wake == "" {
+		t.Fatalf("host install run by the pane's own host offered no host wake: %v", inside)
+	}
+	vars := map[string]string{
+		"TMUX":      pane.socket + "," + pane.pid + ",0",
+		"TMUX_PANE": pane.pane,
+		"PATH":      filepath.Dir(pane.tmux) + ":/usr/bin:/bin",
+		"HOME":      pane.dir,
+	}
+	var outside machine.HostInstall
+	installWith(t, h, func(name string) string { return vars[name] }, &outside)
+	if outside.WakeCommand != "" || !strings.Contains(outside.WakeAbsent, "does not descend from pane "+pane.pane) || outside.WakeInstallerForeground {
+		t.Fatalf("host install outside the pane its variables name answered %+v, want no wake and that it is not in the pane", outside)
+	}
+}
+
 // Ending the notify command ends every tmux client host wake started, P15's
 // "ended together with everything it started": the notifier ends a notify
 // command it gave up on, at its bound or as the service stops, by sending
@@ -396,5 +456,77 @@ func TestEndingTheNotifyCommandEndsTheHostWakesTmuxClients(t *testing.T) {
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
+	}
+}
+
+// host install typed at the prompt of a shell in the coordinator's pane,
+// the way an operator runs a command, offers no host wake: the shell hands
+// the pane's terminal to the command it runs, so the installer leads the
+// pane's foreground process group, and the program tmux names for the pane
+// is the installer itself, which a host started there afterwards never
+// matches; it says so instead. The same installer run by a program that
+// leads the pane's foreground and runs it as a child without handing it the
+// terminal, as a host's shell tool can, is offered the line, naming that program and not the installer,
+// as the positive control that the refusal is not refusing every pane.
+//
+// The pane runs an interactive shell, and the installer is this test binary
+// answering host verbs as assistant does (TestMain), typed into that shell
+// with send-keys; what it printed is read back from a file.
+func TestHostInstallTypedAtThePanesShellOffersNoWakeNamingItself(t *testing.T) {
+	t.Parallel()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHome(t)
+	pane := newPane(t)
+	pane = pane.run(t, pane.paneEnvironment(h), "/bin/sh", "-i")
+
+	// install types command at the pane's shell, with its output and then its
+	// exit status written to files, and returns the output once the status
+	// is there.
+	install := func(name, command string) string {
+		t.Helper()
+		out, status := filepath.Join(pane.dir, name+".out"), filepath.Join(pane.dir, name+".status")
+		line := command + " > " + procgroup.ShellQuote(out) + " 2>&1; echo $? > " + procgroup.ShellQuote(status)
+		pane.tmuxRun(t, "send-keys", "-t", pane.pane, "-l", line)
+		pane.tmuxRun(t, "send-keys", "-t", pane.pane, "Enter")
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			if code, err := os.ReadFile(status); err == nil && strings.HasSuffix(string(code), "\n") {
+				printed, _ := os.ReadFile(out)
+				if strings.TrimSpace(string(code)) != "0" {
+					t.Fatalf("%s exited %s:\n%s", command, code, printed)
+				}
+				return string(printed)
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("%s did not finish within 30s", command)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	commandLine := func(printed string) string {
+		for _, line := range strings.Split(printed, "\n") {
+			if rest, ok := strings.CutPrefix(line, "Command: "); ok {
+				return rest
+			}
+		}
+		return ""
+	}
+	installer := procgroup.ShellQuote(executable) + " host install"
+	self := "--program " + procgroup.ShellQuote(filepath.Base(executable))
+
+	typed := install("typed", installer)
+	if line := commandLine(typed); line != "" {
+		t.Fatalf("host install typed at the pane's shell offered %q, which names the installer as the pane's program:\n%s", line, typed)
+	}
+	if why := machine.HostInstallWakePhrase(machine.HostInstall{WakeInstallerForeground: true}).String(); !strings.Contains(typed, why) {
+		t.Fatalf("host install typed at the pane's shell did not say it led the pane's foreground (%q):\n%s", why, typed)
+	}
+
+	byHost := install("host", "/bin/sh -c "+procgroup.ShellQuote(installer+"; :"))
+	if line := commandLine(byHost); line == "" || strings.HasSuffix(line, self) {
+		t.Fatalf("host install run by the program leading the pane offered %q, want a line naming that program:\n%s", line, byHost)
 	}
 }

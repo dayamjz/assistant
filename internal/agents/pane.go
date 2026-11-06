@@ -85,23 +85,28 @@ func (p Pane) Validate() error {
 
 // PaneFacts is what one reading of a pane says about who holds it: the
 // process identifier of the server that answered for the socket, the time
-// that server started in whole seconds since the Unix epoch, and the name of
-// the program in the pane's foreground, as tmux reports each. The process
-// and the start time together name one server start: a later server on the
-// same socket differs in its start time even where it was given the same
-// process identifier, unless both happened within the same second.
+// that server started in whole seconds since the Unix epoch, the process
+// identifier of the pane's first process, and the name of the program in
+// the pane's foreground, as tmux reports each. The process and the start
+// time together name one server start: a later server on the same socket
+// differs in its start time even where it was given the same process
+// identifier, unless both happened within the same second. The first
+// process is the one tmux started the pane with, on the pane's terminal, so
+// ReadLineage of it reads that terminal's foreground process group, whose
+// leader is the program tmux names.
 type PaneFacts struct {
 	ServerPID   int
 	ServerStart int64
+	PanePID     int
 	Program     string
 }
 
 // paneFormat is the reading ReadPane asks tmux for, tab-separated, the
 // program last so a tab in its name stays part of it.
-const paneFormat = "#{pid}\t#{start_time}\t#{pane_id}\t#{pane_current_command}"
+const paneFormat = "#{pid}\t#{start_time}\t#{pane_id}\t#{pane_pid}\t#{pane_current_command}"
 
-// ReadPane reads who holds p: the server answering on its socket and the
-// program in its foreground. A server that is not there, a pane it does not
+// ReadPane reads whose p is: the server answering on its socket, the
+// pane's first process and the program in its foreground. A server that is not there, a pane it does not
 // have, and an answer that does not parse as the reading asked for are
 // errors, so a caller comparing facts never compares an empty reading.
 func ReadPane(ctx context.Context, p Pane) (PaneFacts, error) {
@@ -115,8 +120,8 @@ func ReadPane(ctx context.Context, p Pane) (PaneFacts, error) {
 	if err != nil {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: %w: %s", p.ID, err, strings.TrimSpace(stderr.String()))
 	}
-	fields := strings.SplitN(strings.TrimRight(string(out), "\n"), "\t", 4)
-	if len(fields) != 4 || fields[2] != p.ID || fields[3] == "" {
+	fields := strings.SplitN(strings.TrimRight(string(out), "\n"), "\t", 5)
+	if len(fields) != 5 || fields[2] != p.ID || fields[4] == "" {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q, which is not that pane's reading", p.ID, out)
 	}
 	pid, err := strconv.Atoi(fields[0])
@@ -127,7 +132,11 @@ func ReadPane(ctx context.Context, p Pane) (PaneFacts, error) {
 	if err != nil || start <= 0 {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q for its server's start time", p.ID, fields[1])
 	}
-	return PaneFacts{ServerPID: pid, ServerStart: start, Program: fields[3]}, nil
+	panePID, err := strconv.Atoi(fields[3])
+	if err != nil || panePID <= 0 {
+		return PaneFacts{}, fmt.Errorf("reading pane %s: tmux answered %q for its first process", p.ID, fields[3])
+	}
+	return PaneFacts{ServerPID: pid, ServerStart: start, PanePID: panePID, Program: fields[4]}, nil
 }
 
 // paneBufferPrefix begins the name of the tmux buffer one TypeIntoPane

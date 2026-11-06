@@ -124,7 +124,7 @@ var (
 )
 
 // The host wake's rows: the notice typed, and beside the installer's own
-// row, the wake offered or why none was. None names the pane, the command
+// row, the wake offered or one of two reasons none was. None names the pane, the command
 // or the key: they are machine text printed beside the row.
 var (
 	phraseHostWakeTyped = Phrase{
@@ -141,6 +141,11 @@ var (
 		Outcome:     "No command to type a notice into the coordinator's pane was offered, because this was not run inside a tmux pane that could be read.",
 		Consequence: "The service reaches the coordinator only when the coordinator asks it for news.",
 		Decision:    "Run this from inside the coordinator's tmux pane if you want the service to type a notice there.",
+	}
+	phraseHostWakeInstallerForeground = Phrase{
+		Outcome:     "No command to type a notice into the coordinator's pane was offered, because this command ran in the pane's foreground, so tmux named it, and not the coordinator's host, as the pane's program.",
+		Consequence: "The service reaches the coordinator only when the coordinator asks it for news.",
+		Decision:    "Start the host in this pane and run this through the host's own shell tool, or in Claude Code type ! before it, so the host stays in the pane's foreground.",
 	}
 )
 
@@ -2017,8 +2022,9 @@ var PhraseNoReading = Phrase{
 // uncertainties and follow-ups, a row per outcome and the three OutcomeExecuting splits into,
 // the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the row for
-// a turn-end check that would run in the background, the host wake's three
-// (a notice typed, a wake offered and none offered), the
+// a turn-end check that would run in the background, the host wake's four
+// (a notice typed, a wake offered, none offered outside a readable pane, and
+// none offered to an installer in the pane's foreground), the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
@@ -2053,7 +2059,7 @@ func TablePhrases() []Phrase {
 	for _, refusal := range HostInstallRefusals() {
 		out = append(out, HostInstallPhrase(HostInstall{Result: HostInstallRefused, Refusal: refusal}))
 	}
-	out = append(out, phraseHostInstallAsync, phraseHostWakeTyped, phraseHostWakeOffered, phraseHostWakeAbsent)
+	out = append(out, phraseHostInstallAsync, phraseHostWakeTyped, phraseHostWakeOffered, phraseHostWakeAbsent, phraseHostWakeInstallerForeground)
 	for _, state := range taskstate.States() {
 		if p, ok := phraseByState[state]; ok {
 			out = append(out, p)

@@ -1047,12 +1047,22 @@ into that pane for every wake, so a wait the coordinator forgot to arm, or a
 `listen` that died, does not leave the fleet silent. This is the host wake,
 the fifth layer of the PRD's "Keeping supervision alive".
 
-Run the installer from inside the coordinator's pane, for example through
-the host's own shell tool:
+Start the coordinator's host in its pane, then have the host run the
+installer through its own shell tool (in Claude Code, typing
+`!assistant host install` at its prompt does the same):
 
 ```sh
 assistant host install
 ```
+
+It offers the line only when it runs below the pane's first process, so
+`TMUX_PANE` inherited by a program started elsewhere names no pane, and only
+when it is not itself the pane's foreground program. Typed at the pane's shell,
+it is, so tmux would name the installer rather than the host
+as the pane's program and every wake would be refused; it offers nothing and
+says so. It records whatever leads the foreground while it runs: run by a
+wrapper of its own, such as a script or `sh -c`, it records the wrapper, and run
+in the background of the pane's shell, it records that shell.
 
 Besides the stop guard's line, it prints a configuration key,
 `notify.command`, and a command line naming `assistant host wake` with the

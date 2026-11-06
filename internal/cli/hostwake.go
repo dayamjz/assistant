@@ -23,7 +23,8 @@ import (
 // offers the line: this binary's absolute path, "host wake", and what it
 // read of the pane, which is tmux's own two variables for the socket and
 // the pane, the tmux binary on the PATH it was given, and one reading of the
-// pane for its server's process and start time and for its program. The
+// pane for its server's process and start time and for its program, which
+// it refuses to offer when that program is the installer itself. The
 // operator sets that line as
 // notify.command, and internal/service's notifier runs it once per queued
 // wake, on that file's terms: at most once, recorded, never on the loop.
@@ -49,6 +50,16 @@ import (
 //     operator's private channel unless both are chained in one shell line.
 //   - The program is compared by the name tmux reports, so another program
 //     of the same name in the same pane is typed into.
+//   - Of the programs that can lead the pane's foreground process group,
+//     the installer refuses only itself, and records whichever leads it
+//     while it runs. Run by a wrapper of its own, a script
+//     or sh -c, it records the wrapper, so every wake is refused while the
+//     host runs; run in the background of the pane's shell, it records that
+//     shell, and a notice is typed into that shell while it is the pane's
+//     foreground program.
+//   - The installer runs in the pane only as far as it descends from the
+//     pane's first process: a host that runs its commands where the kernel
+//     reparents them away from that process is offered no line.
 //   - The start time is tmux's, in whole seconds, so a later server given
 //     the same process identifier within the same second as the one the
 //     installer read is not told apart from it.
@@ -131,13 +142,30 @@ func offerHostWake(ctx context.Context, in *invocation, answer *machine.HostInst
 	line, program, err := hostWakeLine(ctx, in)
 	if err != nil {
 		answer.WakeAbsent = err.Error()
+		answer.WakeInstallerForeground = errors.Is(err, errInstallerForeground)
 		return
 	}
 	answer.WakeCommand, answer.WakeProgram = line, program
 }
 
+// errInstallerForeground is hostWakeLine's refusal when this process leads
+// the foreground process group of the pane's terminal, which is what a shell
+// gives a command typed at its prompt. tmux names that group's leader as the
+// pane's program, so the program read is the installer and not a host.
+var errInstallerForeground = errors.New("this command leads the pane's foreground process group, so tmux names it, not the coordinator's host, as the pane's program")
+
 // hostWakeLine is the notify.command line for the pane this invocation runs
-// in, and the program it read there.
+// in, and the program it read there. tmux's variables are what this process
+// was given, not where it runs, since every process started from a pane
+// inherits them wherever it runs, so it offers a line only when this process
+// descends from the pane's first process. It refuses, with errInstallerForeground,
+// when the program read is this installer: the kernel's foreground process
+// group of the pane's terminal, read from the pane's first process, is the
+// group this process leads. A program leading the pane's foreground that
+// runs the installer as a child, without handing it the terminal, keeps
+// that group, so it is the program read; and the terminal read is the
+// pane's, not the installer's own, so an installer leading a terminal some
+// program made for it is not taken for the pane's.
 func hostWakeLine(ctx context.Context, in *invocation) (line, program string, err error) {
 	getenv := in.env.Getenv
 	if getenv == nil {
@@ -162,6 +190,23 @@ func hostWakeLine(ctx context.Context, in *invocation) (line, program string, er
 	}
 	if facts.ServerPID != server {
 		return "", "", fmt.Errorf("%s names server process %d, and the server on %s is process %d", tmuxVar, server, socket, facts.ServerPID)
+	}
+	first, found, err := agents.ReadLineage(facts.PanePID)
+	if err != nil {
+		return "", "", fmt.Errorf("reading the foreground of pane %s through its first process %d: %w", paneID, facts.PanePID, err)
+	}
+	if !found || first.TerminalGroup == 0 {
+		return "", "", fmt.Errorf("the foreground of pane %s could not be read: its first process %d is not running or has no terminal", paneID, facts.PanePID)
+	}
+	if first.TerminalGroup == os.Getpid() {
+		return "", "", fmt.Errorf("pane %s runs %q: %w", paneID, facts.Program, errInstallerForeground)
+	}
+	inPane, err := agents.DescendsFrom(os.Getpid(), facts.PanePID)
+	if err != nil {
+		return "", "", fmt.Errorf("reading whether this command runs in pane %s: %w", paneID, err)
+	}
+	if !inPane {
+		return "", "", fmt.Errorf("this command does not descend from pane %s's first process %d, so %s names a pane it does not run in", paneID, facts.PanePID, tmuxPaneVar)
 	}
 	line = strings.Join([]string{shellQuote(in.env.Executable), hostVerbName, "wake",
 		"--" + hostWakeTmuxFl, shellQuote(tmux), "--" + hostWakeSocketFl, shellQuote(socket),
