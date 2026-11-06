@@ -99,56 +99,35 @@ func TestEveryShapeOfTheEvidenceNoteSaysTheSummaryIsNotBound(t *testing.T) {
 }
 
 // saysTheSummaryIsUnbound says whether the bound report tells a reader that
-// the comparison was on findings and not on the stage's summary. It asks the
-// report's own text, because that text is the whole of what a person gets.
+// the comparison was on findings and not on the stage's summary.
 //
-// It looks for both halves of the claim, the scope and what the summary
-// escapes, and not for a word a sentence asserting the opposite would also
-// carry. TestThePredicateRejectsTextAssertingTheOpposite is its control.
+// It compares against the one constant the package states the limit in, and
+// not against a description of it. Any predicate that asks whether prose means
+// something can be satisfied by prose that means the opposite, by negation if
+// nothing else, so a test built on one holds nothing: the earlier version here
+// accepted "a stage's summary is held to it too", and the version after that
+// accepted the same sentence wrapped in "it is false that". The sentence is a
+// contract about what a person is told, so the test is that the report carries
+// that sentence.
 func saysTheSummaryIsUnbound(r findings.Report) bool {
 	for _, f := range r.Findings {
-		if summaryEscapesTheComparison(f.Description) {
+		if strings.Contains(f.Description, findings.SummaryUnbound) {
 			return true
 		}
 	}
 	return false
 }
 
-// summaryEscapesTheComparison is the predicate the two tests above rest on,
-// named so its own control can drive it directly.
-func summaryEscapesTheComparison(description string) bool {
-	d := strings.ToLower(description)
-	return strings.Contains(d, "on findings alone") &&
-		strings.Contains(d, "summary") &&
-		strings.Contains(d, "neither refused nor marked")
-}
-
-// The predicate the two tests above rest on has to be able to fail, or they
-// pass on any wording at all. Its negative controls are sentences a report
-// could plausibly carry instead: one saying the summary is held to the
-// comparison, which is the opposite claim, and one naming the summary for an
-// unrelated reason, which is what the report already says when a summary is
-// missing.
-func TestThePredicateRejectsTextAssertingTheOpposite(t *testing.T) {
+// The constant the two tests above rest on has to say both halves of the
+// claim, or a report could carry it and still tell a reader nothing: what the
+// comparison covers, and what the summary escapes. This is the control on the
+// constant, which is the only thing those tests assert about the text.
+func TestTheStatedLimitSaysBothHalvesOfTheClaim(t *testing.T) {
 	t.Parallel()
-	for _, wording := range []string{
-		"The comparison is on findings alone. A stage's summary is held to it too, " +
-			"so a claim it makes about a path the review did not declare reading is refused.",
-		"The comparison covers every claim, the summary among them.",
-		"A report with no summary is refused rather than read as a clean pass.",
-		"",
-	} {
-		if summaryEscapesTheComparison(wording) {
-			t.Errorf("the predicate accepts text that does not say the summary escapes: %q", wording)
+	for _, half := range []string{"findings", "summary", "neither refused nor marked"} {
+		if !strings.Contains(findings.SummaryUnbound, half) {
+			t.Errorf("the stated limit does not mention %q:\n%s", half, findings.SummaryUnbound)
 		}
-	}
-	// The positive control for the predicate itself, so it is not a function
-	// that rejects everything.
-	stated := "The comparison is on findings alone. A stage's summary is prose with no path " +
-		"to test against, so a claim it makes about a path the review did not declare reading " +
-		"is carried as written and is neither refused nor marked."
-	if !summaryEscapesTheComparison(stated) {
-		t.Errorf("the predicate rejects the claim itself: %q", stated)
 	}
 }
 
