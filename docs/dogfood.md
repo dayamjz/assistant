@@ -70,7 +70,9 @@ home is the one mistake this setup exists to avoid.
 HOME_ROOT=~/.assistant-dogfood
 ```
 
-Nothing creates it ahead of time; `init` does.
+Nothing has to exist there yet. `init` creates the root and the directories
+under it, and creating the root yourself first, which step 4 does when it
+writes a configuration key, changes nothing about what `init` then does.
 
 ## 4. Create the mirror and seed its default branch
 
@@ -258,24 +260,30 @@ guidance, which names `--answer` alone.
 
 ## 10. Stop it, and take it out
 
-In this order:
+**Eject before you stop the service, not after.** `eject` is refused while any
+run copy still stands under the home, and the refusal says who clears one: the
+service decides each copy when its run finishes or at its next start. With the
+service stopped, nothing is left to decide them, and the only way on is to
+start it again.
 
 ```sh
-./bin/assistant --home "$HOME_ROOT" --json runs            # find runs not yet finished
+./bin/assistant --home "$HOME_ROOT" --json runs             # find runs not yet finished
 ./bin/assistant --home "$HOME_ROOT" --cancel=<run>          # end each one
+./bin/assistant --home "$HOME_ROOT" status                  # kept work, which eject refuses over too
+./bin/assistant --home "$HOME_ROOT" eject --confirm         # service still up
 ./bin/assistant --home "$HOME_ROOT" service stop --uninstall
-./bin/assistant --home "$HOME_ROOT" eject --confirm
 ```
-
-`service stop` is refused while a run is under way, and names `--force` as the
-way through; `--force` interrupts every run at once, so ending them one at a
-time with `--cancel` first leaves a record of what you did. `--uninstall` is
-what stops the service manager bringing it back.
 
 `eject --confirm` removes the gate repository, the `assistant` remote in the
 working copy and the runs recorded against the gate. It is refused while a run
-copy is still standing, and while any kept work is open; answer those first, as
-[Kept work](operators.md#kept-work) describes.
+copy is still standing, naming each path, and while any kept work is open;
+answer the kept work as [Kept work](operators.md#kept-work) describes, and run
+`eject` again once the copies are gone.
+
+`service stop` is refused while a run is under way and names `--force` as the
+way through; `--force` interrupts every run at once, so ending them one at a
+time with `--cancel` first leaves a record of what you did. `--uninstall` is
+what stops the service manager bringing it back.
 
 ### Until #807 is fixed: a task record blocks the eject
 
@@ -288,15 +296,21 @@ store: a task still names a run of this repository: task <task> works on a branc
 of repository <repository>
 ```
 
-So if you created tasks in the dogfood home, `eject` cannot finish. Because the
-home is the dogfood's own and holds nothing else, the way out is to stop handing
-the service over and then remove the home and the remote by hand:
+So if you created tasks in the dogfood home, step 10 stops at its `eject` line
+with the service still up. Because the home is the dogfood's own and holds
+nothing else, carry on from there: hand the service back, then remove the home
+and the remote by hand.
 
 ```sh
-./bin/assistant --home "$HOME_ROOT" service stop --uninstall --force
+./bin/assistant --home "$HOME_ROOT" service stop --uninstall
 git remote remove assistant
 rm -rf "${HOME_ROOT:?}"
 ```
+
+Run `service stop --uninstall` while the definition is still installed. It
+refuses with a not-installed reason once the definition is gone, so it is not a
+second way to stop a service you already uninstalled. Step 10 cancelled every
+run, so the stop is not refused over an active one and `--force` is not needed.
 
 The `${HOME_ROOT:?}` form is deliberate: an unset or empty variable there would
 otherwise make that command remove the wrong thing. Do this only for a home set
