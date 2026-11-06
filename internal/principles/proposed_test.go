@@ -230,7 +230,7 @@ func TestTheProposedFeaturesTableMatchesTheMarkers(t *testing.T) {
 // named; a document with no table is refused outright.
 func TestTheProposedFeaturesCheckFailsOnEachDrift(t *testing.T) {
 	real := readRealPRD(t)
-	at := strings.Index(real, "\n### "+proposedTableHeading+"\n")
+	at := strings.Index(real, proposedTableHeading+"\n")
 	if at < 0 {
 		t.Fatalf("the PRD has no %q subsection to alter", proposedTableHeading)
 	}
@@ -261,7 +261,7 @@ func TestTheProposedFeaturesCheckFailsOnEachDrift(t *testing.T) {
 		})
 	}
 	t.Run("no table", func(t *testing.T) {
-		if _, err := proposedMismatches([]byte(strings.Replace(real, "### "+proposedTableHeading, "### Something else", 1))); err == nil {
+		if _, err := proposedMismatches([]byte(strings.Replace(real, proposedTableHeading+"\n", "Something else\n", 1))); err == nil {
 			t.Fatal("the check answered a document with no table instead of refusing it")
 		}
 	})
