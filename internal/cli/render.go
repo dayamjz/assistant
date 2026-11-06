@@ -278,6 +278,9 @@ var renderings = []rendering{
 	{name: "task message", voice: VoicePhrased, of: typeOf[machine.TaskMessaged](), render: func(w io.Writer, v any) {
 		writeln(w, machine.MessagePhrase(v.(machine.TaskMessaged).Message))
 	}},
+	{name: "task interrupt", voice: VoicePhrased, of: typeOf[machine.TaskInterrupted](), render: func(w io.Writer, v any) {
+		writeln(w, machine.InterruptPhrase(v.(machine.TaskInterrupted)))
+	}},
 	{name: "task stop", voice: VoicePhrased, of: typeOf[machine.TaskStopped](), render: func(w io.Writer, v any) {
 		writeln(w, machine.StopPhrase(v.(machine.TaskStopped)))
 	}},

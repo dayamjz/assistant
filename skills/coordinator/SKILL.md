@@ -233,6 +233,26 @@ The output is for you to read and never to repeat to the person. A worker
 this service did not launch, such as one an earlier service started, is
 refused rather than read.
 
+## Interrupt a worker's turn
+
+```sh
+assistant --json coordinator interrupt ID
+```
+
+It cuts short the turn the worker of the task's latest attempt is running
+and keeps the worker, which then waits for its next message: send one saying
+what to do instead. It answers only once the worker reads idle again and is
+still running. `interrupted` is `true` when a turn was running and was read
+ended, and `false` when the worker had nothing under way, so nothing was
+done. It is served only for a worker hosted in tmux whose agent declares
+`terminal_interrupt`, which Claude Code does; anything else is refused with
+nothing done, and stopping is the path left. A worker whose input holds text
+someone typed into its terminal is not interrupted either, so their text
+stays theirs. A message the worker had not begun to answer is taken back out
+of its conversation by the interrupt, so it is never acknowledged and
+surfaces once as unacknowledged: say again in the next message what you
+still want done.
+
 ## Stop a worker
 
 ```sh
@@ -619,6 +639,8 @@ assistant --domain DOMAIN --answer stop      # end the delegation
   approval, is refused to any command outside the foreground of a terminal,
   and your host runs your commands outside one. That is the whole of the
   check: it does not name you, and it does not know who is at a terminal.
-- **No interrupt.** The service refuses `task.interrupt` on every call,
-  because no adapter declares what it needs, so the client offers none.
-  Stop the worker instead.
+- **Interrupt only in tmux, and only for Claude Code.** The service serves
+  `task.interrupt` only for a worker hosted in tmux whose agent declares
+  `terminal_interrupt`. A worker on the pipe provider, or of an agent that
+  declares none (Codex and Cursor run on pipes), is refused; stop it
+  instead.

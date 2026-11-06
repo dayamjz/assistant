@@ -64,9 +64,6 @@ import (
 // table, as assistant tasks and --answer given --task, because a
 // subordinate reaches the program through this verb alone and needs both;
 // the service decides each the same way whichever spelling asks.
-// task.interrupt is not here: the service refuses it on every call,
-// because no adapter declares the capability it needs, so a subcommand
-// for it could only ever fail.
 const coordinatorVerbName = "coordinator"
 
 // coordinatorActions are the coordinator's subcommands. The list is the one
@@ -81,6 +78,7 @@ var coordinatorActions = []struct {
 	{"create", "", "Record a new task through intake; a task nothing blocks has its worker begun after the answer.", coordinatorCreate},
 	{"tasks", "[<task>]", "List fleet work with its resolved current state, or one task when it is named, as assistant tasks does.", coordinatorTasks},
 	{"message", "<task>", "Send the worker of a running task a message, recorded before it is written.", coordinatorMessage},
+	{"interrupt", "<task>", "Cut short the turn a task's worker is running and keep the worker, where its agent and terminal allow.", coordinatorInterrupt},
 	{"stop", "<task>", "End a task's worker, prove it ended, and hold the task for an answer.", coordinatorStop},
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
@@ -240,6 +238,21 @@ func coordinatorStop(ctx context.Context, in *invocation) (any, error) {
 	var stopped machine.TaskStopped
 	err = in.callService(ctx, ipc.MethodTaskStop, machine.TaskRequest{Task: task}, &stopped)
 	return stopped, err
+}
+
+// coordinatorInterrupt is task.interrupt: the turn the worker of the task's
+// latest attempt is running is ended and the worker kept, which the service
+// answers only once it read the turn ended and the worker alive, and
+// refuses, typed, where the worker's agent declares no interrupt or its
+// session provider has no terminal to type one into.
+func coordinatorInterrupt(ctx context.Context, in *invocation) (any, error) {
+	task, err := in.taskOperand(coordinatorCommand("interrupt"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var interrupted machine.TaskInterrupted
+	err = in.callService(ctx, ipc.MethodTaskInterrupt, machine.TaskRequest{Task: task}, &interrupted)
+	return interrupted, err
 }
 
 // coordinatorPeek is task.peek: the recent output of the worker of the
