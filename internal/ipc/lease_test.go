@@ -2,10 +2,13 @@ package ipc_test
 
 import (
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
-	"runtime"
+	"runtime/pprof"
 	"strings"
 	"testing"
 	"time"
@@ -210,61 +213,84 @@ func TestARestrictedStreamIsLeasedOnlyOnceAdmitted(t *testing.T) {
 	}
 }
 
-// beats counts this process's goroutines beating a leased stream, read from
-// their stacks as the runtime reports them.
-func beats() int {
-	buf := make([]byte, 1<<20)
-	for {
-		n := runtime.Stack(buf, true)
-		if n < len(buf) {
-			return strings.Count(string(buf[:n]), "internal/ipc.(*Client).beat(")
+// beatOwner is the goroutine label a test sets on itself so the beats it
+// counts are its own: a goroutine inherits its creator's labels, and
+// SubscribeTo starts a stream's beat from its caller's goroutine.
+const beatOwner = "beat-owner"
+
+// ownBeats labels the calling test's goroutine and returns a wait for the
+// count of live goroutines beating a leased stream under that label, read
+// from the runtime's goroutine profile, to be want. A beat another test left
+// exiting carries no such label and is never counted. The profile lists a
+// goroutine only once it has run, so a beat is not counted the moment
+// SubscribeTo returns; a test that waits for a stream's beat to be counted
+// before ending the stream knows its count of none is a beat gone, not one
+// not yet run.
+func ownBeats(t *testing.T) func(want int, what string) {
+	t.Helper()
+	pprof.SetGoroutineLabels(pprof.WithLabels(context.Background(), pprof.Labels(beatOwner, t.Name())))
+	label := fmt.Sprintf("%q:%q", beatOwner, t.Name())
+	count := func() int {
+		var profile bytes.Buffer
+		if err := pprof.Lookup("goroutine").WriteTo(&profile, 1); err != nil {
+			t.Fatalf("reading the goroutine profile: %v", err)
 		}
-		buf = make([]byte, 2*len(buf))
+		// The profile opens with a header line ahead of its first record.
+		_, records, _ := strings.Cut(profile.String(), "\n")
+		total := 0
+		for _, record := range strings.Split(records, "\n\n") {
+			if !strings.Contains(record, "internal/ipc.(*Client).beat+") || !strings.Contains(record, label) {
+				continue
+			}
+			var n int
+			if _, err := fmt.Sscanf(record, "%d @", &n); err != nil {
+				t.Fatalf("reading a goroutine count from %q: %v", record, err)
+			}
+			total += n
+		}
+		return total
+	}
+	return func(want int, what string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			got := count()
+			if got == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s has %d beating goroutines, want %d", what, got, want)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 	}
 }
 
-// A leased stream stops beating as it ends, not at its next beat: a client
-// that opens and closes streams under a long beat holds no beating goroutine
-// for any of them once each has closed, however many it opened, and neither
-// does a stream whose client queue stalled, which the client ends without
-// its consumer closing it. The control is a stream held open, which has
-// exactly one.
+// A leased stream stops beating as it ends, not at its next beat: under a
+// long beat, each of 21 streams one client opens and closes in turn holds
+// no beating goroutine once it has closed, and neither does a stream whose
+// client queue stalled, which the client ends without its consumer closing
+// it. The control is each stream while it is held, which has exactly one,
+// counted before it ends so that none after is a beat that ended.
 func TestAnEndedLeasedStreamStopsBeatingAtOnce(t *testing.T) {
+	beats := ownBeats(t)
 	long := ipc.Lease{Beat: 10 * time.Minute, Expiry: 30 * time.Minute}
 	h := serveOnSocket(t, func(sc *ipc.ServerConfig) {
 		sc.Leases = map[ipc.Method]ipc.Lease{ipc.MethodEventsSubscribe: long}
 	})
 	ctx, cancel := callCtx(t)
 	defer cancel()
-	before := beats()
-	settled := func(what string) {
-		t.Helper()
-		deadline := time.Now().Add(5 * time.Second)
-		for beats() != before {
-			if time.Now().After(deadline) {
-				t.Fatalf("%s left %d beating goroutines, want none", what, beats()-before)
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
 
 	c := h.dial(t, ipc.ClientConfig{})
-	held, err := c.Subscribe(ctx, nil)
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	if got := beats() - before; got != 1 {
-		t.Fatalf("a held leased stream has %d beating goroutines, want 1", got)
-	}
-	held.Close()
-	for range 20 {
+	for i := range 21 {
 		stream, err := c.Subscribe(ctx, nil)
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
+		beats(1, fmt.Sprintf("held leased stream %d", i+1))
 		stream.Close()
+		beats(0, fmt.Sprintf("closed leased stream %d", i+1))
 	}
-	settled("21 closed leased streams")
 
 	// A queue one event deep that nothing reads: the opening gap marker fills
 	// it, and the control event behind that ends it as stalled.
@@ -273,9 +299,7 @@ func TestAnEndedLeasedStreamStopsBeatingAtOnce(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer stalling.Close()
-	if got := beats() - before; got != 1 {
-		t.Fatalf("a held leased stream has %d beating goroutines, want 1", got)
-	}
+	beats(1, "a held leased stream with a one-event queue")
 	publish(t, h.events, control("stopping"))
-	settled("a leased stream whose client queue stalled")
+	beats(0, "a leased stream whose client queue stalled")
 }
