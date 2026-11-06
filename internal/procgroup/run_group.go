@@ -61,6 +61,26 @@ import (
 // before the reap. Run does not put ctx's error in place of any of these: the
 // caller reads ctx.Err() to tell an expiry from an answer.
 func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
+	return run(ctx, cmd, grace, true)
+}
+
+// RunInCallersGroup is Run for a program that joins this process's own
+// process group rather than leading one of its own, so whatever ends this
+// process's group ends the program with it, this process killed outright
+// among them, which a group Run started outlives. The SIGKILLs Run sends its
+// group go to the program alone, while it is unreaped, on the same terms and
+// within the same bounds. Nothing else differs from Run.
+//
+// What that costs: a descendant the program starts is reached by none of
+// this call's signals, only by an end of this process's group, so it fits a
+// program that starts none; and the program receives every signal this
+// process's group does, a terminal's interrupt included.
+func RunInCallersGroup(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
+	return run(ctx, cmd, grace, false)
+}
+
+// run is Run, and with lead false RunInCallersGroup.
+func run(ctx context.Context, cmd *exec.Cmd, grace time.Duration, lead bool) error {
 	if err := check(cmd, grace); err != nil {
 		return err
 	}
@@ -71,13 +91,18 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	if err != nil {
 		return err
 	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: lead}
 	if err := cmd.Start(); err != nil {
 		s.abandon()
 		return err
 	}
 	s.started()
 	pgid := cmd.Process.Pid
+	target := pgid
+	if lead {
+		target = -pgid
+	}
+	endGroup := func() { end(target) }
 	exited := make(chan error, 1)
 	go func() { exited <- AwaitExit(pgid) }()
 
@@ -87,14 +112,14 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 		// The leader has exited and is unreaped, or its exit could not be
 		// observed and it is unreaped all the same, since only cmd.Wait
 		// reaps it; either way the identifier still names this group.
-		endGroup(pgid)
+		endGroup()
 	case <-ctx.Done():
-		endGroup(pgid)
+		endGroup()
 		timer := time.NewTimer(grace)
 		select {
 		case observeErr = <-exited:
 			timer.Stop()
-			endGroup(pgid)
+			endGroup()
 		case <-timer.C:
 			// The reap goes through cmd.Process rather than cmd.Wait,
 			// which would write cmd.ProcessState after Run returned and
@@ -105,7 +130,7 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 			// to finish: no copier, no pipe end to close, no watchCtx.
 			go func() {
 				<-exited
-				endGroup(pgid)
+				endGroup()
 				_, _ = cmd.Process.Wait()
 			}()
 			_ = s.cut(grace)
@@ -124,9 +149,11 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	return waitErr
 }
 
-// endGroup sends SIGKILL to the process group pgid. Its result is not read:
-// a group whose members have all exited answers ESRCH, which is the outcome
-// wanted, and the caller only reaches here while the leader is unreaped.
-func endGroup(pgid int) {
-	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+// end sends SIGKILL to target, a process group as the negated identifier
+// of its leader or a process as its own. Its result is not read: a group
+// whose members have all exited, and a process that has, answer ESRCH, which
+// is the outcome wanted, and the caller only reaches here while the leader
+// is unreaped.
+func end(target int) {
+	_ = syscall.Kill(target, syscall.SIGKILL)
 }

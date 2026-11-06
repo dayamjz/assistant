@@ -193,6 +193,17 @@
 // hostInputWait, is read as no signal and blocked again; the bounds are
 // chosen, not measured against a host.
 //
+// # The host wake is the service's
+//
+// hostHooks also holds "assistant host wake", PRD section 6's host wake,
+// which nothing types and the host does not run: the service runs it as the
+// notify command, once per queued wake, from the line the installer prints
+// when it runs inside the coordinator's tmux pane. It is under this verb for
+// the installer's reason, so the line and the command it names cannot
+// disagree. The installer prints that line and never writes it, because
+// notify.command lives in the operator's own configuration file. hostwake.go
+// owns what the wake checks before it types, what it types, and its gaps.
+//
 // # The coordinator's client is the third, by decision
 //
 // coordinatorActions in coordinator.go holds "assistant coordinator" and its

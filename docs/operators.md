@@ -1049,6 +1049,77 @@ What is sent, and what is not:
   stops offering wakes, and tries again about every 5 seconds.
 - With no command named, nothing runs and nothing is recorded.
 
+## Waking the coordinator's host in a tmux pane
+
+`listen` and `await` reach a coordinator only while it holds one. When the
+coordinator's host runs in a tmux pane, the service can also type a notice
+into that pane for every wake, so a wait the coordinator forgot to arm, or a
+`listen` that died, does not leave the fleet silent. This is the host wake,
+the fifth layer of the PRD's "Keeping supervision alive".
+
+Start the coordinator's host in its pane, then have the host run the
+installer through its own shell tool (in Claude Code, typing
+`!assistant host install` at its prompt does the same):
+
+```sh
+assistant host install
+```
+
+It offers the line only when it runs below the pane's first process, so
+`TMUX_PANE` inherited by a program started elsewhere names no pane, and only
+when it is not itself the pane's foreground program. Typed at the pane's shell,
+it is, so tmux would name the installer rather than the host
+as the pane's program and every wake would be refused; it offers nothing and
+says so. It records whatever leads the foreground while it runs: run by a
+wrapper of its own, such as a script or `sh -c`, it records the wrapper, and run
+in the background of the pane's shell, it records that shell.
+
+Besides the stop guard's line, it prints a configuration key,
+`notify.command`, and a command line naming `assistant host wake` with the
+tmux binary, the server's socket, process and start time, the pane, and the
+program the pane runs. Put that line in your `config.yaml`:
+
+```yaml
+notify:
+  command: /path/to/assistant host wake --tmux /path/to/tmux --socket /path/to/socket --pane %3 --server-pid 4242 --server-start 1793900000 --program claude
+```
+
+Then `assistant service restart`. The installer never writes this itself:
+the file is yours, and the line replaces any command `notify.command`
+already names. To keep a private channel as well, chain both in one shell
+line, remembering that the wake's JSON line arrives on standard input once.
+
+What it does, and what it does not:
+
+- It runs as the notify command above, so everything that section says
+  holds: once per wake, recorded `sent` or `failed`, never retried, and only
+  for a wake still waiting.
+- The notice is the line `listen` prints for a queued wake: drain with
+  `assistant --json coordinator wakes`, act, acknowledge. It is typed as a
+  paste followed by Enter. It hands out and acknowledges nothing.
+- Before every notice it reads the pane again and types only when the tmux
+  server on the socket has the process identifier and the start time the
+  installer read, so a later tmux server that happens to get the same
+  identifier is refused (unless it started within the same second), and the
+  pane's foreground program has the name the installer read. Right before it
+  pastes, the same tmux command checks that the pane is not in copy mode (or
+  any other tmux mode, which would take the Enter), that its window does not
+  have `synchronize-panes` on (the Enter would reach every pane), and that its
+  input is not disabled with `select-pane -d` (the paste would reach nothing).
+  Otherwise it types nothing and the notification is recorded `failed` with
+  the reason; a wake refused this way is not typed again, so leave copy mode
+  promptly in the coordinator's pane.
+  When the service ends the command, at its bound or as it stops, the tmux
+  commands it started end with it. After
+  tmux restarts, or to move the coordinator to another pane, run the
+  installer there again and replace the line.
+- It does not read the screen: text someone left in the pane's input is
+  submitted with the notice, and a notice typed while the host is busy is
+  handled however that host handles input typed while busy.
+- One notice per wake: a burst of wakes types several.
+- A host outside a tmux pane gets no host wake. The PRD's host wake table
+  says what each host has instead.
+
 ### Delegating a domain
 
 A coordinator can hand a named set of tasks to a coordinator of its own,

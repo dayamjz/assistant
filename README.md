@@ -330,6 +330,7 @@ A **hold** is a stage or task waiting for a person's decision; a **parked run** 
 | Capability | Status |
 | --- | --- |
 | Local isolated task workers and supervision | **Available** |
+| Waking a coordinator whose host runs in a tmux pane, without `listen` or `await` | **Available** through `notify.command` and `assistant host wake`; hosts outside tmux are not woken by the service ([operator guide](docs/operators.md#waking-the-coordinators-host-in-a-tmux-pane)). |
 | Hierarchical coordinator domains and escalations | **Available** |
 | Role-specific agent, provider, model, effort, and fallback | **Available** (adapter/model constraints apply) |
 | Nine-stage validation and GitHub/GitLab delivery | **Available** |

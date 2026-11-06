@@ -1,6 +1,9 @@
 package agents
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 // ErrLineageUnreadable is ReadLineage's answer on a platform none of the
 // lineage files builds for: no parent or process group is read there.
@@ -61,4 +64,48 @@ func (l Lineage) Foreground() bool {
 // the process at one instant.
 func ReadLineage(pid int) (Lineage, bool, error) {
 	return lineage(pid)
+}
+
+// maxDescent bounds DescendsFrom's walk, so a chain that does not end, which
+// no operating system this reads produces, is an error rather than a loop.
+const maxDescent = 1024
+
+// DescendsFrom reports whether the process pid names descends from the one
+// ancestor names, walking parents through ReadLineage from pid itself: true
+// once a parent read is ancestor, false at a process the platform reports
+// with no parent, or whose parent is itself. A process the walk was led to
+// that is not running, a parent read as started after its child, which is
+// not the process that created the child (Lineage's order), and a walk past
+// maxDescent are errors, never false, so a caller refusing on false refuses
+// on them too. A process the kernel reparented, because a process between
+// it and ancestor exited, does not descend from ancestor any longer, and the
+// chain is read one process at a time, not as one snapshot.
+func DescendsFrom(pid, ancestor int) (bool, error) {
+	child, found, err := ReadLineage(pid)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, fmt.Errorf("agents: no running process has identifier %d", pid)
+	}
+	for range maxDescent {
+		if child.Parent <= 0 || child.Parent == child.PID {
+			return false, nil
+		}
+		if child.Parent == ancestor {
+			return true, nil
+		}
+		parent, found, err := ReadLineage(child.Parent)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, fmt.Errorf("agents: process %d's parent %d is not running", child.PID, child.Parent)
+		}
+		if parent.Start > child.Start {
+			return false, fmt.Errorf("agents: process %d's parent %d started after it, so the identifier names another process now", child.PID, child.Parent)
+		}
+		child = parent
+	}
+	return false, fmt.Errorf("agents: process %d's ancestry is longer than %d processes", pid, maxDescent)
 }

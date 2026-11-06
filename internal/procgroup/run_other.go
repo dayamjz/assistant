@@ -37,3 +37,10 @@ func Run(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
 	defer stop()
 	return errors.Join(cmd.Wait(), s.finish(grace))
 }
+
+// RunInCallersGroup is Run on a platform where this package starts no
+// process group: the program is in this process's group already, as far as
+// the platform has one, and is ended as Run ends it.
+func RunInCallersGroup(ctx context.Context, cmd *exec.Cmd, grace time.Duration) error {
+	return Run(ctx, cmd, grace)
+}
