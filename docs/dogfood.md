@@ -86,6 +86,20 @@ git push mirror main:main
 The mirror needs the default branch before a run reaches the pull request stage,
 because that is the base the gate opens against.
 
+**Push `main` to the mirror again before each run, or the diffs grow.** The gate
+rebases a pushed branch onto the recorded upstream's default branch and reviews
+the result, so the change it reads is the difference from the **mirror's**
+`main`, not from this repository's. Once this repository's `main` has moved on,
+a branch containing those landings carries them into the diff the gate reviews:
+the rebase hits conflicts that are not the branch's, the review reads a change
+far larger than the pull request, and the scope lens, if you supply an intent,
+reports every landed file as something the intent does not account for. Keeping
+the mirror current is one command:
+
+```sh
+git fetch origin main && git push mirror origin/main:main
+```
+
 **Decide about the mirror's Actions before the first run, and decide it with
 the checks stage in mind.** The workflows come with the clone, and `ci.yml` and
 `repeat.yml` both trigger on every pull request, so a pull request the gate
@@ -190,9 +204,12 @@ of its own keys. A run pins the configuration it resolved at its start, so a
 key added under a running service reaches neither that service nor any run it
 has already begun.
 
-Logs, all under the home: `logs/service.log` is the bounded lifecycle log,
-`logs/managed-service.log` is what the service manager captures, and
-`logs/<run>/<stage>.log` is each stage's output.
+Logs, all under the home: `logs/service.log` is the bounded lifecycle log and
+`logs/<run>/<stage>.log` is each stage's output. `logs/managed-service.log` is
+launchd's only: the definition's output file is written for launchd, and the
+systemd unit leaves standard output and error to the user's journal, so on Linux
+that file does not exist and the output is in
+`journalctl --user -u assistant-<digest>.service`.
 
 ## 7. Send a branch through
 
