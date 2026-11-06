@@ -17,6 +17,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // startHeldBinary starts this binary as a process that runs until something
@@ -389,4 +390,277 @@ func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
 	if !errors.As(err, &unsettled) || table.readings != settleReadings {
 		t.Fatalf("a listing whose refused process numbers are recorded for an ended process of this binary = %v after %d reading(s); want all %d unsettled", err, table.readings, settleReadings)
 	}
+}
+
+// insideLoop is the shell startInside runs: outsideLoop's loop, run by the
+// shell itself rather than in its background.
+const insideLoop = `stop=$1; shift; end=$(( $(date +%s) + 120 ))
+while [ ! -e "$stop" ] && [ "$(date +%s)" -lt "$end" ]; do "$@" & wait $!; done`
+
+// startInside starts, as a child of this process, a shell that runs command
+// again each time it ends, as startOutside's does, and returns its number:
+// what it runs is a grandchild of this process. It is in a process group of
+// its own, which the cleanup kills whole after leaving the stop file.
+func startInside(t *testing.T, command ...string) int {
+	t.Helper()
+	stop := filepath.Join(t.TempDir(), "stop")
+	shell := exec.Command("/bin/sh", append([]string{"-c", insideLoop, "sh", stop}, command...)...)
+	shell.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := shell.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.WriteFile(stop, nil, 0o600)
+		_ = syscall.Kill(-shell.Process.Pid, syscall.SIGKILL)
+		_ = shell.Wait()
+	})
+	return shell.Process.Pid
+}
+
+// copyOfBinary writes a copy of this binary named name in a directory of
+// the test's, and returns its path.
+func copyOfBinary(t *testing.T, name string) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), name)
+	if err := procgroup.WriteProgram(copied, content, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return copied
+}
+
+// startHeld starts the binary at path as a process that runs until
+// something ends it (tmuxPaneArg), and ends it with the test.
+func startHeld(t *testing.T, path string) *exec.Cmd {
+	t.Helper()
+	held, err := StartCopied(func() (*exec.Cmd, error) {
+		cmd := exec.Command(path, "-test.run=^$", tmuxPaneArg)
+		return cmd, cmd.Start()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Process.Kill(); _ = held.Wait() })
+	return held
+}
+
+// predictedName is recordedName of path, failing the test where it
+// predicts none.
+func predictedName(t *testing.T, path string) string {
+	t.Helper()
+	name, ok := recordedName(path)
+	if !ok {
+		t.Fatalf("no recorded name is predicted for %s", path)
+	}
+	return name
+}
+
+// everyReadingUnsettled fails the test unless err is the unsettledError of
+// a listing whose every reading was unsettled.
+func everyReadingUnsettled(t *testing.T, what string, err error, readings int) {
+	t.Helper()
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || readings != settleReadings {
+		t.Fatalf("%s = %v after %d reading(s); want all %d unsettled", what, err, readings, settleReadings)
+	}
+}
+
+// A process of the binary outside this tree whose exit is unread unsettles
+// the reading (P15, #722): its record names it by the binary's name, so it
+// is a candidate whatever its parents are, and what it started may be the
+// binary's. Here a shell outside this tree runs this binary again each time
+// it ends, and the table ends it in every reading once the kernel has
+// recorded it under the binary's name and before the listing identifies it.
+// Without the name clause of the rule the listing settles on its first
+// reading. The control is that every reading ended one.
+func TestAnUnreadExitOfABinaryProcessOutsideTheTreeUnsettles(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := startOutside(t, []string{"STANDIN_TEST_HOLD_OPEN=1"}, self)
+	table := &endsOutsideEachReading{parent: shell, name: predictedName(t, self)}
+	_, err = processesOfBinary(table, self)
+	if table.ended != table.readings {
+		t.Fatalf("%d of %d readings ended a process of the binary outside this tree, so this shows nothing", table.ended, table.readings)
+	}
+	everyReadingUnsettled(t, "a listing while a process of the binary outside this tree exits unread in each reading", err, table.readings)
+}
+
+// A descendant of this process that has not exec'd the binary yet, and
+// whose exit is unread, unsettles the reading (P15, #735 r1 finding 1): its
+// record names another program, but its recorded parents reach this
+// process, so it is a candidate, and it may have started the binary as
+// finding 1's env did. Here this process's child shell runs one sleep after
+// another, and the table ends one in every reading before the listing
+// identifies it. The listing is of a copy of this binary, which this
+// process does not run, so only the this-process clause of the rule makes
+// the sleep a candidate; without it the listing settles on its first
+// reading. The control is that every reading ended one.
+func TestAnUnreadExitOfADescendantOfThisProcessUnsettles(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	copied := copyOfBinary(t, "descendant.test")
+	table := &endsOutsideEachReading{parent: startInside(t, "/bin/sleep", "60"), name: "sleep"}
+	_, err := processesOfBinary(table, copied)
+	if table.ended != table.readings {
+		t.Fatalf("%d of %d readings ended a descendant of this process, so this shows nothing", table.ended, table.readings)
+	}
+	everyReadingUnsettled(t, "a listing while a descendant of this process exits unread in each reading", err, table.readings)
+}
+
+// A failed read of a running process that is no candidate still unsettles
+// the reading (P15, #735 r1 finding 2): the record judges only exits, never
+// a read that fails while the process runs. Here a sleep outside this tree,
+// which the reading's records judge no candidate, has every read of its
+// record fail with EIO (failsMidExec), and the listing fails naming it and
+// the EIO in each of its readings. The control is that the sleep runs
+// throughout.
+func TestAFailedReadOfAProcessThatIsNoCandidateUnsettles(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := startOutside(t, nil, "/bin/sleep", "60")
+	var sleeper agents.Identity
+	deadline := time.Now().Add(10 * time.Second)
+	for sleeper.PID == 0 {
+		_, records, err := readTable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for pid, record := range records {
+			if record.parent == shell && record.name == "sleep" {
+				if newCandidates(self).could(records, pid) {
+					t.Fatalf("the sleep %d outside this tree is judged a candidate, so this shows nothing", pid)
+				}
+				sleeper = record.Identity
+			}
+		}
+		if sleeper.PID == 0 && !time.Now().Before(deadline) {
+			t.Fatal("the shell outside this tree started no sleep")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	_, err = processesWhere(&failsMidExec{pid: sleeper.PID, always: true}, ofBinary(self), newCandidates(self))
+	var unsettled *unsettledError
+	if !errors.As(err, &unsettled) || unsettled.PID != sleeper.PID || unsettled.Readings != settleReadings || !errors.Is(err, syscall.EIO) {
+		t.Fatalf("a listing beside the unreadable sleep %d = %v; want every reading unsettled naming it and its EIO", sleeper.PID, err)
+	}
+	if presence, err := sleeper.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the sleep %v was not running once the listing returned (%v, %v)", sleeper, presence, err)
+	}
+}
+
+// A process that is no candidate by the table's record, but that the
+// listing then read as running the binary, unsettles the reading when it
+// exits before it was read whole (P15, #722): the record was read before it
+// exec'd the binary, and the read after says what it is now. Here a shell
+// outside this tree runs this binary again each time it ends; the table
+// records each under the shell's own name, which a record read before the
+// exec carries, and ends it once the listing has read its command line
+// once. Without the clause that keeps that exit unsettling the listing
+// settles on its first reading. The control is that every reading ended
+// one.
+func TestAnExitAfterAReadAsTheBinaryUnsettlesWhateverTheRecord(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell := startOutside(t, []string{"STANDIN_TEST_HOLD_OPEN=1"}, self)
+	record, found, err := readRecord(shell)
+	if err != nil || !found {
+		t.Fatalf("reading the outside shell's record: %v, %v", found, err)
+	}
+	table := &endsOutsideEachReading{parent: shell, name: predictedName(t, self), renamed: record.name, atRead: true}
+	_, err = processesOfBinary(table, self)
+	if table.ended != table.readings {
+		t.Fatalf("%d of %d readings ended a process read as the binary, so this shows nothing", table.ended, table.readings)
+	}
+	everyReadingUnsettled(t, "a listing while a process read as the binary exits before it is read whole", err, table.readings)
+}
+
+// The name a copy of this binary is recorded under is the one recordedName
+// predicts (P15, #722), run by a path whose name is longer than the table
+// records and through a symbolic link of another name: a listing of either
+// path lists the held process, keeps its candidates on, which it would turn
+// off had the fresh record of the process it accepted carried another name,
+// and the record the table holds is the predicted name.
+func TestTheRecordedNameIsPredictedForALongNameAndALink(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	long := copyOfBinary(t, "a-binary-named-past-the-table-limit.test")
+	link := filepath.Join(t.TempDir(), "link.test")
+	if err := os.Symlink(long, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{long, link} {
+		held := startHeld(t, path)
+		judge := newCandidates(path)
+		if judge == nil {
+			t.Fatalf("no candidates for %s", path)
+		}
+		listed, err := processesWhere(kernel{}, ofBinary(path), judge)
+		if err != nil || !slices.ContainsFunc(listed, func(p Process) bool { return p.PID == held.Process.Pid }) {
+			t.Fatalf("a listing of %s = %v, %v; want the held process %d", path, listed, err, held.Process.Pid)
+		}
+		record, found, err := readRecord(held.Process.Pid)
+		if err != nil || !found || record.name != judge.name || judge.off {
+			t.Errorf("run by %s, the process is recorded as %q (%v, %v), predicted %q; candidates off: %v", path, record.name, found, err, judge.name, judge.off)
+		}
+	}
+}
+
+// A listing whose predicted name this process's own record contradicts
+// judges every exit as a record-less listing does (P15, #722): with the
+// prediction made wrong, outside churn a listing otherwise settles beside
+// (TestAListingOfABinarySettlesWhileProcessesOutsideItsTreeExitUnread)
+// keeps every reading unsettled.
+// Nothing runs the binary but this process, so only the check of this
+// process's record turns the candidates off; without it the listing
+// settles. The control is that every reading ended an outside process.
+func TestAWrongPredictionOfThisProcessesNameTurnsTheRecordsOff(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60")}
+	judge := newCandidates(self)
+	judge.name = "not-" + judge.name
+	_, err = processesWhere(table, ofBinary(self), judge)
+	if table.ended != table.readings {
+		t.Fatalf("%d of %d readings ended a process outside this tree, so this shows nothing", table.ended, table.readings)
+	}
+	everyReadingUnsettled(t, "a listing whose prediction this process's record contradicts", err, table.readings)
+}
+
+// A listing whose predicted name the fresh record of a process it accepted
+// contradicts judges every exit as a record-less listing does (P15, #722):
+// the listing is of a copy of this binary, which this process does not
+// run, with one held process of the copy and the prediction made wrong, so
+// only the check of the accepted process's record turns the candidates off,
+// and the outside churn then keeps every reading unsettled; without it the
+// listing settles. The control is that every reading ended an outside
+// process.
+func TestAWrongPredictionOfAnAcceptedProcessesNameTurnsTheRecordsOff(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	copied := copyOfBinary(t, "accepted.test")
+	startHeld(t, copied)
+	table := &endsOutsideEachReading{parent: startOutside(t, nil, "/bin/sleep", "60")}
+	judge := newCandidates(copied)
+	judge.name = "not-" + judge.name
+	_, err := processesWhere(table, ofBinary(copied), judge)
+	if table.ended != table.readings {
+		t.Fatalf("%d of %d readings ended a process outside this tree, so this shows nothing", table.ended, table.readings)
+	}
+	everyReadingUnsettled(t, "a listing whose prediction an accepted process's record contradicts", err, table.readings)
 }

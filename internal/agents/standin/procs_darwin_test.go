@@ -155,7 +155,7 @@ func TestAListingReadsAgainAProcessWhoseReadFailedOnce(t *testing.T) {
 	shell, token := startHeldShell(t)
 	table := &failsMidExec{pid: shell.Process.Pid}
 
-	listed, err := processesWhere(table, carriesArg(token))
+	listed, err := processesWhere(table, carriesArg(token), nil)
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestAListingFailsWhenThisUsersRunningProcessCannotBeRead(t *testing.T) {
 	shell, token := startHeldShell(t)
 	table := newChurns(t, &failsMidExec{pid: shell.Process.Pid, always: true})
 
-	listed, err := processesWhere(table, carriesArg(token))
+	listed, err := processesWhere(table, carriesArg(token), nil)
 	if err == nil {
 		t.Fatalf("the listing is %v and no error, though no read of the running shell %d succeeded", listed, shell.Process.Pid)
 	}

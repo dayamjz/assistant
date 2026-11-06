@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"golang.org/x/sys/unix"
@@ -35,6 +36,17 @@ func readTable() ([]int, map[int]tableRecord, error) {
 		records[pid] = recordOf(&procs[i])
 	}
 	return pids, records, nil
+}
+
+// readRecord is pid's record as a kern.proc.pid read finds it now, an exited
+// process nobody has reaped among them; found is false when the table holds
+// no entry for pid.
+func readRecord(pid int) (tableRecord, bool, error) {
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.pid", pid)
+	if err != nil || len(procs) == 0 {
+		return tableRecord{}, false, err
+	}
+	return recordOf(&procs[0]), true, nil
 }
 
 // recordOf is the record a process table entry holds: its identity
@@ -142,4 +154,28 @@ func stoppedProcess(pid int) (bool, error) {
 		return false, err
 	}
 	return k.Proc.P_stat == sstop, nil
+}
+
+// commandNameLimit is MAXCOMLEN from the platform's sys/param.h, the most
+// bytes of a command name the process table records. It is spelled here
+// because x/sys does not export it.
+const commandNameLimit = 16
+
+// recordedName is the command name this platform's process table is
+// predicted to record for a process running the file at binary: the base
+// name of the file binary resolves to, cut to commandNameLimit bytes, which
+// is what the table recorded for a copy of a test binary run by a long name
+// and through a symbolic link on the machine this was written on. A listing
+// does not take the prediction on its word (candidates). ok is false when
+// binary cannot be resolved.
+func recordedName(binary string) (name string, ok bool) {
+	resolved, err := filepath.EvalSymlinks(binary)
+	if err != nil {
+		return "", false
+	}
+	name = filepath.Base(resolved)
+	if len(name) > commandNameLimit {
+		name = name[:commandNameLimit]
+	}
+	return name, true
 }
