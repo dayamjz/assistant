@@ -116,7 +116,7 @@ func ReadPane(ctx context.Context, p Pane) (PaneFacts, error) {
 	cmd := procgroup.Command(p.Tmux, "-S", p.Socket, "display-message", "-p", "-t", p.ID, paneFormat)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := tmuxOutputBy(ctx, procgroup.RunInCallersGroup, tmuxReadBound, "the client reading the pane", cmd)
+	out, err := tmuxOutputBy(ctx, inCallersGroup, tmuxReadBound, "the client reading the pane", cmd)
 	if err != nil {
 		return PaneFacts{}, fmt.Errorf("reading pane %s: %w: %s", p.ID, err, strings.TrimSpace(stderr.String()))
 	}
@@ -225,11 +225,11 @@ func TypeIntoPane(ctx context.Context, p Pane, text string) error {
 	cmd.Stdin = strings.NewReader(text)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := tmuxOutputBy(ctx, procgroup.RunInCallersGroup, tmuxTypeBound, "the client typing into the pane", cmd)
+	out, err := tmuxOutputBy(ctx, inCallersGroup, tmuxTypeBound, "the client typing into the pane", cmd)
 	if err != nil {
 		// The buffer may be loaded and never pasted. A paste that ran
 		// already deleted it, and then this client's failure says nothing.
-		_ = runTmuxBy(context.WithoutCancel(ctx), procgroup.RunInCallersGroup, tmuxEndBound, "the client deleting the notice's buffer",
+		_ = runTmuxBy(context.WithoutCancel(ctx), inCallersGroup, tmuxEndBound, "the client deleting the notice's buffer",
 			procgroup.Command(p.Tmux, "-S", p.Socket, "delete-buffer", "-b", buffer))
 		return fmt.Errorf("typing into pane %s: %w: %s", p.ID, err, strings.TrimSpace(stderr.String()))
 	}
