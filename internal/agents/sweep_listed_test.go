@@ -123,9 +123,13 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 	// users without changing its identity, by a setuid exec or a privilege
 	// drop (#779); either reads as blocking, which would be a verdict about
 	// what the process did and not about the rule. The checks are therefore
-	// judged only when the same process, by start time, stood before and
-	// after them with the same user identifiers, and a host whose candidates
-	// keep ending or changing is a skip rather than a pass.
+	// judged only on a snapshot that still holds what the selection decided,
+	// a process sharing no user with this test, and only when the same
+	// process, by start time, stood before and after them with that
+	// snapshot's user identifiers; a host whose candidates keep ending or
+	// changing is a skip rather than a pass. The snapshot is judged itself
+	// because a process can change its users between the selection and the
+	// snapshot, which a comparison of two later readings cannot see.
 	for attempt := 0; attempt < 5; attempt++ {
 		foreign := foreignProcess(t)
 		before, present, err := agents.Identify(foreign)
@@ -133,7 +137,7 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 			continue
 		}
 		usersBefore, present, err := agents.ProcUids(foreign)
-		if err != nil || !present {
+		if err != nil || !present || agents.ClassifyUsers(before, usersBefore, syscall.EPERM) {
 			continue
 		}
 		var failure string
