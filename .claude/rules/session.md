@@ -34,6 +34,12 @@ paths: ["internal/session/**"]
   worker's but in a directory of the home's rather than a proven copy; a
   subordinate's `Reference` names its domain under a prefix of its own.
 
+- A restart's answer is `Host.Release` and `Host.Readopt` (`ErrNotDurable`
+  on `Pipe`): a tmux worker's reference names its server's socket
+  (`Reference.Terminal`, format `terminal2`), and `Readopt` holds nothing
+  `agents.AdoptTerminalWorker` has not verified, so Live is still answered
+  only through a handle.
+
 Read `doc.go` before changing any of that (its tmux section owns the
 placement and containment answers), for the restart answer, and for the
 residual gaps.

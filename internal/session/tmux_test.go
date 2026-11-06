@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -321,4 +323,170 @@ func TestTmuxStartsAClaudeCodeWorkerWithItsRoute(t *testing.T) {
 		return
 	}
 	t.Fatal("no interactive worker was recorded")
+}
+
+// A released tmux worker goes on running and is held again by a provider
+// that never held it, which is what lets a terminal-hosted worker outlive
+// the service that started it without outliving every owner (P15): Release lets the handle go without ending anything, the reference the
+// attempt records names the server's socket, and Readopt verifies the pane
+// against the server on that socket before it holds it, after which it
+// probes Live, captures and takes a send as Create's session does, and
+// Close ends it. Readopt holds nothing it cannot verify: a reference naming
+// this worker's process under another worker's socket is refused with
+// ErrTerminalUnverified, which is the guard's positive control, and one
+// naming no socket is not tried. A pipe's session can be neither.
+func TestTmuxReleasesAWorkerAndAnotherProviderHoldsItAgain(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	released := createIn(t, p, sub.spec("begin"))
+	other := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, released, "worker ready")
+	ref := released.Reference()
+	if ref.Terminal == "" || !strings.HasPrefix(ref.String(), "terminal2:") {
+		t.Fatalf("the tmux worker's reference is %s, want one naming its terminal", ref)
+	}
+	socket := sub.home.TerminalSocket(ref.Terminal)
+	t.Cleanup(func() { _ = exec.Command(standin.Tmux(t), "-S", socket, "kill-server").Run() })
+
+	if err := p.Release(released); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if err := p.Release(released); !errors.Is(err, session.ErrNotHeld) {
+		t.Fatalf("a second Release answered %v, want ErrNotHeld", err)
+	}
+	expect(t, p.Probe(context.Background(), ref.String()), session.ReasonUnheld)
+	if _, ok := p.Workers().Member(ref.PID); ok {
+		t.Fatal("a released worker is still a member of the provider's worker set")
+	}
+
+	again, _ := tmuxProvider(t, sub.home, workerScript())
+	forged := ref
+	forged.Terminal = other.Reference().Terminal
+	if _, err := again.Readopt(context.Background(), forged.String()); !errors.Is(err, agents.ErrTerminalUnverified) {
+		t.Fatalf("Readopt of the worker under another worker's socket answered %v, want ErrTerminalUnverified", err)
+	}
+	unnamed := ref
+	unnamed.Terminal = ""
+	if _, err := again.Readopt(context.Background(), unnamed.String()); !errors.Is(err, session.ErrNotReadoptable) {
+		t.Fatalf("Readopt of a reference naming no terminal answered %v, want ErrNotReadoptable", err)
+	}
+	held, err := again.Readopt(context.Background(), ref.String())
+	if err != nil {
+		t.Fatalf("Readopt: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Close(held) })
+	if held.Reference() != ref {
+		t.Fatalf("the worker is held again as %s, want %s", held.Reference(), ref)
+	}
+	expect(t, again.Probe(context.Background(), ref.String()), session.ReasonHeld)
+	if m, ok := again.Workers().Member(ref.PID); !ok || m.Host == (agents.Identity{}) {
+		t.Fatalf("the worker set answers %+v, %v for the worker held again, want a membership naming its server", m, ok)
+	}
+	if err := again.Send(context.Background(), held, "status?"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitCapture(t, again, held, "still working on it")
+	if err := again.Close(held); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	waitProbe(t, again, ref.String(), session.ReasonAbsent)
+
+	pipe, _ := provider(t, sub.home, workerScript())
+	piped := create(t, pipe, sub.spec("begin"))
+	if err := pipe.Release(piped); !errors.Is(err, session.ErrNotDurable) {
+		t.Fatalf("Release of a pipe's session answered %v, want ErrNotDurable", err)
+	}
+	expect(t, pipe.Probe(context.Background(), piped.Reference().String()), session.ReasonHeld)
+	if _, err := pipe.Readopt(context.Background(), ref.String()); !errors.Is(err, session.ErrNotDurable) {
+		t.Fatalf("Readopt on a pipe answered %v, want ErrNotDurable", err)
+	}
+}
+
+// A worker whose end has begun is not let go alive: once a person has killed
+// its window and the handle has read it gone, Release is refused with
+// agents.ErrWorkerEnding and the session stays held, answering through its
+// handle as an ended worker's does, rather than being forgotten as released.
+func TestTmuxReleaseOfAWorkerAlreadyEndingIsRefusedAndKeepsTheSession(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	s := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, s, "worker ready")
+	attach, err := p.AttachReference(s.Reference().String())
+	if err != nil {
+		t.Fatalf("AttachReference: %v", err)
+	}
+	tmuxRun(t, socketOf(t, attach), "kill-window", "-t", "worker")
+	waitProbe(t, p, s.Reference().String(), session.ReasonExited)
+	if err := p.Release(s); !errors.Is(err, agents.ErrWorkerEnding) {
+		t.Fatalf("Release of a worker whose end has begun answered %v, want ErrWorkerEnding", err)
+	}
+	expect(t, p.Probe(context.Background(), s.Reference().String()), session.ReasonExited)
+}
+
+// Review r1 of #782, finding 1: concurrent Readopt calls of one released
+// reference hold it once. Every call returns the same session, so none of
+// them returns a session the provider no longer holds, and no second handle
+// is left watching the worker.
+func TestConcurrentReadoptsOfOneReferenceHoldOneSession(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	s := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, s, "worker ready")
+	ref := s.Reference().String()
+	t.Cleanup(func() {
+		_ = exec.Command(standin.Tmux(t), "-S", sub.home.TerminalSocket(s.Reference().Terminal), "kill-server").Run()
+	})
+	if err := p.Release(s); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	again, _ := tmuxProvider(t, sub.home, workerScript())
+	const callers = 8
+	got := make([]*session.Session, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i], errs[i] = again.Readopt(context.Background(), ref)
+		}()
+	}
+	wg.Wait()
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("Readopt %d: %v", i, errs[i])
+		}
+		if got[i] != got[0] {
+			t.Fatalf("Readopt %d returned another session than Readopt 0, so one of them is no longer held", i)
+		}
+	}
+	t.Cleanup(func() { _ = again.Close(got[0]) })
+	if err := again.Send(context.Background(), got[0], "status?"); err != nil {
+		t.Fatalf("Send through the one session held again: %v", err)
+	}
+}
+
+// Review r1 of #782, finding 2: once Release returns, the worker's group and
+// its server place as nobody's, read at once with one processor runnable,
+// so no peer is placed as the worker of a session the provider let go.
+func TestReleaseTakesTheWorkerOutOfTheSetBeforeItReturns(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	s := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, s, "worker ready")
+	pid := s.Reference().PID
+	t.Cleanup(func() {
+		_ = exec.Command(standin.Tmux(t), "-S", sub.home.TerminalSocket(s.Reference().Terminal), "kill-server").Run()
+	})
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	if err := p.Release(s); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if m, ok := p.Workers().Member(pid); ok {
+		t.Fatalf("Member(%d) answers %+v once Release has returned, want no member", pid, m)
+	}
+	if m, ok := p.Workers().Hosted(s.Host()); ok {
+		t.Fatalf("Hosted(%v) answers %+v once Release has returned, want no member", s.Host(), m)
+	}
 }
