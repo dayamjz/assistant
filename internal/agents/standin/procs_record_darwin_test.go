@@ -3,10 +3,8 @@
 package standin
 
 import (
-	"errors"
 	"os"
 	"os/exec"
-	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -63,9 +61,9 @@ func endedBinaryRecord(t *testing.T) tableRecord {
 }
 
 // recordedAt is a processTable that passes every read through to the
-// kernel, except that each reading's records hold staging at its own number
-// in place of what the kernel recorded there, and the table names that
-// number when the kernel did not.
+// kernel, and names one number alone, staging.PID, with the kernel's
+// records, except that the first reading's record at that number is
+// staging, in place of what the kernel recorded there.
 type recordedAt struct {
 	kernel
 	staging  tableRecord
@@ -74,30 +72,30 @@ type recordedAt struct {
 
 func (r *recordedAt) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
-	pids, records, err := r.kernel.ids()
+	_, records, err := r.kernel.ids()
 	if err != nil {
 		return nil, nil, err
 	}
-	if !slices.Contains(pids, r.staging.PID) {
-		pids = append(pids, r.staging.PID)
+	if r.readings == 1 {
+		records[r.staging.PID] = r.staging
 	}
-	records[r.staging.PID] = r.staging
-	return pids, records, nil
+	return []int{r.staging.PID}, records, nil
 }
 
 // A process the table recorded at a number, and that exited during the
 // reading while another was given its number, is seen to exit (P15, #722):
-// a reading whose record of a process of this binary is not the process
-// Identify then reads at that number is unsettled, since the recorded one
-// exited unread and may have started another. Here the table holds, at a
-// live sleep's number, a record of a process of this binary that has ended;
-// both are real records, read by readTable from the kernel, and only their
-// pairing at one number is staged, which is the shape a number given to
-// another process between the table's read and Identify's makes. Every
-// reading meets it. Before, Identify's reading of the sleep was taken as
-// the process the table named, the sleep was read whole and refused, and
-// the listing settled. The control is that the sleep runs throughout, under
-// a start time other than the record's.
+// a reading whose record is not the process Identify then reads at that
+// number is unsettled, since the recorded one exited unread and may have
+// started another. Here the first reading holds, at a live sleep's number,
+// the record of a process of this binary that ended before the sleep was
+// started, which is what a table read before that process exited and the
+// sleep was given its number would hold; both records are real ones read
+// by readTable, and only their pairing at one number, in that one reading,
+// is staged. The listing reads again, and the second reading, the kernel's,
+// settles. Before, Identify's reading of the sleep was taken as the process
+// the table named and the first reading settled. The controls are that the
+// recorded process started before the sleep and that the sleep runs
+// throughout.
 func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
@@ -108,16 +106,14 @@ func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 	ended := endedBinaryRecord(t)
 	newcomer := startSleep(t)
 	id, running, err := agents.Identify(newcomer.Process.Pid)
-	if err != nil || !running || id.Start == ended.Start {
-		t.Fatalf("the sleep reads %v, %v, %v beside the ended record %v, so the two are not told apart", id, running, err, ended.Identity)
+	if err != nil || !running || id.Start <= ended.Start {
+		t.Fatalf("the sleep reads %v, %v, %v beside the ended record %v; want it started after the recorded process", id, running, err, ended.Identity)
 	}
 	staged := ended
 	staged.PID = newcomer.Process.Pid
 	table := &recordedAt{staging: staged}
-	_, err = processesOfBinary(table, self)
-	var unsettled *unsettledError
-	if !errors.As(err, &unsettled) || unsettled.PID != newcomer.Process.Pid || unsettled.Readings != settleReadings {
-		t.Fatalf("a listing whose record at %d is an ended process of this binary = %v after %d reading(s); want every reading unsettled naming %d", newcomer.Process.Pid, err, table.readings, newcomer.Process.Pid)
+	if _, err := processesOfBinary(table, self); err != nil || table.readings != 2 {
+		t.Fatalf("a listing whose first record at %d is an ended process of this binary = %v after %d reading(s); want the first unsettled and the second settled", newcomer.Process.Pid, err, table.readings)
 	}
 	if presence, err := id.Presence(); err != nil || presence != agents.PresencePresent {
 		t.Fatalf("the sleep %v was not running once the listing returned (%v, %v), so this shows nothing", id, presence, err)
@@ -125,53 +121,54 @@ func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 }
 
 // refusedNumberRecordedAgain is a processTable that passes every read
-// through to the kernel and orders real processes' lives around its reads
-// of the table: each reading starts a sleep, which the listing reads whole
-// and refuses, and ends and reaps the one the reading before started before
-// the kernel's table is read; that reading's records then hold, at the
-// ended sleep's number, staging, as if another process had been given the
-// number and recorded there. The first reading, which has no sleep before
-// it, starts a second sleep beside its own and ends that one once the
-// kernel's table is read, so the reading meets a real unread exit and is
-// unsettled.
+// through to the kernel, names only the processes it orders, and orders
+// real processes' lives around its reads of the table, with the kernel's
+// records. The first reading names a sleep, refused, which the listing reads
+// whole, and an exiting sleep, which it ends once the kernel's table is read,
+// so that reading meets a real unread exit and is unsettled. Before the
+// second reading it ends and reaps the refused sleep, starts a process of
+// this binary, reads its record, and ends and reaps it too; the second
+// reading names the refused sleep's number alone, with that record staged
+// at it, as if the process had been given the number and recorded there
+// and then exited before it was identified. Later readings name nothing.
 type refusedNumberRecordedAgain struct {
 	kernel
 	t                *testing.T
-	staging          tableRecord
-	current          *exec.Cmd
+	refused          *exec.Cmd
 	readings, staged int
+	stagedStart      uint64
+	refusedStart     uint64
 }
 
 func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
-	previous := r.current
-	r.current = startSleep(r.t)
-	var exiting *exec.Cmd
-	if previous == nil {
-		exiting = startSleep(r.t)
-	}
-	if previous != nil {
-		_ = previous.Process.Kill()
-		_ = previous.Wait()
-	}
-	pids, records, err := r.kernel.ids()
-	if err != nil {
-		return nil, nil, err
-	}
-	if previous == nil {
+	switch r.readings {
+	case 1:
+		r.refused = startSleep(r.t)
+		exiting := startSleep(r.t)
+		_, records, err := r.kernel.ids()
 		_ = exiting.Process.Kill()
 		_ = exiting.Wait()
-		return pids, records, nil
+		r.refusedStart = records[r.refused.Process.Pid].Start
+		return []int{r.refused.Process.Pid, exiting.Process.Pid}, records, err
+	case 2:
+		_ = r.refused.Process.Kill()
+		_ = r.refused.Wait()
+		staging := endedBinaryRecord(r.t)
+		_, records, err := r.kernel.ids()
+		if err != nil {
+			return nil, nil, err
+		}
+		number := r.refused.Process.Pid
+		staging.PID = number
+		records[number] = staging
+		r.staged++
+		r.stagedStart = staging.Start
+		return []int{number}, records, nil
+	default:
+		_, records, err := r.kernel.ids()
+		return nil, records, err
 	}
-	number := previous.Process.Pid
-	if !slices.Contains(pids, number) {
-		pids = append(pids, number)
-	}
-	staged := r.staging
-	staged.PID = number
-	records[number] = staged
-	r.staged++
-	return pids, records, nil
 }
 
 // A process number that a reading read as a refused process does not pass
@@ -179,28 +176,29 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 // a refused process's exit is told by its record's identity, not its
 // number, so one of this binary's given the number between two readings,
 // that starts another and exits before it is identified, unsettles the
-// reading it is recorded in. Here each reading's refused sleep is ended
-// before the next reading, and the next reading's record at its number is
-// one of a process of this binary that has ended, a real record read by
-// readTable; only the pairing is staged, the shape the number's reuse makes.
-// Before, the number was taken for the refused sleep, its exit passed over
-// as a refused process's, and the listing settled on the second reading.
-// The control is that every reading after the first met the staged record.
-// Not parallel: it starts and ends a real process in each of its 64
-// readings, which would keep other tests' listings from settling.
+// reading it is recorded in. Here the first reading reads a sleep whole and
+// refuses it, and the second records at its number a process of this
+// binary started after that sleep ended and itself ended since: a real
+// record read by readTable, of which only the number is staged, the shape
+// the number's reuse makes. The listing reads a third time, which names
+// nothing and settles. Before, the number was taken for the refused sleep,
+// its exit passed over as a refused process's, and the listing settled on
+// the second reading. The controls are that the second reading met the
+// staged record and that it records a start after the refused sleep's.
+// Not parallel: it starts and ends real processes around its readings,
+// which would keep other tests' listings from settling.
 func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	table := &refusedNumberRecordedAgain{t: t, staging: endedBinaryRecord(t)}
+	table := &refusedNumberRecordedAgain{t: t}
 	_, err = processesOfBinary(table, self)
-	if table.staged != table.readings-1 {
-		t.Fatalf("%d of the %d readings after the first met the staged record, so this shows nothing", table.staged, table.readings-1)
+	if table.staged != 1 || table.stagedStart <= table.refusedStart {
+		t.Fatalf("the second reading met the staged record %d time(s), started at %d beside the refused sleep's %d, so this shows nothing", table.staged, table.stagedStart, table.refusedStart)
 	}
-	var unsettled *unsettledError
-	if !errors.As(err, &unsettled) || table.readings != settleReadings {
-		t.Fatalf("a listing whose refused process numbers are recorded for an ended process of this binary = %v after %d reading(s); want all %d unsettled", err, table.readings, settleReadings)
+	if err != nil || table.readings != 3 {
+		t.Fatalf("a listing whose refused process number is recorded for an ended process of this binary = %v after %d reading(s); want the first two unsettled and the third settled", err, table.readings)
 	}
 }
