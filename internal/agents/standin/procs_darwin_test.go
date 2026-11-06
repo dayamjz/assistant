@@ -74,10 +74,10 @@ type churns struct {
 	ended int
 }
 
-func (c *churns) ids() ([]int, error) {
+func (c *churns) ids() ([]int, map[int]tableRecord, error) {
 	p := exec.Command("/bin/sleep", "60")
 	if err := p.Start(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c.mu.Lock()
 	c.live[p.Process.Pid] = p

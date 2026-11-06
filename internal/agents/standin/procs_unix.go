@@ -43,7 +43,12 @@ func (p Process) String() string {
 // process of another user's (foreignProcess) whose command line cannot be
 // read is passed over, and one of this user's is read again (processesWhere).
 func ProcessesOf(binary string) ([]Process, error) {
-	return processesWhere(kernel{}, ofBinary(binary))
+	return processesOfBinary(kernel{}, binary)
+}
+
+// processesOfBinary is ProcessesOf's listing read from table.
+func processesOfBinary(table processTable, binary string) ([]Process, error) {
+	return processesWhere(table, ofBinary(binary))
 }
 
 // ProcessesMatching lists every process whose arguments, argv[0] first, match
@@ -114,9 +119,11 @@ func carries(value string) func(processTable, int) (bool, error) {
 // processTable is the kernel's process table, one method per read the
 // listings make of it, so a test can have a real process exit between two
 // of those reads; kernel is the real one, and a test's table passes every
-// read through to it.
+// read through to it. ids is every process number the table names, in the
+// order it names them, with each one's record when the read that named them
+// holds one (readTable), and nil records when it holds none.
 type processTable interface {
-	ids() ([]int, error)
+	ids() ([]int, map[int]tableRecord, error)
 	identify(pid int) (agents.Identity, bool, error)
 	commandLine(pid int) (string, []string, error)
 	environment(pid int) ([]string, error)
@@ -127,7 +134,7 @@ type processTable interface {
 // kernel is the processTable the kernel answers.
 type kernel struct{}
 
-func (kernel) ids() ([]int, error) { return processIDs() }
+func (kernel) ids() ([]int, map[int]tableRecord, error) { return readTable() }
 func (kernel) identify(pid int) (agents.Identity, bool, error) {
 	return agents.Identify(pid)
 }
@@ -135,6 +142,15 @@ func (kernel) commandLine(pid int) (string, []string, error) { return commandLin
 func (kernel) environment(pid int) ([]string, error)         { return startEnvironment(pid) }
 func (kernel) foreign(pid int) (bool, error)                 { return foreignProcess(pid) }
 func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
+
+// tableRecord is what a read of the process table holds of one process
+// besides its number: its identity as agents.Identify reads it, its
+// parent's number, and the command name the table records for it.
+type tableRecord struct {
+	agents.Identity
+	parent int
+	name   string
+}
 
 // settleReadings bounds how many times processesWhere reads the process
 // table looking for a settled reading (processesWhere), so a listing ends
@@ -238,7 +254,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	var causes []unsettledCause
 	standing := map[int]int{}
 	for range settleReadings {
-		pids, err := table.ids()
+		pids, _, err := table.ids()
 		if err != nil {
 			return nil, fmt.Errorf("listing processes: %w", err)
 		}

@@ -214,23 +214,23 @@ func (r *refusedExitsEachReading) start() *exec.Cmd {
 	return cmd
 }
 
-func (r *refusedExitsEachReading) ids() ([]int, error) {
+func (r *refusedExitsEachReading) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
 	previous := r.unread
 	if r.readings > 1 {
 		previous = r.current
 	}
 	r.current = r.start()
-	pids, err := r.kernel.ids()
+	pids, records, err := r.kernel.ids()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if slices.Contains(pids, previous.Process.Pid) {
 		r.ended = append(r.ended, previous.Process.Pid)
 	}
 	_ = previous.Process.Kill()
 	_ = previous.Wait()
-	return pids, nil
+	return pids, records, nil
 }
 
 // A process the listing read whole and refused that exits does not keep a
@@ -368,10 +368,11 @@ type unreadableAsExiting struct {
 }
 
 // ids names pid alone, so how many readings the listing takes is decided
-// by that process and nothing else running beside the test.
-func (u *unreadableAsExiting) ids() ([]int, error) {
+// by that process and nothing else running beside the test, and with no
+// record, as Linux's table holds none.
+func (u *unreadableAsExiting) ids() ([]int, map[int]tableRecord, error) {
 	u.readings++
-	return []int{u.pid}, nil
+	return []int{u.pid}, nil, nil
 }
 
 func (u *unreadableAsExiting) commandLine(pid int) (string, []string, error) {
@@ -451,10 +452,11 @@ type argumentsEmptyOnce struct {
 }
 
 // ids names pid alone, so how many readings the listing takes is decided
-// by that process and nothing else running beside the test.
-func (a *argumentsEmptyOnce) ids() ([]int, error) {
+// by that process and nothing else running beside the test, and with no
+// record, as Linux's table holds none.
+func (a *argumentsEmptyOnce) ids() ([]int, map[int]tableRecord, error) {
 	a.readings++
-	return []int{a.pid}, nil
+	return []int{a.pid}, nil, nil
 }
 
 func (a *argumentsEmptyOnce) commandLine(pid int) (string, []string, error) {
@@ -762,10 +764,10 @@ type unreadGoneEachReadingBesideMatched struct {
 	numbers  *goneNumbers
 }
 
-func (u *unreadGoneEachReadingBesideMatched) ids() ([]int, error) {
+func (u *unreadGoneEachReadingBesideMatched) ids() ([]int, map[int]tableRecord, error) {
 	u.readings++
 	u.gone = u.numbers.take()
-	return []int{u.matched, u.gone}, nil
+	return []int{u.matched, u.gone}, nil, nil
 }
 
 func (u *unreadGoneEachReadingBesideMatched) identify(pid int) (agents.Identity, bool, error) {

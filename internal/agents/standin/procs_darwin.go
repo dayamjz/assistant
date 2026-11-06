@@ -9,20 +9,43 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"golang.org/x/sys/unix"
 )
 
 // processIDs is every process identifier in the kernel's process table.
 func processIDs() ([]int, error) {
+	pids, _, err := readTable()
+	return pids, err
+}
+
+// readTable is every process identifier in the kernel's process table, in
+// the order the table names them, and each one's record, all from the one
+// kern.proc.all read that names them.
+func readTable() ([]int, map[int]tableRecord, error) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.all")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	pids := make([]int, 0, len(procs))
-	for _, p := range procs {
-		pids = append(pids, int(p.Proc.P_pid))
+	records := make(map[int]tableRecord, len(procs))
+	for i := range procs {
+		pid := int(procs[i].Proc.P_pid)
+		pids = append(pids, pid)
+		records[pid] = recordOf(&procs[i])
 	}
-	return pids, nil
+	return pids, records, nil
+}
+
+// recordOf is the record a process table entry holds: its identity
+// (agents.EntryIdentity), its parent (Eproc.Ppid) and its command name
+// (Proc.P_comm, up to its first NUL).
+func recordOf(entry *unix.KinfoProc) tableRecord {
+	name := entry.Proc.P_comm[:]
+	if end := bytes.IndexByte(name, 0); end >= 0 {
+		name = name[:end]
+	}
+	return tableRecord{Identity: agents.EntryIdentity(entry), parent: int(entry.Eproc.Ppid), name: string(name)}
 }
 
 // commandLine reads pid's executable path and its arguments, argv[0]
