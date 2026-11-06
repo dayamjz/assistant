@@ -20,6 +20,10 @@ func ClassifyRefused(pid int, signal error) (bool, error) {
 	return currentViewer().blocks(refused{id: id, uids: uids, signal: signal}), nil
 }
 
+// ProcUids exposes the user identifiers the classification reads for pid,
+// and whether pid was found.
+func ProcUids(pid int) ([]int, bool, error) { return procUids(pid) }
+
 // Ancestry exposes the parent chain the listing sets aside.
 func Ancestry() []Identity { return ancestry(os.Getpid()) }
 

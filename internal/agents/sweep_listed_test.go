@@ -119,14 +119,20 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 	}
 
 	// The other user's process is one this test found running on the host,
-	// not one it started, so it can end between the checks; a process that
-	// is gone reads as blocking, which would be a verdict about its exit and
-	// not about the rule. The checks are therefore judged only when the same
-	// process, by start time, stood before and after them, and a host whose
-	// candidates keep ending is a skip rather than a pass.
+	// not one it started, so it can end between the checks, or change its
+	// users without changing its identity, by a setuid exec or a privilege
+	// drop (#779); either reads as blocking, which would be a verdict about
+	// what the process did and not about the rule. The checks are therefore
+	// judged only when the same process, by start time, stood before and
+	// after them with the same user identifiers, and a host whose candidates
+	// keep ending or changing is a skip rather than a pass.
 	for attempt := 0; attempt < 5; attempt++ {
 		foreign := foreignProcess(t)
 		before, present, err := agents.Identify(foreign)
+		if err != nil || !present {
+			continue
+		}
+		usersBefore, present, err := agents.ProcUids(foreign)
 		if err != nil || !present {
 			continue
 		}
@@ -143,12 +149,15 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 		if after, present, err := agents.Identify(foreign); err != nil || !present || after != before {
 			continue
 		}
+		if usersAfter, present, err := agents.ProcUids(foreign); err != nil || !present || !slices.Equal(usersAfter, usersBefore) {
+			continue
+		}
 		if failure != "" {
 			t.Fatal(failure)
 		}
 		return
 	}
-	t.Skip("every process of another user this test chose ended during its checks, so the second carve-out is not established for one here")
+	t.Skip("every process of another user this test chose ended or changed its users during its checks, so the second carve-out is not established for one here")
 }
 
 // foreignProcess is a running process sharing no user with this test and
