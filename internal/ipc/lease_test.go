@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -206,4 +208,74 @@ func TestARestrictedStreamIsLeasedOnlyOnceAdmitted(t *testing.T) {
 	if n, open := wakes.Attachment(); n != 1 || !open {
 		t.Fatalf("an admitted stream reports attachment %d open=%v, want the first lease held", n, open)
 	}
+}
+
+// beats counts this process's goroutines beating a leased stream, read from
+// their stacks as the runtime reports them.
+func beats() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "internal/ipc.(*Client).beat(")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// A leased stream stops beating as it ends, not at its next beat: a client
+// that opens and closes streams under a long beat holds no beating goroutine
+// for any of them once each has closed, however many it opened, and neither
+// does a stream whose client queue stalled, which the client ends without
+// its consumer closing it. The control is a stream held open, which has
+// exactly one.
+func TestAnEndedLeasedStreamStopsBeatingAtOnce(t *testing.T) {
+	long := ipc.Lease{Beat: 10 * time.Minute, Expiry: 30 * time.Minute}
+	h := serveOnSocket(t, func(sc *ipc.ServerConfig) {
+		sc.Leases = map[ipc.Method]ipc.Lease{ipc.MethodEventsSubscribe: long}
+	})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+	before := beats()
+	settled := func(what string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for beats() != before {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s left %d beating goroutines, want none", what, beats()-before)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	c := h.dial(t, ipc.ClientConfig{})
+	held, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if got := beats() - before; got != 1 {
+		t.Fatalf("a held leased stream has %d beating goroutines, want 1", got)
+	}
+	held.Close()
+	for range 20 {
+		stream, err := c.Subscribe(ctx, nil)
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+		stream.Close()
+	}
+	settled("21 closed leased streams")
+
+	// A queue one event deep that nothing reads: the opening gap marker fills
+	// it, and the control event behind that ends it as stalled.
+	stalling, err := h.dial(t, ipc.ClientConfig{Backlog: 1}).Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stalling.Close()
+	if got := beats() - before; got != 1 {
+		t.Fatalf("a held leased stream has %d beating goroutines, want 1", got)
+	}
+	publish(t, h.events, control("stopping"))
+	settled("a leased stream whose client queue stalled")
 }

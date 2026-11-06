@@ -318,6 +318,9 @@ type Subscription struct {
 	done    bool
 	err     error
 	ready   chan struct{}
+	// ended is closed once, when the subscription ends, so a goroutine
+	// serving it can wait on its end without consuming ready.
+	ended chan struct{}
 }
 
 // newSubscription builds a subscription with a fixed queue depth.
@@ -332,6 +335,7 @@ func newSubscription(backlog int, gapped bool) *Subscription {
 		ring:  make([]Event, backlog),
 		gap:   gapped,
 		ready: make(chan struct{}, 1),
+		ended: make(chan struct{}),
 	}
 }
 
@@ -403,11 +407,19 @@ func (s *Subscription) Close() {
 // finish ends the subscription with err, keeping the first reason.
 func (s *Subscription) finish(err error) {
 	s.mu.Lock()
-	if !s.done {
-		s.done, s.err = true, err
-	}
+	s.end(err)
 	s.mu.Unlock()
 	s.signal()
+}
+
+// end marks the subscription ended with err and closes ended, unless it has
+// already ended, so the first reason is kept and ended is closed once. The
+// caller holds mu.
+func (s *Subscription) end(err error) {
+	if !s.done {
+		s.done, s.err = true, err
+		close(s.ended)
+	}
 }
 
 // deliver queues e, applying the overflow policy. It never blocks.
@@ -450,7 +462,7 @@ func (s *Subscription) deliver(e Event) bool {
 	// arriving event is still a discard, so it raises the gap, and the stream
 	// ends behind it.
 	s.discarded()
-	s.done, s.err = true, ErrSubscriberStalled
+	s.end(ErrSubscriberStalled)
 	return false
 }
 
