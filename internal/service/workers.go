@@ -492,16 +492,20 @@ func wakesLimit(r machine.WakesRequest) (int, error) {
 // nothing the caller sent. A worker is refused; a subordinate naming a row
 // whose task is outside its domain, read from the task's row, is refused
 // with ipc.ErrOutsideDomain and nothing is closed; a batch the store
-// refuses, for an unknown or an already acknowledged identifier, writes
-// nothing and the refusal is the store's.
+// refuses, for an unknown or an already acknowledged identifier, or for a
+// number named without its shape that a row of another shape carries
+// (machine.AmbiguousWake), writes nothing and the refusal is the store's.
 func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
 	p, err := s.admitted(req)
 	if err != nil {
 		return machine.Acknowledged{}, err
 	}
-	if len(r.Wakes)+len(r.DomainWakes)+len(r.KeptWorkWakes)+len(r.HousekeepingWakes) == 0 {
+	if len(r.Bare)+len(r.Wakes)+len(r.DomainWakes)+len(r.KeptWorkWakes)+len(r.HousekeepingWakes) == 0 {
 		return machine.Acknowledged{}, fmt.Errorf("%w: an acknowledgement names no wakes", ipc.ErrInvalidRequest)
 	}
+	// A number named without its shape can close only a task wake, so a
+	// subordinate's scope is read over both.
+	tasked := append(slices.Clip(r.Wakes), r.Bare...)
 	if p.isSubordinate && len(r.DomainWakes) > 0 {
 		// Every wake about a domain is about a subordinate, and the first
 		// coordinator alone acts on one.
@@ -526,7 +530,7 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 		// kind it can act on; a decision-class row about its domain's task
 		// is the first coordinator's to close, and refused as a command the
 		// subordinate does not hold.
-		scopes, err := s.store.WakeScopes(ctx, r.Wakes)
+		scopes, err := s.store.WakeScopes(ctx, tasked)
 		if err != nil {
 			var refused *store.WakeIDError
 			if errors.As(err, &refused) {
@@ -535,7 +539,7 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 			return machine.Acknowledged{}, err
 		}
 		actable := wakeRouteOf(p).Actable
-		for _, id := range r.Wakes {
+		for _, id := range tasked {
 			scope := scopes[id]
 			if scope.Domain != p.subordinate.Domain {
 				return machine.Acknowledged{}, fmt.Errorf("%w: %s is the subordinate coordinator of domain %s, and wake %d is about a task %s",
@@ -553,15 +557,19 @@ func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machi
 		if errors.As(err, &refused) {
 			return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
 		}
+		var ambiguous *store.WakeAmbiguousError
+		if errors.As(err, &ambiguous) {
+			return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, machine.AmbiguousWake(ambiguous))
+		}
 		return err
 	}
 	// The shapes are one batch, all or nothing: store.AcknowledgeAll
 	// checks every row of each before it writes any, in one transaction,
 	// so a refused row of one shape leaves every row named open too.
-	if err := s.store.AcknowledgeAll(ctx, r.Wakes, r.DomainWakes, r.KeptWorkWakes, r.HousekeepingWakes, by); err != nil {
+	if err := s.store.AcknowledgeAll(ctx, r.Bare, r.Wakes, r.DomainWakes, r.KeptWorkWakes, r.HousekeepingWakes, by); err != nil {
 		return machine.Acknowledged{}, refusal(err)
 	}
-	return machine.Acknowledged{Wakes: r.Wakes, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes,
+	return machine.Acknowledged{Wakes: tasked, DomainWakes: r.DomainWakes, KeptWorkWakes: r.KeptWorkWakes,
 		HousekeepingWakes: r.HousekeepingWakes, By: by.String()}, nil
 }
 

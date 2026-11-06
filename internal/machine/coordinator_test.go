@@ -123,13 +123,11 @@ func TestAListedNoticeReadsAsItsKindsRow(t *testing.T) {
 }
 
 // A drain's phrase gives the acknowledge command for exactly the rows it
-// handed out, each shape named as the acknowledge command line reads it: a
-// task wake by its number alone, whatever its kind, a domain wake with
-// DomainWakePrefix, a kept-work wake with KeptWorkWakePrefix and a
-// housekeeping wake with HousekeepingWakePrefix. Rows numbered alike in the
-// four shapes are four names, so a person running
-// the command closes each row and no other, and a drain of other rows names
-// other rows.
+// handed out, each named by its shape's flag as the acknowledge command
+// line reads it, whatever its kind: never a number alone, which the
+// service refuses when another shape carries it. Rows numbered alike in
+// the four shapes are four names, so a person running the command closes
+// each row and no other, and a drain of other rows names other rows.
 func TestADrainsPhraseNamesEachRowAsTheAcknowledgeCommandTakesIt(t *testing.T) {
 	drain := machine.Wakes{
 		Wakes:             []store.Wake{{ID: 4, Kind: string(supervisor.KindKeptWork)}, {ID: 9}},
@@ -137,17 +135,18 @@ func TestADrainsPhraseNamesEachRowAsTheAcknowledgeCommandTakesIt(t *testing.T) {
 		KeptWorkWakes:     []store.KeptWorkWake{{ID: 4}},
 		HousekeepingWakes: []store.HousekeepingWake{{ID: 4}},
 	}
-	want := []string{"4", "9", machine.DomainWakePrefix + "4", machine.KeptWorkWakePrefix + "4", machine.HousekeepingWakePrefix + "4"}
+	want := []string{"--" + machine.AcknowledgeTaskFlag + " 4", "--" + machine.AcknowledgeTaskFlag + " 9", "--" + machine.AcknowledgeDomainFlag + " 4",
+		"--" + machine.AcknowledgeKeptWorkFlag + " 4", "--" + machine.AcknowledgeHousekeepingFlag + " 4"}
 	if got := machine.AcknowledgeNames(drain); !slices.Equal(got, want) {
 		t.Fatalf("the drain is named %v, want %v", got, want)
 	}
 	phrase := machine.WakesPhrase(drain)
 	vocabtest.Assert(t, phrase.String())
-	if command := "assistant coordinator acknowledge 4 9 d4 k4 h4,"; !strings.Contains(phrase.Decision, command) {
+	if command := "assistant coordinator acknowledge --task 4 --task 9 --domain 4 --kept 4 --housekeeping 4,"; !strings.Contains(phrase.Decision, command) {
 		t.Fatalf("the drain's phrase reads %q, which does not give %q", phrase.Decision, command)
 	}
 	other := machine.WakesPhrase(machine.Wakes{KeptWorkWakes: []store.KeptWorkWake{{ID: 5}}})
-	if !strings.Contains(other.Decision, "acknowledge k5,") || strings.Contains(other.Decision, "4") {
+	if !strings.Contains(other.Decision, "acknowledge --kept 5,") || strings.Contains(other.Decision, "4") {
 		t.Fatalf("a drain of kept-work wake 5 alone reads %q", other.Decision)
 	}
 }

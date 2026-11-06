@@ -205,10 +205,10 @@ func TestAnInteractiveWorkerTakesTwoEscapesInOneWriteAsTwoKeys(t *testing.T) {
 		{Contains: "hello there", Reply: "the quiet turn's reply", Turn: time.Hour},
 	}}}, state, key)
 	screenOf(t, socket, footerBusy)
-	// A paste without -p and with -S writes the buffer as it is, control
-	// bytes unescaped, in one write.
-	both := exec.Command(Tmux(t), "-S", socket, "load-buffer", "-b", "e", "-", ";", "paste-buffer", "-S", "-d", "-b", "e", "-t", "w")
-	both.Stdin = strings.NewReader("\x1b\x1b")
+	// Both bytes in one tmux command, which queues them to the pane
+	// together, and which every tmux CI runs has (paste-buffer's -S, the
+	// other way to keep tmux from escaping them, is newer than some).
+	both := exec.Command(Tmux(t), "-S", socket, "send-keys", "-t", "w", "-H", "1b", "1b")
 	if out, err := both.CombinedOutput(); err != nil {
 		t.Fatalf("writing two Escape keys: %v: %s", err, out)
 	}

@@ -20,14 +20,16 @@ type untaskedShape struct {
 	table string
 	// noun is what an error calls one of its rows.
 	noun string
+	// shape is the shape a WakeAmbiguousError names it by.
+	shape WakeShape
 }
 
 var (
-	domainWakeShape   = untaskedShape{table: "domain_wake", noun: "domain wake"}
-	keptWorkWakeShape = untaskedShape{table: "kept_work_wake", noun: "kept work wake"}
+	domainWakeShape   = untaskedShape{table: "domain_wake", noun: "domain wake", shape: WakeShapeDomain}
+	keptWorkWakeShape = untaskedShape{table: "kept_work_wake", noun: "kept work wake", shape: WakeShapeKeptWork}
 	// housekeepingWakeShape is migration 66's housekeeping_wake, the
 	// fourth shape, about a repository, on the same terms.
-	housekeepingWakeShape = untaskedShape{table: "housekeeping_wake", noun: "housekeeping wake"}
+	housekeepingWakeShape = untaskedShape{table: "housekeeping_wake", noun: "housekeeping wake", shape: WakeShapeHousekeeping}
 )
 
 // offeredClause is offeredClause for the shape: a subordinate is offered
