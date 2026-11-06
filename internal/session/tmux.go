@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
@@ -52,6 +53,10 @@ type Tmux struct {
 	home   *home.Home
 	runner agents.Runner
 	tmux   string
+	// readopting serializes Readopt, so a second call for a reference finds
+	// the session the first holds rather than verifying and holding another
+	// handle over the same worker.
+	readopting sync.Mutex
 	*held
 }
 
@@ -130,8 +135,11 @@ var ErrNotReadoptable = errors.New("session: the reference names no terminal thi
 // holds returns that session. ErrNotReadoptable for a reference it will
 // not try, and agents.ErrTerminalUnverified, wrapped, for a worker that does
 // not verify, which leaves Probe's answer for ref what it was. It starts
-// and ends nothing.
+// and ends nothing. Calls are serialized, so concurrent calls for one
+// reference hold one session and every one of them returns it.
 func (t *Tmux) Readopt(ctx context.Context, ref string) (*Session, error) {
+	t.readopting.Lock()
+	defer t.readopting.Unlock()
 	if s, ok := t.lookup(ref); ok {
 		return s, nil
 	}

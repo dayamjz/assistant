@@ -148,6 +148,10 @@ func (h *held) letGo(s *Session, worker agents.TerminalWorker) error {
 	}
 	delete(h.sessions, s.key)
 	h.mu.Unlock()
+	// The membership ends before Release returns, not when the goroutine
+	// watching for it next runs, so nothing is placed as the worker of a
+	// session already let go.
+	s.leave()
 	close(s.released)
 	return nil
 }

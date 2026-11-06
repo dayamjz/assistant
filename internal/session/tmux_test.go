@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -420,4 +422,71 @@ func TestTmuxReleaseOfAWorkerAlreadyEndingIsRefusedAndKeepsTheSession(t *testing
 		t.Fatalf("Release of a worker whose end has begun answered %v, want ErrWorkerEnding", err)
 	}
 	expect(t, p.Probe(context.Background(), s.Reference().String()), session.ReasonExited)
+}
+
+// Review r1 of #782, finding 1: concurrent Readopt calls of one released
+// reference hold it once. Every call returns the same session, so none of
+// them returns a session the provider no longer holds, and no second handle
+// is left watching the worker.
+func TestConcurrentReadoptsOfOneReferenceHoldOneSession(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	s := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, s, "worker ready")
+	ref := s.Reference().String()
+	t.Cleanup(func() {
+		_ = exec.Command(standin.Tmux(t), "-S", sub.home.TerminalSocket(s.Reference().Terminal), "kill-server").Run()
+	})
+	if err := p.Release(s); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	again, _ := tmuxProvider(t, sub.home, workerScript())
+	const callers = 8
+	got := make([]*session.Session, callers)
+	errs := make([]error, callers)
+	var wg sync.WaitGroup
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i], errs[i] = again.Readopt(context.Background(), ref)
+		}()
+	}
+	wg.Wait()
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("Readopt %d: %v", i, errs[i])
+		}
+		if got[i] != got[0] {
+			t.Fatalf("Readopt %d returned another session than Readopt 0, so one of them is no longer held", i)
+		}
+	}
+	t.Cleanup(func() { _ = again.Close(got[0]) })
+	if err := again.Send(context.Background(), got[0], "status?"); err != nil {
+		t.Fatalf("Send through the one session held again: %v", err)
+	}
+}
+
+// Review r1 of #782, finding 2: once Release returns, the worker's group and
+// its server place as nobody's, read at once with one processor runnable,
+// so no peer is placed as the worker of a session the provider let go.
+func TestReleaseTakesTheWorkerOutOfTheSetBeforeItReturns(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := tmuxProvider(t, sub.home, workerScript())
+	s := createIn(t, p, sub.spec("begin"))
+	waitCapture(t, p, s, "worker ready")
+	pid := s.Reference().PID
+	t.Cleanup(func() {
+		_ = exec.Command(standin.Tmux(t), "-S", sub.home.TerminalSocket(s.Reference().Terminal), "kill-server").Run()
+	})
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	if err := p.Release(s); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if m, ok := p.Workers().Member(pid); ok {
+		t.Fatalf("Member(%d) answers %+v once Release has returned, want no member", pid, m)
+	}
+	if m, ok := p.Workers().Hosted(s.Host()); ok {
+		t.Fatalf("Hosted(%v) answers %+v once Release has returned, want no member", s.Host(), m)
+	}
 }
