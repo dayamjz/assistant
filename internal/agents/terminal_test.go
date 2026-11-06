@@ -354,6 +354,10 @@ func TestAReleasedTerminalWorkerIsHeldAgainOnlyOnceItVerifies(t *testing.T) {
 		t.Fatalf("reading the worker's identity: found %v, %v", found, err)
 	}
 	host := released.Host()
+	otherID, found, err := agents.Identify(other.Group())
+	if err != nil || !found {
+		t.Fatalf("reading the other worker's identity: found %v, %v", found, err)
+	}
 
 	released.Release()
 	released.Release()
@@ -380,8 +384,8 @@ func TestAReleasedTerminalWorkerIsHeldAgainOnlyOnceItVerifies(t *testing.T) {
 	if _, err := agents.AdoptTerminalWorker(t.Context(), cursor, term, pane); !errors.As(err, &refusal) {
 		t.Fatalf("adopting through an adapter with no terminal workers answered %v, want a *CapabilityError", err)
 	}
-	if presence, err := (agents.Identity{PID: other.Group()}).Presence(); err == nil && presence == agents.PresenceAbsent {
-		t.Fatal("a refused adoption ended the other worker")
+	if presence, err := otherID.Presence(); err != nil || presence != agents.PresencePresent {
+		t.Fatalf("the other worker reads %q (%v) after the refused adoptions, want it still running", presence, err)
 	}
 
 	held, err := agents.AdoptTerminalWorker(t.Context(), agent.Runner(), term, pane)
