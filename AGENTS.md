@@ -189,9 +189,9 @@ repository more than one round of review.
 - Credential removal is `internal/redact`'s: a new shape is added there, never
   a second remover at a call site. A sentence a person reads is a row in
   `internal/machine`'s phrase table (`phrases.go`), never one at a renderer.
-- `internal/cli`'s verb table is PRD section 9's table and nothing else; a verb
-  that section does not describe is a finding against the specification, not a
-  row to add.
+- `internal/cli`'s verb table is PRD section 9's table, plus the four named
+  verbs (`gate`, `host`, `coordinator`, `worker`) that stand beside it; any
+  other verb outside that set is a finding.
 
 ## Tests
 
