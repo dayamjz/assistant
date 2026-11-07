@@ -412,9 +412,14 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	}
 	// The run left the two directories it is pointed away from untouched,
 	// which is what a worker owes the operator's own home. What it did
-	// leave elsewhere under HOME is logged rather than asserted: it is the
-	// record the adapter's documentation rests on, and this probe is where
-	// a later CLI's new write shows up.
+	// leave elsewhere under HOME, and in the cache directory it was given
+	// instead, is logged rather than asserted: it is the record the
+	// adapter's documentation rests on, and this probe is where a later
+	// CLI's new write shows up. The cache directory is read before Close,
+	// which removes it.
+	cached := entriesUnder(t, agents.ClaudeCacheFor(term))
+	t.Logf("the run left %d entries in the worker's own cache directory:\n%s",
+		len(cached), strings.Join(cached, "\n"))
 	worker.Close()
 	for _, name := range []string{".cache", ".claude"} {
 		entries, err := os.ReadDir(filepath.Join(home, name))

@@ -207,6 +207,39 @@ func TestAClaudeTerminalWorkerCachesIntoADirectoryOfItsOwn(t *testing.T) {
 	}
 }
 
+// A start that cannot make its cache directory is refused, and takes with
+// it the configuration directory it had just seeded and nothing else: what
+// already stood where the cache directory goes is left exactly as it was.
+// It is made here with a file in it, so a start that removed it would be
+// removing content, which a test against an empty directory would miss.
+func TestAClaudeTerminalStartRefusedByItsCacheDirectoryKeepsWhatStoodThere(t *testing.T) {
+	term := terminalFor(t)
+	cache := agents.ClaudeCacheFor(term)
+	if err := os.Mkdir(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept, held := filepath.Join(cache, "kept"), "not this start's"
+	if err := os.WriteFile(kept, []byte(held), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := standin.New(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond),
+		agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+
+	_, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("a start over a cache directory that already exists answered %v, want it refused", err)
+	}
+	if got, err := os.ReadFile(kept); err != nil || string(got) != held {
+		t.Errorf("the refused start left %q (%v) in the cache directory, want %q untouched", got, err, held)
+	}
+	if _, err := os.Stat(agents.ClaudeConfigFor(term)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the configuration directory the refused start seeded outlived it: %v", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Errorf("the refused start ran the CLI %d times: %v", len(calls), calls)
+	}
+}
+
 // awaitWorkerEnvironment reads the environment a command in the worker's
 // pane wrote to path, as names to values.
 func awaitWorkerEnvironment(t *testing.T, path string) map[string]string {
