@@ -27,7 +27,8 @@ import (
 // declares them restricted, and refuseWorker refuses a caller the worker
 // group set places in any task's worker group before anything is read or
 // written, so no worker steers itself or a sibling. An interrupt is refused
-// to a subordinate coordinator as well, which section 9 does not grant it.
+// to a subordinate coordinator as well, which section 9 names among what a
+// subordinate is refused.
 // Who sent a message is ipc.Request.MessageSender, derived from the surface
 // and never read from the request, so no value meaning a person reaches the
 // record.
