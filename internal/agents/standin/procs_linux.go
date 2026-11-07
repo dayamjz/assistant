@@ -25,6 +25,14 @@ func processIDs() ([]int, error) {
 	return pids, nil
 }
 
+// readTable is every process identifier /proc lists, and no records: /proc
+// is not read in one call, so a reading of it holds none, and a listing
+// judges every exit as one with no record (processesWhere).
+func readTable() ([]int, map[int]tableRecord, error) {
+	pids, err := processIDs()
+	return pids, nil, err
+}
+
 // commandLine reads pid's executable, the link /proc holds for it, and its
 // arguments, argv[0] first, from its NUL-separated cmdline. Nothing is split
 // on white space, so a path or an argument with a space in it is read whole.

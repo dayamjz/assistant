@@ -43,7 +43,12 @@ func (p Process) String() string {
 // process of another user's (foreignProcess) whose command line cannot be
 // read is passed over, and one of this user's is read again (processesWhere).
 func ProcessesOf(binary string) ([]Process, error) {
-	return processesWhere(kernel{}, ofBinary(binary))
+	return processesOfBinary(kernel{}, binary)
+}
+
+// processesOfBinary is ProcessesOf's listing read from table.
+func processesOfBinary(table processTable, binary string) ([]Process, error) {
+	return processesWhere(table, ofBinary(binary))
 }
 
 // ProcessesMatching lists every process whose arguments, argv[0] first, match
@@ -114,9 +119,11 @@ func carries(value string) func(processTable, int) (bool, error) {
 // processTable is the kernel's process table, one method per read the
 // listings make of it, so a test can have a real process exit between two
 // of those reads; kernel is the real one, and a test's table passes every
-// read through to it.
+// read through to it. ids is every process number the table names, in the
+// order it names them, with each one's record when the read that named them
+// holds one (readTable), and nil records when it holds none.
 type processTable interface {
-	ids() ([]int, error)
+	ids() ([]int, map[int]tableRecord, error)
 	identify(pid int) (agents.Identity, bool, error)
 	commandLine(pid int) (string, []string, error)
 	environment(pid int) ([]string, error)
@@ -127,7 +134,7 @@ type processTable interface {
 // kernel is the processTable the kernel answers.
 type kernel struct{}
 
-func (kernel) ids() ([]int, error) { return processIDs() }
+func (kernel) ids() ([]int, map[int]tableRecord, error) { return readTable() }
 func (kernel) identify(pid int) (agents.Identity, bool, error) {
 	return agents.Identify(pid)
 }
@@ -135,6 +142,12 @@ func (kernel) commandLine(pid int) (string, []string, error) { return commandLin
 func (kernel) environment(pid int) ([]string, error)         { return startEnvironment(pid) }
 func (kernel) foreign(pid int) (bool, error)                 { return foreignProcess(pid) }
 func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
+
+// tableRecord is what a read of the process table holds of one process
+// besides its number: its identity as agents.Identify reads it.
+type tableRecord struct {
+	agents.Identity
+}
 
 // settleReadings bounds how many times processesWhere reads the process
 // table looking for a settled reading (processesWhere), so a listing ends
@@ -171,6 +184,11 @@ const settleReadings = 64
 // case processesWhere reads the table again, reusing what it read of a
 // process it already read whole, until a reading settles or settleReadings
 // have run, which is an error naming what left the last reading unsettled.
+// Across readings a process is told by its record's identity where the
+// reading holds a record of it, and by its number where it holds none, as
+// on Linux; a record whose identity is not the process identify then reads
+// at that number is of a process that exited during the reading, and that
+// exit is judged as any other is.
 //
 // Invariant: a settled reading has read whole every live process of this
 // user's that could match, and every process that exited unread is one the
@@ -215,10 +233,13 @@ const settleReadings = 64
 // or exits, and which carrying's match refuses only for a process not read
 // as carrying the identity (carrying); a process read whole is not read
 // again within a listing, so one that execs another program after it was
-// read keeps what it was read as; a refused process's exit is told from
-// another's by the process number the reading before read it under, so
-// another process given that number, started and ended between the two
-// readings, would be taken for it; and processes the listing never read
+// read keeps what it was read as; where a reading holds no record, a
+// refused process's exit is told from another's by the process number the
+// reading before read it under, so another process given that number,
+// started and ended between the two readings, would be taken for it, and
+// where it holds one, by the record's identity, which a number given again
+// within the start time's resolution does not tell apart (agents.Identity);
+// and processes the listing never read
 // whole that keep exiting, one in every reading, still keep every reading
 // from settling.
 func processesWhere(table processTable, match func(processTable, int) (bool, error)) ([]Process, error) {
@@ -228,9 +249,10 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	// refused is those of them read whole that match refused.
 	read := map[agents.Identity]*Process{}
 	refused := map[agents.Identity]bool{}
-	// stopped is the process numbers the last reading read as not running,
-	// and wasRefused those it read as a running process in refused.
-	stopped, wasRefused := map[int]bool{}, map[int]bool{}
+	// stopped is the processes the last reading read as not running, and
+	// wasRefused those it read as a running process in refused, each named
+	// as that reading named it (named, below).
+	stopped, wasRefused := map[agents.Identity]bool{}, map[agents.Identity]bool{}
 	// causes is what kept the last reading from settling, one per process
 	// number in the order the table named them, and standing is, for each
 	// of those numbers, how many readings in a row through the last it kept
@@ -238,7 +260,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 	var causes []unsettledCause
 	standing := map[int]int{}
 	for range settleReadings {
-		pids, err := table.ids()
+		pids, records, err := table.ids()
 		if err != nil {
 			return nil, fmt.Errorf("listing processes: %w", err)
 		}
@@ -247,7 +269,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 		unsettle := func(pid int, err error) {
 			causes = append(causes, unsettledCause{pid: pid, err: err})
 		}
-		nowStopped, nowRefused := map[int]bool{}, map[int]bool{}
+		nowStopped, nowRefused := map[agents.Identity]bool{}, map[agents.Identity]bool{}
 		for _, pid := range pids {
 			if exclude[pid] {
 				continue
@@ -257,9 +279,25 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 				unsettle(pid, fmt.Errorf("process %d could not be identified: %w", pid, err))
 				continue
 			}
+			// named is the process the table named at pid: its record's
+			// identity, or the number alone where the reading holds no
+			// record of it, as on Linux.
+			named := agents.Identity{PID: pid}
+			record, recorded := records[pid]
+			if recorded {
+				named = record.Identity
+			}
+			if running && recorded && id != named {
+				// The recorded process exited during the reading and its
+				// number went to another, which this reading has no record of.
+				if !stopped[named] && !wasRefused[named] {
+					unsettle(pid, fmt.Errorf("%v exited during the reading, its number given to another process", named))
+				}
+				named = id
+			}
 			if !running {
-				nowStopped[pid] = true
-				if !stopped[pid] && !wasRefused[pid] {
+				nowStopped[named] = true
+				if !stopped[named] && !wasRefused[named] {
 					unsettle(pid, fmt.Errorf("process %d read as not running for the first time", pid))
 				}
 				continue
@@ -269,7 +307,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 					found = append(found, *p)
 				}
 				if refused[id] {
-					nowRefused[pid] = true
+					nowRefused[named] = true
 				}
 				continue
 			}
@@ -311,8 +349,8 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 				// gone with its address space, could not be read in any of
 				// the readings (run 40211320712).
 				if exiting, err := table.isExiting(pid); err == nil && exiting {
-					nowStopped[pid] = true
-					if !stopped[pid] && !wasRefused[pid] {
+					nowStopped[named] = true
+					if !stopped[named] && !wasRefused[named] {
 						unsettle(pid, fmt.Errorf("process %d read as exiting for the first time, its read failing: %w", pid, failed))
 					}
 					continue
@@ -330,7 +368,7 @@ func processesWhere(table processTable, match func(processTable, int) (bool, err
 				read[id] = nil
 				if failed == nil && !matched {
 					refused[id] = true
-					nowRefused[pid] = true
+					nowRefused[named] = true
 				}
 				continue
 			}
