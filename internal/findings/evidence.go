@@ -415,8 +415,27 @@ func evidenceNote(b Binding) Finding {
 				" this change touched: " + strings.Join(b.Undeclared, ", ") + "."
 		}
 	}
-	return Finding{Severity: SeverityInfo, Action: ActionNote, Description: description}
+	return Finding{Severity: SeverityInfo, Action: ActionNote, Description: description + " " + summaryUnbound}
 }
+
+// summaryUnbound is the comparison's own limit, said wherever the comparison
+// is said. It closes on every branch of evidenceNote above, because a reader
+// meets the note in whichever shape their run produced and each of those
+// shapes describes what the evidence set cost the review's findings. Without
+// this a reader has every reason to take the sentence before it as covering
+// the whole report, and the part it does not cover is the part they read first
+// and argue with least.
+//
+// It states the limit and does not apologize for it. Resolving the summary
+// against the evidence set would mean deciding, from prose, which paths a
+// paragraph rests on: a filename a summary mentions in passing would be
+// refused, and a paragraph describing an undeclared file without naming it
+// would pass, which is a test that reads stricter than it is. So the gap is
+// reported rather than closed, which is what this package does with every
+// other thing the binding does not reach.
+const summaryUnbound = "The comparison is on findings alone. A stage's summary is prose with no path " +
+	"to test against, so a claim it makes about a path the review did not declare reading is carried as " +
+	"written and is neither refused nor marked."
 
 // pathWord agrees the noun with the count, so a report reads as prose rather
 // than as a template.
