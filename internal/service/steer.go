@@ -122,6 +122,10 @@ import (
 // for that row and does not interrupt: the path is stop, then relaunch
 // with a note. Serving the declared capability is a separate change.
 //
+// PRD section 12 still says that proof is something "nothing reads yet".
+// That half is false once CapabilityTerminalInterrupt shipped; the
+// disagreement is raised as issue 833 rather than editing the PRD.
+//
 // # Residual gaps
 //
 //   - Written proves the worker's input took the bytes. A send that failed
