@@ -2986,26 +2986,26 @@ keeps exact identifiers and stage names, so it is a detailed evidence document i
 P13's list names it; the line pointing at it is phrased. The local protocol
 carries the same read as one open method. No verb is added.
 
-**Reading the records without this program.** All truth is in the home's embedded database, so a
-person debugging a stuck home has nothing to `cat` or `grep` among those records and reads them
-through this program's own views; stage and service logs under the home remain ordinary files.
-`assistant db path` is the way out for the records. It prints the database file of the home it
-acted on, so a reader of the person's own can be pointed at the records. It names where the file
-is rather than reading it: it creates nothing, opens no database and asks the service nothing, so
-it answers the same with the service up or down, which is when a person debugging a stuck home
-asks. Opening the file read-only is the reader's to do, and so is managing a file the service may
-be writing; this answers where the file is and promises nothing about the read. The answer is a detailed evidence document in P13's sense and the one printed with nothing
-before it, because a caller composes it into another command line, which P13 says. The printed line is
-not the file name byte for byte when the path holds a control character: that character is
-escaped, as this program escapes one in any line it prints. The structured answer keeps a control
-character, so a caller that reads `--json` recovers the path. A byte that is not valid UTF-8
-becomes the replacement character in the structured answer, which is Go's JSON encoding and not
-this verb's choice; the printed line keeps that byte when the path holds no control character, so
-it is the answer that still names the file. This verb does not repair a path the structured answer
-has already rewritten. Naming the file
-adds no second source of truth: the records in it are the truth, read and written through the
-store on section 8's, P8's and P15's terms, and what this verb hands out is a path that nothing
-in the program reads back.
+**Reading the records without this program.** The durable records of a home live in its embedded
+database, so a person debugging a stuck home has nothing to `cat` or `grep` among those records and
+reads them through this program's own views; stage and service logs, configuration, and other
+files under the home remain ordinary files beside them. `assistant db path` is the way out for the
+records. It prints the database file of the home it acted on, so a reader of the person's own can
+be pointed at the records. It names where the file is rather than reading it: it creates nothing,
+opens no database and asks the service nothing, so it answers the same with the service up or down,
+which is when a person debugging a stuck home asks. Opening the file read-only is the reader's to
+do, and so is managing a file the service may be writing; this answers where the file is and
+promises nothing about the read. The answer is a detailed evidence document in P13's sense and the
+one printed with nothing before it, because a caller composes it into another command line, which
+P13 says. The printed line is not the file name byte for byte when the path holds a control
+character: that character is escaped, as this program escapes one in any line it prints. The
+structured answer keeps a control character, so a caller that reads `--json` recovers the path. A
+byte that is not valid UTF-8 becomes the replacement character in the structured answer, which is
+Go's JSON encoding and not this verb's choice; the printed line keeps that byte when the path
+holds no control character, so it is the answer that still names the file. This verb does not
+repair a path the structured answer has already rewritten. Naming the file adds no second source of
+truth: the records in it are the truth, read and written through the store on section 8's and P8's
+terms, and what this verb hands out is a path that nothing in the program reads back.
 
 Answering a hold is a flag on `assistant`, and it takes a task as well as a run, so a
 hold a task raised with no run behind it, an investigation's among them, is answered the same

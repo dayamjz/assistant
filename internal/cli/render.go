@@ -70,7 +70,7 @@ type Rendering struct {
 	Voice Voice
 }
 
-// Voice is the rule P13 holds one renderer's lines to. It is one of three,
+// Voice is the rule P13 holds one renderer's lines to. It is one of four,
 // and the renderings table gives every row exactly one.
 type Voice int
 
@@ -91,13 +91,12 @@ const (
 	// relay of a finding that needs a decision - which P13 lets keep exact
 	// identifiers and stage names. P13's list holds a fifth document,
 	// section 9's db path, and that one is written with no phrase before it,
-	// which is VoiceValue rather than this. Its
-	// row carries the phrase-table row that points a person at it, and writeEvidence,
-	// which the run renderer writes the first and last through, and
-	// writePointed, which readOut writes the usage view and the log view
-	// through, write that row first,
-	// because the message that points at an evidence document stays
-	// phrased.
+	// which is VoiceValue rather than this. A VoiceEvidence row carries the
+	// phrase-table row that points a person at it, and writeEvidence, which
+	// the run renderer writes the first and last through, and writePointed,
+	// which readOut writes the usage view and the log view through, write
+	// that row first, because the message that points at an evidence
+	// document stays phrased. VoiceValue carries no such pointer.
 	VoiceEvidence
 	// VoiceValue is a renderer whose whole answer is one value a caller
 	// composes into another command line, and which writes that value alone:

@@ -2,10 +2,13 @@ package cli_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/cli"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
@@ -131,5 +134,68 @@ func TestTheDatabaseVerbServesItsSubcommandAndNothingElse(t *testing.T) {
 		if !strings.Contains(help.stdout, row[0]) || !strings.Contains(help.stdout, row[1]) {
 			t.Errorf("the help does not list %q with its summary %q:\n%s", row[0], row[1], help.stdout)
 		}
+	}
+}
+
+// TestTheDatabasePathCreatesNothing holds the stuck-home promise: the verb
+// names the file and does not create the home. A --home that has never been
+// opened stays absent after the answer, so inserting a Create would fail this.
+func TestTheDatabasePathCreatesNothing(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "never-created")
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("%s should be absent before the command: %v", root, err)
+	}
+	got := runArgs(t, t.TempDir(), "--home", root, "db", "path")
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant --home %s db path exited %s:\n%s%s", root, got.code, got.stdout, got.stderr)
+	}
+	want := filepath.Join(root, "state.db") + "\n"
+	if got.stdout != want {
+		t.Errorf("assistant db path wrote %q, want %q", got.stdout, want)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("db path created %s; the verb promises to create nothing", root)
+	}
+}
+
+// TestTheDatabasePathWithAControlCharacterIsRecoveredFromJSON holds the
+// fidelity claim for machine.Database: a control character in the home root
+// is escaped on the printed line and kept in the structured answer, so a
+// caller that reads --json recovers the path.
+func TestTheDatabasePathWithAControlCharacterIsRecoveredFromJSON(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	root := filepath.Join(t.TempDir(), "a\tb")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	h, err := home.Open(root)
+	if err != nil {
+		t.Fatalf("opening the home: %v", err)
+	}
+	path := h.Database()
+
+	got := run(t, h, filepath.Dir(root), "db", "path")
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant db path exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stdout, "\t") {
+		t.Errorf("the printed path carries a raw tab: %q", got.stdout)
+	}
+	if !strings.Contains(got.stdout, `\x09`) {
+		t.Errorf("the printed path does not escape the tab as \\x09: %q", got.stdout)
+	}
+
+	document := run(t, h, filepath.Dir(root), "--json", "db", "path")
+	if document.code != machine.ExitOK {
+		t.Fatalf("assistant --json db path exited %s:\n%s%s", document.code, document.stdout, document.stderr)
+	}
+	var answer machine.Database
+	if err := json.Unmarshal([]byte(document.stdout), &answer); err != nil {
+		t.Fatalf("the answer is not one database document: %v\n%s", err, document.stdout)
+	}
+	if answer.Path != path {
+		t.Errorf("--json recovered %q, want the home's database %q", answer.Path, path)
 	}
 }
