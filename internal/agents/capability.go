@@ -94,10 +94,13 @@ const (
 	CapabilityTerminalWorkers Capability = "terminal_workers"
 	// CapabilityTerminalInterrupt is an adapter whose terminal workers can
 	// have a running turn ended while the agent goes on, with the end read
-	// off the screen: PRD section 6's interrupt under the tmux provider.
+	// off the screen. That reading is the proof PRD section 12 asks an
+	// adapter for before an interrupt is offered; section 6 still says the
+	// surface offers none, and nothing in this package serves one.
 	// TerminalWorker.Interrupt is the mechanism, InterruptTerminalWorker
-	// the route, and the interrupt key the adapter's terminal typing names
-	// is what Resolve checks a declaration against. Claude Code declares it
+	// the route, and the interrupt key and screen reader the adapter's
+	// terminal typing names, which are both of what the mechanism needs,
+	// are what Resolve checks a declaration against. Claude Code declares it
 	// over Escape, on the observations claudeterminal.go records; the
 	// scripted adapter reads no screen, so it could prove nothing and does
 	// not. It is a claim about terminal workers only: an interrupt over a
@@ -178,7 +181,14 @@ var capabilityTable = []capabilitySpec{
 	}, nil},
 	{CapabilityTerminalInterrupt, func(r Runner) bool {
 		typer, ok := r.(terminalTyper)
-		return ok && typer.terminalTyping().interrupt != ""
+		if !ok {
+			return false
+		}
+		// Both halves Interrupt needs: the key to press and the reading
+		// that says a turn is running and then that it ended. An adapter
+		// with one of them would pass Resolve and refuse every interrupt.
+		typing := typer.terminalTyping()
+		return typing.interrupt != "" && typing.read != nil
 	}, nil},
 	{CapabilityReportsInputTokens, nil, func(u Usage) Count { return u.InputTokens }},
 	{CapabilityReportsOutputTokens, nil, func(u Usage) Count { return u.OutputTokens }},

@@ -202,12 +202,20 @@ import (
 //     in a pasted-content element rather than as the bare text: the CLI
 //     collapsed a four-line paste on screen and sent it that way, and took
 //     ten kilobytes whole the same way.
-//   - The Claude Code typing rests on what one CLI version, 2.1.301, drew
-//     and read: the footer and input text claudeScreen reads, the state
-//     file's keys, and the approval's twenty characters. A later CLI that
-//     draws something else is refused at start or at a send rather than
-//     typed at blind; one that draws the same and reads its input otherwise
-//     is not noticed here.
+//   - A Claude Code worker's instructions and every send reach its model
+//     with the space in each prefix claudeScreen reads swapped, wherever
+//     in the text it sits, so no row of them can begin as the interface's
+//     own rows do. Prose and code that name one of those prefixes arrive
+//     changed, and a file the model writes from that text verbatim carries
+//     the no-break space the swap put there; defused says what that costs.
+//   - The Claude Code typing rests on what two CLI versions drew and read,
+//     which claudeObservedVersion names: 2.1.301 for the footer and input
+//     text claudeScreen reads, the state file's keys and the approval's
+//     twenty characters, and 2.1.308 for the interrupt key, the cursor the
+//     layout rests on and the mark that says the input holds text. A later
+//     CLI that draws something else is refused at start or at a send rather
+//     than typed at blind; one that draws the same and reads its input
+//     otherwise is not noticed here.
 //   - A send to a Claude Code worker waits for the turn running when it is
 //     made, so a caller whose bound is shorter than a turn has its text
 //     refused, nothing typed, rather than queued. The CLI was seen to queue
@@ -349,7 +357,9 @@ type TerminalWorker interface {
 	// is read off the screen, which carries a message a person may have
 	// typed at the pane themselves, so the bullets below this interface say
 	// what that costs. A wait ctx ends is an
-	// error wrapping ErrTerminalNotReady saying whether the key was typed;
+	// error wrapping ErrTerminalNotReady saying whether the key was typed,
+	// and so is a client that failed to carry the key, which says instead
+	// that the terminal may have taken it;
 	// also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
 	// adapter whose typing names no key. It never types anything but the
 	// key, so no text in the input is ever cleared.
@@ -560,7 +570,10 @@ const terminalBuffer = "assistant-send"
 // drawn within the bound, and at a send, one that did not read ready to be
 // typed into before the send's ctx ended; at either, a screen whose reading
 // ran past tmuxReadBound. Nothing is typed into a screen that has not read
-// ready, so a send refused with it typed nothing. It is wrapped together
+// ready, so a send refused with it typed nothing. An interrupt refused with
+// it says in its own message whether the key was pressed: it was where the
+// turn was not read to have ended after the press, and whether it was is
+// not known where the client carrying it failed. It is wrapped together
 // with ctx's error where ctx is what ended the wait, and with
 // ErrTerminalClientTimedOut where a reading did.
 var ErrTerminalNotReady = errors.New("agents: the terminal worker's screen did not read ready")
@@ -1197,7 +1210,10 @@ func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
 		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
 			return false, ErrWorkerEnded
 		}
-		return false, fmt.Errorf("typing the interrupt into the terminal: %w", err)
+		// The client failed or ran out of time, and the server may have
+		// taken the key before either, so this is the one answer that
+		// cannot say whether the key landed.
+		return false, fmt.Errorf("%w: typing the interrupt into the terminal, which may have taken the key anyway: %w", ErrTerminalNotReady, err)
 	}
 	if err := w.await(ctx, func(s screenState) bool { return s == screenReady }); err != nil {
 		return false, fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err)
