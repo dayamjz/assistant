@@ -20,8 +20,9 @@ import (
 // is what makes the Claude Code adapter a TerminalWorkerRunner, and
 // Capabilities declares the same fact.
 //
-// Everything below was observed of Claude Code 2.1.301 in a tmux pane,
-// against a local server standing in for the model (#254), and nothing here
+// Everything below was observed of Claude Code in a tmux pane, against a
+// local server standing in for the model (#254), on the versions
+// claudeObservedVersion names, and nothing here
 // re-checks it at run time except the one wait the screen reader states.
 // Where a later CLI draws or reads differently, the start or a send is
 // refused rather than typed blind, which is as far as that wait reaches.
@@ -273,9 +274,15 @@ const claudeConfigVariable = "CLAUDE_CONFIG_DIR"
 // observed to keep as its approval.
 const claudeApprovalSuffix = 20
 
-// claudeObservedVersion is the Claude Code version every observation this
-// file and claudeScreen rest on was made on.
-const claudeObservedVersion = "2.1.301"
+// claudeObservedVersion names the Claude Code versions the observations
+// this file and claudeScreen rest on were made on. The start, the state
+// file, the framing and the footer and input text claudeScreen reads are
+// 2.1.301's; claudeInterruptKey, the busy mark dropping once the input
+// holds text, the cursor claudeLayout rests on, the mark that says an
+// input holds text and the interrupted line are 2.1.308's. Each piece
+// says which, and a reader holding a CLI against a stated version has
+// both to hold it against.
+const claudeObservedVersion = "2.1.301 and 2.1.308"
 
 // ErrNoCredential is the refusal to start an agent whose credential is not
 // in its environment. The error wrapping it names every variable that
@@ -410,6 +417,13 @@ func sessionIdentifier() (string, error) {
 // any word of a message can be the first thing on a row. With the prefixes
 // broken, none of a message's rows begins with one, wherever the CLI breaks
 // its lines.
+//
+// Nothing here tells a prefix a message is talking about from one a row
+// could begin with, so that swap reaches prose and code alike: a task that
+// says to write "tool: gofmt" into a file hands the model a no-break space
+// in it, and a file written from that text verbatim carries the no-break
+// space, which a reader that takes only a plain space for white space
+// (YAML among them) does not accept. Nothing puts it back.
 func defused(text string) string {
 	if strings.HasPrefix(text, "!") || strings.HasPrefix(text, "/") {
 		text = " " + text

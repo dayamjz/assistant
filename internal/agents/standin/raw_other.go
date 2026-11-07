@@ -13,3 +13,7 @@ import (
 func makeRaw(int) (func(), error) {
 	return nil, errors.New("standin: no raw terminal mode on " + runtime.GOOS)
 }
+
+// columns reads no terminal width on this platform, which leaves the screen
+// counting one row per line. Nothing reaches it: makeRaw refuses first.
+func columns(int) int { return 0 }

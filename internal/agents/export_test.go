@@ -55,7 +55,7 @@ func ReadClaudeScreen(screen string, cursor int) string {
 // is, so a test can build a line the pane draws over more than one row.
 const TerminalWidth = terminalWidth
 
-// ClaudeObservedVersion is the Claude Code version the terminal mode's
+// ClaudeObservedVersion names the Claude Code versions the terminal mode's
 // observations were made on.
 const ClaudeObservedVersion = claudeObservedVersion
 

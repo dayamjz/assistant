@@ -248,9 +248,10 @@
 // Interactive mode is the Claude Code adapter's terminal worker:
 // --ax-screen-reader among the flags before "--", and no --print. New's
 // runner starts one through agents.OpenTerminalWorker, in a tmux pane. It
-// models the CLI's interactive interface as it was observed in a tmux pane,
-// on version 2.1.301 with that flag, against a local server standing in
-// for the model (#254), and serveInteractiveWorker and input state its
+// models the CLI's interactive interface as it was observed in a tmux pane
+// with that flag, against a local server standing in for the model (#254):
+// on version 2.1.301, except for what the Escape key does, which is
+// 2.1.308's. serveInteractiveWorker and input state its
 // rules. In short: it puts its terminal in raw mode and asks for bracketed
 // paste; it opens on a first-run screen, and never leaves it, unless the
 // .claude.json in its CLAUDE_CONFIG_DIR records onboarding, trust for the
@@ -267,7 +268,7 @@
 // model's reply is the script's, a "!" command is not run, a paste is not
 // collapsed or wrapped, the footer is modelled in acceptEdits mode only,
 // and no first-run screen answers a key. Like the stream mode's sources,
-// this is an observation of one version that nothing here re-checks;
+// this is an observation of versions nothing here re-checks;
 // internal/agents runs the same probe against an installed CLI where there
 // is one, and says what the model rests on where there is not. The
 // environment is still not recorded: the key is read to check an approval
