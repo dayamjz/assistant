@@ -185,15 +185,18 @@ func ofBinary(binary string) func(processTable, int) (bool, error) {
 // same processes ProcessesOf does. It is how the owner sweep and
 // leftAfterTests find a terminal server a test started, and the processes in
 // its panes, which run another program and are in no group or session of the
-// test's. It is a settled reading, as ProcessesOf's is. A process of
-// another user's whose environment cannot be read is not read as carrying
-// the identity, one of this user's is read again (processesWhere), and one
-// whose environment reads as empty is not read as carrying it. On some
-// macOS machines the read finds none for some programs, whatever they were
-// started with: on the one this was written on, every
-// process of Apple's /bin/sh, /bin/bash, /bin/zsh and /bin/sleep, read with
-// a probe of kern.procargs2; CI's macOS runner, by contrast, read the
-// environment of /bin/sh and /bin/sleep processes the tests started.
+// test's. It is a settled reading under the strict (nil-judge) rule
+// processesWhere uses for every listing that is not ProcessesOf: on Darwin,
+// ProcessesOf alone may pass over a non-candidate unread exit, and this
+// path does not inherit that exemption (#797). A process of another user's
+// whose environment cannot be read is not read as carrying the identity,
+// one of this user's is read again (processesWhere), and one whose
+// environment reads as empty is not read as carrying it. On some macOS
+// machines the read finds none for some programs, whatever they were
+// started with: on the one this was written on, every process of Apple's
+// /bin/sh, /bin/bash, /bin/zsh and /bin/sleep, read with a probe of
+// kern.procargs2; CI's macOS runner, by contrast, read the environment of
+// /bin/sh and /bin/sleep processes the tests started.
 func carrying(value string) ([]Process, error) {
 	return processesWhere(kernel{}, carries(value), nil)
 }
@@ -241,8 +244,10 @@ func (kernel) foreign(pid int) (bool, error)                 { return foreignPro
 func (kernel) isExiting(pid int) (bool, error)               { return exitingProcess(pid) }
 
 // tableRecord is what a read of the process table holds of one process
-// besides its number: its identity as agents.Identify reads it, its
-// parent's number, and the command name the table records for it.
+// besides its number: its PID and start (agents.EntryIdentity on Darwin,
+// including an unreaped exit the table still names; not the Identity
+// Identify returns for a zombie), its parent's number, and the command
+// name the table records for it.
 type tableRecord struct {
 	agents.Identity
 	parent int
