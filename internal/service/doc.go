@@ -513,12 +513,17 @@
 // terminals.go's terms, so internal/taskstate's process tier answers
 // Running from the Live probe of the recorded reference while the worker
 // runs and what precedence gives with Dead once it exits. One launch per
-// attempt per service, and a restart dispatches and launches again as a new
-// attempt over the standing copy, which is PRD section 11's relaunch in
-// place by the record's lights; the earlier process, if alive and still in
-// the copy, is ended by the sweep relaunch.go asks of the copy on Linux and
-// macOS, or, where its working directory cannot be read by this service and
-// neither of agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
+// attempt per service. A restart under session_provider tmux lets a worker
+// hosted in a terminal server of its own go rather than ending it
+// (decision 33), and the next start holds it again once section 11's step 5
+// verification passes, which the reconciliation section below owns; only a
+// terminal that reads Dead is relaunched in place as a new attempt over the
+// standing copy, which is PRD section 11's relaunch by the record's lights.
+// A pipe's worker cannot outlive the service and is ended and relaunched as
+// before. The earlier process of a relaunch, if alive and still in the copy,
+// is ended by the sweep relaunch.go asks of the copy on Linux and macOS, or,
+// where its working directory cannot be read by this service and neither of
+// agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
 // later start. Elsewhere there is no sweep, so the relaunch is refused and
 // holds for a person, and on a retry answer goes ahead with that process,
 // if any, an orphan this service holds no handle to and does not end. Worker

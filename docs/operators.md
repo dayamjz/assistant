@@ -1484,8 +1484,10 @@ it running the same way, and the next start holds it again too. Before it
 holds one, the service checks that the process the task's attempt recorded is
 still running with its recorded start time and that the worker's own server,
 on the socket the attempt recorded, answers with that process. A worker that
-fails that check is not held: it reads as unobservable and is reported as a
-terminal-gone wake rather than relaunched beside, until it ends.
+passes is held again and not relaunched. One whose process is gone reads Dead
+and is relaunched in place, counting toward `relaunch_attempts`. One that is
+still present but fails the check reads Unobserved: it is surfaced and left
+alone rather than relaunched beside, until it ends or verifies.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
