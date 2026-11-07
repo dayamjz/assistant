@@ -270,6 +270,10 @@ func (s *Service) AbandonSessionsForTest(tb testing.TB) {
 	tb.Cleanup(func() { runtime.KeepAlive(abandoned) })
 }
 
+// ReadoptBound is the bound holding one worker again at reconciliation is
+// held to, exposed so a test can hold Open to it.
+const ReadoptBound = readoptBound
+
 // ReconcileProbeBound is the bound one read of the fleet at reconciliation
 // is held to, exposed so a test can hold Open to it.
 const ReconcileProbeBound = reconcileProbeBound
