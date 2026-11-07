@@ -202,16 +202,50 @@ import (
 //     in a pasted-content element rather than as the bare text: the CLI
 //     collapsed a four-line paste on screen and sent it that way, and took
 //     ten kilobytes whole the same way.
-//   - The Claude Code typing rests on what one CLI version, 2.1.301, drew
-//     and read: the footer and input text claudeScreen reads, the state
-//     file's keys, and the approval's twenty characters. A later CLI that
-//     draws something else is refused at start or at a send rather than
-//     typed at blind; one that draws the same and reads its input otherwise
-//     is not noticed here.
+//   - A Claude Code worker's instructions and every send reach its model
+//     with the space in each prefix claudeScreen reads swapped, wherever
+//     in the text it sits, so no row of them can begin as the interface's
+//     own rows do. Prose and code that name one of those prefixes arrive
+//     changed, and a file the model writes from that text verbatim carries
+//     the no-break space the swap put there; defused says what that costs.
+//   - The Claude Code typing rests on what two CLI versions drew and read,
+//     which claudeObservedVersion names: 2.1.301 for the footer and input
+//     text claudeScreen reads, the state file's keys and the approval's
+//     twenty characters, and 2.1.308 for the interrupt key, the cursor the
+//     layout rests on and the mark that says the input holds text. A later
+//     CLI that draws something else is refused at start or at a send rather
+//     than typed at blind; one that draws the same and reads its input
+//     otherwise is not noticed here.
 //   - A send to a Claude Code worker waits for the turn running when it is
 //     made, so a caller whose bound is shorter than a turn has its text
 //     refused, nothing typed, rather than queued. The CLI was seen to queue
 //     a message pasted while a turn ran; nothing here relies on that.
+//   - The Claude Code typing tells its interface from the conversation
+//     above it by the row tmux reports the cursor on, since the
+//     conversation carries text this package did not write. One shape is
+//     read as not ready whichever it is: a conversation row quoting the
+//     footer and then one quoting the prompt with the no-break space the
+//     CLI draws before input text. Sends are refused, nothing typed, for
+//     as long as the pane draws it, and claudeLayout says why no reading
+//     tells it from a draft of several lines quoting the same two.
+//   - Whether a turn has begun its reply, which is what Interrupt presses
+//     the key on, is read from the conversation's rows the same way. A
+//     message this package sends draws none that read as a reply, because
+//     the typing defuses it, but one a person types at the pane is not
+//     defused: a message of theirs that draws a row beginning "claude: " or
+//     "tool: ", on a line of its own or where the CLI breaks a long line,
+//     reads as a reply begun before the model has sent anything. The key
+//     is then pressed on their turn, and the CLI answers it by putting
+//     their message back in the input, where it stays until they clear it,
+//     refusing sends. Nothing here reads the conversation for whose text
+//     it is, so this is a gap, not a measure.
+//   - The model's own reply is not defused either, and the reading starts
+//     at the last row that begins as a message does. A reply that draws
+//     one, a transcript or a quoted exchange among the shapes that do,
+//     hides every reply row above it, so a turn well into its answer reads
+//     as one that has drawn none. The interrupt then waits on a turn it
+//     could have ended and is refused at its bound with nothing pressed,
+//     which is the safe direction of the same gap.
 
 // TerminalWorkerRunner is a Runner that can be started as a terminal worker,
 // which is what CapabilityTerminalWorkers names: an adapter implements it
@@ -316,6 +350,43 @@ type TerminalWorker interface {
 	// answers Capture with its last screen, and its Close ends the worker's
 	// group and server by their verified identities and touches no path.
 	Release() error
+
+	// Interrupt ends the running turn and keeps the worker, the mechanism of
+	// CapabilityTerminalInterrupt. It takes turns with Send under ctx, then
+	// waits for a turn running that has drawn part of its reply with an
+	// empty input, or ready, which answers false with nothing pressed.
+	// Running, it presses the key once and answers true once the screen
+	// reads ready with the worker alive: a turn ended, perhaps by itself
+	// just before the key. A turn that has drawn none of its reply is waited
+	// on, because the CLI answered the key there by putting the message
+	// back in the input, which nothing here takes out again; so is any
+	// other screen, text in the input among them. Whether a reply has begun
+	// is read off the screen, which carries text this package did not
+	// write, a message a person typed at the pane among it, so the bullets
+	// in this file's comment say what that costs. Every refusal is an
+	// *InterruptRefused, whose Key says what the key did and which carries
+	// the refusal itself: ErrTerminalNotReady for a wait that ran out, be
+	// it for the slot, for a turn to read running, or for the turn to end
+	// after the key, and for a client that failed to carry the key;
+	// ErrWorkerEnded or ErrWorkerReleased for a worker that is gone or let
+	// go, which either wait can find after the key as well as before it;
+	// and a *CapabilityError for an adapter that declares the capability
+	// without the key or the screen reading it rests on. Only Key tells a
+	// caller whether it may press again, and no refusal is its own answer
+	// to that. It never types anything but the
+	// key, so no text in the input is ever cleared.
+	Interrupt(ctx context.Context) (bool, error)
+}
+
+// InterruptTerminalWorker is w.Interrupt for a worker r started, refused
+// with an *InterruptRefused carrying a *CapabilityError, nothing read or
+// pressed, when r has not declared CapabilityTerminalInterrupt, as
+// OpenTerminalWorker reads its declaration.
+func InterruptTerminalWorker(ctx context.Context, r Runner, w TerminalWorker) (bool, error) {
+	if !r.Capabilities().Has(CapabilityTerminalInterrupt) {
+		return false, refuseInterrupt(InterruptKeyUnpressed, &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"})
+	}
+	return w.Interrupt(ctx)
 }
 
 // ErrWorkerEnding is Release's refusal of a worker whose end has already
@@ -512,10 +583,68 @@ const terminalBuffer = "assistant-send"
 // drawn within the bound, and at a send, one that did not read ready to be
 // typed into before the send's ctx ended; at either, a screen whose reading
 // ran past tmuxReadBound. Nothing is typed into a screen that has not read
-// ready, so a send refused with it typed nothing. It is wrapped together
+// ready, so a send refused with it typed nothing. An interrupt is not a
+// send and may be refused with it after its key: what the key did is
+// *InterruptRefused's to say, not this error's. It is wrapped together
 // with ctx's error where ctx is what ended the wait, and with
 // ErrTerminalClientTimedOut where a reading did.
 var ErrTerminalNotReady = errors.New("agents: the terminal worker's screen did not read ready")
+
+// InterruptKey is what a refused interrupt did with its key. It is the one
+// fact a caller needs before it asks again, because a second key reaches a
+// CLI that has already answered the first: the Claude Code adapter's was
+// observed to open a rewind menu there.
+type InterruptKey int
+
+const (
+	// InterruptKeyUnpressed is a refusal from before the key: the terminal
+	// was never typed into, so the turn is as the interrupt found it.
+	InterruptKeyUnpressed InterruptKey = iota
+	// InterruptKeyTyped is a refusal from after the terminal took the key:
+	// what it did with it was not read, so the turn may have ended.
+	InterruptKeyTyped
+	// InterruptKeyUnknown is the refusal that cannot tell: the key was
+	// carried to a client that failed, and a server behind it may have
+	// taken the key before the failure or never seen it.
+	InterruptKeyUnknown
+)
+
+// String names the key's state as the refusals do.
+func (k InterruptKey) String() string {
+	switch k {
+	case InterruptKeyUnpressed:
+		return "pressed nothing"
+	case InterruptKeyTyped:
+		return "typed the key"
+	case InterruptKeyUnknown:
+		return "may have typed the key"
+	}
+	return fmt.Sprintf("InterruptKey(%d)", int(k))
+}
+
+// InterruptRefused is every refusal TerminalWorker.Interrupt answers with,
+// so a caller reads the key's state off the type rather than off the words:
+// errors.As gives Key, and errors.Is reaches the refusal underneath
+// unchanged, whichever it is. Its message is that refusal's, which says the
+// same thing in words for whoever reads a log.
+type InterruptRefused struct {
+	// Key is what the interrupt did with its key before it was refused.
+	Key InterruptKey
+	// Err is the refusal itself, the error a caller matches against.
+	Err error
+}
+
+// Error is the underlying refusal's message.
+func (e *InterruptRefused) Error() string { return e.Err.Error() }
+
+// Unwrap is the refusal this one carries.
+func (e *InterruptRefused) Unwrap() error { return e.Err }
+
+// refuseInterrupt is the one way an interrupt is refused: it states what the
+// key did beside the refusal rather than leaving a caller to read the words.
+func refuseInterrupt(key InterruptKey, err error) error {
+	return &InterruptRefused{Key: key, Err: err}
+}
 
 // screenState is what an adapter's reader makes of a terminal worker's
 // screen.
@@ -532,7 +661,23 @@ const (
 	// screenReady is the interface drawn with no turn running and nothing
 	// in its input, which is the one state a send types into.
 	screenReady
+	// screenBusy is a turn running that has drawn part of its reply, with
+	// nothing in the input: the one state an interrupt presses its key on.
+	screenBusy
 )
+
+// terminalScreen is one reading of a terminal worker's pane: its visible
+// rows, one row per line as the pane holds them, and the row tmux reported
+// its cursor on, which is the row the agent's own input ends on. Any row
+// can read like the interface's own, since the rows carry a conversation
+// of text the agent was sent and text a model answered, while the cursor
+// is the server's answer rather than anything drawn, so it is the one part
+// of a reading text cannot write. cursor is -1 where the server reported
+// none, which no reader may take for a row.
+type terminalScreen struct {
+	rows   []string
+	cursor int
+}
 
 // terminalTyping is how an adapter types into a terminal worker: the bytes
 // one send is typed as, how they are pasted, and how its screen is read. It
@@ -551,7 +696,17 @@ type terminalTyping struct {
 	// start returns only once it reads other than screenNotDrawn, and a send
 	// types only once it reads screenReady. Nil, nothing is read and every
 	// send is typed at once.
-	read func(screen string) screenState
+	read func(screen terminalScreen) screenState
+	// interrupt is the tmux name of the key that ends a running turn, which
+	// Interrupt presses, empty for an adapter with none; it is what
+	// CapabilityTerminalInterrupt's row reads.
+	interrupt string
+}
+
+// terminalTyper is a runner whose workers are typed into with the typing it
+// answers, so the capability table reads the value the workers use.
+type terminalTyper interface {
+	terminalTyping() terminalTyping
 }
 
 // tmuxWorker is the TerminalWorker over one tmux server this package
@@ -580,9 +735,9 @@ type tmuxWorker struct {
 	// path after this handle has freed it.
 	serverOnce sync.Once
 
-	// sendMu serializes sends, the instructions among them, so text arrives
-	// in the order it was sent.
-	sendMu sync.Mutex
+	// slot serializes sends and interrupts, taken under the caller's ctx
+	// (takeSlot), so text arrives in the order it was sent.
+	slot chan struct{}
 
 	captureMu sync.Mutex
 	last      Capture
@@ -714,6 +869,7 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		hurry:    hurryOf(ctx),
 		maxOut:   spec.maxOut,
 		typing:   typing,
+		slot:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
 		released: make(chan struct{}),
 	}
@@ -759,6 +915,12 @@ func commandSize(args []string) int {
 	return n
 }
 
+// terminalWidth is how many columns wide the pane a worker's server opens
+// is. An agent draws its interface to fit it and wraps what does not, so it
+// is how long a line of a message can be before the pane draws it over
+// several rows, which is a fact a screen reader has to answer for.
+const terminalWidth = 200
+
 // tmuxNewSessionArgs is the argument vector startTerminalWorker passes to tmux
 // when starting a worker in dir with bin and workerArgs.
 func tmuxNewSessionArgs(t Terminal, dir, bin string, workerArgs []string) ([]string, error) {
@@ -766,7 +928,7 @@ func tmuxNewSessionArgs(t Terminal, dir, bin string, workerArgs []string) ([]str
 		return nil, err
 	}
 	return append([]string{"-S", t.Socket, "-f", os.DevNull,
-		"new-session", "-d", "-s", terminalTarget, "-x", "200", "-y", "50", "-c", dir,
+		"new-session", "-d", "-s", terminalTarget, "-x", strconv.Itoa(terminalWidth), "-y", "50", "-c", dir,
 		"-P", "-F", "#{pane_pid} #{pid}", "--", bin}, workerArgs...), nil
 }
 
@@ -822,11 +984,35 @@ func (w *tmuxWorker) await(ctx context.Context, ok func(screenState) bool) error
 	}
 }
 
-// screen is the pane's visible screen, with lines tmux wrapped joined back.
-func (w *tmuxWorker) screen(ctx context.Context) (string, error) {
+// screen is the pane's visible screen: the server's cursor row and then
+// its rows, asked for in one client call rather than two, so that this
+// package does not pair readings it asked for at different times. What the
+// server does between the two commands of one call it does not say, and
+// nothing here checks it. The rows are taken as the pane holds them, one
+// to a line, rather than with the lines tmux wrapped joined back, so that a
+// row's index is the row the cursor is reported on; a pane too narrow to
+// draw the reader's marks on one row therefore reads as no interface, which
+// waits and refuses rather than typing blind. An answer whose first line is
+// not a row number is read with no cursor, which no reader takes for ready.
+func (w *tmuxWorker) screen(ctx context.Context) (terminalScreen, error) {
 	out, err := tmuxOutput(ctx, tmuxReadBound, "the client reading the screen", procgroup.Command(w.terminal.Tmux, "-S", w.terminal.Socket,
-		"capture-pane", "-p", "-J", "-t", terminalTarget))
-	return string(out), err
+		"display-message", "-p", "-t", terminalTarget, "#{cursor_y}", ";",
+		"capture-pane", "-p", "-t", terminalTarget))
+	return parseTerminalScreen(string(out)), err
+}
+
+// parseTerminalScreen reads what screen asked tmux for: the cursor's row on
+// the first line and the pane's rows after it.
+func parseTerminalScreen(answer string) terminalScreen {
+	where, rows, found := strings.Cut(answer, "\n")
+	if !found {
+		return terminalScreen{cursor: -1}
+	}
+	cursor, err := strconv.Atoi(strings.TrimSpace(where))
+	if err != nil || cursor < 0 {
+		cursor = -1
+	}
+	return terminalScreen{rows: strings.Split(rows, "\n"), cursor: cursor}
 }
 
 // parseTerminalAnswer reads the line the server prints for a new session,
@@ -994,8 +1180,11 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 	if err != nil {
 		return err
 	}
-	w.sendMu.Lock()
-	defer w.sendMu.Unlock()
+	release, err := w.takeSlot(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	select {
 	case <-w.done:
 		return ErrWorkerEnded
@@ -1045,6 +1234,70 @@ func (w *tmuxWorker) Send(ctx context.Context, text string) error {
 		return fmt.Errorf("typing into the terminal: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// takeSlot takes the slot under ctx and returns its release; ctx ending
+// first is ErrTerminalNotReady with ctx's error, nothing typed.
+func (w *tmuxWorker) takeSlot(ctx context.Context) (func(), error) {
+	select {
+	case w.slot <- struct{}{}:
+		return func() { <-w.slot }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: waiting for a send or an interrupt ahead of this one: %w", ErrTerminalNotReady, ctx.Err())
+	}
+}
+
+// Interrupt ends the turn the worker is running and keeps the worker, on
+// the terms TerminalWorker.Interrupt states.
+func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
+	if w.typing.interrupt == "" || w.typing.read == nil {
+		return false, refuseInterrupt(InterruptKeyUnpressed,
+			&CapabilityError{Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"})
+	}
+	release, err := w.takeSlot(ctx)
+	if err != nil {
+		return false, refuseInterrupt(InterruptKeyUnpressed, fmt.Errorf("the interrupt pressed nothing: %w", err))
+	}
+	defer release()
+	select {
+	case <-w.done:
+		return false, refuseInterrupt(InterruptKeyUnpressed, ErrWorkerEnded)
+	default:
+	}
+	if w.isReleased() {
+		return false, refuseInterrupt(InterruptKeyUnpressed, ErrWorkerReleased)
+	}
+	var read screenState
+	if err := w.await(ctx, func(s screenState) bool { read = s; return s == screenBusy || s == screenReady }); err != nil {
+		return false, refuseInterrupt(InterruptKeyUnpressed,
+			fmt.Errorf("the interrupt pressed nothing and no turn was read to be running with its reply begun: %w", err))
+	}
+	if read == screenReady {
+		return false, nil
+	}
+	if err := runTmux(ctx, tmuxTypeBound, "the client typing an interrupt", procgroup.Command(w.terminal.Tmux,
+		"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, w.typing.interrupt)); err != nil {
+		// The client failed or ran out of time, and the server may have
+		// taken the key before either, so neither this refusal nor the one
+		// for a worker gone by now can say whether the key landed.
+		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
+			return false, refuseInterrupt(InterruptKeyUnknown, ErrWorkerEnded)
+		}
+		return false, refuseInterrupt(InterruptKeyUnknown,
+			fmt.Errorf("%w: typing the interrupt into the terminal, which may have taken the key anyway: %w", ErrTerminalNotReady, err))
+	}
+	if err := w.await(ctx, func(s screenState) bool { return s == screenReady }); err != nil {
+		return false, refuseInterrupt(InterruptKeyTyped,
+			fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err))
+	}
+	select {
+	case <-w.done:
+		// The key was typed and the screen read ready after it, so the turn
+		// ended; the worker ending too is what there is no true answer for.
+		return false, refuseInterrupt(InterruptKeyTyped, ErrWorkerEnded)
+	default:
+	}
+	return true, nil
 }
 
 // Capture reads the pane on the terms the mechanism states.
@@ -1198,6 +1451,7 @@ func adoptTerminalWorker(ctx context.Context, t Terminal, pane Identity, spec pr
 		maxOut:   spec.maxOut,
 		typing:   typing,
 		cleanup:  spec.cleanup,
+		slot:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
 		released: make(chan struct{}),
 	}
