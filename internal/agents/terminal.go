@@ -356,12 +356,15 @@ type TerminalWorker interface {
 	// other screen, text in the input among them. Whether a reply has begun
 	// is read off the screen, which carries a message a person may have
 	// typed at the pane themselves, so the bullets below this interface say
-	// what that costs. A wait ctx ends is an
-	// error wrapping ErrTerminalNotReady saying whether the key was typed,
-	// and so is a client that failed to carry the key, which says instead
-	// that the terminal may have taken it;
-	// also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
-	// adapter whose typing names no key. It never types anything but the
+	// what that costs. Every refusal wrapping ErrTerminalNotReady says in
+	// its own message whether the key was pressed: a wait ctx ends before
+	// the key, for the slot or for a turn that reads running, says nothing
+	// was pressed; the wait for the turn to end after the key says it was
+	// typed; and a client that failed to carry the key says the terminal
+	// may have taken it anyway, which is the one answer that cannot tell.
+	// Also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
+	// adapter whose typing names no key, none of which pressed anything.
+	// It never types anything but the
 	// key, so no text in the input is ever cleared.
 	Interrupt(ctx context.Context) (bool, error)
 }
@@ -1187,7 +1190,7 @@ func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
 	}
 	release, err := w.takeSlot(ctx)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("the interrupt pressed nothing: %w", err)
 	}
 	defer release()
 	select {
@@ -1200,7 +1203,7 @@ func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
 	}
 	var read screenState
 	if err := w.await(ctx, func(s screenState) bool { read = s; return s == screenBusy || s == screenReady }); err != nil {
-		return false, err
+		return false, fmt.Errorf("the interrupt pressed nothing and no turn was read to be running with its reply begun: %w", err)
 	}
 	if read == screenReady {
 		return false, nil

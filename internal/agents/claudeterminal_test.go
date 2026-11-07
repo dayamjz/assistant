@@ -856,8 +856,9 @@ func interruptOneTurn(t *testing.T, progress string) {
 // reply, because Claude Code 2.1.308 answered Escape (and Control-C) there by
 // putting the message back in the input, which nothing can then take out
 // without risking a person's text: it waits, and is refused with
-// ErrTerminalNotReady once its context ends, the turn still running. Once
-// the reply has begun, the same turn is interrupted.
+// ErrTerminalNotReady once its context ends, saying that nothing was
+// pressed, the turn still running. Once the reply has begun, the same turn
+// is interrupted.
 func TestAClaudeTerminalInterruptWaitsForTheReplyToBegin(t *testing.T) {
 	const quiet = "a quiet long turn"
 	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
@@ -876,6 +877,11 @@ func TestAClaudeTerminalInterruptWaitsForTheReplyToBegin(t *testing.T) {
 	}
 	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("an interrupt of a turn that drew no reply answered %v, want ErrTerminalNotReady and the deadline", err)
+	}
+	// The contract is that a refusal says whether the key was pressed, and
+	// this is the refusal that comes before any press.
+	if !strings.Contains(err.Error(), "pressed nothing") {
+		t.Errorf("the refusal %q does not say that nothing was pressed", err)
 	}
 	call := awaitInteractive(t, agent, answered(2))
 	if len(call.Interrupted) != 0 || call.IdleEscapes != 0 {
