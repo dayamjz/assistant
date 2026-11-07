@@ -111,35 +111,42 @@ one, against GitHub's own billing documentation rather than against this page.
 `ci.yml` bounds its `check` job, which runs on both platforms, at 50 minutes,
 so one pull request's matrix is not small.
 
-Leaving Actions on is what gives the checks stage something to settle on, and
-is the only option that validates against this repository's real checks. It
-does not work on a fresh mirror for a head that changes code, and the reason is
-worth knowing before you choose:
+Leaving Actions on is what would validate against this repository's real
+checks. **On a fresh mirror it does not work at all, for any head**, so take
+the second option below until #827 is fixed. The reason is worth knowing, both
+because it is not obvious and because it decides nothing else in this runbook:
 
-- `ci.yml`'s **Prior check probe** step runs on `ubuntu-latest` for a pull
-  request whose diff is not docs-only. It calls
-  `scripts/prior-check.py --probe`, which asks the repository for its most
-  recent **successful `pull_request` run of `ci.yml`**. A fresh mirror has none,
-  so the script fails with `no successful pull_request CI run to probe against`
-  and returns 1, deliberately: its comment says an unreadable API "fails loudly
-  so the step cannot go green without checking either path". That fails
-  `check (ubuntu-latest)`, which is one of the five checks the gate waits on.
+- `ci.yml`'s **Prior check probe** step calls `scripts/prior-check.py --probe`,
+  which asks the repository for its most recent **successful `pull_request` run
+  of `ci.yml`**. A fresh mirror has none, so the script fails with
+  `no successful pull_request CI run to probe against` and returns 1,
+  deliberately: its comment says an unreadable API "fails loudly so the step
+  cannot go green without checking either path". That fails
+  `check (ubuntu-latest)`, one of the five checks the gate waits on.
+- **A docs-only head does not escape it.** The condition on the probe does
+  exclude a docs-only pull request, but the step that decides docs-only runs on
+  `macos-latest` only, so on Linux that output is never set and the exclusion
+  never fires. `ci.yml` says as much where it sets it: "Linux always runs the
+  full suite". The step before it, `Prior check`, is unconditional and reports
+  `run=true` for any pull request, since its skip is for pushes to `main`. So
+  the probe runs on Linux for every pull request the gate opens.
 - Nothing you can do on the mirror alone clears it. The probe needs a prior run
   whose **Test step itself succeeded**, not merely a green check: `decide`
-  skips any candidate whose suite did not run. A docs-only pull request is
-  green and does not qualify, because docs-only skips the suite. And the probe
-  step sits **before** the suite steps in the same job, so a run that fails the
-  probe never reaches the suite that would have qualified it.
+  skips any candidate whose suite did not run. And the probe step sits
+  **before** the suite steps in the same job, so a run that fails the probe
+  never reaches the suite that would have qualified it.
 - Editing the mirror's `ci.yml` is not the way around it. The gate rebases onto
   the mirror's default branch and reviews the difference from it, so a mirror
   whose `main` has diverged from this repository puts that divergence in every
   head's reviewed diff, as a change the head appears to revert.
 
-So the Actions-on path validates **docs-only heads** against the real checks
-today. For a head that changes code, use the Actions-off path below and say in
-your comparison that the checks stage settled on a declaration. Fixing the
-probe's fresh-repository case is a change to `scripts/prior-check.py`, not
-something this runbook can work around; it is issue #827.
+So on a fresh mirror, use the Actions-off path below for every head, and say in
+your comparison that the checks stage settled on a declaration rather than on
+checks. What this costs you is real: the checks and merge stages are then never
+exercised against live checks, which is the gap to report rather than paper
+over. Fixing the probe's fresh-repository case is a change to
+`scripts/prior-check.py`, not something this runbook can work around; it is
+issue #827.
 
 Turning them off takes a second step. An empty check list is not a pass: the
 run **waits** in the checks stage, re-reading, until `checks_timeout` elapses
