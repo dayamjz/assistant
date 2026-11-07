@@ -56,9 +56,12 @@ func (w *WorkerScript) refusal(line string) (string, bool) {
 // with no Contains to find the command after, and one with a Reply the Ran
 // would replace; and one whose Recorded lines cannot be played back as
 // Recorded says: beside a Reply, a Run or a Write they would replace, or
-// carrying a line with a newline in it; and a Refuse exchange beside
-// anything its refusal would replace.
+// carrying a line with a newline in it; a Refuse exchange beside
+// anything its refusal would replace; and a negative Turn.
 func (e Exchange) valid() error {
+	if e.Turn < 0 {
+		return fmt.Errorf("an exchange's turn of %v is negative", e.Turn)
+	}
 	if e.Refuse != "" && (e.Reply != "" || e.Run || e.Write || len(e.Recorded) > 0 || e.Ends) {
 		return errors.New("a Refuse exchange answers with a JSON-RPC error in place of a Reply, a Run, a Write, Recorded lines or an end, so it may have none of them")
 	}
