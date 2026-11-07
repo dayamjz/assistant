@@ -397,6 +397,28 @@ var ErrWorkerEnding = errors.New("agents: the worker is being ended, so it canno
 // handle no longer speaks for whatever runs on its socket.
 var ErrWorkerReleased = errors.New("agents: the worker's handle was released")
 
+// terminalPreflight is what an adapter whose terminal worker needs more of
+// its environment than its pipe worker does implements: the refusal
+// StartInTerminal would answer for that, read without starting anything.
+type terminalPreflight interface{ terminalPreflight() error }
+
+// TerminalStartable reports why r could not start a terminal worker here,
+// read before anything starts, or nil when nothing known stands in the way:
+// a *CapabilityError when r has not declared CapabilityTerminalWorkers, and
+// what the adapter's own start would refuse for its environment, which for
+// the Claude Code adapter is ErrNoCredential when neither of its credential
+// variables is set. A nil answer is not a promise that a start succeeds; it
+// is what a caller choosing between a terminal and a pipe can know first.
+func TerminalStartable(r Runner) error {
+	if !r.Capabilities().Has(CapabilityTerminalWorkers) {
+		return &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalWorkers, Path: "the terminal worker"}
+	}
+	if p, ok := r.(terminalPreflight); ok {
+		return p.terminalPreflight()
+	}
+	return nil
+}
+
 // ErrTerminalUnverified is AdoptTerminalWorker's refusal of a worker it
 // could not verify as the one named: the pane's process is gone or was
 // replaced, the server on the socket did not answer or named another pane,

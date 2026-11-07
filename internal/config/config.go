@@ -331,10 +331,11 @@ const (
 	DefaultCommitFixMessage = "fix: " + FixMessagePlaceholder
 	// DefaultDelivery is PRD section 10's default delivery posture: the gate.
 	DefaultDelivery = DeliveryGated
-	// DefaultSessionProvider is the reference provider, the one PRD section
-	// 12's phase 1 names, so a home whose operator chose nothing runs its
-	// workers exactly as it did before the key existed.
-	DefaultSessionProvider = SessionProviderPipe
+	// DefaultSessionProvider is auto: a worker is hosted in tmux where tmux
+	// is installed and its adapter can start a terminal worker, so it can
+	// outlive a restart of the service, and on a pipe otherwise (the owner's
+	// decision of 2026-11-05 on #763, PRD decision 33).
+	DefaultSessionProvider = SessionProviderAuto
 	// DefaultRemoteDisconnectGrace is PRD section 10's default for
 	// remote_disconnect_grace. Chosen, not measured.
 	DefaultRemoteDisconnectGrace = 30 * time.Minute
@@ -366,10 +367,19 @@ const (
 	// names it rather than start its workers some other way (its
 	// unhonored.go).
 	SessionProviderHerdr SessionProvider = "herdr"
+	// SessionProviderAuto is the default: each worker is hosted as
+	// SessionProviderTmux hosts it when a tmux binary is on the service's
+	// PATH, the adapter routing selected for it can start a terminal worker
+	// here (agents.TerminalStartable) and the home's path leaves room for
+	// the worker's socket, and as
+	// SessionProviderPipe hosts it otherwise. Routing does
+	// not require terminal workers under it, so no adapter is refused for
+	// lacking them; internal/service's sessionHost decides per launch.
+	SessionProviderAuto SessionProvider = "auto"
 )
 
 // sessionProviders is the closed set, in the order a refusal names them.
-var sessionProviders = []SessionProvider{SessionProviderPipe, SessionProviderTmux, SessionProviderHerdr}
+var sessionProviders = []SessionProvider{SessionProviderAuto, SessionProviderPipe, SessionProviderTmux, SessionProviderHerdr}
 
 // Recognized reports whether p is a member of the closed set.
 func (p SessionProvider) Recognized() bool { return slices.Contains(sessionProviders, p) }

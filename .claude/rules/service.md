@@ -160,8 +160,9 @@ paths: ["internal/service/**"]
   the service's `Terminals`, the one seam a terminal is observed through;
   liveness has one producer, the provider's probe, and nothing writes an
   event to say Running. Which provider a launch builds over the adapter
-  `agents.Route` selected, and `driverFor` over the resolved agent, is
-  `terminals.go`'s `sessionHost`, from the global layer only.
+  `agents.Route` selected is `terminals.go`'s `sessionHost`, and which
+  `driverFor` builds over the resolved agent its `driverHost` (auto keeps
+  subordinates on pipes), from the global layer only.
 - Reconciliation and relaunch: a launched task is never dispatched again;
   what a restart does about it is `reconcile.go`'s, whose `readoptWorkers`
   holds again, before the table reads, every tmux worker a restart let go

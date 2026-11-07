@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -95,16 +96,75 @@ import (
 // shared identity rule as they would for any provider. The service does not
 // fall back to the pipe provider: the operator chose an attachable terminal,
 // and a worker they cannot attach to is not what they chose.
-
+//
+// For auto, the default, it is the tmux provider when r could start a
+// terminal worker here (agents.TerminalStartable: it declares terminal
+// workers and, for the Claude Code adapter, a credential is in its
+// environment, which its pipe worker does not need), a tmux binary resolves
+// and the home's socket path fits the platform's limit, and the pipe provider otherwise, which is the fallback
+// auto names; Options.PipeByDefault makes it the pipe provider without
+// looking. Routing under auto does not require terminal
+// workers (routeWorker), so the adapter decides here and is never refused for
+// lacking them.
 func (s *Service) sessionHost(r agents.Runner) session.Host {
-	if s.cfg.SessionProvider != config.SessionProviderTmux {
-		return session.NewPipe(s.home, r)
+	switch s.cfg.SessionProvider {
+	case config.SessionProviderTmux:
+		tmux, err := tmuxBinary()
+		if err != nil {
+			s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
+		}
+		return session.NewTmux(s.home, r, tmux)
+	case config.SessionProviderAuto:
+		if host, ok := s.autoSessionHost(r); ok {
+			return host
+		}
+	}
+	return session.NewPipe(s.home, r)
+}
+
+// autoSessionHost is sessionHost's auto branch: the tmux provider when a
+// worker of r can be hosted there, else false so the caller builds a pipe.
+// A fallback is logged when r could have used a terminal (it declares
+// terminal workers) but did not: missing credential, no tmux binary, or a
+// home path too long for the socket. An adapter without terminal workers
+// stays on pipes with no log, which is the ordinary choice under auto;
+// doctor's session-provider row still names which provider auto picks.
+func (s *Service) autoSessionHost(r agents.Runner) (session.Host, bool) {
+	if !s.autoTmux {
+		return nil, false
+	}
+	if err := agents.TerminalStartable(r); err != nil {
+		var missing *agents.CapabilityError
+		if !errors.As(err, &missing) {
+			s.log.Printf("session_provider auto hosts %s on a pipe: %v", r.Name(), err)
+		}
+		return nil, false
 	}
 	tmux, err := tmuxBinary()
 	if err != nil {
-		s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
+		s.log.Printf("session_provider auto hosts %s on a pipe: no tmux binary on PATH (%v)", r.Name(), err)
+		return nil, false
 	}
-	return session.NewTmux(s.home, r, tmux)
+	if !session.TerminalFits(s.home, tmux) {
+		s.log.Printf("session_provider auto hosts %s on a pipe: the home path leaves no room for a terminal socket", r.Name())
+		return nil, false
+	}
+	return session.NewTmux(s.home, r, tmux), true
+}
+
+// driverHost is the provider driverFor builds over the resolved agent, which
+// starts every subordinate coordinator and answers by identity a reference no
+// launch holds: sessionHost's, except that auto is the pipe provider here.
+// auto is the default so that a task's worker can outlive a restart, which a
+// subordinate does not (PRD section 9's domain.delegate relaunches it at
+// restart), and the Claude Code adapter refuses a terminal-hosted
+// subordinate, so auto keeps subordinates where the earlier pipe default
+// had them. Probes answer on one identity rule under either provider.
+func (s *Service) driverHost(r agents.Runner) session.Host {
+	if s.cfg.SessionProvider == config.SessionProviderAuto {
+		return session.NewPipe(s.home, r)
+	}
+	return s.sessionHost(r)
 }
 
 // tmuxBinary is the absolute path of the tmux binary on this process's PATH.

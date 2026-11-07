@@ -100,3 +100,27 @@ func TestATerminalReferenceNamesItsSocket(t *testing.T) {
 		t.Errorf("Encode of a subordinate naming a terminal answered %v, want ErrReference", err)
 	}
 }
+
+// A home fits a terminal worker only when the socket Create would put under
+// it is within the platform's local socket path limit, so the default
+// provider can fall back to a pipe for a home whose root is too long rather
+// than refuse every launch there.
+func TestATerminalFitsOnlyAHomeShortEnoughForItsSocket(t *testing.T) {
+	short, err := home.Open("/tmp/h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !session.TerminalFits(short, "/usr/bin/tmux") {
+		t.Error("a short home does not fit a terminal worker")
+	}
+	long, err := home.Open("/tmp/" + strings.Repeat("l", 100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.TerminalFits(long, "/usr/bin/tmux") {
+		t.Error("a home past the socket path limit fits a terminal worker")
+	}
+	if session.TerminalFits(short, "tmux") {
+		t.Error("a relative tmux fits a terminal worker")
+	}
+}

@@ -170,12 +170,12 @@ With `housekeeping.interval` set, the supervisor also tells the coordinator when
 
 Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks in that project until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
 
-**Where workers run:** The default session provider is `pipe`: the worker is the service's own child, so a restart of the service ends it and it is relaunched in its copy. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers, and such a worker outlives `assistant service restart`: the next service picks it up again, with its context and no relaunch. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
+**Where workers run:** By default (`session_provider: auto`) each worker runs in a tmux server of its own wherever tmux is installed and its adapter can host it there (today Claude Code, with `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in the service's environment), so you can attach to it and it outlives a restart of the service: `assistant service restart` lets it keep running and the next service picks it up again, with its context and no relaunch. Elsewhere it runs on pipes as the service's own child and is relaunched in its copy after a restart. `session_provider: tmux` or `pipe` chooses one for every worker. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
 ```mermaid
 flowchart LR
     C["Coordinator"] --> P{"Place worker"}
-    P --> L["This machine\npipe or tmux"]
+    P --> L["This machine\ntmux or pipe"]
     P -. "Refused this build" .-> M["Another machine\nherdr bridge"]
     L --> I["Isolated repository copy"]
     I --> S["Supervision + durable state"]

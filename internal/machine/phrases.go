@@ -1544,9 +1544,10 @@ const (
 	// only when configuration names it.
 	CheckNamedOnlyAgents = "named-only agents"
 	// CheckSessionProvider is whether the operator's chosen terminal session
-	// provider can host workers on this machine: the default pipe always
-	// can, and tmux needs both a tmux binary and an agent that declares
-	// terminal_workers.
+	// provider can host workers on this machine: auto, the default, always
+	// can (tmux where it can host the worker, a pipe otherwise), pipe always
+	// can, and an explicit tmux needs both a tmux binary and an agent that
+	// declares terminal_workers.
 	CheckSessionProvider = "session provider"
 	// CheckCodeHost is whether what a run needs to reach the code host is
 	// here: the gh command line for a github.com upstream, and an access token

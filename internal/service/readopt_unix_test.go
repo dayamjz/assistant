@@ -20,7 +20,12 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// A restart of the service with three live tmux-hosted workers relaunches
+// defaultProviderGlobal is the home's configuration with no session
+// provider named, so the default decides.
+const defaultProviderGlobal = `{"supervision_beacon_interval": "1s"}`
+
+// A restart of the service with three live workers under the default
+// provider, which hosts each in tmux where tmux is installed, relaunches
 // none of them: the restart verb releases each worker rather than ending it,
 // its tmux server goes on running, and the next service re-adopts it from the
 // attempt's recorded session once re-adoption verifies the pane and the server
@@ -37,7 +42,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 	tmux := standin.Tmux(t)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
-	if err := os.WriteFile(h.ConfigFile(), []byte(tmuxGlobal+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(h.ConfigFile(), []byte(defaultProviderGlobal+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	subject := newSubject(t)
@@ -51,6 +56,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 
 	first := map[string]session.Reference{}
 	o, _ := workerOptions(t, h)
+	o.PipeByDefault = false
 	running, closeFirst := openService(t, o)
 	for _, id := range ids {
 		provider, launched := launchedSession(t, running.service, id)
@@ -78,6 +84,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 	}
 
 	o, _ = workerOptions(t, h)
+	o.PipeByDefault = false
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		for _, id := range ids {
 			provider, held, ok := running.service.SessionOf(id)
@@ -85,7 +92,7 @@ func TestARestartReadoptsThreeLiveTmuxWorkersAndRelaunchesNone(t *testing.T) {
 				t.Fatalf("the restarted service holds no session for task %s, so its worker was not re-adopted", id)
 			}
 			if _, tmux := provider.(*session.Tmux); !tmux {
-				t.Fatalf("task %s's worker is held through %T, want the tmux provider", id, provider)
+				t.Fatalf("task %s's worker is held through %T, want the tmux provider the default chose", id, provider)
 			}
 			if held.Reference() != first[id] {
 				t.Fatalf("task %s runs in session %s after the restart, want the same worker %s", id, held.Reference(), first[id])

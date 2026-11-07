@@ -189,6 +189,14 @@ type Options struct {
 	// the service without internal/cli passes, starts every subordinate
 	// with git alone and tells it of no route.
 	CoordinatorRoute string
+	// PipeByDefault resolves session_provider auto, the default, to the
+	// pipe provider for every worker, which is what auto resolves to on a
+	// machine with no tmux, rather than looking for tmux. internal/cli
+	// leaves it false, so the product hosts a worker in tmux wherever tmux
+	// is installed and the worker's adapter declares terminal workers; a
+	// test whose subject is not the provider sets it so its workers keep the
+	// pipe shape it scripts. It changes nothing under an explicit provider.
+	PipeByDefault bool
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
@@ -370,6 +378,10 @@ type Service struct {
 	housekeeping housekeepingState
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
+	// autoTmux is whether auto may host a worker in tmux: Open sets it to
+	// the opposite of Options.PipeByDefault, so a Service a test builds by
+	// hand rather than through Open hosts its workers on pipes.
+	autoTmux bool
 	// coordinatorRoute is Options.CoordinatorRoute, fixed when the service
 	// opens.
 	coordinatorRoute string
@@ -856,6 +868,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		stopping:                  make(chan struct{}),
 
 		workerRoute:      o.WorkerRoute,
+		autoTmux:         !o.PipeByDefault,
 		coordinatorRoute: o.CoordinatorRoute,
 		sweepCopy:        o.sweepCopy,
 	}
@@ -1241,8 +1254,9 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// The session provider is built over the agent as resolved, before the
 	// wrapper below takes its worker arm away; driver.sessions says why.
 	// A review or fix role's agent is not a worker, so the provider stays
-	// on the service agent.
-	sessions := s.sessionHost(resolution.Runner)
+	// on the service agent. It starts subordinate coordinators, which the
+	// default, auto, keeps on pipes (driverHost).
+	sessions := s.driverHost(resolution.Runner)
 	// Every invocation of a run passes through the resolved runner or the
 	// fixer it opens, so wrapping here is what registers each one's process
 	// group with the containment registry for as long as it runs; contain.go
