@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"net"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +25,7 @@ import (
 // this test started, and the socket the reference names is one this test
 // listens on and never accepts from, so a tmux client connects and waits,
 // as it does on a server that has stopped.
-func unansweredWorker(t *testing.T, h *home.Home, records *store.Store, adapter string) {
+func unansweredWorker(t *testing.T, h *home.Home, records *store.Store, adapter string) string {
 	t.Helper()
 	ctx := t.Context()
 	pane := exec.Command("sleep", "60")
@@ -66,13 +67,17 @@ func unansweredWorker(t *testing.T, h *home.Home, records *store.Store, adapter 
 	if err := records.SetAttemptSession(ctx, id, 1, ref.String(), store.SessionHost{}); err != nil {
 		t.Fatalf("recording the session of %s: %v", id, err)
 	}
+	return id
 }
 
 // Re-adoption waits on servers that do not answer once for them all, however
 // many there are: twelve workers whose servers never answer, more than any
 // batch a cap on how many are asked at once would take in one round, are
 // asked together under one readoptBound, so the pass is held back by that
-// bound and not by a multiple of it. None is held, since none verifies.
+// bound and not by a multiple of it. None is held, since none verifies. The
+// positive control is that every one was asked: re-adoption waited at least
+// the one bound, and the log says of each worker that its server did not
+// answer, so a re-adoption that skipped them does not pass here.
 func TestReadoptionWaitsOnceForEveryServerThatDoesNotAnswer(t *testing.T) {
 	standin.Tmux(t)
 	h, records := loopHomeConfigured(t, loopConfig)
@@ -84,8 +89,9 @@ func TestReadoptionWaitsOnceForEveryServerThatDoesNotAnswer(t *testing.T) {
 	}
 	runner := workerStandIn(t).Runner()
 	const workers = 12
+	var ids []string
 	for range workers {
-		unansweredWorker(t, h, records, runner.Name())
+		ids = append(ids, unansweredWorker(t, h, records, runner.Name()))
 	}
 	log, err := h.OpenLog(0)
 	if err != nil {
@@ -104,7 +110,30 @@ func TestReadoptionWaitsOnceForEveryServerThatDoesNotAnswer(t *testing.T) {
 		t.Fatalf("re-adoption behind %d servers that do not answer took %v, want under %v: it waited on them in rounds",
 			workers, took, 2*readoptBound)
 	}
+	if took < readoptBound {
+		t.Fatalf("re-adoption took %v, under the %v any server that does not answer costs, so it asked none", took, readoptBound)
+	}
 	if len(s.launched) != 0 {
 		t.Fatalf("re-adoption held %d workers whose servers never answered", len(s.launched))
+	}
+	unansweredInLog(t, serviceLogOf(t, h), ids)
+}
+
+// unansweredInLog fails unless the service log says of every task in ids
+// that its worker was not held again because its server did not answer.
+func unansweredInLog(t *testing.T, log string, ids []string) {
+	t.Helper()
+	for _, id := range ids {
+		found := false
+		for _, line := range strings.Split(log, "\n") {
+			if strings.Contains(line, "task "+id+"'s worker in terminal session") &&
+				strings.Contains(line, "was not held again") && strings.Contains(line, "did not answer with its pane") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("the service log does not say task %s's server was asked and did not answer:\n%s", id, log)
+		}
 	}
 }

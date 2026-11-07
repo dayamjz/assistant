@@ -5,6 +5,7 @@ package service_test
 import (
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -145,15 +146,17 @@ func TestASurvivorOfAHardStopIsHeldAgainAndAPlainStopEndsIt(t *testing.T) {
 }
 
 // A restart whose workers' tmux servers have stopped answering is held back
-// by them once, not once per worker: each re-adoption asks its server under
-// a bound of its own, and the service does not serve until reconciliation is
-// done, so asking them one after another would cost a bound per worker
-// before the first readiness answer, past the wait a restart gives its
-// successor. Four workers outlive a hard stop and their servers are then
-// stopped, so each pane is present and its server never answers. The next
-// service must open within three of the one bound, where one after another
-// takes at least four; it holds none of the workers, since none verifies,
-// and relaunches none, since each is present.
+// by them once, not once per worker: the re-adoptions are bounded, and the
+// service does not serve until reconciliation is done, so asking them one
+// after another would cost a bound per worker before the first readiness
+// answer, past the wait a restart gives its successor. Four workers outlive
+// a hard stop and their servers are then stopped, so each pane is present
+// and its server never answers. The next service must open within three of
+// the one bound, where one after another takes at least four; it holds none
+// of the workers, since none verifies, and relaunches none, since each is
+// present. The positive control is that each was asked: opening took at
+// least the one bound, and the log says of every worker that its server
+// did not answer, so a restart that skipped re-adoption does not pass here.
 //
 // It does not run in parallel: it bounds how long Open takes from above,
 // and the package's other tests beside it would be measuring their load.
@@ -208,6 +211,23 @@ func TestARestartBehindTmuxServersThatDoNotAnswerWaitsOnThemOnce(t *testing.T) {
 	if limit := time.Duration(len(servers)-1) * service.ReadoptBound; took >= limit {
 		t.Fatalf("the service behind %d tmux servers that do not answer took %v to open, want under %v: the re-adoptions waited one after another",
 			len(servers), took, limit)
+	}
+	if took < service.ReadoptBound {
+		t.Fatalf("the service opened in %v, under the %v a server that does not answer costs, so it asked none", took, service.ReadoptBound)
+	}
+	log := serviceLog(t, h)
+	for _, id := range ids {
+		asked := false
+		for _, line := range strings.Split(log, "\n") {
+			if strings.Contains(line, "task "+id+"'s worker in terminal session") &&
+				strings.Contains(line, "was not held again") && strings.Contains(line, "did not answer with its pane") {
+				asked = true
+				break
+			}
+		}
+		if !asked {
+			t.Fatalf("the service log does not say task %s's server was asked and did not answer:\n%s", id, log)
+		}
 	}
 	for _, id := range ids {
 		if _, _, held := running.service.SessionOf(id); held {
