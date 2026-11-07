@@ -170,7 +170,7 @@ With `housekeeping.interval` set, the supervisor also tells the coordinator when
 
 Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks on that copy's branch until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
 
-**Where workers run:** The default session provider is `pipe`: the worker is the service's own child. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
+**Where workers run:** The default session provider is `pipe`: the worker is the service's own child, so a restart of the service ends it and it is relaunched in its copy. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers, and such a worker outlives `assistant service restart`: the next service picks it up again, with its context and no relaunch. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
 ```mermaid
 flowchart LR
@@ -219,7 +219,7 @@ A validation gate is useful only if its failure behavior is clear. Assistant's d
 | --- | --- |
 | The upstream branch moves during delivery | Delivery is anchored to an observed commit; an unexpected move is refused rather than overwritten blindly. |
 | Hosted CI fails after a push | `fix_rounds.checks` defaults to 3. A check still failing after the last round parks the run. An explicit 0 holds for a person and makes no repair. [Operating the gate](docs/operators.md#keep-your-ci-required) says when a repair is reviewed and pushed, and when that path holds instead. |
-| A worker dies or the service restarts | Durable state and supervision support reconciliation, but uncertainty is surfaced; not every recovery path is automated. |
+| A worker dies or the service restarts | A worker running in tmux keeps running across a restart and is picked up again after a check that it is the recorded one; a worker that is gone is relaunched in its own copy, up to `relaunch_attempts`. One that cannot be checked is surfaced rather than relaunched beside; not every recovery path is automated. |
 | A requested agent/model/window is unsupported | Adapter capability checks refuse unsupported combinations rather than silently substituting them. |
 | Task work cannot safely be discarded | The isolated copy is kept; new work on that branch waits for a person's kept-work decision. |
 | A stage cannot establish enough evidence | It holds for a person rather than converting missing evidence into success. Not every non-zero command exit is a hold: the Document stage records it as a non-blocking note. |

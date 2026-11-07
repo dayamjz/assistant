@@ -163,13 +163,17 @@ paths: ["internal/service/**"]
   `agents.Route` selected, and `driverFor` over the resolved agent, is
   `terminals.go`'s `sessionHost`, from the global layer only.
 - Reconciliation and relaunch: a launched task is never dispatched again;
-  what a restart does about it is `reconcile.go`'s. `relaunch.go`'s
+  what a restart does about it is `reconcile.go`'s, whose `readoptWorkers`
+  holds again, before the table reads, every tmux worker a restart let go
+  (`launch.go`'s `releaseForRestart`) or a hard stop left. `relaunch.go`'s
   `relaunchTask` is the one relaunch, and `taskholds.go` owns the bound's
   hold and both no-sweep holds. Reconciliation writes no wake and no marker:
   the queue and the markers are the loop's, under its fence.
 - Stopping: `shutdown.go` is P15's stop half. `Shutdown` is `Close` under
   `stop_grace`; past it, or on a forced stop, it ends every group it
-  registered by force and the caller exits. Its header owns which groups and
+  registered by force and the caller exits; a restart lets go of every
+  worker that can outlive it once the protocol server is closed, under the
+  lock the force claims its groups under. Its header owns which groups and
   the gaps.
 - Supervisor loop: PRD section 5's supervisor loop lives in `supervise.go`;
   read its header before changing it, and for the residual gaps.
