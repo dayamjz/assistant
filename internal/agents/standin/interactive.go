@@ -1,7 +1,6 @@
 package standin
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 
 // The interactive mode models the Claude Code CLI's interactive interface as
 // it was observed in a tmux pane, on version 2.1.301 with --ax-screen-reader,
+// and for the interrupt keys on version 2.1.308,
 // against a local server standing in for the model. The package
 // documentation says what that observation was and what this does not model;
 // everything below is one rule of it, and each is one a typist can be failed
@@ -46,11 +46,20 @@ const (
 	keyScreen        = "Detected a custom API key in your environment"
 	keyChoice        = "Do you want to use this API key?"
 	inputLine        = "$"
+	// interruptedLine is what the CLI drew where a turn's reply would have
+	// gone once the Escape key ended it, observed on version 2.1.308.
+	interruptedLine = "Interrupted  · What should Claude do instead?"
 	// approvalSuffix is how many trailing characters of an API key the CLI
 	// was observed to keep as that key's approval: an approval naming them
 	// skipped the key screen and one naming the whole key did not.
 	approvalSuffix = 20
 )
+
+// escapeWait is how long an ESC waits for the byte after it before it is
+// read as the Escape key alone. A terminal delivers the bytes of one
+// sequence together, a paste's markers among them, so a wait this short
+// only parts a key typed on its own.
+const escapeWait = 50 * time.Millisecond
 
 // interactiveArgs reports whether args select the interactive mode: the
 // screen reader flag among the flags, and no --print. Only the words before
@@ -178,6 +187,15 @@ const (
 //     before it, a space among them, leaves the input a message.
 //   - An input submitted while a turn is running is queued and answered
 //     after it.
+//   - The Escape key, an ESC no other byte follows within escapeWait, is
+//     handed to the answering side, which alone knows whether a turn is
+//     running: one is ended by it, and with none it is recorded and does
+//     nothing else. A turn it ends before drawing any of its reply has its
+//     message put back in the input, through restores.
+//   - Control-U outside a paste takes the last line out of the input: the
+//     text after its last line break, or that line break when nothing
+//     follows it, which is how the CLI took a message an interrupt had put
+//     back in the input out of it, one press per line.
 //
 // It is read by one goroutine, so the fields are its own except ready and
 // busy, which the drawing side sets.
@@ -185,6 +203,11 @@ type input struct {
 	mu    sync.Mutex
 	ready bool
 	busy  bool
+	// restores carries a message an interrupted turn puts back in the
+	// input, which the reading goroutine takes, so what it holds and what
+	// is drawn change together. It is buffered, so a send never waits on a
+	// reader whose input has ended.
+	restores chan string
 }
 
 func (in *input) setReady() {
@@ -205,11 +228,12 @@ func (in *input) state() (ready, busy bool) {
 	return in.ready, in.busy
 }
 
-// read parses r until it ends, sending every submission on out and showing
-// what is typed on shown, and closes out when it does.
-func (in *input) read(r io.Reader, out chan<- submission, shown *screen) {
+// read parses r until it ends, sending every submission on out, every
+// Escape key on escapes, and showing what is typed on shown, and closes out
+// when it does.
+func (in *input) read(r io.Reader, out chan<- submission, escapes chan<- struct{}, shown *screen) {
 	defer close(out)
-	br := bufio.NewReader(r)
+	src := bytesOf(r)
 	var buf strings.Builder
 	kind := submitMessage
 	pasting := false
@@ -227,13 +251,35 @@ func (in *input) read(r io.Reader, out chan<- submission, shown *screen) {
 		buf.WriteByte(b)
 	}
 	for {
-		b, err := br.ReadByte()
-		if err != nil {
-			return
+		var b byte
+		select {
+		case text := <-in.restores:
+			buf.Reset()
+			buf.WriteString(text)
+			kind, drawn = submitMessage, text
+			shown.setFooter(footerIdle)
+			_ = shown.input(text)
+			continue
+		case next, ok := <-src:
+			if !ok {
+				return
+			}
+			b = next
 		}
 		switch {
 		case b == 0x1b:
-			seq := escape(br)
+			seq, lone := escape(src)
+			// An ESC right behind an ESC leaves the first one the Escape
+			// key alone and begins a sequence of its own, so keys written
+			// together are each a key, as the CLI took them.
+			for seq == "\x1b" {
+				escapes <- struct{}{}
+				seq, lone = escape(src)
+			}
+			if lone {
+				escapes <- struct{}{}
+				continue
+			}
 			switch seq {
 			case "[200~":
 				pasting = true
@@ -252,6 +298,16 @@ func (in *input) read(r io.Reader, out chan<- submission, shown *screen) {
 			out <- submission{kind: kind, text: buf.String(), queued: busy}
 			buf.Reset()
 			kind = submitMessage
+		case b == 0x15:
+			kept := strings.TrimSuffix(buf.String(), "\n")
+			if kept == buf.String() {
+				kept = kept[:strings.LastIndex(kept, "\n")+1]
+			}
+			buf.Reset()
+			buf.WriteString(kept)
+			if kept == "" {
+				kind = submitMessage
+			}
 		case b == 0x7f:
 			if s := buf.String(); s != "" {
 				buf.Reset()
@@ -276,20 +332,48 @@ func (in *input) read(r io.Reader, out chan<- submission, shown *screen) {
 	}
 }
 
+// bytesOf is r's bytes, one at a time, on a channel closed once r ends,
+// so a reader can wait for the next byte with a deadline.
+func bytesOf(r io.Reader) <-chan byte {
+	src := make(chan byte, 4096)
+	go func() {
+		defer close(src)
+		buf := make([]byte, 4096)
+		for {
+			n, err := r.Read(buf)
+			for _, b := range buf[:n] {
+				src <- b
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return src
+}
+
 // escape reads the rest of an escape sequence after its ESC: a control
-// sequence up to its final byte, or the one byte of any other.
-func escape(br *bufio.Reader) string {
-	first, err := br.ReadByte()
-	if err != nil {
-		return ""
+// sequence up to its final byte, or the one byte of any other. An ESC no
+// byte follows within escapeWait, or at the end of the input, is the
+// Escape key alone, which it reports as lone.
+func escape(src <-chan byte) (string, bool) {
+	var first byte
+	select {
+	case b, ok := <-src:
+		if !ok {
+			return "", true
+		}
+		first = b
+	case <-time.After(escapeWait):
+		return "", true
 	}
 	if first != '[' {
-		return string(first)
+		return string(first), false
 	}
 	seq := []byte{first}
 	for len(seq) < 32 {
-		b, err := br.ReadByte()
-		if err != nil {
+		b, ok := <-src
+		if !ok {
 			break
 		}
 		seq = append(seq, b)
@@ -297,14 +381,16 @@ func escape(br *bufio.Reader) string {
 			break
 		}
 	}
-	return string(seq)
+	return string(seq), false
 }
 
 // screen draws the interactive interface: lines that scroll, and below them
-// a footer and an input line that are redrawn in place, as the CLI redrew
-// its own, so a screen read at any moment carries exactly one footer. The
-// input line is the prompt alone when nothing is typed, and the prompt, a
-// no-break space and the first line of what is typed otherwise. The input
+// a footer and the input that are redrawn in place, as the CLI redrew its
+// own, so a screen read at any moment carries exactly one footer. The input
+// is the prompt alone when nothing is typed, and otherwise the prompt, a no-
+// break space and what is typed, each line of it on a line of its own, as
+// the CLI drew a message an interrupt put back; a paste the CLI drew as a
+// placeholder naming it is drawn whole here. The input
 // is redrawn by the goroutine reading it and the rest by the one answering,
 // so every draw holds the mutex.
 type screen struct {
@@ -313,20 +399,23 @@ type screen struct {
 	footer string
 	typed  string
 	// shown is whether a footer is on the screen now, which is what the
-	// next draw has to clear first.
+	// next draw has to clear first, and rows is how many lines the input
+	// below it took.
 	shown bool
+	rows  int
 }
 
-// prompt is the input line for what is typed.
-func (s *screen) prompt() string {
+// prompt is the input for what is typed, its lines apart.
+func (s *screen) prompt() []string {
 	if s.typed == "" {
-		return inputLine
+		return []string{inputLine}
 	}
-	first, _, _ := strings.Cut(s.typed, "\n")
-	return inputLine + "\u00a0" + first
+	lines := strings.Split(s.typed, "\n")
+	lines[0] = inputLine + "\u00a0" + lines[0]
+	return lines
 }
 
-// input redraws the input line with text as what is typed.
+// input redraws the footer and the input with text as what is typed.
 func (s *screen) input(text string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -334,8 +423,7 @@ func (s *screen) input(text string) error {
 	if !s.shown {
 		return nil
 	}
-	_, err := io.WriteString(s.w, "\r\x1b[K"+s.prompt())
-	return err
+	return s.linesLocked()
 }
 
 // lines draws text above the footer, each line of each argument on a line
@@ -349,9 +437,9 @@ func (s *screen) lines(texts ...string) error {
 func (s *screen) linesLocked(texts ...string) error {
 	var b strings.Builder
 	if s.shown {
-		// The cursor is on the input line: back to its start, up to the
-		// footer, and clear both before drawing over them.
-		b.WriteString("\r\x1b[1A\x1b[J")
+		// The cursor is on the input's last line: back to its start, up to
+		// the footer, and clear all of it before drawing over it.
+		fmt.Fprintf(&b, "\r\x1b[%dA\x1b[J", s.rows)
 	}
 	for _, text := range texts {
 		for _, line := range strings.Split(text, "\n") {
@@ -360,7 +448,9 @@ func (s *screen) linesLocked(texts ...string) error {
 	}
 	s.shown = s.footer != ""
 	if s.shown {
-		b.WriteString(s.footer + "\r\n" + s.prompt())
+		prompt := s.prompt()
+		s.rows = len(prompt)
+		b.WriteString(s.footer + "\r\n" + strings.Join(prompt, "\r\n"))
 	}
 	_, err := io.WriteString(s.w, b.String())
 	return err
@@ -388,9 +478,15 @@ func (s *screen) setFooter(footer string) {
 // arrives.
 //
 // It draws the interface Startup after it starts, a turn takes Turn to
-// answer, and the footer says which of the two, idle or running, the
-// interface is in. A message no exchange answers draws a note and nothing
-// else, so silence is never a default nobody wrote. A shell or slash
+// answer, or its exchange's own Turn, and the footer says which of the two,
+// idle or running, the interface is in. A message no exchange answers draws
+// a note and nothing else, so silence is never a default nobody wrote. The
+// Escape key read while a turn runs ends it as the CLI was observed to: the
+// turn's message is recorded Interrupted and the interface is idle again,
+// with the observed interrupted line drawn in place of a reply when the
+// turn drew its exchange's Progress, and with the message put back in the
+// input when it drew nothing; one read with no turn running is counted in
+// IdleEscapes and does nothing else. A shell or slash
 // command is recorded and drawn, and nothing is run for it.
 //
 // It exits when its input ends, which is what the end of its pane does, or
@@ -450,9 +546,10 @@ func serveInteractiveWorker(control string, args []string) int {
 		return worker.Exit
 	}
 
-	in := &input{}
+	in := &input{restores: make(chan string, 4)}
 	submitted := make(chan submission, 64)
-	go in.read(os.Stdin, submitted, out)
+	escapes := make(chan struct{}, 64)
+	go in.read(os.Stdin, submitted, escapes, out)
 
 	startup, turn := worker.Startup, worker.Turn
 	if startup <= 0 {
@@ -464,8 +561,17 @@ func serveInteractiveWorker(control string, args []string) int {
 	time.Sleep(startup)
 
 	// answer runs one message as a turn: it is recorded, drawn, shown
-	// running for the turn, and answered.
+	// running for the turn, and answered, unless the Escape key ends the
+	// turn first. An Escape read before the turn began is an idle one.
 	answer := func(text string) (bool, int) {
+		for idle := true; idle; {
+			select {
+			case <-escapes:
+				call.IdleEscapes++
+			default:
+				idle = false
+			}
+		}
 		call.Lines = append(call.Lines, text)
 		if err := record(callsPath(control), call); err != nil {
 			fmt.Fprintln(os.Stderr, "standin: "+err.Error())
@@ -478,7 +584,38 @@ func serveInteractiveWorker(control string, args []string) int {
 		if err := out.draw(footerBusy); err != nil {
 			return true, exitNoOutput
 		}
-		time.Sleep(turn)
+		running, progress := turn, ""
+		if exchange, ok := interactiveExchange(worker, text); ok {
+			if exchange.Turn > 0 {
+				running = exchange.Turn
+			}
+			progress = exchange.Progress
+		}
+		if progress != "" {
+			if err := out.lines("claude: " + progress); err != nil {
+				return true, exitNoOutput
+			}
+		}
+		select {
+		case <-time.After(running):
+		case <-escapes:
+			call.Interrupted = append(call.Interrupted, text)
+			if err := record(callsPath(control), call); err != nil {
+				return true, exitNoRecord
+			}
+			in.setBusy(false)
+			if progress == "" {
+				// The message's own line stays drawn above, which the CLI
+				// took away; nothing an adapter reads is above the footer.
+				in.restores <- text
+				return false, 0
+			}
+			out.setFooter(footerIdle)
+			if err := out.lines(interruptedLine); err != nil {
+				return true, exitNoOutput
+			}
+			return false, 0
+		}
 		reply, ends, err := interactiveReply(worker, text)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "standin: "+err.Error())
@@ -502,7 +639,21 @@ func serveInteractiveWorker(control string, args []string) int {
 	if done, status := answer(after[0]); done {
 		return status
 	}
-	for sub := range submitted {
+	for {
+		var sub submission
+		select {
+		case <-escapes:
+			call.IdleEscapes++
+			if err := record(callsPath(control), call); err != nil {
+				return exitNoRecord
+			}
+			continue
+		case next, ok := <-submitted:
+			if !ok {
+				return worker.Exit
+			}
+			sub = next
+		}
 		if sub.queued {
 			call.Queued = append(call.Queued, sub.text)
 		}
@@ -529,22 +680,30 @@ func serveInteractiveWorker(control string, args []string) int {
 			}
 		}
 	}
-	return worker.Exit
+}
+
+// interactiveExchange is the first exchange that answers a message, and
+// false when none does.
+func interactiveExchange(worker *WorkerScript, text string) (Exchange, bool) {
+	for _, exchange := range worker.Exchanges {
+		if exchange.answers(text) {
+			return exchange, true
+		}
+	}
+	return Exchange{}, false
 }
 
 // interactiveReply is what the worker draws for a message: the first
 // exchange that answers it, as "claude: " and its reply, or a note when
 // none does; and whether that exchange ends the worker.
 func interactiveReply(worker *WorkerScript, text string) (string, bool, error) {
-	for _, exchange := range worker.Exchanges {
-		if !exchange.answers(text) {
-			continue
-		}
-		reply, err := exchange.answer(text)
-		if err != nil {
-			return "", false, err
-		}
-		return "claude: " + reply, exchange.Ends, nil
+	exchange, ok := interactiveExchange(worker, text)
+	if !ok {
+		return "standin: no exchange of the script answers this message: " + shorten(text), false, nil
 	}
-	return "standin: no exchange of the script answers this message: " + shorten(text), false, nil
+	reply, err := exchange.answer(text)
+	if err != nil {
+		return "", false, err
+	}
+	return "claude: " + reply, exchange.Ends, nil
 }
