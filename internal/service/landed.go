@@ -78,7 +78,9 @@ import (
 // tasks.KeptPromotionWindow when the window has passed and
 // tasks.KeptPromotionWorkerEnded when the worker ended inside it, so it is
 // one kept work entry, surfaced as every other entry is and holding the
-// new tasks on its branch on dispatch.go's terms, unless internal/tasks reads
+// new tasks that would start where that copy stands, which for an
+// investigation's copy naming no branch is the project's base, on
+// dispatch.go's terms, unless internal/tasks reads
 // the copy as holding nothing the default branch lacks (NothingKept). A
 // promotion answers that entry carry on in its flip, as it answers any
 // open entry of its copy, and relaunches in the copy. Its cleanup is owed

@@ -22,12 +22,12 @@ import "github.com/dayamjz/assistant/internal/store"
 var (
 	phraseKeptWork = Phrase{
 		Outcome:     "This work was kept in its local copy, because it is not yet on the shared branch or anywhere else safe.",
-		Consequence: "The copy stays unless its work later turns up somewhere safe, and no new task on the same branch starts until then or until the work is decided; your own pushes still go ahead.",
+		Consequence: "The copy stays unless its work later turns up somewhere safe, and no new task that would start where it stands begins until then or until the work is decided; your own pushes still go ahead.",
 		Decision:    "Read what it holds with --json; to have it validated, answer land with assistant, --task and the work's identifier or --run= and the validation's, --answer land and --hold with the entry's key, which assistant --json status shows; or carry-on in place of land to begin new work in the copy, or discard to be shown what removing it would lose.",
 	}
 	phraseKeptWorkPart = Phrase{
 		Outcome:     "This work was kept in local copies because it is not yet anywhere safe, oldest first.",
-		Consequence: "Each copy stays unless its work later turns up somewhere safe, and no new task on the same branch starts until then or until that work is decided; your own pushes still go ahead.",
+		Consequence: "Each copy stays unless its work later turns up somewhere safe, and no new task that would start where it stands begins until then or until that work is decided; your own pushes still go ahead.",
 		Decision:    "Read what each one holds with --json.",
 	}
 	phraseNothingKept = Phrase{

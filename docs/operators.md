@@ -699,8 +699,10 @@ the entry's branch
 starts: the task is recorded, `assistant --json tasks` shows it waiting and
 names the entries under `kept_work`, and it starts on its own once every
 entry is answered or closed. A new task of the same project on another branch
-starts as usual, because the kept copy's work is not on its branch. The
-branches compared are the one the entry recorded, which `status` shows under
+starts as usual: the hold compares the branch the entry recorded with the
+branch the task names, and says nothing about content, so two branches of one
+project may still change the same lines and conflict where they integrate.
+The branches compared are the one the entry recorded, which `status` shows under
 `kept_work`, and the one the task was created with; a task that names no
 branch, an investigation's, is held by an entry whose owner named none and by
 no other. When whether kept work holds the task could not

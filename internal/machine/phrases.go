@@ -289,7 +289,7 @@ var phraseLandedLocallyNow = Phrase{
 }
 
 // phraseTaskWaitsOnKeptWork is the row for a task the program dispatched and
-// kept work on its branch holds, PRD section 6's "it waits, naming the kept
+// kept work that stands where it would start holds, PRD section 6's "it waits, naming the kept
 // work and the three answers": Task.KeptWork names the entries, which the
 // structured rendering carries and this row points at, and the row names
 // the three answers. It says what this build does: the task starts once
@@ -308,8 +308,8 @@ var phraseTaskWaitsOnKeptWork = Phrase{
 // nor that the task waits, since either may be true, and says what each
 // would mean.
 var phraseTaskKeptWorkUnread = Phrase{
-	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy of its branch is holding it could not be read just now.",
-	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy of its branch holds it, it begins once that work is decided or turns up somewhere safe.",
+	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy, standing where this work would start, is holding it could not be read just now.",
+	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy, standing where this work would start, holds it, it begins once that work is decided or turns up somewhere safe.",
 	Decision:    "Nothing to decide yet; ask again for a current answer.",
 }
 

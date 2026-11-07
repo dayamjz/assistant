@@ -19,7 +19,7 @@ import (
 // run's copy is kept on an unpushed commit of the branch the run is of, so
 // the subject's project holds one open entry on that branch. A delivery
 // task created in that project on another branch is dispatched, not held:
-// the kept copy's work is not on its branch, which is the narrowing the
+// the hold compares recorded branch names only, which is the narrowing the
 // owner decided on 2026-11-06 (PRD decision 21), and before it this same
 // task waited for an entry it could not touch. A task created in another
 // project at the same time is dispatched too, so kept work in one project

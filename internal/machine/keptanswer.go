@@ -245,7 +245,7 @@ var PhraseKeptWorkLosesNothing = Phrase{
 // changes nothing, the copy and its entry as they were.
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",
-	Consequence: "The copy stays, with everything it holds, and new work in the same project still waits on it.",
+	Consequence: "The copy stays, with everything it holds, and new work that would start where it stands still waits on it.",
 	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything a discard would show as lost that you want to keep.",
 }
 
