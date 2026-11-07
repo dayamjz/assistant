@@ -575,7 +575,7 @@ type Task struct {
 	// KeptWork is the open kept work entries that hold this task's dispatch,
 	// oldest first, as internal/store's KeptWorkHolding read them for this
 	// answer: present only while the task resolves Dispatched from its
-	// history and its project's kept work holds it, PRD section 6's "it
+	// history and kept work on its branch holds it, PRD section 6's "it
 	// waits, naming the kept work". It is derived on every answer and never
 	// stored, and TaskPhrase renders a task carrying it as waiting on that
 	// decision rather than as a worker being launched.
