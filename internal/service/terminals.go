@@ -21,8 +21,9 @@ import (
 // provider the launches go through, so a reference the provider holds a
 // session for reads Live out of that handle, a reference whose process the
 // identity proves gone reads Dead, and everything else, a survivor an earlier
-// service launched, another home's reference, and every failure to read,
-// reads Unobserved, on that package's terms. Capture is answered out of the
+// service launched that recovery did not hold again, another home's
+// reference, and every failure to read, reads Unobserved, on that package's
+// terms. Capture is answered out of the
 // same held set, through the provider's CaptureReference, so the reference a
 // probe answers Live for is the one a capture reads, and the reference to
 // handle lookup has one owner, the provider's held set. When this service
@@ -86,27 +87,36 @@ import (
 // layer that key may come from, so no repository's copy chooses how this
 // service starts processes (P7).
 //
-// For tmux the binary is resolved off this process's PATH once, here, and
-// the provider holds the absolute path. A machine with none still gets a
-// tmux provider, one built with no binary: every Create on it is refused
-// with session.ErrNoTmux, which launch.go reports as it reports an adapter
-// without the capability, the task staying Dispatched, while probes answer
-// on the shared identity rule as they would for any provider. The service
-// does not fall back to the pipe provider: the operator chose an attachable
-// terminal, and a worker they cannot attach to is not what they chose.
+// For tmux the binary is resolved off this process's PATH, here, and the
+// provider holds the absolute path. A machine with none still gets a tmux
+// provider, one built with no binary: every Create on it is refused with
+// session.ErrNoTmux, which launch.go reports as it reports an adapter without
+// the capability, the task staying Dispatched, while probes answer on the
+// shared identity rule as they would for any provider. The service does not
+// fall back to the pipe provider: the operator chose an attachable terminal,
+// and a worker they cannot attach to is not what they chose.
+
 func (s *Service) sessionHost(r agents.Runner) session.Host {
 	if s.cfg.SessionProvider != config.SessionProviderTmux {
 		return session.NewPipe(s.home, r)
 	}
-	tmux, err := exec.LookPath("tmux")
-	if err == nil {
-		tmux, err = filepath.Abs(tmux)
-	}
+	tmux, err := tmuxBinary()
 	if err != nil {
 		s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
-		tmux = ""
 	}
 	return session.NewTmux(s.home, r, tmux)
+}
+
+// tmuxBinary is the absolute path of the tmux binary on this process's PATH.
+func tmuxBinary() (string, error) {
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		return "", err
+	}
+	if tmux, err = filepath.Abs(tmux); err != nil {
+		return "", err
+	}
+	return tmux, nil
 }
 
 // heldTerminals is the Terminals over this service's own session provider,

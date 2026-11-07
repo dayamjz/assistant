@@ -1047,7 +1047,9 @@ terminal or a tmux pane. A command that opens a terminal of its own is
 placed as a shell's, so this is a check for a terminal and not for you.
 
 A restart does not leave that queue exactly as it was. When the service
-starts it reconciles every task, and a task whose worker's terminal is gone
+starts it first holds again every worker that went on running in tmux
+across the restart (see [Watch a worker in a terminal](#watch-a-worker-in-a-terminal)),
+which is not relaunched. It then reconciles every task, and a task whose worker's terminal is gone
 with its work not landed and no report filed for it is relaunched, up to
 `relaunch_attempts` times (2 unless configured). A relaunch records each still-queued `terminal-gone`
 wake about the session it replaced as handled by the program, so no later
@@ -1475,6 +1477,23 @@ the command that attaches you:
 ```sh
 tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
 ```
+
+Under `session_provider: tmux`, a worker outlives a restart of the service.
+`assistant service restart` lets it go rather than ending it, once the
+service has stopped answering requests, and the next service holds it again
+as it starts (a restart forced past `stop_grace` before that point ends it
+as a stop does, and it is relaunched in place): the same worker, with its context,
+answers through the next service, and no relaunch is recorded, so a restart
+does not count toward `relaunch_attempts`. A service killed outright leaves
+it running the same way, and the next start holds it again too. Before it
+holds one, the service checks that the process the task's attempt recorded is
+still running with its recorded start time and that the worker's own server,
+on the socket the attempt recorded, answers with that process. A worker that
+fails that check is not held: it reads as unobservable and is reported as a
+terminal-gone wake rather than relaunched beside, until it ends.
+`assistant service stop` still ends every worker, and a worker on pipes is
+ended by a restart too and relaunched in place, as before. While no service
+runs, a worker that goes on cannot push or reach the service.
 
 What you type there is the worker's input, exactly as a message is, and the
 program keeps no record of it: the worker acts on it, and the coordinator

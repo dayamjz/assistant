@@ -496,12 +496,15 @@
 // worker, which may differ from the run agent, and never over the runner
 // containRunner wraps, because the wrapper carries no worker arm: a
 // session.Pipe by default, or a session.Tmux when the operator's file sets
-// config.KeySessionProvider to tmux. driverFor builds one more the same way
-// over the resolved agent, which starts a subordinate coordinator's session
-// and answers a reference no launch of this service holds by identity
-// alone, on terminals.go's terms. The sessions a launch creates are held per
-// task, one per attempt, and Close ends exactly those and no worker an
-// earlier service of this home started.
+// config.KeySessionProvider to tmux. driverFor builds one more the same way over the resolved agent, which
+// starts a subordinate coordinator's session and answers a reference no
+// launch of this service holds by identity alone, on terminals.go's terms.
+// The sessions a launch creates are held per task, one per attempt, beside
+// the tmux workers an earlier service let go across a restart, which
+// recovery holds again (reconcile.go's readoptWorkers); Close ends exactly
+// the sessions held, except that a restart lets go of every one that can
+// outlive it once the protocol server is closed (launch.go's
+// releaseForRestart), and a forced stop never signals one it let go.
 //
 // Four things about the launch are stated rather than implied, and launch.go
 // owns each. Nothing here writes an event to say Running, and the task
@@ -537,7 +540,9 @@
 // PRD section 11's fleet reconciliation runs inside recover, after the runs
 // are reconciled and before anything is served: the queued wakes are read
 // as input with store.QueuedWakes, which hands out nothing because a drain
-// is the coordinator's and hands rows out to whoever makes it, every task of this home is read with its terminal probed under a
+// is the coordinator's and hands rows out to whoever makes it, every tmux
+// worker an earlier service let go or left is held again where it verifies
+// (readoptWorkers), every task of this home is read with its terminal probed under a
 // bound, and a terminal gone with the work not landed is relaunched in the
 // copy it stood in. reconcile.go owns the table, which is keyed on the
 // resolved state, the source that decided it and the probed liveness, and
@@ -562,11 +567,12 @@
 // good for one attempt. The launch of a claimed
 // attempt goes to a goroutine under startWork, so "before serving anything"
 // is a property of the claim. A launched task is never dispatched again,
-// which dispatch.go states: a restarted service holds no session, so its
-// provider answers every reference by identity, and a worker whose process
-// is still present reads Unobserved and is left alone, on PRD section 11's
-// ambiguous-liveness row, while one whose process is gone reads Dead and is
-// relaunched. Both files state what the mechanism does not establish, a
+// which dispatch.go states: a restarted service holds no session but the
+// ones it held again, so its provider answers every other reference by
+// identity, and a worker whose process is still present reads Unobserved
+// and is left alone, on PRD section 11's ambiguous-liveness row, while one
+// whose process is gone reads Dead and is relaunched; one it held again
+// reads Live and is left alone too. Both files state what the mechanism does not establish, a
 // dead terminal not being proof that nothing still writes in the copy among
 // it. An investigation with a stored report is not a terminal gone with the
 // work not landed: internal/taskstate resolves it Reported from the report
