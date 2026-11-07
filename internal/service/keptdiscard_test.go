@@ -39,7 +39,7 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 // the copy, its objects included, and the gate are byte for byte as they
 // were, and the entry, field for field but when it last surfaced, still
 // open and listed, so it still
-// holds its project's new tasks (P6, a refused discard keeps the copy and
+// holds the new tasks of its project on its branch (P6, a refused discard keeps the copy and
 // its entry). Before, the confirmation on the digest shown removed the
 // copy and answered the entry.
 func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
@@ -822,10 +822,10 @@ func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath
 
 // A discard of an entry already answered is refused as answered, with a
 // confirmation as without one (the full review of 04c4696): the entry is
-// carried on, so its copy moved and its project's dispatch is free, and a
+// carried on, so its copy moved and its branch's dispatch is free, and a
 // discard given --confirm is refused naming the first answer and never
 // with the row saying removal is deferred, whose advice to answer land or
-// carry on, and that the project still waits, would be wrong. Before, the
+// carry on, and that that branch still waits, would be wrong. Before, the
 // confirmation was refused as deferred before the entry was read as
 // answered.
 func TestADiscardOfAnAnsweredEntryIsRefusedAsAnsweredWithOrWithoutAConfirmation(t *testing.T) {

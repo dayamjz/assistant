@@ -169,7 +169,7 @@ Each task gets an isolated repository copy. Workers can investigate a problem an
 
 With `housekeeping.interval` set, the supervisor also tells the coordinator when a repository's agent context (its `AGENTS.md`, `CLAUDE.md`, rules folders and README) is due a **housekeeping pass**, a task that corrects factual drift in those files through the gate; see [the operator guide](docs/operators.md#keeping-a-repositorys-agent-context-true).
 
-Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks in that project until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
+Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks on that copy's branch until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
 
 **Where workers run:** The default session provider is `pipe`: the worker is the service's own child, so a restart of the service ends it and it is relaunched in its copy. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers, and such a worker outlives `assistant service restart`: the next service picks it up again, with its context and no relaunch. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
@@ -222,7 +222,7 @@ A validation gate is useful only if its failure behavior is clear. Assistant's d
 | Hosted CI fails after a push | `fix_rounds.checks` defaults to 3. A check still failing after the last round parks the run. An explicit 0 holds for a person and makes no repair. [Operating the gate](docs/operators.md#keep-your-ci-required) says when a repair is reviewed and pushed, and when that path holds instead. |
 | A worker dies or the service restarts | A worker running in tmux keeps running across a restart and is picked up again after a check that it is the recorded one; a worker that is gone is relaunched in its own copy, up to `relaunch_attempts`. One that cannot be checked is surfaced rather than relaunched beside; not every recovery path is automated. |
 | A requested agent/model/window is unsupported | Adapter capability checks refuse unsupported combinations rather than silently substituting them. |
-| Task work cannot safely be discarded | The isolated copy is kept; new work in the project waits for a person's kept-work decision. |
+| Task work cannot safely be discarded | The isolated copy is kept; new work on that branch waits for a person's kept-work decision. |
 | A stage cannot establish enough evidence | It holds for a person rather than converting missing evidence into success. Not every non-zero command exit is a hold: the Document stage records it as a non-blocking note. |
 
 See [operating the gate](docs/operators.md), [multi-agent support](docs/multi-agent-support.md), and [end-to-end verification](internal/journey/README.md) for details and evidence. These are documented behaviors and implementation contracts, **not comparative benchmark results** or a guarantee that every failure has been exercised on every supported host.
@@ -325,7 +325,7 @@ Each review that reaches the checks and is not stopped during them also writes o
 
 ## Operations and recovery
 
-A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks in that project wait until a person answers land or carry on (or until cleanup closes the entry on proof). A discard answer previews what removal would lose and does not remove the copy in this build. Use `assistant watch`, `assistant tasks`, and the [operator guide](docs/operators.md#kept-work) to inspect those states.
+A **hold** is a stage or task waiting for a person's decision; a **parked run** has stopped at a configured bound. An **investigation** can report findings without shipping code; **promotion** turns that investigation into a delivery task. **Kept work** is an isolated copy containing work not proven to have landed, so it is retained rather than removed. New tasks on that copy's branch wait until a person answers land or carry on (or until cleanup closes the entry on proof); tasks of the same project on other branches start as usual. A discard answer previews what removal would lose and does not remove the copy in this build. Use `assistant watch`, `assistant tasks`, and the [operator guide](docs/operators.md#kept-work) to inspect those states.
 
 ## Available now vs. on the roadmap
 
