@@ -232,11 +232,12 @@
 // the gate is never removed under a copy that depends on it. No reservation
 // refuses a kept work entry.
 //
-// An open entry also holds a new task's dispatch in its project, PRD
+// An open entry also holds a new task's dispatch on its branch, PRD
 // section 6's "kept work is answered before new task work starts".
 // keptworkhold.go is the one predicate (a task naming a project, with no
 // attempt whose worker started by a recorded session, whose project has an
-// open entry), read by KeptWorkHolding, and by BeginFirstTaskAttempt,
+// open entry on the task's own branch, a branch neither names being the
+// project's base), read by KeptWorkHolding, and by BeginFirstTaskAttempt,
 // BeginDispatchAttempt and ClaimAttemptLaunch (attemptLaunchMigration's
 // launch_claimed_at, written once immediately before a worker's process
 // starts), each of the three refusing a held task with a

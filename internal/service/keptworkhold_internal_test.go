@@ -16,19 +16,26 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// keepWorkIn records an open kept work entry in the subject's project,
-// owned by a second task of that project, and returns it.
-func keepWorkIn(t *testing.T, records *store.Store) store.KeptWork {
+// keepWorkIn records an open kept work entry that holds the task held: a
+// second task of its project on its branch owns the kept copy, since the
+// hold compares the branch the entry recorded with the task's (PRD section
+// 6's kept work). The owner is anchored to the held task's row, which is
+// the newest on that branch in every fixture here.
+func keepWorkIn(t *testing.T, records *store.Store, held string) store.KeptWork {
 	t.Helper()
 	ctx := t.Context()
+	on, err := records.Task(ctx, held)
+	if err != nil {
+		t.Fatalf("reading the task the entry is to hold: %v", err)
+	}
 	owner, err := home.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := records.CreateTask(ctx, store.Task{
 		ID: owner, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/" + owner,
-		RepositoryID: store.Known("subject"), Branch: store.Known("task/kept"),
-	}, store.Disposition{}); err != nil {
+		RepositoryID: on.RepositoryID, Branch: on.Branch,
+	}, store.Disposition{Observed: on.Row}); err != nil {
 		t.Fatalf("recording the kept copy's owner: %v", err)
 	}
 	entry, _, err := records.RecordKeptWork(ctx, store.KeptCopy{TaskID: owner, CopyPath: "/worktrees/" + owner,
@@ -57,7 +64,7 @@ func TestKeptWorkRecordedBeforeTheLaunchKeepsANewWorkerFromStarting(t *testing.T
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
 	}
-	entry := keepWorkIn(t, subject.records)
+	entry := keepWorkIn(t, subject.records, subject.task)
 
 	launched, err := subject.service.launchTask(ctx, d)
 	var held *store.DispatchHeldError
@@ -96,7 +103,7 @@ func TestAnEntryClosedWhileAHeldDispatchHasTheSlotStillDispatchesTheTask(t *test
 	ctx := t.Context()
 	subject := newDispatchSubject(t)
 	subject.service.stopCtx = ctx
-	entry := keepWorkIn(t, subject.records)
+	entry := keepWorkIn(t, subject.records, subject.task)
 
 	inWindow := false
 	subject.service.betweenHeldAndRelease = func(string) {
@@ -142,7 +149,7 @@ func TestAHoldThatCouldNotBeReadKeepsNoSlotFromTheClosingPass(t *testing.T) {
 	ctx := t.Context()
 	subject := newDispatchSubject(t)
 	s := subject.service
-	entry := keepWorkIn(t, subject.records)
+	entry := keepWorkIn(t, subject.records, subject.task)
 	pass, endPass := context.WithCancel(ctx)
 	defer endPass()
 	s.stopCtx = pass
@@ -227,7 +234,7 @@ func TestAHoldThatCouldNotBeReadIsNotAnsweredAsALaunch(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	ctx := t.Context()
 	subject := newDispatchSubject(t)
-	entry := keepWorkIn(t, subject.records)
+	entry := keepWorkIn(t, subject.records, subject.task)
 	o, err := subject.service.tasks().ObserveTask(ctx, subject.task)
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +286,7 @@ func TestALaunchClaimedWhoseWorkerNeverStartedIsHeldAtTheNextDispatch(t *testing
 	if err := subject.records.ClaimAttemptLaunch(ctx, subject.task, d.attempt); err != nil {
 		t.Fatalf("claiming attempt 1's launch: %v", err)
 	}
-	entry := keepWorkIn(t, subject.records)
+	entry := keepWorkIn(t, subject.records, subject.task)
 
 	// The next start: a service holding no slot for the task.
 	subject.service.mu.Lock()
@@ -347,7 +354,7 @@ func TestKeptWorkRefusingAWorkerHandoffRaisesNoFallbackHold(t *testing.T) {
 	claims := 0
 	s.betweenAttemptReadAndClaim = func() {
 		if claims++; claims == 2 {
-			entry = keepWorkIn(t, subject.records)
+			entry = keepWorkIn(t, subject.records, subject.task)
 		}
 	}
 	d, err := s.dispatchTask(ctx, subject.task)
