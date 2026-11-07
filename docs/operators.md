@@ -1497,11 +1497,13 @@ still running with its recorded start time and that the worker's own server,
 on the socket the attempt recorded, answers with that process. A worker that
 passes is held again: you can attach and send through the new service as
 before, and no relaunch is recorded. A worker that fails because the
-process is gone reads as dead and is relaunched in place, counting toward
-`relaunch_attempts`. A worker that is still running but fails the check
-(its identity or socket does not match) is not held and not relaunched
-beside: it reads as unobservable and is reported as a terminal-gone wake
-until it ends, after which a later reconcile can relaunch.
+process is gone, or because another process now sits at the recorded
+identity, reads as dead and is relaunched in place, counting toward
+`relaunch_attempts`. A worker that is still the recorded process but fails
+the check (the socket or pane no longer answers as that process) is not
+held and not relaunched beside: it reads as unobservable and is reported
+as a terminal-gone wake until it ends, after which a later reconcile can
+relaunch.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
