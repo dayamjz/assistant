@@ -97,7 +97,8 @@ import (
 // that marks the removal, so a copy whose work later landed (recovery's
 // reclaim among the paths) leaves no entry listed for a copy that is gone.
 //
-// While an entry is open, a new task in its project is not dispatched, on
+// While an entry is open, a new task of its project on its branch is not
+// dispatched, on
 // dispatch.go's terms. A removal is the one way an entry closes in this
 // build, so a cleanup that removed a copy asks dispatchDue again, through
 // redispatchAfterRemoval, and a task the closed entry held dispatches then

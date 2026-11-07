@@ -289,7 +289,7 @@ var phraseLandedLocallyNow = Phrase{
 }
 
 // phraseTaskWaitsOnKeptWork is the row for a task the program dispatched and
-// kept work in its project holds, PRD section 6's "it waits, naming the kept
+// kept work on its branch holds, PRD section 6's "it waits, naming the kept
 // work and the three answers": Task.KeptWork names the entries, which the
 // structured rendering carries and this row points at, and the row names
 // the three answers. It says what this build does: the task starts once
@@ -297,7 +297,7 @@ var phraseLandedLocallyNow = Phrase{
 // are given on section 9's hold answer, and discard shows what removing
 // the copy would lose and removes nothing (its removal is deferred).
 var phraseTaskWaitsOnKeptWork = Phrase{
-	Outcome:     "This work has not begun, because work kept in a local copy of the same project is waiting on your decision first.",
+	Outcome:     "This work has not begun, because work kept in a local copy, standing where this work would start, is waiting on your decision first.",
 	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
 	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key, and in this build discard shows what removing it would lose without removing it.",
 }
@@ -308,8 +308,8 @@ var phraseTaskWaitsOnKeptWork = Phrase{
 // nor that the task waits, since either may be true, and says what each
 // would mean.
 var phraseTaskKeptWorkUnread = Phrase{
-	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy of its project is holding it could not be read just now.",
-	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy holds it, it begins once that work is decided or turns up somewhere safe.",
+	Outcome:     "This work has not been seen to begin, and whether work kept in a local copy of its branch is holding it could not be read just now.",
+	Consequence: "If nothing holds it, a worker is launched on its own; if work kept in a local copy of its branch holds it, it begins once that work is decided or turns up somewhere safe.",
 	Decision:    "Nothing to decide yet; ask again for a current answer.",
 }
 

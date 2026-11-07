@@ -606,7 +606,7 @@ func TestAFailedAdoptionHoldsTheTaskAndAFreshCloneIsNotTakenForTheCopy(t *testin
 // configuration no longer has, so intake refuses the task that would carry
 // it on. The answer is refused naming why, no task is created, and the
 // entry is still open, still read by the open-entry listing and status,
-// and still holds the project's new tasks; the copy stands where it was.
+// and still holds the new tasks of its project on its branch; the copy stands where it was.
 // Without the answer kept apart from its outcome, the entry reads answered
 // carry-on naming a task that never exists, is listed nowhere, and the
 // project's tasks dispatch past kept work nobody decided.
@@ -740,7 +740,7 @@ func TestACarryOnCompletesTheClaimTheEntryHoldsNotOneItReadBefore(t *testing.T) 
 // entries name the one copy. Carrying the first on answers and marks both
 // with the one task, and that task dispatches and its worker starts.
 // Without the answer reaching the second entry it stays open over a copy
-// that has moved, and holds the project's new task from dispatching for
+// that has moved, and holds a new task of its project on its branch from dispatching for
 // as long as it stands.
 func TestCarryingOnAnswersEveryEntryOfTheCopy(t *testing.T) {
 	t.Parallel()

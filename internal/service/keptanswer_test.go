@@ -25,15 +25,18 @@ import (
 )
 
 // PRD section 6's land answer, through the real socket: a run's copy kept on
-// an unpushed commit is an open entry holding a new task of its project. An
+// an unpushed commit is an open entry. An
 // answer of carry-on, a discard confirmed with a digest that is not the
 // copy's, and a land naming the wrong owner are each refused and record
 // nothing. Land then records the answer, brings the
 // copy's commit into the gate and starts a run of the entry's branch at it
-// the way a push does, names that run on the entry, and lifts the hold, so
-// the waiting task dispatches. The same answer again names the same run and
-// starts no second one.
-func TestLandingKeptWorkStartsARunOfItsBranchAndLiftsTheHold(t *testing.T) {
+// the way a push does, and names that run on the entry. The same answer
+// again names the same run and
+// starts no second one. What an answer releases is
+// TestAnEntryNamingNoBranchHoldsTheInvestigationsOfItsProject: no task
+// this entry holds can be created here, because intake refuses a new task
+// on the branch the kept run is of as a person's.
+func TestLandingKeptWorkStartsARunOfItsBranchAtItsHead(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
@@ -52,14 +55,6 @@ func TestLandingKeptWorkStartsARunOfItsBranchAndLiftsTheHold(t *testing.T) {
 			t.Fatalf("status lists kept work %+v, want the run's one entry", status.KeptWork)
 		}
 		entry := status.KeptWork[0]
-		var created machine.TaskCreated
-		if err := under.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: repository.ID, Branch: "task/new",
-		}, &created); err != nil {
-			t.Fatal(err)
-		}
-		waitLog(t, h, "task "+created.Record.ID+" waits: ")
 
 		answer := func(r machine.KeptWorkAnswerRequest) (machine.KeptWorkAnswered, error) {
 			var out machine.KeptWorkAnswered
@@ -91,7 +86,6 @@ func TestLandingKeptWorkStartsARunOfItsBranchAndLiftsTheHold(t *testing.T) {
 		if err != nil || run.Branch != "work" || run.SubmittedHead != submitted || run.RepositoryID != repository.ID {
 			t.Fatalf("the landing's run reads %+v, %v; want a run of work at %s", run, err, submitted)
 		}
-		waitAttempts(t, h, created.Record.ID)
 
 		again, err := answer(machine.KeptWorkAnswerRequest{Run: started.Record.ID, Hold: entry.Key(), Answer: string(store.KeptLand)})
 		if err != nil || again.Run != landed.Run {

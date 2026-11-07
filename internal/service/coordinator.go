@@ -209,7 +209,7 @@ func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.Ta
 		Environment: agents.WorkerEnvironment(os.Environ(), nil),
 	})
 	// The flip answers the copy's open kept work, if any, as carry on, which
-	// no longer holds the project's new tasks, so a dispatch pass is asked
+	// no longer holds the new tasks on its branch, so a dispatch pass is asked
 	// for as it is after any answer to kept work. It is asked whatever the
 	// promotion returned: one that failed after its flip, creating the
 	// branch among the ways, has answered the entries all the same, and a
