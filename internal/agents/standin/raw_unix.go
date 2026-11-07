@@ -26,3 +26,14 @@ func makeRaw(fd int) (func(), error) {
 	}
 	return func() { _ = unix.IoctlSetTermios(fd, ioctlSetTermios, &old) }, nil
 }
+
+// columns is how many columns wide the terminal on fd is, and 0 where that
+// could not be read, which is how many columns the screen counts a drawn
+// line's rows against.
+func columns(fd int) int {
+	size, err := unix.IoctlGetWinsize(fd, unix.TIOCGWINSZ)
+	if err != nil {
+		return 0
+	}
+	return int(size.Col)
+}
