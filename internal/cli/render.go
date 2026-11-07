@@ -96,6 +96,16 @@ const (
 	// because the message that points at an evidence document stays
 	// phrased.
 	VoiceEvidence
+	// VoiceValue is a renderer whose whole answer is one value a caller
+	// composes into another command line, and which writes that value alone:
+	// no pointer before it, no label beside it, and nothing after it. PRD
+	// section 9's db path is the one, and the value it writes is a path, so
+	// P13's evidence exception is what lets it carry one; what makes it a
+	// voice of its own rather than an evidence row is that a pointer would
+	// become part of what the caller substitutes, which is the whole use the
+	// specification gives the verb. The sentence pointing a person at it is
+	// section 9's and the README's instead.
+	VoiceValue
 )
 
 // String is the voice's name, for a test's message.
@@ -105,6 +115,8 @@ func (v Voice) String() string {
 		return "phrased"
 	case VoiceEvidence:
 		return "evidence"
+	case VoiceValue:
+		return "value"
 	default:
 		return "unsettled"
 	}
@@ -186,10 +198,14 @@ func writePointed(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The four that are not phrased are named, so that the claim about the
-// rest is bounded by an enumeration. They are evidence documents, which P13
-// names as the exception to its rule and P13 and PRD section 9 name as four
-// documents:
+// The five that are not phrased are named, so that the claim about the
+// rest is bounded by an enumeration. All five keep exact identifiers under
+// P13's evidence exception, and they differ in how a person is pointed at
+// them: four are evidence documents written behind a phrase that points at
+// each, which P13 and PRD section 9 name as four documents, and the fifth is
+// the value row, which is written alone because a pointer would become part
+// of what a caller substitutes; VoiceValue says so and databaseRendering is
+// the row. The four:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -210,6 +226,10 @@ func writePointed(w io.Writer, row rendering, value any) {
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
 //     view, so it is the fourth evidence document P13's list names.
+//
+// And the fifth row, which is not one of those four: database is PRD section
+// 9's db path, the database file of the home the command acted on, written
+// as the value alone.
 //
 // The first two name no answer type, so readOut never dispatches to either;
 // the run renderer reaches each through writeEvidence, behind the phrased
@@ -317,6 +337,7 @@ var renderings = []rendering{
 	}},
 	usageRendering,
 	logRendering,
+	databaseRendering,
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,
@@ -349,6 +370,13 @@ var (
 	logRendering = rendering{name: "log", voice: VoiceEvidence, of: typeOf[machine.StageLog](),
 		render: func(w io.Writer, v any) { readOutStageLog(w, v.(machine.StageLog)) },
 		points: machine.PhraseStageLogFollows}
+	// databaseRendering is the one value row, PRD section 9's db path: the
+	// path and nothing else, so a caller substituting the answer into
+	// another command line substitutes a path. It carries no pointer, which
+	// is what VoiceValue is for, and readOut reaches it like any phrased row
+	// rather than through writePointed.
+	databaseRendering = rendering{name: "database", voice: VoiceValue, of: typeOf[machine.Database](),
+		render: func(w io.Writer, v any) { writeln(w, printable(v.(machine.Database).Path)) }}
 )
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }

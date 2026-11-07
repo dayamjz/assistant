@@ -254,9 +254,13 @@ func fixtures(t *testing.T) map[string]any {
 		// and the program and nothing the set forbids.
 		"host wake": machine.HostWake{Pane: "%3", Program: "claude", Typed: machine.HostWakeNotice()},
 		"decision":  fixtureDecision(),
-		"details":   withDetails,
-		"findings":  fixtureDecision(),
-		"usage":     fixtureUsage(),
+		// The one value row: a home's database file, which carries the home
+		// path and the file name internal/home composes, both of which the
+		// derivation forbids a phrased row.
+		"database": machine.Database{Path: filepath.Join(root, "state.db")},
+		"details":  withDetails,
+		"findings": fixtureDecision(),
+		"usage":    fixtureUsage(),
 		// The end of a review's log: the run, the stage and the path name it,
 		// and a reply carries what the agent wrote.
 		"log": machine.StageLog{Run: sampleID, Stage: "review", Path: filepath.Join(root, "logs", sampleID, "review.log"),

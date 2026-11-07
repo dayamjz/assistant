@@ -29,6 +29,16 @@ filed and it reads `reported`; one whose report raised decisions reads
 the service's next release, a run finishing or a restart, rather than at
 your answer.
 
+## Reading the records yourself
+
+`assistant db path` prints the home's database file and nothing else, so a
+reader of your own opens the records: `sqlite3 -readonly "$(assistant db
+path)"` works with the service up, and it is the one read that needs no
+answer from the service. Open it read-only; the command promises nothing
+about what a reader does with the file, and a writer other than the service
+is not something this program expects. Nothing decides anything from what
+you read there: the task surface above is what a decision is made from.
+
 ## The watch digest
 
 `assistant --json watch --once` carries a `digest` of that read: counts of

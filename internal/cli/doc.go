@@ -272,6 +272,28 @@
 // --file, a path or - for standard input, because one written into the
 // worker's copy would keep the copy from being cleaned up.
 //
+// # Where the records are, for a reader that is not this program
+//
+// db in db.go is PRD section 9's verb for a person debugging a home from
+// outside this binary: db path writes the database file of the home the
+// command acted on, so the records can be opened with a reader of their own.
+// It is a row of the verb table because that section describes it, and
+// dbActions is the one owner of what it answers; a subcommand that section
+// does not describe is a finding against the specification, as a verb is.
+//
+// It takes the service out of the path on purpose. The verb opens nothing,
+// creates nothing and asks nothing: the path is internal/home's, so the
+// answer is the same with the service up or down, which is when the question
+// is asked. It promises no more than that, and db.go says so: what a reader
+// does with the file is the reader's, and the sentence telling a person to
+// open it read-only is the specification's and the README's.
+//
+// What a person reads is the path alone, which is the value voice in
+// render.go rather than an evidence row: a caller composes the answer into
+// another command line, so a phrase written before it would become part of
+// what that caller substitutes. P13's evidence exception is what lets the
+// answer carry a path at all.
+//
 // # Which verbs need the service, and which cannot
 //
 // A verb that acts on a run or on fleet state is a call to the service, which

@@ -306,6 +306,8 @@ Everything Assistant says to you names the project outcome, the consequence, and
 
 Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, the log view of one stage of a run, and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.
 
+Section 9's `db path` keeps an exact identifier on those terms and is the one output printed with no message before it. Its whole answer is the database file of the home, because you compose that answer into another command (`sqlite3 -readonly "$(assistant db path)"`), and a line written before the path would become part of what you substituted. The sentence pointing you at it is section 9's and the README's instead of standard output's.
+
 **Prevents:** a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.
 
 </details>
@@ -2891,6 +2893,7 @@ share the same decisions, the same options, and the same authority. Only the ren
 | `assistant service …` | Start, stop, restart, status. |
 | `assistant gate …` | What the gate's own hooks invoke, not a verb a person drives: `admit` runs before any reference changes and refuses a push it cannot validate, and `notify` runs after and starts the run. They are named here because the hooks the gate installs depend on them existing; a person never types either. |
 | `assistant host …` | The coordinator's host and its hook. `install` is the one host verb a person types, once, for setup: it is section 6's stop guard installer. The other host verbs are hook plumbing a person never types: `stop` runs from the hook the host fires at turn end and is section 6's stop guard, answering whether the turn may end and blocking it when work is in flight and no live supervisor is the service holding this home's lock. It is named here because that hook depends on it existing. `wake` is run by the service as the `notify.command` line `install` offers from inside the coordinator's tmux pane, and is section 6's host wake. It is the second command outside the table, and with `assistant gate` it is not a precedent for a third: each is the interface a hook this program installed or asked for requires. |
+| `assistant db …` | Where this home's records are kept, for a reader that opens them itself: `path` prints the database file and nothing else, so you can open the records read-only with the sqlite shell (`sqlite3 -readonly "$(assistant db path)"`) while the service is up. It is one subcommand; a second is a change to this table. |
 | `assistant eject` | Remove the gate and its records. |
 
 `assistant init` records the repository the gate validates, and takes four flags.
@@ -2968,6 +2971,24 @@ nothing decides anything from it (P8). It is an answer of its own, apart from th
 keeps exact identifiers and stage names, so it is a detailed evidence document in P13's sense and
 P13's list names it; the line pointing at it is phrased. The local protocol
 carries the same read as one open method. No verb is added.
+
+**Reading the records without this program.** All truth is in the home's embedded database, so a
+person debugging a stuck home has nothing to `cat` or `grep` and reads it through this program's
+own views. `assistant db path` is the way out of that. It prints the database file of the home it
+acted on, so the records open in an sqlite reader of the person's own
+(`sqlite3 -readonly "$(assistant db path)"`), and it names where the file is rather than reading
+it: it opens nothing, creates nothing and asks the service nothing, so it answers the same with
+the service up or down, and opening the file read-only is the reader's to do. The answer is a
+detailed evidence document in P13's sense and the one printed with nothing before it, because a
+caller composes it into another command line, which P13 says.
+
+Naming the file does not make files the source of truth, and this specification does not add a
+command that writes one. What the database buys is one consistent read and writes that land
+together: a wake written in the same transaction as the detector markers it advances (section 8),
+a task's state resolved from one read of the records it is resolved from (P8), a checkpoint that
+survives a restart (section 8), and several writers at once (P15). A file a reader could own
+instead would carry none of that, and a store shaped so that it could is a change to this
+specification rather than a verb.
 
 Answering a hold is a flag on `assistant`, and it takes a task as well as a run, so a
 hold a task raised with no run behind it, an investigation's among them, is answered the same
