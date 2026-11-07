@@ -857,7 +857,7 @@ func TestACarryOnCarriesOnAnEntryOfTheCopyKeptAfterItsClaim(t *testing.T) {
 				t.Fatalf("entry %d reads %+v, %v; want it carried on by task %s", id, got, err, out.Task)
 			}
 		}
-		// A task an open entry of its project holds never launches, so the
+		// A task an open entry on its branch holds never launches, so the
 		// launch is that nothing holds it.
 		waitLaunched(t, h, out.Task)
 	})
@@ -1659,7 +1659,7 @@ func refFiles(t *testing.T, clone string) string {
 // the next start adopts the copy at the new task's path, marks the entry
 // and launches the worker. Before the reflog counted, the completion
 // refused the copy as not containing C and left the claim and the
-// project's dispatch held for good.
+// branch's dispatch held for good.
 func TestACarryOnStoppedAfterTheMoveAdoptsACopyWhoseKeptCommitWasAmended(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

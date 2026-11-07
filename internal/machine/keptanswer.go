@@ -223,11 +223,11 @@ var phraseKeptWorkCarriedOn = Phrase{
 // digest last, or PhraseKeptWorkLosesNothing when nothing is listed.
 // Removing the copy on a confirmed discard is not in this build
 // (docs/prd.md, sections 6 and 9), so the row says what lets the
-// project's new work go ahead instead.
+// work that would start where that copy stands go ahead instead.
 var phraseKeptWorkDiscardShown = Phrase{
 	Outcome:     "Nothing was removed: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
 	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "To let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
+	Decision:    "To let new work that would start where that copy stands go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place

@@ -822,10 +822,10 @@ func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath
 
 // A discard of an entry already answered is refused as answered, with a
 // confirmation as without one (the full review of 04c4696): the entry is
-// carried on, so its copy moved and its project's dispatch is free, and a
+// carried on, so its copy moved and its branch's dispatch is free, and a
 // discard given --confirm is refused naming the first answer and never
 // with the row saying removal is deferred, whose advice to answer land or
-// carry on, and that the project still waits, would be wrong. Before, the
+// carry on, and that that branch still waits, would be wrong. Before, the
 // confirmation was refused as deferred before the entry was read as
 // answered.
 func TestADiscardOfAnAnsweredEntryIsRefusedAsAnsweredWithOrWithoutAConfirmation(t *testing.T) {
