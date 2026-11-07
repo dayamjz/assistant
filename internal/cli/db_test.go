@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
@@ -119,7 +120,16 @@ func TestTheDatabaseVerbServesItsSubcommandAndNothingElse(t *testing.T) {
 	if help.code != machine.ExitOK {
 		t.Fatalf("assistant db --help exited %s:\n%s%s", help.code, help.stdout, help.stderr)
 	}
-	if !strings.Contains(help.stdout, "path") {
-		t.Errorf("the help does not list the subcommand the verb takes:\n%s", help.stdout)
+	// The row, not the word: a help text that said "path" anywhere would
+	// satisfy a substring check for the name alone, so this asks for the
+	// summary beside it, as the table holds the two.
+	rows := cli.Subcommands()["db"]
+	if len(rows) == 0 {
+		t.Fatal("the db verb has no subcommand row to look for in its help")
+	}
+	for _, row := range rows {
+		if !strings.Contains(help.stdout, row[0]) || !strings.Contains(help.stdout, row[1]) {
+			t.Errorf("the help does not list %q with its summary %q:\n%s", row[0], row[1], help.stdout)
+		}
 	}
 }
