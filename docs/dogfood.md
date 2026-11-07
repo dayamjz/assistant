@@ -299,7 +299,8 @@ there is none. So pushing first and then running this attaches you to the run
 the push started, which is exactly the run with no intent recorded.
 
 ```sh
-git checkout -B shadow/pr-<number> <the head>
+git fetch origin refs/pull/<number>/head:shadow/pr-<number>
+git checkout shadow/pr-<number>
 ./bin/assistant --home "$HOME_ROOT" --intent 'what this change sets out to do'
 ```
 
