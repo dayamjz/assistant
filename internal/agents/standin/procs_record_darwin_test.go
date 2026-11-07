@@ -69,14 +69,12 @@ func endedBinaryRecord(t *testing.T) tableRecord {
 // from the one kern.proc.all read, and every fake in this file that stages a
 // record answers through this.
 //
-// This process's own lineage is in every reading because the kernel's table
-// always names it, and a listing of a binary this process runs reads its own
-// record to check what it predicts the binary is recorded as. A reading that
-// left it out would be unsettled by that check rather than by what the row
-// staged, which is how the first attempt at this helper was caught: the
-// in-reading reuse check could be deleted and the reuse row still passed.
-// The identify loop reads nothing of those numbers in any case, because
-// ownLineage excludes them.
+// This process and its ancestors are in every reading because one
+// kern.proc.all read always records the process making it, so a reading
+// without them is another shape readTable cannot return. Nothing in this
+// part reads those records: the identify loop excludes those numbers,
+// because ownLineage is what it excludes, so the rows' reading counts are
+// the same with them as without.
 //
 // The one liberty the rows below take is the table's size, and the number
 // list and the record map name the same processes, so no process is hidden
