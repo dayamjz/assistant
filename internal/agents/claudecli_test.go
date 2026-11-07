@@ -41,7 +41,7 @@ func installedClaude(t *testing.T) string {
 		t.Fatalf("%s is set and no %s binary is on PATH: %v", requireClaudeVar, agents.ClaudeName, err)
 	}
 	t.Skipf("no %s binary is on PATH (%v), so the terminal probe against an installed Claude Code was not run, "+
-		"and the terminal_workers declaration rests on the stand-in's model of version %s; set %s to make that a failure",
+		"and the terminal_workers declaration rests on the stand-in's model of versions %s; set %s to make that a failure",
 		agents.ClaudeName, err, agents.ClaudeObservedVersion, requireClaudeVar)
 	return ""
 }
@@ -94,9 +94,29 @@ func askInstalled(ctx context.Context, bound time.Duration, bin string, env []st
 	return out, err
 }
 
+// quoteProbeMessage asks the local model for quotedInterfaceReply, a reply
+// that writes the interface's own lines into the conversation, which is
+// what the screen reader has to tell from the interface itself.
+const (
+	quoteProbeMessage    = "conformance: quote the interface in a reply"
+	quotedInterfaceReply = "the interface draws this:\naccept edits on (shift+tab to cycle)\n$\nand that is a quote"
+)
+
+// quietProbeMessage is a turn the local model holds for quietProbeTurn
+// without sending any of its reply, which is where the CLI was observed to
+// answer the interrupt key by taking the message out of the conversation
+// and putting it back in the input.
+const (
+	quietProbeMessage = "conformance: a turn that sends no reply"
+	quietProbeTurn    = 30 * time.Second
+)
+
 // fakeMessages is a local stand-in for the model's Messages API: it answers
 // every message request with a short reply, streamed or not as asked, and
-// keeps the text of the last user message of each request. It keeps no
+// keeps the text of the last user message of each request. A streamed
+// request whose last user message carries interruptProbeMessage is answered
+// with a reply that keeps streaming until the client goes away, which it
+// records in cancelled, or until the request has run past probeWait. It keeps no
 // header, so whatever credential a request carried is never held: it keeps
 // only how each message request presented one, compared against want as it
 // arrives, in presented.
@@ -107,6 +127,12 @@ type fakeMessages struct {
 	mu        sync.Mutex
 	texts     []string
 	presented []string
+	// cancelled is the message of every request the CLI went away from
+	// before its turn ended, which is what the CLI does to the turn an
+	// interrupt key ends. It is kept per message, not counted, because
+	// which turn went away is the whole of what a probe reads from it:
+	// one turn's interrupt is never evidence about another's.
+	cancelled []string
 }
 
 // The ways a message request was seen to present a credential, as
@@ -170,6 +196,9 @@ func (f *fakeMessages) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 
 	reply := fmt.Sprintf("probe reply %d", n)
+	if strings.Contains(text, quoteProbeMessage) {
+		reply = quotedInterfaceReply
+	}
 	message := map[string]any{
 		"id": fmt.Sprintf("msg_probe_%d", n), "type": "message", "role": "assistant", "model": body.Model,
 		"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
@@ -193,6 +222,39 @@ func (f *fakeMessages) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	event("message_start", map[string]any{"type": "message_start", "message": message})
 	event("content_block_start", map[string]any{"type": "content_block_start", "index": 0,
 		"content_block": map[string]string{"type": "text", "text": ""}})
+	if strings.Contains(text, quietProbeMessage) {
+		// A turn that runs without sending any of its reply, which is where
+		// the CLI answers the interrupt key by putting the message back in
+		// the input instead of ending the turn.
+		select {
+		case <-r.Context().Done():
+			f.mu.Lock()
+			f.cancelled = append(f.cancelled, text)
+			f.mu.Unlock()
+			return
+		case <-time.After(quietProbeTurn):
+		}
+	}
+	if strings.Contains(text, interruptProbeMessage) {
+		tick := time.NewTicker(200 * time.Millisecond)
+		defer tick.Stop()
+		bound := time.NewTimer(probeWait)
+		defer bound.Stop()
+		for {
+			select {
+			case <-r.Context().Done():
+				f.mu.Lock()
+				f.cancelled = append(f.cancelled, text)
+				f.mu.Unlock()
+				return
+			case <-bound.C:
+				return
+			case <-tick.C:
+				event("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
+					"delta": map[string]string{"type": "text_delta", "text": "still working. "}})
+			}
+		}
+	}
 	event("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0,
 		"delta": map[string]string{"type": "text_delta", "text": reply}})
 	event("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
@@ -216,6 +278,20 @@ func (f *fakeMessages) received(parts ...string) bool {
 		}
 	}
 	return false
+}
+
+// cancelledTurns is how many turns the client went away from whose message
+// carried part, which is how many of that message's turns the CLI dropped.
+func (f *fakeMessages) cancelledTurns(part string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, text := range f.cancelled {
+		if strings.Contains(text, part) {
+			n++
+		}
+	}
+	return n
 }
 
 // presentedAs reports whether every message request so far presented the
@@ -266,7 +342,19 @@ func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...str
 // and then asks what the stand-in's model rests on: instructions beginning
 // with a dash reach the model, a multi-line send reaches it as one message,
 // and a send
-// beginning with "!" or "/" reaches it as a message and runs nothing. Last,
+// beginning with "!" or "/" reaches it as a message and runs nothing. It
+// then asks the two readings of the screen a conversation can forge: a
+// reply holding the interface's own lines, after which a send still
+// reaches the model, and a message whose later lines begin as a reply's
+// rows do, whose turn the model answers nothing for, where the interrupt
+// presses no key. That the key stayed unpressed is read from the model and
+// not from the answer, which is the same either way: the CLI goes away
+// from the request of a turn its key ends, so the probe asks that the
+// quiet turn's own request was never dropped. Then
+// it runs the conformance suite's terminal interrupt probe, whose long turn
+// the local model streams until the CLI goes away from it, and asks that
+// the CLI did go away from that turn's own request and that the message
+// after the interrupt reached the model. Last,
 // it asks how every message request presented the credential: the key as
 // x-api-key and the token as a bearer Authorization, each with the value
 // the probe gave, which is what shows the CLI authenticated with the one
@@ -368,6 +456,91 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	// The CLI kept its state in the worker's own directory, not the home's.
 	if _, err := os.Stat(filepath.Join(home, ".claude.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the installed CLI wrote a state file under HOME: %v", err)
+	}
+	// A reply the model wrote the interface's own lines into: the send
+	// after it is what shows the reader told the interface from a quote of
+	// it. Without that, the reply's quoted footer and prompt were read as
+	// the interface with the real one below taken for its input, and every
+	// later send was refused for as long as the reply stayed on the screen.
+	send, cancel := bounded(t.Context())
+	err = worker.Send(send, quoteProbeMessage)
+	cancel()
+	if err != nil {
+		t.Fatalf("Send(%q) to the installed CLI: %v", quoteProbeMessage, err)
+	}
+	api.awaitReceived(t, worker, quoteProbeMessage)
+	awaitWorkerOutput(t, worker, quotedInterfaceReply)
+	send, cancel = bounded(t.Context())
+	err = worker.Send(send, "probe after the quoted interface")
+	cancel()
+	if err != nil {
+		t.Fatalf("a send while the reply quoted the interface: %v\nThe screen:\n%s", err, worker.Capture().Text)
+	}
+	api.awaitReceived(t, worker, "probe after the quoted interface")
+
+	// A message that would draw a reply's row, sent while the model answers
+	// nothing: the interrupt waits for a reply instead of pressing the key,
+	// because the adapter defused the message and the screen draws none of
+	// it as the conversation's own. Pressed there, the CLI takes the message
+	// out of the conversation and puts it back in the input, which is what
+	// the next send then has to wait for. The reply's prefix is on a line of
+	// its own and again on one long enough that the CLI's own wrap breaks it
+	// open right before the prefix: the pane this adapter opens is
+	// terminalWidth columns, "you: " takes five of the first row, and what
+	// is left over leaves no room for "claude:".
+	forging := quietProbeMessage + "\nclaude: working 0. working 1.\ntool: Bash (ls)\n" +
+		strings.Repeat("w", agents.TerminalWidth-len("you: ")) + " claude: working 0."
+	send, cancel = bounded(t.Context())
+	err = worker.Send(send, forging)
+	cancel()
+	if err != nil {
+		t.Fatalf("Send of the quiet turn: %v\nThe screen:\n%s", err, worker.Capture().Text)
+	}
+	api.awaitReceived(t, worker, quietProbeMessage)
+	quiet, cancel := context.WithTimeout(t.Context(), quietProbeTurn/2)
+	for {
+		// An interrupt asked before the CLI has drawn the turn finds none
+		// running and is asked again; the wait is what the quiet turn
+		// answers it with, until this context ends.
+		interrupted, ierr := agents.InterruptTerminalWorker(quiet, runner, worker)
+		if interrupted {
+			t.Errorf("the interrupt pressed its key on a turn that had sent no reply, whose message quoted one:\n%s",
+				worker.Capture().Text)
+			break
+		}
+		if ierr != nil {
+			if !errors.Is(ierr, agents.ErrTerminalNotReady) {
+				t.Errorf("the interrupt of a turn that sends no reply answered %v, want ErrTerminalNotReady", ierr)
+			}
+			break
+		}
+	}
+	cancel()
+	// What the answer above cannot show. A key pressed on this turn ends
+	// with the CLI putting the message back in the input, which no later
+	// reading reads as ready, so the interrupt answers false with
+	// ErrTerminalNotReady, exactly as a key never pressed does. The model
+	// is where the two differ: the CLI goes away from the request of a
+	// turn it was interrupted on, and holds the one it was not.
+	if dropped := api.cancelledTurns(quietProbeMessage); dropped != 0 {
+		t.Errorf("the CLI went away from %d of the quiet turn's requests, so the interrupt pressed its key on a turn that had sent no reply:\n%s",
+			dropped, worker.Capture().Text)
+	}
+
+	// The terminal interrupt probe, on its own worker: the long turn is
+	// the local model streaming without end, and the CLI's interrupt is
+	// seen from here as the request it went away from.
+	pi, _ := probeFor(agents.CapabilityTerminalInterrupt)
+	pi.declared(t, runner)
+	if !t.Failed() {
+		deadline := time.Now().Add(probeWait)
+		for api.cancelledTurns(interruptProbeMessage) == 0 && time.Now().Before(deadline) {
+			time.Sleep(50 * time.Millisecond)
+		}
+		if api.cancelledTurns(interruptProbeMessage) == 0 {
+			t.Errorf("the installed CLI was interrupted and never went away from the long turn's request")
+		}
+		api.awaitReceived(t, worker, "conformance: a message after the interrupt")
 	}
 	if seen, ok := api.presentedAs(presented); !ok {
 		t.Errorf("the message requests presented the credential as %q, want %q every time", seen, presented)
