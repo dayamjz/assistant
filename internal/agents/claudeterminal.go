@@ -62,9 +62,13 @@ import (
 // giving a worker a HOME nothing else wrote to and reading that HOME after
 // the run: fs_usage, which would have shown every open, needs a privilege
 // the measuring account did not have, so this is what a worker left and
-// not the whole of what it touched. claudecli_test.go's probe is that
-// measurement where a claude is on PATH, and it fails on an entry in
-// HOME's .cache or .claude.
+// not the whole of what it touched. The measurement was made by hand and
+// nothing re-checks the whole of it; claudecli_test.go's probe re-runs the
+// part a checked-in test can, where a claude is on PATH: it gives a worker
+// a HOME of its own, fails on an entry left in that HOME's .cache or
+// .claude, and logs the rest of what the run left there and in the cache
+// directory below, so a later CLI's new write is reported rather than
+// assumed away. The marker read below is the part it does not re-run.
 //
 // With the two variables above set, the run left HOME's .cache and .claude
 // exactly as empty as it found them, and wrote its state file, its
@@ -74,7 +78,9 @@ import (
 // Handler.app, and, where the worker's PATH reached a gh, the device
 // identifier gh writes for itself under .local/state/gh. What invoked gh
 // was not established. The cache directory this adapter makes was empty
-// after such a run, so it bounds what the worker runs rather than the CLI.
+// after such a run, so it bounds what the worker runs rather than the CLI;
+// that is the directory the probe logs while the worker is still up,
+// since the worker's end removes it.
 //
 // A HOME holding a .claude/CLAUDE.md, a .claude/settings.json and a
 // .claude.json, each carrying a marker, produced no model request carrying
@@ -190,12 +196,12 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 }
 
 // AdoptInTerminal holds again a Claude Code terminal worker on
-// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The
-// configuration directory it removes at the worker's end is the one its
-// start made beside the terminal's socket (claudeConfigFor), derived from
-// the socket the adoption verifies and never from anything the worker or
-// its server states, so nothing the worker can change names what is
-// removed.
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The two
+// directories it removes at the worker's end are the ones its start made
+// beside the terminal's socket, its configuration (claudeConfigFor) and
+// its cache (claudeCacheFor), each derived from the socket the adoption
+// verifies and never from anything the worker or its server states, so
+// nothing the worker can change names what is removed.
 func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
@@ -221,7 +227,9 @@ func claudeConfigFor(t Terminal) string { return t.Socket + ".claude" }
 // claudeCacheFor is the cache directory of the Claude Code worker on t,
 // named from the terminal exactly as claudeConfigFor names its
 // configuration directory, so it too is a function of the terminal alone
-// and a start and an adoption of the same terminal name the same directory.
+// and a start and an adoption of the same terminal name the same
+// directory. home.TerminalSockets, whose layout both sit in, records that
+// an adapter names a worker's directories this way.
 func claudeCacheFor(t Terminal) string { return t.Socket + ".cache" }
 
 // terminalLaunchSessionMeasure is the session identifier

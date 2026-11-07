@@ -157,6 +157,15 @@ func (h *Home) TerminalSocket(name string) string { return filepath.Join(h.Termi
 // TerminalSockets is the directory TerminalSocket's paths are in. It is
 // created owner-only, like every directory here, which is what keeps
 // another user from reaching a worker's server through it.
+//
+// A socket is not all that stands in it: an adapter that gives its worker
+// a directory of its own names it by suffixing the socket's path, so that
+// a start and an adoption of one terminal name the same directory without
+// a second path to agree on. internal/agents' Claude adapter keeps a
+// worker's configuration and cache that way, and removes both when the
+// worker ends. Nothing here makes, removes or reads them; this is the
+// layout saying what lives here, so a reader of this package is not left
+// expecting sockets alone.
 func (h *Home) TerminalSockets() string { return filepath.Join(h.root, "terminals") }
 
 // ServiceLog is the bounded lifecycle log, which OpenLog writes.

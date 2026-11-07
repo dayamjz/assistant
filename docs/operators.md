@@ -1504,15 +1504,18 @@ convention caches per worker instead of in your `~/.cache`, and starts cold
 for each worker as the price. Both directories are removed when the worker
 ends.
 
-A worker run was measured on 2026-11-06, against Claude Code 2.1.308 on
-macOS, to leave your `~/.cache` and `~/.claude` exactly as it found them
-and to write nothing into your own `~/.claude.json`; it did write an app
-bundle at `~/Applications/Claude Code URL Handler.app`. What the CLI reads
-from your home was not enumerated, because that needs a privileged trace; a
-`~/.claude/CLAUDE.md`, a `~/.claude/settings.json` and a `~/.claude.json`
-put in a home of the measurement's own reached no model request. The
-worker's `HOME` is still the service's own, so everything else it runs,
-git's identity among them, reads your home as before.
+What a run of that worker leaves in your own home was measured once, and
+`StartInTerminal`'s documentation in `internal/agents` is where that
+measurement lives: the date, the CLI version, the method, what the method
+could not see, and every write it found. Read it there before you rely on
+any of it. For an operator the short of it is that a run left your
+`~/.cache` and `~/.claude` as it found them and wrote nothing into your own
+`~/.claude.json`, and that it did write outside them: an app bundle at
+`~/Applications/Claude Code URL Handler.app`, and the device identifier
+`gh` keeps for itself under `~/.local/state/gh` when the worker's `PATH`
+reaches a `gh`. The worker's `HOME` is still the service's own, so
+everything else it runs, git's identity among them, reads your home as
+before.
 
 The configuration directory carries none of your
 login, so the service needs a credential in its environment: either
