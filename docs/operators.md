@@ -1484,8 +1484,13 @@ it running the same way, and the next start holds it again too. Before it
 holds one, the service checks that the process the task's attempt recorded is
 still running with its recorded start time and that the worker's own server,
 on the socket the attempt recorded, answers with that process. A worker that
-fails that check is not held: it reads as unobservable and is reported as a
-terminal-gone wake rather than relaunched beside, until it ends.
+passes is held again: you can attach and send through the new service as
+before, and no relaunch is recorded. A worker that fails because the
+process is gone reads as dead and is relaunched in place, counting toward
+`relaunch_attempts`. A worker that is still running but fails the check
+(its identity or socket does not match) is not held and not relaunched
+beside: it reads as unobservable and is reported as a terminal-gone wake
+until it ends, after which a later reconcile can relaunch.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
@@ -1509,9 +1514,9 @@ And the resolved agent has to declare terminal workers, which Claude Code
 does. `assistant doctor` checks both when this file chooses tmux, and reports
 the stall by name before a task waits Dispatched. Cursor and Grok do not
 declare terminal workers; naming one under tmux fails that check the same
-way. A worker an earlier service started is never attached to or read
-through the new one: its terminal reads as unobservable until it ends, as it
-does under the default provider.
+way. Under the default (pipes) provider a worker an earlier service started
+is never attached to or read through the new one: a restart ends it and
+relaunches in place. Under tmux, the hold-again path above is what decides.
 
 A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering
