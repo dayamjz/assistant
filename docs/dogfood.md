@@ -9,11 +9,11 @@ followed from nothing, and what it assumes you have is:
 - **a coding agent this build can drive, installed and authenticated.** The
   review and fix stages launch one, and a run cannot start without it:
   `assistant doctor` reports the agent row as blocking and answers that no run
-  can start.   The default `auto` resolves Claude Code and nothing else, because Claude is
-  the only adapter declaring itself auto-eligible, so **any other adapter on
-  its own** leaves that row blocking until you name it with `agent` in the
-  home's `config.yaml`. Step 5 below runs `assistant doctor`, which is where
-  you read that row.
+  can start. The default `auto` resolves Claude Code and nothing else, because
+  Claude is the only adapter declaring itself auto-eligible, so **any other
+  adapter on its own** leaves that row blocking until you name it with `agent`
+  in the home's `config.yaml`. Step 5 below runs `assistant doctor`, which is
+  where you read that row.
 
 **Shadow** here means one thing only: the gate's recorded upstream is a private
 mirror repository rather than this one. Every stage still runs for real,
@@ -126,7 +126,7 @@ heads you are validating exactly as they are:
 ```sh
 gh api -X PUT repos/dayamjz/assistant-gate-mirror/actions/permissions -F enabled=false
 mkdir -p "$HOME_ROOT"
-grep -q '^no_ci:' "$HOME_ROOT/config.yaml" 2>/dev/null ||
+grep -n '^no_ci:' "$HOME_ROOT/config.yaml" 2>/dev/null ||
   printf 'no_ci: true\n' >> "$HOME_ROOT/config.yaml"
 ```
 
@@ -135,6 +135,14 @@ configuration is strict about it: a key appearing more than once in an object
 "is refused rather than resolved to one of its values". So a second run of a
 bare `>>` leaves a file that will not parse, and `service start` reads the same
 resolution the service makes and refuses before launching anything.
+
+**If the `grep` printed a line, nothing was appended: open the file and make
+that line read `no_ci: true`.** The guard asks whether the key is present, which
+is not the same question as whether it says what you want, and the case that
+matters is a `no_ci: false` already in the file. Actions would be off and the
+key would still declare that this repository has CI, so every run would wait the
+full `checks_timeout` with nothing coming. Edit the line in place rather than
+appending a second one, for the duplicate-key reason above.
 
 The service reads `config.yaml` when it starts, so write this before step 6 or
 restart the service after writing it; step 6 says so again. In any comparison
