@@ -878,10 +878,11 @@ func TestAClaudeTerminalInterruptWaitsForTheReplyToBegin(t *testing.T) {
 	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("an interrupt of a turn that drew no reply answered %v, want ErrTerminalNotReady and the deadline", err)
 	}
-	// The contract is that a refusal says whether the key was pressed, and
-	// this is the refusal that comes before any press.
-	if !strings.Contains(err.Error(), "pressed nothing") {
-		t.Errorf("the refusal %q does not say that nothing was pressed", err)
+	// The contract is that a refusal carries what the key did, and this is
+	// the refusal that comes before any press.
+	var refused *agents.InterruptRefused
+	if !errors.As(err, &refused) || refused.Key != agents.InterruptKeyUnpressed {
+		t.Errorf("the refusal %v carries %v, want an *InterruptRefused of %v", err, refused, agents.InterruptKeyUnpressed)
 	}
 	call := awaitInteractive(t, agent, answered(2))
 	if len(call.Interrupted) != 0 || call.IdleEscapes != 0 {

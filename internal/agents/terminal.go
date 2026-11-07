@@ -239,6 +239,13 @@ import (
 //     their message back in the input, where it stays until they clear it,
 //     refusing sends. Nothing here reads the conversation for whose text
 //     it is, so this is a gap, not a measure.
+//   - The model's own reply is not defused either, and the reading starts
+//     at the last row that begins as a message does. A reply that draws
+//     one, a transcript or a quoted exchange among the shapes that do,
+//     hides every reply row above it, so a turn well into its answer reads
+//     as one that has drawn none. The interrupt then waits on a turn it
+//     could have ended and is refused at its bound with nothing pressed,
+//     which is the safe direction of the same gap.
 
 // TerminalWorkerRunner is a Runner that can be started as a terminal worker,
 // which is what CapabilityTerminalWorkers names: an adapter implements it
@@ -354,27 +361,30 @@ type TerminalWorker interface {
 	// on, because the CLI answered the key there by putting the message
 	// back in the input, which nothing here takes out again; so is any
 	// other screen, text in the input among them. Whether a reply has begun
-	// is read off the screen, which carries a message a person may have
-	// typed at the pane themselves, so the bullets below this interface say
-	// what that costs. Every refusal wrapping ErrTerminalNotReady says in
-	// its own message whether the key was pressed: a wait ctx ends before
-	// the key, for the slot or for a turn that reads running, says nothing
-	// was pressed; the wait for the turn to end after the key says it was
-	// typed; and a client that failed to carry the key says the terminal
-	// may have taken it anyway, which is the one answer that cannot tell.
-	// Also ErrWorkerEnded, ErrWorkerReleased, or a *CapabilityError for an
-	// adapter whose typing names no key, none of which pressed anything.
-	// It never types anything but the
+	// is read off the screen, which carries text this package did not
+	// write, a message a person typed at the pane among it, so the bullets
+	// in this file's comment say what that costs. Every refusal is an
+	// *InterruptRefused, whose Key says what the key did and which carries
+	// the refusal itself: ErrTerminalNotReady for a wait that ran out, be
+	// it for the slot, for a turn to read running, or for the turn to end
+	// after the key, and for a client that failed to carry the key;
+	// ErrWorkerEnded or ErrWorkerReleased for a worker that is gone or let
+	// go, which either wait can find after the key as well as before it;
+	// and a *CapabilityError for an adapter that declares the capability
+	// without the key or the screen reading it rests on. Only Key tells a
+	// caller whether it may press again, and no refusal is its own answer
+	// to that. It never types anything but the
 	// key, so no text in the input is ever cleared.
 	Interrupt(ctx context.Context) (bool, error)
 }
 
 // InterruptTerminalWorker is w.Interrupt for a worker r started, refused
-// with a *CapabilityError, nothing read or pressed, when r has not declared
-// CapabilityTerminalInterrupt, as OpenTerminalWorker reads its declaration.
+// with an *InterruptRefused carrying a *CapabilityError, nothing read or
+// pressed, when r has not declared CapabilityTerminalInterrupt, as
+// OpenTerminalWorker reads its declaration.
 func InterruptTerminalWorker(ctx context.Context, r Runner, w TerminalWorker) (bool, error) {
 	if !r.Capabilities().Has(CapabilityTerminalInterrupt) {
-		return false, &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"}
+		return false, refuseInterrupt(InterruptKeyUnpressed, &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"})
 	}
 	return w.Interrupt(ctx)
 }
@@ -573,13 +583,68 @@ const terminalBuffer = "assistant-send"
 // drawn within the bound, and at a send, one that did not read ready to be
 // typed into before the send's ctx ended; at either, a screen whose reading
 // ran past tmuxReadBound. Nothing is typed into a screen that has not read
-// ready, so a send refused with it typed nothing. An interrupt refused with
-// it says in its own message whether the key was pressed: it was where the
-// turn was not read to have ended after the press, and whether it was is
-// not known where the client carrying it failed. It is wrapped together
+// ready, so a send refused with it typed nothing. An interrupt is not a
+// send and may be refused with it after its key: what the key did is
+// *InterruptRefused's to say, not this error's. It is wrapped together
 // with ctx's error where ctx is what ended the wait, and with
 // ErrTerminalClientTimedOut where a reading did.
 var ErrTerminalNotReady = errors.New("agents: the terminal worker's screen did not read ready")
+
+// InterruptKey is what a refused interrupt did with its key. It is the one
+// fact a caller needs before it asks again, because a second key reaches a
+// CLI that has already answered the first: the Claude Code adapter's was
+// observed to open a rewind menu there.
+type InterruptKey int
+
+const (
+	// InterruptKeyUnpressed is a refusal from before the key: the terminal
+	// was never typed into, so the turn is as the interrupt found it.
+	InterruptKeyUnpressed InterruptKey = iota
+	// InterruptKeyTyped is a refusal from after the terminal took the key:
+	// what it did with it was not read, so the turn may have ended.
+	InterruptKeyTyped
+	// InterruptKeyUnknown is the refusal that cannot tell: the key was
+	// carried to a client that failed, and a server behind it may have
+	// taken the key before the failure or never seen it.
+	InterruptKeyUnknown
+)
+
+// String names the key's state as the refusals do.
+func (k InterruptKey) String() string {
+	switch k {
+	case InterruptKeyUnpressed:
+		return "pressed nothing"
+	case InterruptKeyTyped:
+		return "typed the key"
+	case InterruptKeyUnknown:
+		return "may have typed the key"
+	}
+	return fmt.Sprintf("InterruptKey(%d)", int(k))
+}
+
+// InterruptRefused is every refusal TerminalWorker.Interrupt answers with,
+// so a caller reads the key's state off the type rather than off the words:
+// errors.As gives Key, and errors.Is reaches the refusal underneath
+// unchanged, whichever it is. Its message is that refusal's, which says the
+// same thing in words for whoever reads a log.
+type InterruptRefused struct {
+	// Key is what the interrupt did with its key before it was refused.
+	Key InterruptKey
+	// Err is the refusal itself, the error a caller matches against.
+	Err error
+}
+
+// Error is the underlying refusal's message.
+func (e *InterruptRefused) Error() string { return e.Err.Error() }
+
+// Unwrap is the refusal this one carries.
+func (e *InterruptRefused) Unwrap() error { return e.Err }
+
+// refuseInterrupt is the one way an interrupt is refused: it states what the
+// key did beside the refusal rather than leaving a caller to read the words.
+func refuseInterrupt(key InterruptKey, err error) error {
+	return &InterruptRefused{Key: key, Err: err}
+}
 
 // screenState is what an adapter's reader makes of a terminal worker's
 // screen.
@@ -1186,44 +1251,50 @@ func (w *tmuxWorker) takeSlot(ctx context.Context) (func(), error) {
 // the terms TerminalWorker.Interrupt states.
 func (w *tmuxWorker) Interrupt(ctx context.Context) (bool, error) {
 	if w.typing.interrupt == "" || w.typing.read == nil {
-		return false, &CapabilityError{Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"}
+		return false, refuseInterrupt(InterruptKeyUnpressed,
+			&CapabilityError{Capability: CapabilityTerminalInterrupt, Path: "interrupting a terminal worker's turn"})
 	}
 	release, err := w.takeSlot(ctx)
 	if err != nil {
-		return false, fmt.Errorf("the interrupt pressed nothing: %w", err)
+		return false, refuseInterrupt(InterruptKeyUnpressed, fmt.Errorf("the interrupt pressed nothing: %w", err))
 	}
 	defer release()
 	select {
 	case <-w.done:
-		return false, ErrWorkerEnded
+		return false, refuseInterrupt(InterruptKeyUnpressed, ErrWorkerEnded)
 	default:
 	}
 	if w.isReleased() {
-		return false, ErrWorkerReleased
+		return false, refuseInterrupt(InterruptKeyUnpressed, ErrWorkerReleased)
 	}
 	var read screenState
 	if err := w.await(ctx, func(s screenState) bool { read = s; return s == screenBusy || s == screenReady }); err != nil {
-		return false, fmt.Errorf("the interrupt pressed nothing and no turn was read to be running with its reply begun: %w", err)
+		return false, refuseInterrupt(InterruptKeyUnpressed,
+			fmt.Errorf("the interrupt pressed nothing and no turn was read to be running with its reply begun: %w", err))
 	}
 	if read == screenReady {
 		return false, nil
 	}
 	if err := runTmux(ctx, tmuxTypeBound, "the client typing an interrupt", procgroup.Command(w.terminal.Tmux,
 		"-S", w.terminal.Socket, "send-keys", "-t", terminalTarget, w.typing.interrupt)); err != nil {
-		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
-			return false, ErrWorkerEnded
-		}
 		// The client failed or ran out of time, and the server may have
-		// taken the key before either, so this is the one answer that
-		// cannot say whether the key landed.
-		return false, fmt.Errorf("%w: typing the interrupt into the terminal, which may have taken the key anyway: %w", ErrTerminalNotReady, err)
+		// taken the key before either, so neither this refusal nor the one
+		// for a worker gone by now can say whether the key landed.
+		if presence, perr := w.identity.Presence(); perr == nil && presence != PresencePresent {
+			return false, refuseInterrupt(InterruptKeyUnknown, ErrWorkerEnded)
+		}
+		return false, refuseInterrupt(InterruptKeyUnknown,
+			fmt.Errorf("%w: typing the interrupt into the terminal, which may have taken the key anyway: %w", ErrTerminalNotReady, err))
 	}
 	if err := w.await(ctx, func(s screenState) bool { return s == screenReady }); err != nil {
-		return false, fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err)
+		return false, refuseInterrupt(InterruptKeyTyped,
+			fmt.Errorf("the interrupt was typed and the turn was not read to have ended: %w", err))
 	}
 	select {
 	case <-w.done:
-		return false, ErrWorkerEnded
+		// The key was typed and the screen read ready after it, so the turn
+		// ended; the worker ending too is what there is no true answer for.
+		return false, refuseInterrupt(InterruptKeyTyped, ErrWorkerEnded)
 	default:
 	}
 	return true, nil
