@@ -265,6 +265,7 @@ shadow run of an existing pull request, fetch its head and push that:
 
 ```sh
 git fetch origin refs/pull/<number>/head:shadow/pr-<number>
+git checkout shadow/pr-<number>                   # step 8 reads the run of the branch you are on
 ./bin/assistant --home "$HOME_ROOT" --json runs   # before, so the new run is obvious
 git push assistant shadow/pr-<number>
 ```
@@ -272,6 +273,12 @@ git push assistant shadow/pr-<number>
 The push answers at once and the run goes on in the service. The branch name is
 the gate's handle on the run, so one branch per pull request head keeps the runs
 apart.
+
+The checkout is there for step 8 rather than for the push. `status` reports the
+active run **of the branch the working copy is on**, so reading it from another
+branch reports no active run even while the run is advancing. `runs` lists every
+run whatever branch you are on, and `--cancel=RUN` reaches one by name from any
+directory, so neither needs it.
 
 ### A pushed run carries no intent, and two checks go quiet without one
 
@@ -283,7 +290,13 @@ change touches was asked for. That is the gate being honest, not a defect, but
 it means a shadow run started by `git push` is a weaker run than one a person
 starts.
 
-Starting the run from the branch is what records one:
+Starting the run from the branch is what records one. **Use this instead of the
+push above, not after it.** The record holds one live run per branch, and the
+two commands get there differently: a push **supersedes** the branch's
+unfinished run, terminating it before it creates the new one, while this
+command **attaches** to a run the branch already has and starts one only when
+there is none. So pushing first and then running this attaches you to the run
+the push started, which is exactly the run with no intent recorded.
 
 ```sh
 git checkout -B shadow/pr-<number> <the head>
@@ -306,7 +319,7 @@ your own shell does not reach a service a service manager starts.
 ## 8. Read where it stands, and its findings
 
 ```sh
-./bin/assistant --home "$HOME_ROOT" status        # from the branch's checkout
+./bin/assistant --home "$HOME_ROOT" status        # with that branch checked out
 ./bin/assistant --home "$HOME_ROOT" --json status # stage times, every finding
 ```
 
