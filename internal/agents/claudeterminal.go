@@ -527,7 +527,13 @@ var claudeReplied = []string{"claude: ", "tool: ", "tool error: "}
 // breaks a long line, reads as a reply begun while the model has sent
 // nothing, and the interrupt presses the key the CLI answers there by
 // putting their message back in the input, which it then leaves theirs to
-// clear.
+// clear. The model's reply is not defused either, and the row the reading
+// starts at is the last that begins as a message does, so a reply drawing
+// one of those rows itself, as a transcript or a quoted exchange does,
+// hides the reply rows above it and reads as a turn that has drawn none.
+// That one is refused with nothing pressed rather than pressed wrongly.
+// Neither is measured against: nothing here reads the conversation for
+// whose text it is.
 func claudeScreen(screen terminalScreen) screenState {
 	lines, footer, prompt := claudeLayout(screen)
 	switch {
