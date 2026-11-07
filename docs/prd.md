@@ -1719,10 +1719,11 @@ it states the evidence rather than deferring.
 
 This is a testable contract, not a style preference. The translation table below should be
 enforced by a test that asserts both the required wording and the absence of the internal terms.
-It governs everything a person reads except the four detailed evidence documents section 9
-names, the detail view, the usage view, the log view of one stage of a run, and the relay of a finding that needs your decision, where exact
-identifiers and stage names stay. The plain status lines are not evidence documents and stay
-phrased.
+It governs everything a person reads except the five detailed evidence documents section 9
+names: the detail view, the usage view, the log view of one stage of a run, and the relay of a
+finding that needs your decision, each pointed at by a phrased message, and `db path`, which is
+printed with no message before it. Exact identifiers and stage names stay in those documents.
+The plain status lines are not evidence documents and stay phrased.
 
 | Internal term | What you hear instead |
 |---|---|
