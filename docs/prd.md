@@ -306,7 +306,7 @@ Everything Assistant says to you names the project outcome, the consequence, and
 
 Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, the log view of one stage of a run, the relay of a finding that needs your decision, and `db path`. The message that points you at one of the first four still translates, and so does every plain status line.
 
-`db path` is the one printed with no message before it. Its answer is the database file of the home and nothing else, because you compose that answer into another command (`sqlite3 -readonly "$(assistant db path)"`) and a line written before the path would become part of what you substituted. The sentence pointing you at it is section 9's and the README's instead of standard output's.
+`db path` is the one of those five printed with no message before it, which says nothing about an answer that is not an evidence document: the build `--version` reports is a bare value too. Its answer is the database file of the home and nothing else, because you compose that answer into another command (`sqlite3 -readonly "$(assistant db path)"`) and a line written before the path would become part of what you substituted. The sentence pointing you at it is section 9's and the README's instead of standard output's.
 
 **Prevents:** a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.
 
