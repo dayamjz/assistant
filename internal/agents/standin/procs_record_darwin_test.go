@@ -259,15 +259,16 @@ func TestAListingOfABinarySettlesWhileProcessesOutsideItsTreeExitUnread(t *testi
 // from the one kern.proc.all read, and the two fakes below that stage a
 // record answer through this.
 //
-// This process's own lineage is in every reading because the kernel's table
-// always names it, and candidates.checkSelf reads this process's record to
-// check what the listing predicts the binary is recorded as. A reading that
-// left it out would be unsettled by that check rather than by what the row
-// staged, and that is measured too: without the lineage, deleting the
-// in-reading reuse check left
-// TestAListingSeesARecordedProcessExitWhileItsNumberIsReused passing under
-// this part's rule. The identify loop reads nothing of those numbers in any
-// case, because ownLineage excludes them.
+// This process and its ancestors are in every reading because one
+// kern.proc.all read always records the process making it, so a reading
+// without them is another shape readTable cannot return. Here that shape
+// also hides what a row stages: candidates.checkSelf reads this process's
+// record to check what the listing predicts the binary is recorded as, so a
+// reading leaving it out is unsettled by that check instead. That is
+// measured, not argued: without the lineage, deleting the in-reading reuse
+// check left TestAListingSeesARecordedProcessExitWhileItsNumberIsReused
+// passing. The identify loop reads nothing of those numbers in any case,
+// because ownLineage is what it excludes.
 //
 // The one liberty those two rows take is the table's size, and the number
 // list and the record map name the same processes, so no process is hidden
