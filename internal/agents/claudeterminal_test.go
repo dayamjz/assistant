@@ -83,6 +83,21 @@ func typeAsAPerson(t *testing.T, term agents.Terminal, text string) {
 	}
 }
 
+// draftAsAPerson pastes text into the worker's pane straight through tmux,
+// around the adapter, as a person would paste a draft they have not sent:
+// one bracketed paste and no Enter, so a draft of several lines sits in the
+// input with its later lines on rows of their own.
+func draftAsAPerson(t *testing.T, term agents.Terminal, text string) {
+	t.Helper()
+	cmd := exec.Command(term.Tmux, "-S", term.Socket,
+		"load-buffer", "-b", "draft", "-", ";",
+		"paste-buffer", "-p", "-d", "-b", "draft", "-t", "worker")
+	cmd.Stdin = strings.NewReader(text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("pasting a draft into the pane as a person: %v: %s", err, out)
+	}
+}
+
 // A Claude Code terminal worker reaches its conversation with nobody at the
 // pane: the instructions are its first message, its command line is the
 // interactive interface's with the grant a pipe worker gets, and its state
@@ -434,12 +449,40 @@ func TestAClaudeTerminalRefusesInstructionsTooLongForTheCommand(t *testing.T) {
 	}
 }
 
+// cursorAt marks the row tmux reported the pane's cursor on in a recorded
+// screen below: cursorScreen takes the mark out and gives the reader that
+// row's index, as the tmux provider gives it the row the server answered
+// with. A screen with no mark is one read with no cursor.
+const cursorAt = "\u2038"
+
+// cursorScreen is a recorded screen without its cursor mark, and the index
+// of the row the mark was on, or -1 where there was none.
+func cursorScreen(t *testing.T, screen string) (string, int) {
+	t.Helper()
+	cursor := -1
+	for i, line := range strings.Split(screen, "\n") {
+		if strings.Contains(line, cursorAt) {
+			if cursor >= 0 {
+				t.Fatalf("the screen marks two cursor rows, %d and %d", cursor, i)
+			}
+			cursor = i
+		}
+	}
+	return strings.ReplaceAll(screen, cursorAt, ""), cursor
+}
+
 // The screen reader is held to screens Claude Code drew, copied from captures
-// of version agents.ClaudeObservedVersion in a tmux pane with
-// --ax-screen-reader. A line naming the model, and the warnings this
-// machine's host added, were left out of each, and a conversation line
-// quoting the footer was added above one, which is where the CLI draws its
-// conversation.
+// of version agents.ClaudeObservedVersion and, where a row says so, of
+// 2.1.308 in a tmux pane with --ax-screen-reader. A line naming the model,
+// and the warnings this machine's host added, were left out of each.
+//
+// The cursor's row is marked where the capture recorded it, which the four
+// rows taken from the 2.1.308 captures of the cursor do. On every one of
+// those the server had the cursor where the input's text ended: on the
+// prompt's own row for an empty input, after the text for one line of it,
+// and on the input's last row for several. The older captures recorded the
+// screen alone, so their mark is that row, the one every capture that did
+// record a cursor had it on.
 func TestTheClaudeScreenReaderReadsScreensTheCLIDrew(t *testing.T) {
 	for _, c := range []struct{ name, screen, want string }{
 		{"starting", "[Screen Reader Mode: on via flag]\n", "not drawn"},
@@ -450,27 +493,124 @@ func TestTheClaudeScreenReaderReadsScreensTheCLIDrew(t *testing.T) {
 			"Do you want to use this API key?\ny. Yes\nn. No (recommended)\nEnter y/n:\nEnter to confirm · Esc to cancel\n", "not drawn"},
 		{"running", "[Screen Reader Mode: on via flag]\nClaude Code v2.1.301\n/work\nyou: instructions v\n" +
 			"claude: a partial reply\nCrafting…\naccept edits on (shift+tab to cycle)  ·  esc to interrupt\n" +
-			"effort: medium · /effort\n$\n", "drawn"},
+			"effort: medium · /effort\n" + cursorAt + "$\n", "busy"},
 		{"done", "[Screen Reader Mode: on via flag]\nClaude Code v2.1.301\n/work\nyou: instructions v\n" +
 			"claude: the reply\nBrewed for 8s · done 10:23 PM\naccept edits on (shift+tab to cycle)\n" +
-			"effort: medium · /effort\n$\n", "ready"},
+			"effort: medium · /effort\n" + cursorAt + "$\n", "ready"},
 		{"quoted above", "you: what does accept edits on (shift+tab to cycle)  ·  esc to interrupt mean\n" +
-			"claude: the reply\naccept edits on (shift+tab to cycle)\n$\n", "ready"},
+			"claude: the reply\naccept edits on (shift+tab to cycle)\n" + cursorAt + "$\n", "ready"},
 		{"text in the input", "claude: the reply\nBrewed for 8s · done 10:23 PM\naccept edits on (shift+tab to cycle)\n" +
-			"effort: medium · /effort\n$\u00a0  /probe-slash command\n", "drawn"},
+			"effort: medium · /effort\n" + cursorAt + "$\u00a0  /probe-slash command\n", "drawn"},
 		{"the message just sent still in the input", "you:  !touch probe-bang\nclaude: probe reply 15\n" +
 			"Sautéed for 0s · done 10:50 PM\naccept edits on (shift+tab to cycle)\n" +
 			"tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking\n" +
-			"$\u00a0  !touch probe-bang\n", "drawn"},
+			cursorAt + "$\u00a0  !touch probe-bang\n", "drawn"},
 		{"just after a paste", "claude: probe reply 59\nWorked for 0s · done 10:53 PM\npaste again to expand\n" +
-			"effort: medium · /effort\n$\n", "not drawn"},
+			"effort: medium · /effort\n" + cursorAt + "$\n", "not drawn"},
+		// Drawn by Claude Code 2.1.308 around the Escape key, a path replaced.
+		{"running, 2.1.308", "[Screen Reader Mode: on via flag]\nClaude Code v2.1.308\nOpus 5.5 · API Usage Billing\n/work\n" +
+			"you: LONGTURN please work for a long time\nclaude: working 0. working 1. working 2.\nWaddling…\n" +
+			"accept edits on (shift+tab to cycle)  ·  esc to interrupt\neffort: medium · /effort\n" + cursorAt + "$\n", "busy"},
+		{"running a tool, 2.1.308", "you: TOOLTURN: git -c alias.zz='!sleep 40' zz\ntool: Bash (git -c alias.zz='!sleep 40' zz)\n" +
+			"Running…  (5s)\n(ctrl+b ctrl+b (twice) to run in background)\nHashing…\n" +
+			"Tip: Use /memory to view and manage Claude memory\naccept edits on (shift+tab to cycle)  ·  esc to interrupt\n" +
+			cursorAt + "$\n", "busy"},
+		{"text typed into a running turn, 2.1.308", "you: LONGTURN second long turn\n" +
+			"Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.\n" +
+			"accept edits on (shift+tab to cycle)\neffort: medium · /effort\n" + cursorAt + "$\u00a0 half typed\n", "drawn"},
+		{"interrupted, 2.1.308", "[Screen Reader Mode: on via flag]\nClaude Code v2.1.308\nOpus 5.5 · API Usage Billing\n/work\n" +
+			"you: LONGTURN please work for a long time\nclaude: working 0. working 1. working 2. working 3.\n" +
+			"Interrupted  · What should Claude do instead?\naccept edits on (shift+tab to cycle)\n" + cursorAt + "$\n", "ready"},
+		{"interrupted over typed text, 2.1.308", "you: LONGTURN second long turn\nclaude: working 0. working 1.\n" +
+			"Interrupted  · What should Claude do instead?\naccept edits on (shift+tab to cycle)\n" +
+			"effort: medium · /effort\n" + cursorAt + "$\u00a0 half typed\n", "drawn"},
+		{"interrupted on a tool, 2.1.308", "you: TOOLTURN: git -c alias.zz='!sleep 40' zz\n" +
+			"tool error: Bash (git -c alias.zz='!sleep 40' zz)\nInterrupted  · What should Claude do instead?\n" +
+			"accept edits on (shift+tab to cycle)\n" + cursorAt + "$\n", "ready"},
+		{"interrupted before any reply, 2.1.308", "you: hello first\nclaude: ack 2: hello first\n" +
+			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n" +
+			cursorAt + "$\u00a0 SLOWSTART nothing streams yet\n", "drawn"},
+		{"a paste interrupted before any reply, 2.1.308", "claude: ack 2: hello first\nCogitated for 0s · done 3:41 AM\n" +
+			"paste again to expand\n" + cursorAt + "$\u00a0 [Pasted text #2 +3 lines]\n", "not drawn"},
+		{"a paste interrupted before any reply, settled, 2.1.308", "claude: ack 2: hello first\n" +
+			"Cogitated for 0s · done 3:41 AM\naccept edits on (shift+tab to cycle)\n" +
+			cursorAt + "$\u00a0 [Pasted text #4 +3 lines]\n", "drawn"},
+		{"a message of several lines put back in the input, 2.1.308", "claude: ack 5:\nCooked for 0s · done 3:55 AM\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\nSLOWSTART: think for a long time before answering\n\n" +
+			cursorAt + "\n", "drawn"},
+		{"its first line left after one clear, 2.1.308", "claude: ack 5:\nCooked for 0s · done 3:55 AM\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 ### Message 3\n\n\n" + cursorAt + "\n", "drawn"},
+		{"a message put back in the input that quotes the footer", "claude: the reply\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n" + cursorAt + "(shift+tab to cycle)\n", "drawn"},
+		{"text in the input that quotes the footer and then the prompt", "claude: the reply\n" +
+			"accept edits on (shift+tab to cycle)\n$\u00a0 LONG explain\n(shift+tab to cycle)\n" + cursorAt + "$\n", "drawn"},
+		{"running before any of the reply is drawn, 2.1.308", "you: SLOWSTART nothing streams yet\nSimmering…\n" +
+			"Tip: Hit Enter to queue up additional messages while Claude is working.\n" +
+			"accept edits on (shift+tab to cycle)  ·  esc to interrupt\neffort: medium · /effort\n" + cursorAt + "$\n", "drawn"},
 		{"a notice below the footer", "claude: the reply\nWorked for 0s · done 10:53 PM\n" +
 			"accept edits on (shift+tab to cycle)\n" +
 			"tmux focus-events off · add 'set -g focus-events on' to ~/.tmux.conf and reattach for focus tracking\n" +
-			"$\n\n\n", "ready"},
+			cursorAt + "$\n\n\n", "ready"},
+		// Captured from 2.1.308 with the cursor the server reported, a path
+		// and a name replaced. The reply quoting the interface is what a
+		// reading that took the first footer and prompt on the screen for
+		// the interface read as an input holding text, so every later send
+		// was refused while it was drawn.
+		{"a reply quoting the footer and the prompt, 2.1.308",
+			"you: QUOTEFOOTER what does the footer mean\nclaude: here is the interface you asked about:\n" +
+				"accept edits on (shift+tab to cycle)\n$\nthat is all\nCooked for 0s · done 1:22 PM\n" +
+				"accept edits on (shift+tab to cycle)\n" + cursorAt + "$\n", "ready"},
+		// The same two rows pasted into the input instead, which is the
+		// reading the cursor cannot tell from the one above: it is read as
+		// the draft it is, so no send types into it.
+		{"a draft of several lines quoting the footer and the prompt, 2.1.308",
+			"claude: scratch reply 2\nSautéed for 0s · done 1:26 PM\naccept edits on (shift+tab to cycle)\n" +
+				"ctrl+g to edit in Vim\n$\u00a0 a draft\n(shift+tab to cycle)\n" + cursorAt + "$\n", "drawn"},
+		{"one line of a person's text in the input, 2.1.308",
+			"you: say hello and nothing else\nclaude: scratch reply 2\nSautéed for 0s · done 1:26 PM\n" +
+				"accept edits on (shift+tab to cycle)\n" + cursorAt + "$\u00a0 half a thought\n", "drawn"},
+		{"several pasted lines in the input, 2.1.308",
+			"claude: scratch reply 2\nSautéed for 0s · done 1:26 PM\naccept edits on (shift+tab to cycle)\n" +
+				"ctrl+g to edit in Vim\n$\u00a0 first pasted line\nsecond pasted line\n" + cursorAt + "last pasted line\n", "drawn"},
+		// One message of several lines under a turn the model sent no reply
+		// for, drawn twice by 2.1.308: as a person typed it at the pane,
+		// where its own rows read as a reply having begun, and as this
+		// adapter types it, defused, where they do not. The first is the
+		// reading an interrupt presses its key on with no reply drawn, and
+		// it is what no message this adapter sends can draw.
+		{"a message a person typed whose own rows read as a reply, 2.1.308",
+			"you: HOLD explain this transcript\nclaude: working 0. working 1.\ntool: Bash (ls)\nWorking…\n" +
+				"Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits\n" +
+				"accept edits on (shift+tab to cycle)  ·  esc to interrupt\neffort: medium · /effort\n" + cursorAt + "$\n", "busy"},
+		{"the same message defused as this adapter sends it, 2.1.308",
+			"you: HOLD explain this transcript\nclaude:\u00a0working 0. working 1.\ntool:\u00a0Bash (ls)\nGusting…\n" +
+				"Tip: Use Plan Mode to prepare for a complex request before making changes. Press shift+tab twice to enable.\n" +
+				"accept edits on (shift+tab to cycle)  ·  esc to interrupt\n" + cursorAt + "$\n", "drawn"},
+		// One line of 195 columns and then " claude: working 0.", which
+		// 2.1.308 drew over two rows, broken at the space, so the prefix was
+		// the first thing on the second row. A message's line is drawn this
+		// way wherever it is too long for the pane, which is why defusing
+		// the starts of lines is not enough: the undefused reading below is
+		// one the interrupt pressed its key on with no reply drawn, and the
+		// defused one, its prefix broken wherever it sits, is what the same
+		// send draws.
+		{"a line of a person's message the CLI's wrap broke before a reply prefix, 2.1.308",
+			"you: HOLD " + strings.Repeat("w", agents.TerminalWidth-len("you: HOLD ")) + "\nclaude: working 0.\nHatching…\n" +
+				"Tip: New to Claude Code? Run /powerup for a quick interactive tutorial\n" +
+				"accept edits on (shift+tab to cycle)  ·  esc to interrupt\n" + cursorAt + "$\n", "busy"},
+		{"the same line defused as this adapter sends it, 2.1.308",
+			"you: HOLD " + strings.Repeat("w", agents.TerminalWidth-len("you: HOLD ")) + "\nclaude:\u00a0working 0.\nBunning…\n" +
+				"Tip: Start with small features or bug fixes, tell Claude to propose a plan, and verify its suggested edits\n" +
+				"accept edits on (shift+tab to cycle)  ·  esc to interrupt\n" + cursorAt + "$\n", "drawn"},
 	} {
-		if got := agents.ReadClaudeScreen(c.screen); got != c.want {
+		screen, cursor := cursorScreen(t, c.screen)
+		if got := agents.ReadClaudeScreen(screen, cursor); got != c.want {
 			t.Errorf("the %s screen reads %q, want %q", c.name, got, c.want)
+		}
+		// The cursor is what tells the interface from the conversation, so
+		// the same screen read without one is never ready or busy.
+		if got := agents.ReadClaudeScreen(screen, -1); got != "drawn" && got != "not drawn" {
+			t.Errorf("the %s screen read with no cursor reads %q, want neither ready nor busy", c.name, got)
 		}
 	}
 }
@@ -505,6 +645,101 @@ func TestAClaudeTerminalSendLeavesAPersonsUnsentTextAlone(t *testing.T) {
 	}
 }
 
+// A conversation that quotes the interface does not stop the worker being
+// sent to: the reply here draws the footer's line and then the prompt's,
+// which is what the CLI drew for a reply quoting them, and the send after
+// it is typed and answered. The control is the same two lines pasted into
+// the input instead, as a person's draft: that send is refused with
+// ErrTerminalNotReady, nothing typed, and the draft is still theirs to
+// send. The screens of both are rows of the reader's own table.
+func TestAClaudeTerminalSendReadsTheInterfaceAndNotAQuoteOfIt(t *testing.T) {
+	const quoting = "what does the footer mean"
+	const quoted = "here is the interface you asked about:\naccept edits on (shift+tab to cycle)\n$\nthat is all"
+	worker, term, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: quoting, Reply: quoted},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), quoting); err != nil {
+		t.Fatalf("Send(%q): %v", quoting, err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	awaitWorkerOutput(t, worker, "$\nthat is all")
+	after, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if err := worker.Send(after, "after the quoted interface"); err != nil {
+		t.Fatalf("a send while the conversation quoted the interface: %v\n%s", err, worker.Capture().Text)
+	}
+	call := awaitInteractive(t, agent, answered(3))
+	if got := call.Lines[2]; got != "after the quoted interface" {
+		t.Errorf("the worker answered %q, want the send after the quoted interface", got)
+	}
+
+	// The same lines in the input, where they are a person's text.
+	draftAsAPerson(t, term, "a draft\n(shift+tab to cycle)\n$")
+	ctx, stop := context.WithTimeout(t.Context(), 2*time.Second)
+	defer stop()
+	if err := worker.Send(ctx, "over the draft"); !errors.Is(err, agents.ErrTerminalNotReady) {
+		t.Fatalf("a send over a draft that quotes the interface answered %v, want ErrTerminalNotReady", err)
+	}
+	if call = awaitInteractive(t, agent, answered(3)); len(call.Lines) != 3 {
+		t.Errorf("the worker answered %q, want nothing typed over the draft", call.Lines)
+	}
+}
+
+// No message this adapter types can be read as the conversation's or the
+// input's own rows: a line of a send that begins as one of them is typed
+// one column in, and reaches the model that way. Without that, a message
+// whose later lines begin with a reply's prefix reads as a reply having
+// begun while the model has sent nothing, and the interrupt presses the key
+// the CLI answers there by taking the message out of the conversation and
+// putting it back in the input. So the interrupt of such a message's quiet
+// turn waits for a reply instead, and is refused with ErrTerminalNotReady,
+// nothing pressed and the turn still running.
+func TestAClaudeTerminalDefusesLinesTheScreenWouldReadAsItsOwn(t *testing.T) {
+	const quiet = "explain this transcript"
+	// The reply's prefixes come last, where a reading that takes the rows
+	// below the conversation's last "you: " row for the reply finds them.
+	// The last line carries one in the middle, where the CLI's own wrap of
+	// a line too long for the pane can put it at the start of a row.
+	const forging = quiet + "\nyou: and back\n$\u00a0 typed\nclaude: working 0. working 1.\ntool: Bash (ls)" +
+		"\nand the transcript went tool: Bash (ls) and then claude: working again"
+	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: quiet, Reply: "the quiet reply", Turn: time.Hour},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), forging); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	call := awaitInteractive(t, agent, answered(2))
+	want := quiet + "\nyou:\u00a0and back\n$  typed\nclaude:\u00a0working 0. working 1.\ntool:\u00a0Bash (ls)" +
+		"\nand the transcript went tool:\u00a0Bash (ls) and then claude:\u00a0working again"
+	if got := call.Lines[1]; got != want {
+		t.Errorf("the worker was sent %q, want every prefix that would read as the interface's defused: %q", got, want)
+	}
+	// The reader's own prefixes, spelled here as it matches them: no part of
+	// what the worker was sent may carry one, wherever the CLI puts it.
+	for _, prefix := range []string{"you: ", "claude: ", "tool: ", "tool error: ", "$\u00a0"} {
+		if strings.Contains(call.Lines[1], prefix) {
+			t.Errorf("the worker was sent %q, which still carries %q for a row of its own to begin with", call.Lines[1], prefix)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var err error
+	for interrupted := false; !interrupted && err == nil; {
+		interrupted, err = agents.InterruptTerminalWorker(ctx, agent.Runner(), worker)
+	}
+	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("an interrupt of a turn whose message quotes a reply answered %v, want ErrTerminalNotReady and the deadline", err)
+	}
+	if call = awaitInteractive(t, agent, answered(2)); len(call.Interrupted) != 0 || call.IdleEscapes != 0 {
+		t.Fatalf("the worker recorded %q interrupted and %d idle Escape keys, want nothing pressed", call.Interrupted, call.IdleEscapes)
+	}
+	if !strings.Contains(worker.Capture().Text, "esc to interrupt") {
+		t.Fatalf("the turn is not still running:\n%s", worker.Capture().Text)
+	}
+}
+
 // A terminal-hosted subordinate coordinator is refused by the Claude Code
 // adapter before anything starts: its grant runs the interface in the
 // default mode, and the ready screen the adapter reads was observed in
@@ -535,5 +770,158 @@ func TestAClaudeTerminalSubordinateIsRefusedBeforeItStarts(t *testing.T) {
 	want.allowed += ",Bash(" + route + ":*)"
 	if got := grantOf(call.Args); got != want {
 		t.Errorf("the terminal worker ran under %+v, want %+v", got, want)
+	}
+}
+
+// An interrupt presses Escape once, only on a screen that reads a turn
+// running that has drawn part of its reply with an empty input, and answers
+// once the screen reads ready with the worker still running; the turn is
+// ended unanswered and the next send is answered.
+// With no turn running it answers so and presses nothing, and over a
+// person's unsent text it presses nothing and is refused with
+// ErrTerminalNotReady once its context ends, leaving the text theirs:
+// Claude Code 2.1.308 was observed to open a menu on a second Escape at an
+// idle screen and to offer to clear typed text on one.
+func TestAClaudeTerminalInterruptPressesOneKeyWhileATurnRuns(t *testing.T) {
+	interruptOneTurn(t, "the reply begins")
+}
+
+// interruptOneTurn is one run of
+// TestAClaudeTerminalInterruptPressesOneKeyWhileATurnRuns, with progress as
+// what the long turn draws of its reply.
+func interruptOneTurn(t *testing.T, progress string) {
+	// Several lines, as every message the service sends is, so a message
+	// put back in the input takes a clear per line.
+	const long = "a turn to interrupt\n\nwith a second paragraph"
+	worker, term, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: "a turn to interrupt", Reply: "the long turn's reply", Turn: time.Hour, Progress: progress},
+	}}}, workerSpec(t))
+	runner := agent.Runner()
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), long); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	// One asked before the turn is drawn finds none and presses nothing.
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		interrupted, err := agents.InterruptTerminalWorker(t.Context(), runner, worker)
+		if err != nil {
+			t.Fatalf("interrupting the long turn: %v\n%s", err, worker.Capture().Text)
+		}
+		if interrupted {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the interrupt never found the long turn running:\n%s", worker.Capture().Text)
+		}
+	}
+	call := awaitInteractive(t, agent, func(c standin.Call) bool { return len(c.Interrupted) > 0 })
+	if !slices.Equal(call.Interrupted, []string{long}) || call.IdleEscapes != 0 {
+		t.Fatalf("the worker recorded %q interrupted and %d idle Escape keys, want the long turn and none", call.Interrupted, call.IdleEscapes)
+	}
+	select {
+	case <-worker.Done():
+		t.Fatal("the worker ended on the interrupt")
+	default:
+	}
+	if interrupted, err := agents.InterruptTerminalWorker(t.Context(), runner, worker); err != nil || interrupted {
+		t.Fatalf("an interrupt with no turn running answered %t, %v, want false", interrupted, err)
+	}
+	if err := worker.Send(t.Context(), "and then"); err != nil {
+		t.Fatalf("Send after the interrupt: %v", err)
+	}
+	awaitInteractive(t, agent, answered(3))
+
+	half := exec.Command(term.Tmux, "-S", term.Socket, "send-keys", "-t", "worker", "-l", "half a thought")
+	if out, err := half.CombinedOutput(); err != nil {
+		t.Fatalf("typing as a person: %v: %s", err, out)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err := agents.InterruptTerminalWorker(ctx, runner, worker); !errors.Is(err, agents.ErrTerminalNotReady) {
+		t.Fatalf("an interrupt over a person's unsent text answered %v, want ErrTerminalNotReady", err)
+	}
+	enter := exec.Command(term.Tmux, "-S", term.Socket, "send-keys", "-t", "worker", "Enter")
+	if out, err := enter.CombinedOutput(); err != nil {
+		t.Fatalf("pressing Enter as a person: %v: %s", err, out)
+	}
+	call = awaitInteractive(t, agent, answered(4))
+	if call.Lines[3] != "half a thought" || call.IdleEscapes != 0 || strings.Contains(worker.Capture().Text, "the long turn's reply") {
+		t.Fatalf("the worker answered %q with %d idle Escape keys, want the person's text as typed and none:\n%s",
+			call.Lines, call.IdleEscapes, worker.Capture().Text)
+	}
+}
+
+// An interrupt presses nothing while the running turn has drawn none of its
+// reply, because Claude Code 2.1.308 answered Escape (and Control-C) there by
+// putting the message back in the input, which nothing can then take out
+// without risking a person's text: it waits, and is refused with
+// ErrTerminalNotReady once its context ends, saying that nothing was
+// pressed, the turn still running. Once the reply has begun, the same turn
+// is interrupted.
+func TestAClaudeTerminalInterruptWaitsForTheReplyToBegin(t *testing.T) {
+	const quiet = "a quiet long turn"
+	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: quiet, Reply: "the quiet reply", Turn: time.Hour},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), quiet); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var err error
+	for interrupted := false; !interrupted && err == nil; {
+		interrupted, err = agents.InterruptTerminalWorker(ctx, agent.Runner(), worker)
+	}
+	if !errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("an interrupt of a turn that drew no reply answered %v, want ErrTerminalNotReady and the deadline", err)
+	}
+	// The contract is that a refusal carries what the key did, and this is
+	// the refusal that comes before any press.
+	var refused *agents.InterruptRefused
+	if !errors.As(err, &refused) || refused.Key != agents.InterruptKeyUnpressed {
+		t.Errorf("the refusal %v carries %v, want an *InterruptRefused of %v", err, refused, agents.InterruptKeyUnpressed)
+	}
+	call := awaitInteractive(t, agent, answered(2))
+	if len(call.Interrupted) != 0 || call.IdleEscapes != 0 {
+		t.Fatalf("the worker recorded %q interrupted and %d idle Escape keys, want nothing pressed", call.Interrupted, call.IdleEscapes)
+	}
+	if !strings.Contains(worker.Capture().Text, "esc to interrupt") {
+		t.Fatalf("the turn is not still running:\n%s", worker.Capture().Text)
+	}
+}
+
+// An interrupt waits its turn behind a send that waits for the running turn
+// to end, and only for as long as its own context allows: it is refused
+// with ErrTerminalNotReady and the context's error when that ends first. The
+// send is given a moment to take its turn first; an interrupt that takes it
+// first anyway ends the turn, which is also an answer within its deadline.
+func TestAClaudeTerminalInterruptBehindAWaitingSendKeepsItsDeadline(t *testing.T) {
+	const long = "a turn to wait behind"
+	worker, _, agent := openClaudeTerminal(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: long, Reply: "the long reply", Turn: time.Hour, Progress: "the long reply begins"},
+	}}}, workerSpec(t))
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(t.Context(), long); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	awaitInteractive(t, agent, answered(2))
+	pending, stop := context.WithCancel(t.Context())
+	defer stop()
+	go func() { _ = worker.Send(pending, "queued behind the turn") }()
+	time.Sleep(500 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := agents.InterruptTerminalWorker(ctx, agent.Runner(), worker); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil && (!errors.Is(err, agents.ErrTerminalNotReady) || !errors.Is(err, context.DeadlineExceeded)) {
+			t.Fatalf("an interrupt behind a waiting send answered %v, want ErrTerminalNotReady and the deadline", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("an interrupt behind a waiting send was still waiting long after its deadline")
 	}
 }

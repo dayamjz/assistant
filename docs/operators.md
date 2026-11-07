@@ -1556,10 +1556,10 @@ a shell command or a slash command. Some limits are worth knowing:
   has no terminal, and a push from there is refused with code `unplaceable`.
 - A long or multi-line message reaches the model wrapped as pasted content
   rather than as bare text.
-- All of this rests on what Claude Code 2.1.301 drew on screen and kept in
-  its state file. A later version that draws something else has its workers
-  refused at start, or its messages refused, rather than typed at blind; one
-  that draws the same and behaves differently is not detected.
+- All of this rests on what Claude Code 2.1.301 and 2.1.308 drew on screen
+  and kept in the state file. A later version that draws something else has
+  its workers refused at start, or its messages refused, rather than typed
+  at blind; one that draws the same and behaves differently is not detected.
 - Instructions longer than about 16 KB do not fit the command that starts a
   tmux worker and are refused.
 
