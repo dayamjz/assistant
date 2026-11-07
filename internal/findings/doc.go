@@ -137,6 +137,19 @@
 // that a claim is refused unless the reviewer's own account of what it read
 // supports it, and that the account is on the record to be read across runs.
 //
+// The binding also does not reach the report's summary. It binds Findings and
+// nothing else, so the summary arrives as the reviewer wrote it, and a claim
+// it makes about a path the evidence set does not hold is neither refused nor
+// marked where it stands. That is the design rather than an oversight: a
+// summary is prose, and resolving prose against the evidence set would mean
+// deciding which paths a paragraph rests on from the filenames it happens to
+// name, which refuses a passing mention and admits a paragraph that describes
+// an undeclared file without naming it. What it costs is real, because the
+// summary is the part of a review a person reads first and the part a refused
+// finding beside it does not contradict, so the evidence note says the limit
+// (summaryUnbound) rather than leaving a reader to infer that the comparison
+// covered everything.
+//
 // The other limit is on how far the discriminator reaches, and it is PRD
 // section 5's own design rather than a shortfall against it: the PRD puts the
 // duty to cite on the reviewer, so citing is voluntary. The wholesale
