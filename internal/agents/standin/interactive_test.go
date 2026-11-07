@@ -115,7 +115,9 @@ func TestAnInteractiveWorkerOpensOnTheScreenItsStateCallsFor(t *testing.T) {
 // observed to end one: a turn that drew part of its reply gets the
 // interrupted line where the rest would have gone and the idle footer; a
 // turn that drew none has its message put back in the input, every line of
-// it, which Control-U takes out one line at a time. Either is recorded Interrupted and answered with no
+// it, which Control-U takes out one line at a time, and its own row taken
+// off the screen, which is the row a reader of the conversation would
+// otherwise take for the last message sent. Either is recorded Interrupted and answered with no
 // reply, and the worker then answers its next message. An Escape with no
 // turn running changes nothing on screen and is counted, so a typist that
 // presses one there, which the CLI was seen to take another way, is caught.
@@ -169,9 +171,16 @@ func TestAnInteractiveWorkerEndsATurnOnEscape(t *testing.T) {
 		t.Fatalf("pasting: %v: %s", err, out)
 	}
 	keys("Enter")
+	screenOf(t, socket, "you: quiet")
 	screenOf(t, socket, footerBusy)
 	keys("Escape")
 	screenOf(t, socket, footerIdle+"\n"+inputLine+"\u00a0quiet\n\na second paragraph")
+	// The CLI took the message's own row off the screen with the message,
+	// which is the region a reader of the conversation reads; the earlier
+	// message's row, which it kept, is the control.
+	if got := screenOf(t, socket, "you: hello there"); strings.Contains(got, "you: quiet") {
+		t.Fatalf("the interrupted message's own row is still drawn:\n%s", got)
+	}
 	recorded("the second interrupt", func(c Call) bool { return len(c.Interrupted) == 2 })
 	// A line's text, then each line break, one press each.
 	keys("C-u")

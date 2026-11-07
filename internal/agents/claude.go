@@ -225,7 +225,7 @@ func (r *claudeRunner) Capabilities() Capabilities { return claudeDeclaration }
 
 // claudeDeclaration is what Capabilities and the factory's Declares both return.
 var claudeDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers,
-	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityTerminalInterrupt, CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
 	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
 
 // Run executes one invocation with no session. It resumes nothing, and the

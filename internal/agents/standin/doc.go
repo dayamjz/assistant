@@ -266,19 +266,18 @@
 // it takes the Escape key as the end of a running turn, which Call.Interrupted
 // records and no reply answers, drawing the interrupted line where a turn that
 // had begun its reply would have gone and putting back in the input a turn's
-// message that had not, line by line, for Control-U to take out one press at a
-// time; and its footer and input are the text the CLI drew, redrawn in place,
-// each line of what is typed on a line of its own.
+// message that had not, its own row taken off the screen with it, line by
+// line, for Control-U to take out one press at a time; and its footer and
+// input are the text the CLI drew, redrawn in place, each line of what is
+// typed on a line of its own.
 // What it does not model is everything else the CLI draws and does: the
 // model's reply is the script's, a "!" command is not run, a paste is not
 // collapsed or wrapped, the footer is modelled in acceptEdits mode only,
-// no first-run screen answers a key, an Escape key with no turn running
+// no first-run screen answers a key, and an Escape key with no turn running
 // draws nothing and is only counted, in Call.IdleEscapes, where the CLI was
-// observed to open a rewind menu or offer to clear unsent text, and the line
-// a restored message was drawn on stays on the screen above, where the CLI
-// took it away; nothing an adapter reads is above the footer.
+// observed to open a rewind menu or offer to clear unsent text.
 // Like the stream mode's sources,
-// this is an observation of one version that nothing here re-checks;
+// this is an observation of versions nothing here re-checks;
 // internal/agents runs the same probe against an installed CLI where there
 // is one, and says what the model rests on where there is not. The
 // environment is still not recorded: the key is read to check an approval
