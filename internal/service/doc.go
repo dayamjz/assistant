@@ -495,9 +495,11 @@
 // terminals.go's sessionHost, over the adapter agents.Route selected for that
 // worker, which may differ from the run agent, and never over the runner
 // containRunner wraps, because the wrapper carries no worker arm: under the
-// default, auto, a session.Tmux where tmux is installed and the adapter
-// declares terminal workers and a session.Pipe otherwise, and the one
-// config.KeySessionProvider names when the operator's file names one.
+// default, auto, a session.Tmux where tmux is installed, the adapter can
+// start a terminal worker here (agents.TerminalStartable) and the home's
+// path leaves room for the socket (session.TerminalFits), and a
+// session.Pipe otherwise, and the one config.KeySessionProvider names when
+// the operator's file names one.
 // driverFor builds one more the same way over the resolved agent, which
 // starts a subordinate coordinator's session and answers a reference no
 // launch of this service holds by identity alone, on terminals.go's terms.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -177,6 +178,36 @@ func tmuxBinary() (string, error) {
 		return "", err
 	}
 	return tmux, nil
+}
+
+// terminalForLaunchCheck is the terminal a launch of a worker through r would
+// start under, when the session provider hosts that worker in tmux, or empty
+// when it hosts it on a pipe. refuseKnowledgeIfLaunchTooLarge asks
+// WorkerLaunchRefusal with it so the bound matches Create's under auto as
+// under an explicit tmux: the same PATH, TerminalStartable and TerminalFits
+// gates sessionHost uses.
+func (s *Service) terminalForLaunchCheck(r agents.Runner) (agents.Terminal, bool) {
+	var tmux string
+	switch s.cfg.SessionProvider {
+	case config.SessionProviderTmux:
+		var err error
+		tmux, err = tmuxBinary()
+		if err != nil {
+			return agents.Terminal{}, false
+		}
+	case config.SessionProviderAuto:
+		if !s.autoTmux || agents.TerminalStartable(r) != nil {
+			return agents.Terminal{}, false
+		}
+		var err error
+		tmux, err = tmuxBinary()
+		if err != nil || !session.TerminalFits(s.home, tmux) {
+			return agents.Terminal{}, false
+		}
+	default:
+		return agents.Terminal{}, false
+	}
+	return agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket(strings.Repeat("0", 16))}, true
 }
 
 // heldTerminals is the Terminals over this service's own session provider,

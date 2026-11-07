@@ -13,11 +13,13 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -621,7 +623,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(machine.Check{Name: machine.CheckAgent, OK: true, Blocking: true, Detail: resolution.Name})
 	}
 	add(namedOnlyAgents(ctx, catalog))
-	add(sessionProvider(ctx, in.home.ConfigFile(), catalog))
+	add(sessionProvider(ctx, in.home, catalog))
 
 	// The upstream is read first because which host the code-host row
 	// probes is the one the upstream names; the rows are still reported in
@@ -654,18 +656,18 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 
 // sessionProvider reports whether the operator's chosen terminal session
 // provider can host workers here. pipe always can, and so can auto, the
-// default, which hosts a worker in tmux where tmux is on PATH and the agent
-// declares terminal_workers and on a pipe otherwise; the row says which. tmux
-// needs a tmux binary on PATH and an agent that declares terminal_workers;
-// without either, every launch is refused and the task stays Dispatched,
-// which is the stall this row names before an operator waits on one. It reads the
-// operator's file the way the service does at start, and resolves the agent
-// list that file names (defaults included), which is what launches go
-// through. It does not block a run: gate validation does not need a worker
-// terminal, and a missing prerequisite is a fleet launch refusal rather than
-// a run-start refusal.
-func sessionProvider(ctx context.Context, configFile string, catalog *agents.Catalog) machine.Check {
-	cfg, err := service.GlobalConfig(configFile)
+// default, which hosts a worker in tmux where tmux is on PATH, the agent can
+// start a terminal worker and the home's path leaves room for the socket, and
+// on a pipe otherwise; the row says which. tmux needs a tmux binary on PATH
+// and an agent that declares terminal_workers; without either, every launch is
+// refused and the task stays Dispatched, which is the stall this row names
+// before an operator waits on one. It reads the operator's file the way the
+// service does at start, and resolves the agent list that file names
+// (defaults included), which is what launches go through. It does not block a
+// run: gate validation does not need a worker terminal, and a missing
+// prerequisite is a fleet launch refusal rather than a run-start refusal.
+func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog) machine.Check {
+	cfg, err := service.GlobalConfig(h.ConfigFile())
 	if err != nil {
 		return machine.Check{
 			Name:   machine.CheckSessionProvider,
@@ -673,13 +675,13 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 		}
 	}
 	if cfg.SessionProvider == config.SessionProviderAuto {
-		return autoSessionProvider(ctx, cfg, catalog)
+		return autoSessionProvider(ctx, cfg, catalog, h)
 	}
 	if cfg.SessionProvider != config.SessionProviderTmux {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
 			OK:   true,
-			Detail: "workers run on pipes, as session_provider pipe in " + configFile +
+			Detail: "workers run on pipes, as session_provider pipe in " + h.ConfigFile() +
 				" chooses; remove it to host each in an attachable terminal where tmux is installed",
 		}
 	}
@@ -715,8 +717,10 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 }
 
 // autoSessionProvider is sessionProvider's row for auto, which is always OK
-// and says which provider a worker of the resolved agent gets here.
-func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents.Catalog) machine.Check {
+// and says which provider a worker of the resolved agent gets here, on the
+// same TerminalStartable and TerminalFits gates the service's sessionHost
+// uses for a launch.
+func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents.Catalog, h *home.Home) machine.Check {
 	row := machine.Check{Name: machine.CheckSessionProvider, OK: true}
 	tmux, lookErr := exec.LookPath("tmux")
 	resolution, err := agents.Resolve(ctx, cfg.Agent, catalog)
@@ -729,6 +733,8 @@ func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents
 	case agents.TerminalStartable(resolution.Runner) != nil:
 		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto), so a worker cannot outlive a restart of the service: %v",
 			agents.TerminalStartable(resolution.Runner))
+	case !session.TerminalFits(h, tmux):
+		row.Detail = "workers run on pipes (the default, auto): the home path leaves no room for a terminal socket, so a worker cannot outlive a restart of the service"
 	default:
 		row.Detail = fmt.Sprintf("workers run in tmux (the default, auto): tmux at %s, and %s declares %s",
 			tmux, resolution.Name, agents.CapabilityTerminalWorkers)
