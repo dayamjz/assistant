@@ -76,12 +76,19 @@ type scriptedRunner struct{ *claudeRunner }
 // workers, because all three mechanisms are here, and the four token counts,
 // because the one-shot path is the Claude Code adapter's and reads its
 // envelope. Instruction suppression is not declared, for the reason the
-// Claude Code adapter gives.
+// Claude Code adapter gives, and neither is a terminal interrupt, because
+// this adapter's typing reads no screen to prove a turn ended by.
 func (r *scriptedRunner) Capabilities() Capabilities { return scriptedDeclaration }
 
 // scriptedDeclaration is what Capabilities and the factory's Declares both
 // return.
-var scriptedDeclaration = claudeDeclaration
+var scriptedDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers,
+	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
+
+// terminalTyping is this adapter's terminal typing: plain lines through
+// terminalLines, no screen read and no interrupt key.
+func (r *scriptedRunner) terminalTyping() terminalTyping { return terminalTyping{frame: terminalLines} }
 
 // Start launches the binary as a worker: the configured entry's own
 // arguments and nothing managed, with --print absent, and every send written
@@ -123,7 +130,7 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
-	}, spec.Instructions, terminalTyping{frame: terminalLines})
+	}, spec.Instructions, r.terminalTyping())
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +141,7 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 // AdoptTerminalWorker's terms, typed into as StartInTerminal's is.
 func (r *scriptedRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
 	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{grace: r.settings.grace, maxOut: r.settings.maxOut},
-		terminalTyping{frame: terminalLines})
+		r.terminalTyping())
 	if err != nil {
 		return nil, err
 	}
