@@ -14,6 +14,7 @@ import (
 
 // The interactive mode models the Claude Code CLI's interactive interface as
 // it was observed in a tmux pane, on version 2.1.301 with --ax-screen-reader,
+// and for the interrupt keys on version 2.1.308,
 // against a local server standing in for the model. The package
 // documentation says what that observation was and what this does not model;
 // everything below is one rule of it, and each is one a typist can be failed
