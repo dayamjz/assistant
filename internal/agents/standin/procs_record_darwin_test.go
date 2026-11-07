@@ -62,12 +62,21 @@ func endedBinaryRecord(t *testing.T) tableRecord {
 }
 
 // readingOf is one reading of a process table that holds just the processes
-// named and nothing else: the kernel's own record of each of live, every
-// record in staged at its own number in place of the kernel's, and a number
-// list naming exactly the records the reading holds, in the order the
-// kernel's table names them. That is how readTable builds the two, from the
-// one kern.proc.all read, and every fake in this file that stages a record
-// answers through this.
+// named: this process and its ancestors, the kernel's own record of each of
+// live, every record in staged at its own number in place of the kernel's,
+// and a number list naming exactly the records the reading holds, in the
+// order the kernel's table names them. That is how readTable builds the two,
+// from the one kern.proc.all read, and every fake in this file that stages a
+// record answers through this.
+//
+// This process's own lineage is in every reading because the kernel's table
+// always names it, and a listing of a binary this process runs reads its own
+// record to check what it predicts the binary is recorded as. A reading that
+// left it out would be unsettled by that check rather than by what the row
+// staged, which is how the first attempt at this helper was caught: the
+// in-reading reuse check could be deleted and the reuse row still passed.
+// The identify loop reads nothing of those numbers in any case, because
+// ownLineage excludes them.
 //
 // The one liberty the rows below take is the table's size, and the number
 // list and the record map name the same processes, so no process is hidden
@@ -91,7 +100,12 @@ func readingOf(t *testing.T, live []int, staged ...tableRecord) ([]int, map[int]
 	if err != nil {
 		return nil, nil, err
 	}
-	records := make(map[int]tableRecord, len(live)+len(staged))
+	records := make(map[int]tableRecord, len(live)+len(staged)+1)
+	for pid := range ownLineage() {
+		if record, ok := all[pid]; ok {
+			records[pid] = record
+		}
+	}
 	for _, pid := range live {
 		record, ok := all[pid]
 		if !ok {
