@@ -272,9 +272,11 @@
 // What it does not model is everything else the CLI draws and does: the
 // model's reply is the script's, a "!" command is not run, a paste is not
 // collapsed or wrapped, the footer is modelled in acceptEdits mode only,
-// no first-run screen answers a key, and an Escape key with no turn running
+// no first-run screen answers a key, an Escape key with no turn running
 // draws nothing and is only counted, in Call.IdleEscapes, where the CLI was
-// observed to open a rewind menu or offer to clear unsent text.
+// observed to open a rewind menu or offer to clear unsent text, and the line
+// a restored message was drawn on stays on the screen above, where the CLI
+// took it away; nothing an adapter reads is above the footer.
 // Like the stream mode's sources,
 // this is an observation of one version that nothing here re-checks;
 // internal/agents runs the same probe against an installed CLI where there
