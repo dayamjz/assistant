@@ -150,6 +150,20 @@ type Exchange struct {
 	// exchange. Reply, Run, Write, Recorded and Ends must be unset beside
 	// it; a script breaking that rule is refused when the Agent is built.
 	Refuse string `json:"refuse,omitempty"`
+	// Turn is how long an interactive worker shows the turn this exchange
+	// answers as running, in place of WorkerScript.Turn, which zero leaves
+	// in force; it is how a script makes one message a long turn. A
+	// negative Turn is refused when the Agent is built. Line, stream and
+	// JSON-RPC workers do not read it.
+	Turn time.Duration `json:"turn,omitempty"`
+	// Progress is a line an interactive worker draws as soon as the turn
+	// this exchange answers begins, as the CLI drew the first words of a
+	// reply while it streamed. Whether a turn has drawn any is what decided
+	// how the CLI took the Escape key: a turn that had drawn some was
+	// ended with an interrupted line, and one that had drawn none had its
+	// message put back in the input. Line, stream and JSON-RPC workers do
+	// not read it.
+	Progress string `json:"progress,omitempty"`
 }
 
 // Wrote is what a worker answers for a line a Write exchange took: the path
