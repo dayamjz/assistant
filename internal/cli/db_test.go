@@ -54,9 +54,9 @@ func TestTheDatabasePathIsWrittenAloneSoACallerCanSubstituteIt(t *testing.T) {
 }
 
 // TestTheDatabaseThePathNamesIsReadableWhileTheStoreIsOpen is the point of
-// the verb: a reader that is not this binary opens the file the path names,
-// read-only, while the records are open for writing, and reads the task the
-// store wrote.
+// the verb: the file the path names holds the records, and a second
+// read-only connection to it reads the task the store wrote while the store
+// still holds it open for writing.
 //
 // It reads through internal/store's read-only open, which is a second
 // connection to the file and the only reader this module can drive. That

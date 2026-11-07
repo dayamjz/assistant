@@ -2893,7 +2893,7 @@ share the same decisions, the same options, and the same authority. Only the ren
 | `assistant service …` | Start, stop, restart, status. |
 | `assistant gate …` | What the gate's own hooks invoke, not a verb a person drives: `admit` runs before any reference changes and refuses a push it cannot validate, and `notify` runs after and starts the run. They are named here because the hooks the gate installs depend on them existing; a person never types either. |
 | `assistant host …` | The coordinator's host and its hook. `install` is the one host verb a person types, once, for setup: it is section 6's stop guard installer. The other host verbs are hook plumbing a person never types: `stop` runs from the hook the host fires at turn end and is section 6's stop guard, answering whether the turn may end and blocking it when work is in flight and no live supervisor is the service holding this home's lock. It is named here because that hook depends on it existing. `wake` is run by the service as the `notify.command` line `install` offers from inside the coordinator's tmux pane, and is section 6's host wake. It is the second command outside the table, and with `assistant gate` it is not a precedent for a third: each is the interface a hook this program installed or asked for requires. |
-| `assistant db …` | Where this home's records are kept, for a reader that opens them itself: `path` prints the database file and nothing else, so a reader of your own can open it, read-only, while the service is up and holding the records (`sqlite3 -readonly "$(assistant db path)"` is one such reader). It is one subcommand; a second is a change to this table. |
+| `assistant db …` | Where this home's records are kept, for a reader that opens them itself: `path` prints the database file and nothing else, so you can point a reader of your own at the records instead of reading them through these views. Open it read-only; `sqlite3 -readonly "$(assistant db path)"` is the usual way. What this answers is where the file is, and what a given reader manages against a file the service is writing is that reader's. It is one subcommand; a second is a change to this table. |
 | `assistant eject` | Remove the gate and its records. |
 
 `assistant init` records the repository the gate validates, and takes four flags.
@@ -2975,18 +2975,19 @@ carries the same read as one open method. No verb is added.
 **Reading the records without this program.** All truth is in the home's embedded database, so a
 person debugging a stuck home has nothing to `cat` or `grep` and reads it through this program's
 own views. `assistant db path` is the way out of that. It prints the database file of the home it
-acted on, so a reader of the person's own can open it, read-only, while the service is up and
-holding the records. It names where the file is rather than reading it: it creates nothing, opens
-no database and asks the service nothing, so it answers the same with the service up or down,
-which is when a person debugging a stuck home asks, and opening the file read-only is the reader's
-to do. The answer is a detailed evidence document in P13's sense and the one printed with nothing
+acted on, so a reader of the person's own can be pointed at the records. It names where the file
+is rather than reading it: it creates nothing, opens no database and asks the service nothing, so
+it answers the same with the service up or down, which is when a person debugging a stuck home
+asks. Opening the file read-only is the reader's to do, and so is managing a file the service may
+be writing; this answers where the file is and promises nothing about the read. The answer is a detailed evidence document in P13's sense and the one printed with nothing
 before it, because a caller composes it into another command line, which P13 says. Neither answer
 promises the file name byte for byte: the printed line escapes a control character, as this
 program escapes one in any line it prints, and the structured answer keeps a control character
 while a byte that is not valid UTF-8 becomes the replacement character in it. A home root holding
 either is named exactly by neither, and this verb does not repair such a name. Naming the file
-does not make it the source of truth: nothing this program decides is read from it, and what the
-records hold and how they are written stay section 8's, P8's and P15's.
+adds no second source of truth: the records in it are the truth, read and written through the
+store on section 8's, P8's and P15's terms, and what this verb hands out is a path that nothing
+in the program reads back.
 
 Answering a hold is a flag on `assistant`, and it takes a task as well as a run, so a
 hold a task raised with no run behind it, an investigation's among them, is answered the same

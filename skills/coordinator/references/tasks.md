@@ -31,13 +31,13 @@ your answer.
 
 ## Reading the records yourself
 
-`assistant db path` prints the home's database file and nothing else, so a
-reader of your own opens the records, read-only, while the service is up and
-holding them: `sqlite3 -readonly "$(assistant db path)"` is one such reader.
-The verb asks the service nothing, so it answers with the service down too,
-which is when you are most likely to want it. Open the file read-only. The
-command enforces nothing about that, and this is a read for debugging: the
-task reads above are what you decide from, never what you find in the file.
+`assistant db path` prints the home's database file and nothing else, so you
+can point a reader of your own at the records: `sqlite3 -readonly "$(assistant
+db path)"` is the usual way. The verb asks the service nothing, so it answers
+with the service down too, which is when you are most likely to want it. Open
+the file read-only. The command enforces nothing about that and promises
+nothing about the read, and this is a read for debugging: the task reads above
+are what you decide from, never what you find in the file.
 
 ## The watch digest
 
