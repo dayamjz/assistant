@@ -281,12 +281,14 @@
 // dbActions is the one owner of what it answers; a subcommand that section
 // does not describe is a finding against the specification, as a verb is.
 //
-// It takes the service out of the path on purpose. The verb opens nothing,
-// creates nothing and asks nothing: the path is internal/home's, so the
-// answer is the same with the service up or down, which is when the question
-// is asked. It promises no more than that, and db.go says so: what a reader
-// does with the file is the reader's, and the sentence telling a person to
-// open it read-only is the specification's and the README's.
+// It takes the service out of the path on purpose. The verb opens no
+// database, creates nothing and asks the service nothing: the path is
+// internal/home's, so the answer is the same with the service up or down,
+// which is when the question is asked. That makes it one of the verbs the
+// next section lists as needing no service rather than the only one. It
+// promises no more than that, and db.go says so: what a reader does with the
+// file is the reader's, and the sentence telling a person to open it
+// read-only is the specification's and the README's.
 //
 // What a person reads is the path alone, which is the value voice in
 // render.go rather than an evidence row: a caller composes the answer into

@@ -57,11 +57,14 @@ func TestTheDatabasePathIsWrittenAloneSoACallerCanSubstituteIt(t *testing.T) {
 // read-only, while the records are open for writing, and reads the task the
 // store wrote.
 //
-// It reads through internal/store's read-only open rather than through a
-// sqlite shell, because that open is the one this module can drive and it
-// takes the same connection a shell's read-only open takes. What it
-// establishes is the path: a reader given it needs nothing else from this
-// binary, and the store holding the file open does not keep it out.
+// It reads through internal/store's read-only open, which is a second
+// connection to the file and the only reader this module can drive. That
+// open is not a sqlite shell's: it sets this build's pragmas and refuses a
+// schema this build did not migrate to, so what the test establishes is the
+// path and not how an outside reader behaves. The path names the file the
+// records are in, a second read-only connection to it succeeds while the
+// store holds it open for writing, and it reads the records back; whether
+// any particular outside reader can do the same is that reader's.
 func TestTheDatabaseThePathNamesIsReadableWhileTheStoreIsOpen(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)

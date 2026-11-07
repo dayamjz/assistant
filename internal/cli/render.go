@@ -86,9 +86,12 @@ const (
 	// agent's, escaped.
 	VoicePhrased
 	// VoiceEvidence is a renderer that writes one of the four detailed
-	// evidence documents P13 and PRD section 9 name - the detail view, the
-	// usage view, the log view, and the relay of a finding that needs a
-	// decision - which P13 lets keep exact identifiers and stage names. Its
+	// evidence documents P13 and PRD section 9 name a person as pointed at
+	// by a phrase - the detail view, the usage view, the log view, and the
+	// relay of a finding that needs a decision - which P13 lets keep exact
+	// identifiers and stage names. P13's list holds a fifth document,
+	// section 9's db path, and that one is written with no phrase before it,
+	// which is VoiceValue rather than this. Its
 	// row carries the phrase-table row that points a person at it, and writeEvidence,
 	// which the run renderer writes the first and last through, and
 	// writePointed, which readOut writes the usage view and the log view
@@ -202,7 +205,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // rest is bounded by an enumeration. All five keep exact identifiers under
 // P13's evidence exception, and they differ in how a person is pointed at
 // them: four are evidence documents written behind a phrase that points at
-// each, which P13 and PRD section 9 name as four documents, and the fifth is
+// each, which P13 and PRD section 9 name as the four pointed at, and the fifth is
 // the value row, which is written alone because a pointer would become part
 // of what a caller substitutes; VoiceValue says so and databaseRendering is
 // the row. The four:
@@ -374,7 +377,11 @@ var (
 	// path and nothing else, so a caller substituting the answer into
 	// another command line substitutes a path. It carries no pointer, which
 	// is what VoiceValue is for, and readOut reaches it like any phrased row
-	// rather than through writePointed.
+	// rather than through writePointed. The path goes through printable, as
+	// every line this package writes does, so a control character in a home
+	// root is escaped rather than written; that is the one case where this
+	// line is not the file's name byte for byte, and --json carries the
+	// bytes. PRD section 9 says so.
 	databaseRendering = rendering{name: "database", voice: VoiceValue, of: typeOf[machine.Database](),
 		render: func(w io.Writer, v any) { writeln(w, printable(v.(machine.Database).Path)) }}
 )

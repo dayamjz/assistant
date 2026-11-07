@@ -32,12 +32,12 @@ your answer.
 ## Reading the records yourself
 
 `assistant db path` prints the home's database file and nothing else, so a
-reader of your own opens the records: `sqlite3 -readonly "$(assistant db
-path)"` works with the service up, and it is the one read that needs no
-answer from the service. Open it read-only; the command promises nothing
-about what a reader does with the file, and a writer other than the service
-is not something this program expects. Nothing decides anything from what
-you read there: the task surface above is what a decision is made from.
+reader of your own opens the records, read-only, while the service is up and
+holding them: `sqlite3 -readonly "$(assistant db path)"` is one such reader.
+The verb asks the service nothing, so it answers with the service down too,
+which is when you are most likely to want it. Open the file read-only. The
+command enforces nothing about that, and this is a read for debugging: the
+task reads above are what you decide from, never what you find in the file.
 
 ## The watch digest
 

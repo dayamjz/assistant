@@ -33,17 +33,22 @@ func dbVerb(ctx context.Context, in *invocation) (any, error) {
 // on: PRD section 9's db path, for a person or an agent that opens the
 // records with a reader of their own instead of through this program's views.
 //
-// It composes nothing and reads nothing. The path is internal/home's, the one
-// owner of where a home's files are (P14), and this neither opens the file,
-// creates the home, nor asks the service anything: a home whose database has
-// never been written names the file that would hold its records, which is the
-// honest answer to where they are, and the verb answers the same with the
-// service up or down, which is when a person debugging a stuck home asks.
+// The path is internal/home's, the one owner of where a home's files are
+// (P14). This opens no database, creates no home and asks the service
+// nothing, so it answers the same with the service up or down, which is when
+// a person debugging a stuck home asks, and a home whose database has never
+// been written names the file that would hold its records, which is the
+// honest answer to where they are. The one filesystem read behind the answer
+// is the home root's own resolution, which internal/home does when the
+// invocation resolves the home: a symlinked root answers as its target.
 //
 // The answer is read-only in the only sense this command can promise: it
 // hands over a path and does not open it. What a reader then does with the
 // file is the reader's, so the sentence telling a person to open it read-only
-// is PRD section 9's and the README's, and nothing here enforces it.
+// is PRD section 9's and the README's, and nothing here enforces it. The
+// rendering writes the path alone, with a control character escaped as every
+// line this program prints escapes one; the structured answer carries the
+// bytes.
 func databasePath(_ context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags(dbVerbName+" path", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
