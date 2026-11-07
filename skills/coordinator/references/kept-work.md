@@ -29,7 +29,7 @@ place of `--task` for a run's copy.
   refused under `--json` and from any process not in the foreground of a
   terminal, which your tool's commands are not, so never try to give one.
 
-To let the project's new tasks go ahead, tell the person their answers are
+To let the new tasks on the entry's branch go ahead, tell the person their answers are
 land and carry-on, or committing or removing its uncommitted work and pushing
 its commits, after which the program removes the copy on that proof when it
 next looks at it, which is not immediate, and with it, unchecked, files git
@@ -40,12 +40,19 @@ copy has an entry answers that entry carry on by itself.
 
 ## New tasks it holds
 
-While the project has an open entry, a task you create in it is recorded and
+While the project has an open entry, a task you create in that project **on
+the entry's branch** is recorded and
 not started: it reads `dispatched` and its answer (`task.get`) names the
 entries holding it under `kept_work`; it starts on its own once they are
-answered or closed. An answer carrying `kept_work_unread` could not read
+answered or closed. The entry's branch is in `status` under `kept_work`, so
+read it before you promise a new task will start. A task of the same project
+on any other branch starts as usual: an entry holds the work that would stand
+where its copy's work is, and nothing else. An investigation task names no
+branch, and is held only by an entry whose own owner named none. An answer
+carrying `kept_work_unread` could not read
 whether kept work holds the task, so it names no entry either way: ask again
-rather than telling the person it is starting. Tasks in other projects, work
+rather than telling the person it is starting. Tasks on other branches, tasks
+in other projects, work
 already running and a person's own push are not held.
 
 ## Kept work no task names

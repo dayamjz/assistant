@@ -19,7 +19,7 @@ import (
 // cannot run under the housekeeping role the program reserves for a pass.
 // It is created under the worker role, and the entry closes carried on,
 // rather than intake refusing the role and leaving the entry open, holding
-// every new task in the project (P15).
+// every new task that would start where that copy stands (P15).
 func TestCarryingOnAHousekeepingPassesKeptWorkCreatesAnOrdinaryTask(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

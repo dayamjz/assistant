@@ -82,7 +82,8 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // leave the entry unestablished for good; an answered or closed entry is
 // sealed whole, basis included.
 //
-// While an entry is open, a new task in its project is not dispatched:
+// While an entry is open, a new task of its project on its branch is not
+// dispatched:
 // keptworkhold.go is that predicate and BeginDispatchAttempt its refusal.
 //
 // A repository with an open entry cannot be forgotten: ForgetRepository,
@@ -635,7 +636,7 @@ func (s *Store) MarkKeptWorkSurfaced(ctx context.Context, id int64, at time.Time
 // is what lets a stop before its creation be completed from the entry
 // (P6); copyIdentity, the kept copy's own identity as the caller read it,
 // so the task adopts that copy and no other; and by, who asked, with the
-// instant. The entry stays open, so it is listed and holds the project's
+// instant. The entry stays open, so it is listed and holds its branch's
 // dispatch as before, until MarkKeptWorkCarriedOn answers it with the
 // adoption or WithdrawKeptWorkCarryOn takes the claim back. An entry
 // answered is ErrKeptWorkAnswered, one closed ErrKeptWorkClosed, one
@@ -860,7 +861,7 @@ var ErrKeptWorkLandingClaimed = errors.New("store: the kept work entry's landing
 // the landing's two facts: who gave it, by, with the instant, written
 // before the run is started and decided in the transaction that writes it,
 // so two landings of one entry get one claim between them. The entry stays
-// open, so it is listed and holds the project's dispatch as before, until
+// open, so it is listed and holds its branch's dispatch as before, until
 // RecordKeptWorkLanding answers it with the run or WithdrawKeptWorkLanding
 // takes the claim back. An entry answered is ErrKeptWorkAnswered, one
 // closed ErrKeptWorkClosed, one already claimed, or of a copy another entry

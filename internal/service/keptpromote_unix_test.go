@@ -44,8 +44,8 @@ func keptOnCopyOf(t *testing.T, w launched) store.KeptWork {
 // PRD section 6: a promotion of a task whose copy has an open kept work
 // entry records the entry's answer as carry on and closes it, since the
 // worker continues in that same copy. Through the real socket: a running
-// investigation's copy has an open entry, which holds a delivery task
-// created in the project; the promotion closes the entry as carry on
+// investigation's copy has an open entry, which holds a new investigation task
+// of the project, naming no branch as the copy's owner names none; the promotion closes the entry as carry on
 // naming the promoted task itself, recorded as the machine interface's
 // answer, in the flip, and the held task then dispatches. Without the write
 // in the flip the entry stays open after the promotion and the task never
@@ -59,8 +59,8 @@ func TestAPromotionAnswersItsCopysKeptWorkAsCarryOn(t *testing.T) {
 		entry := keptOnCopyOf(t, w)
 		var created machine.TaskCreated
 		if err := w.running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: w.repository.ID, Branch: "task/held-by-kept",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: w.repository.ID,
 		}, &created); err != nil {
 			t.Fatal(err)
 		}
@@ -82,7 +82,7 @@ func TestAPromotionAnswersItsCopysKeptWorkAsCarryOn(t *testing.T) {
 // A promotion that fails after its flip still asks for the dispatch pass
 // the flip's answer to kept work calls for, the final full review of
 // c5c581c: as above, a running investigation's copy has an open entry that
-// holds a delivery task of the project, and the branch the promotion is to
+// holds a new investigation task of the project, and the branch the promotion is to
 // create already stands in the copy, so the flip answers the entry carry on
 // and the promotion then fails creating the branch. The held task
 // dispatches. Before the pass was asked whatever the promotion returned, it
@@ -95,8 +95,8 @@ func TestAPromotionThatFailsAfterItsFlipStillDispatchesWhatItsAnswerFreed(t *tes
 		entry := keptOnCopyOf(t, w)
 		var created machine.TaskCreated
 		if err := w.running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: w.repository.ID, Branch: "task/held-by-kept",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: w.repository.ID,
 		}, &created); err != nil {
 			t.Fatal(err)
 		}
