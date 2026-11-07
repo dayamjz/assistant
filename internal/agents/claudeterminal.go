@@ -162,11 +162,14 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	if err != nil {
 		return nil, err
 	}
-	remove := func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) }
 	if err := os.Mkdir(cacheDir, 0o700); err != nil {
-		remove()
+		// What this call made is removed and a directory standing there
+		// already is left as it is, which is the stance seedClaudeConfig
+		// takes for its own.
+		_ = os.RemoveAll(configDir)
 		return nil, fmt.Errorf("making the terminal worker's cache directory: %w", err)
 	}
+	remove := func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) }
 	env = withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir)
 
 	args := r.claudeTerminalWorkerArgs(spec, session)
