@@ -251,26 +251,78 @@ func TestAListingOfABinarySettlesWhileProcessesOutsideItsTreeExitUnread(t *testi
 	t.Logf("settled in %d reading(s)", table.readings)
 }
 
-// recordedAt is a processTable that passes every read through to the
-// kernel, and names one number alone, staging.PID, with the kernel's
-// records, except that the first reading's record at that number is
-// staging, in place of what the kernel recorded there.
+// readingOf is one reading of a process table that holds just the processes
+// named and nothing else: the kernel's own record of each of live, every
+// record in staged at its own number in place of the kernel's, and a number
+// list naming exactly the records the reading holds, in the order the
+// kernel's table names them. That is how readTable builds the two, from the
+// one kern.proc.all read, and the two fakes below that stage a record answer
+// through this.
+//
+// The one liberty those two rows take is the table's size, and the number
+// list and the record map name the same processes, so no process is hidden
+// from the identify loop while its record stays in reach of the checks that
+// read records. A reading whose list was a subset of its records would be
+// the shape readTable cannot make, and is the finding that brought this
+// helper (#804's round 2, and the third of that class in this file).
+//
+// The machine's whole table cannot serve those two rows, which are part 1's.
+// On part 1's rule any process outside this tree that exits unread unsettles
+// a reading, which is the failure of #722, so over the whole table a reading
+// is unsettled whatever a row stages and neither row could tell its staged
+// cause from the machine's. That is measured, not assumed: with the whole
+// table named, deleting the in-reading reuse check left
+// TestAListingSeesARecordedProcessExitWhileItsNumberIsReused passing,
+// because the machine's own churn had unsettled the first reading. This
+// part's own rows are what make a listing settle under that churn, and they
+// name the whole table through endsOutsideEachReading.
+func readingOf(t *testing.T, live []int, staged ...tableRecord) ([]int, map[int]tableRecord, error) {
+	t.Helper()
+	order, all, err := readTable()
+	if err != nil {
+		return nil, nil, err
+	}
+	records := make(map[int]tableRecord, len(live)+len(staged))
+	for _, pid := range live {
+		record, ok := all[pid]
+		if !ok {
+			t.Fatalf("the kernel's table holds no record of process %d, so a reading cannot name it", pid)
+		}
+		records[pid] = record
+	}
+	for _, record := range staged {
+		records[record.PID] = record
+	}
+	pids := make([]int, 0, len(records))
+	for _, pid := range order {
+		if _, ok := records[pid]; ok {
+			pids = append(pids, pid)
+		}
+	}
+	for _, record := range staged {
+		if !slices.Contains(pids, record.PID) {
+			pids = append(pids, record.PID)
+		}
+	}
+	return pids, records, nil
+}
+
+// recordedAt is a processTable whose every reading names one live process,
+// staging.PID, with the kernel's record of it, except that the first
+// reading carries staging at that number in place of the kernel's record.
 type recordedAt struct {
 	kernel
+	t        *testing.T
 	staging  tableRecord
 	readings int
 }
 
 func (r *recordedAt) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
-	_, records, err := r.kernel.ids()
-	if err != nil {
-		return nil, nil, err
-	}
 	if r.readings == 1 {
-		records[r.staging.PID] = r.staging
+		return readingOf(r.t, nil, r.staging)
 	}
-	return []int{r.staging.PID}, records, nil
+	return readingOf(r.t, []int{r.staging.PID})
 }
 
 // A process the table recorded at a number, and that exited during the
@@ -282,11 +334,16 @@ func (r *recordedAt) ids() ([]int, map[int]tableRecord, error) {
 // started, which is what a table read before that process exited and the
 // sleep was given its number would hold; both records are real ones read
 // by readTable, and only their pairing at one number, in that one reading,
-// is staged. The listing reads again, and the second reading, the kernel's,
-// settles. Before, Identify's reading of the sleep was taken as the process
-// the table named and the first reading settled. The controls are that the
-// recorded process started before the sleep and that the sleep runs
-// throughout.
+// is staged. The listing reads again, and the second reading, which carries
+// the kernel's own record at that number, settles. Before, Identify's
+// reading of the sleep was taken as the process the table named and the
+// first reading settled, which is what deleting the in-reading reuse check
+// gives again.
+//
+// Each reading names that one process, which is readingOf's liberty and the
+// reason the reading counts here are exact rather than a floor. The controls
+// are that the recorded process started before the sleep and that the sleep
+// runs throughout.
 func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
@@ -300,9 +357,9 @@ func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 	if err != nil || !running || id.Start <= ended.Start {
 		t.Fatalf("the sleep reads %v, %v, %v beside the ended record %v; want it started after the recorded process", id, running, err, ended.Identity)
 	}
-	staged := ended
-	staged.PID = newcomer.Process.Pid
-	table := &recordedAt{staging: staged}
+	staging := ended
+	staging.PID = newcomer.Process.Pid
+	table := &recordedAt{t: t, staging: staging}
 	if _, err := processesOfBinary(table, self); err != nil || table.readings != 2 {
 		t.Fatalf("a listing whose first record at %d is an ended process of this binary = %v after %d reading(s); want the first unsettled and the second settled", newcomer.Process.Pid, err, table.readings)
 	}
@@ -311,21 +368,23 @@ func TestAListingSeesARecordedProcessExitWhileItsNumberIsReused(t *testing.T) {
 	}
 }
 
-// refusedNumberRecordedAgain is a processTable that passes every read
-// through to the kernel, names only the processes it orders, and orders
-// real processes' lives around its reads of the table, with the kernel's
-// records. The first reading names a sleep, refused, which the listing reads
-// whole, and an exiting sleep, which it ends once the kernel's table is read,
-// so that reading meets a real unread exit and is unsettled. Before the
-// second reading it ends and reaps the refused sleep, starts a process of
-// this binary, reads its record, and ends and reaps it too; the second
-// reading names the refused sleep's number alone, with that record staged
-// at it, as if the process had been given the number and recorded there
-// and then exited before it was identified. Later readings name nothing.
+// refusedNumberRecordedAgain is a processTable that names, through
+// readingOf, the processes it orders and nothing else, and orders real
+// processes' lives around its reads of the table. Every reading names a
+// sleep that runs throughout, held so that no reading names an empty table.
+// The first reading names beside it a sleep the listing reads whole and
+// refuses, and an exiting sleep, which it ends once the kernel's table is
+// read, so that reading meets a real unread exit and is unsettled. Before
+// the second reading it ends and reaps the refused sleep, starts a process
+// of this binary, reads its record, and ends and reaps it too; the second
+// reading carries that record at the refused sleep's number, as if the
+// process had been given the number and recorded there and then exited
+// before it was identified. The third reading names the held sleep alone,
+// which it has read whole already, and settles.
 type refusedNumberRecordedAgain struct {
 	kernel
 	t                *testing.T
-	refused          *exec.Cmd
+	held, refused    *exec.Cmd
 	readings, staged int
 	stagedStart      uint64
 	refusedStart     uint64
@@ -335,30 +394,27 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 	r.readings++
 	switch r.readings {
 	case 1:
+		r.held = startSleep(r.t)
 		r.refused = startSleep(r.t)
 		exiting := startSleep(r.t)
-		_, records, err := r.kernel.ids()
+		pids, records, err := readingOf(r.t, []int{r.held.Process.Pid, r.refused.Process.Pid, exiting.Process.Pid})
 		_ = exiting.Process.Kill()
 		_ = exiting.Wait()
+		if err != nil {
+			return nil, nil, err
+		}
 		r.refusedStart = records[r.refused.Process.Pid].Start
-		return []int{r.refused.Process.Pid, exiting.Process.Pid}, records, err
+		return pids, records, nil
 	case 2:
 		_ = r.refused.Process.Kill()
 		_ = r.refused.Wait()
 		staging := endedBinaryRecord(r.t)
-		_, records, err := r.kernel.ids()
-		if err != nil {
-			return nil, nil, err
-		}
-		number := r.refused.Process.Pid
-		staging.PID = number
-		records[number] = staging
+		staging.PID = r.refused.Process.Pid
 		r.staged++
 		r.stagedStart = staging.Start
-		return []int{number}, records, nil
+		return readingOf(r.t, []int{r.held.Process.Pid}, staging)
 	default:
-		_, records, err := r.kernel.ids()
-		return nil, records, err
+		return readingOf(r.t, []int{r.held.Process.Pid})
 	}
 }
 
@@ -371,13 +427,18 @@ func (r *refusedNumberRecordedAgain) ids() ([]int, map[int]tableRecord, error) {
 // refuses it, and the second records at its number a process of this
 // binary started after that sleep ended and itself ended since: a real
 // record read by readTable, of which only the number is staged, the shape
-// the number's reuse makes. The listing reads a third time, which names
-// nothing and settles. Before, the number was taken for the refused sleep,
-// its exit passed over as a refused process's, and the listing settled on
-// the second reading. The controls are that the second reading met the
-// staged record and that it records a start after the refused sleep's.
-// Not parallel: it starts and ends real processes around its readings,
-// which would keep other tests' listings from settling.
+// the number's reuse makes. The listing reads a third time, which names the
+// held sleep it has read already, and settles. Before, the number was taken
+// for the refused sleep, its exit passed over as a refused process's, and
+// the listing settled on the second reading, which is what keying refused
+// processes by number gives again.
+//
+// Each reading names the processes this row orders and nothing else, which
+// is readingOf's liberty and the reason the reading counts here are exact.
+// The controls are that the second reading met the staged record and that it
+// records a start after the refused sleep's. Not parallel: it starts and
+// ends real processes around its readings, which would keep other tests'
+// listings from settling.
 func TestARefusedProcessNumberRecordedForAnotherIsNotPassedOver(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	self, err := os.Executable()
