@@ -1137,8 +1137,9 @@ entry nobody has decided no longer stops every piece of work in its project. Tha
 differ is all the comparison asks, and it says nothing about content: two branches of one project
 may change the same lines and conflict where they integrate, as any two branches of a project may,
 and this hold is not what answers that. The branch compared
-is the one the entry recorded when the copy was kept, beside the one the task was created with,
-and neither is read again from any copy. A task that names no branch, an investigation's, works at
+is the one the entry recorded when the copy was kept, beside the one the task's own record carries,
+which it was created with unless a promotion has since given it one, and neither is read again
+from any copy. A task that names no branch, an investigation's, works at
 the project's base, and so does a copy whose owner named none: an entry naming no branch holds
 exactly the tasks that name none, and such a task is held by exactly those entries. A branch
 neither side names is therefore the base and never a wildcard, so no entry holds a whole project

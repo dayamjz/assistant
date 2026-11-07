@@ -31,6 +31,16 @@ import (
 // TestAnEntryNamingNoBranchHoldsTheInvestigationsOfItsProject; the branch
 // the entry records is compared with the task's in
 // store.TestOpenKeptWorkHoldsANewTasksDispatchOnItsBranchOnly.
+//
+// No held task waits here, and none can: the entry is a run's copy on the
+// run's branch, and intake refuses a new task on a branch a run already
+// has as a person's. That is why nothing asserts cleanup's redispatch
+// after a removal (cleanup.go's redispatchAfterRemoval) end to end. The
+// only kept copy a service removes without a person's answer is a run's,
+// reclaimed at recovery, and a run's entry always names the branch no new
+// task may be created on; a task's kept copy standing is re-examined only
+// when something asks CleanUp for it. The store test above holds the half
+// this reaches, that a closed entry stops holding.
 func TestKeptWorkOnOneBranchHoldsNoNewTaskOnAnother(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

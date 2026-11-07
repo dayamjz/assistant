@@ -178,7 +178,9 @@ import (
 //     reported in the log once per reference per service life and left
 //     running.
 //   - A reported investigation that is never promoted or relayed keeps its
-//     copy, and the entry the window wrote holds the new tasks on its branch,
+//     copy, and the entry the window wrote holds the new tasks that would
+//     start where that copy stands, which for an investigation's copy,
+//     naming no branch, is the project's base,
 //     until a person answers the entry or a removal on a proof closes it.
 //   - A survivor whose end the window could not verify, or whose group did
 //     not end, gets no entry in this service's life, because it may still

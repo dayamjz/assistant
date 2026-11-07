@@ -49,7 +49,8 @@ import (
 // narrowed it on 2026-11-06 (decision 21): an entry holds a task that
 // works where its copy's work is, and no other. The two are compared as
 // their rows recorded them, the owner's branch written once with the entry
-// (KeptWork.Branch) and the task's written once at its intake, and nothing
+// (KeptWork.Branch) and the task's as its own row stands, which intake
+// wrote and a promotion rewrites (TransitionTaskShape), and nothing
 // here reads what either stands on now. A branch neither names is the
 // project's base, where a copy with no branch of its own stands and where
 // an investigation task's clone is cut, so an entry naming none holds

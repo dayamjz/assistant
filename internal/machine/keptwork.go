@@ -12,7 +12,9 @@ import "github.com/dayamjz/assistant/internal/store"
 // What the rows claim is what this build does: the copy stays unless the
 // cleanup decision later removes it on a proof, which closes the entry, and
 // nothing else removes it; while an entry is open, no new task of its
-// project on its branch starts (internal/store's keptworkhold.go), and a
+// project that would start where its copy stands begins, which is its
+// branch, or the project's base when the entry names none
+// (internal/store's keptworkhold.go), and a
 // push still runs.
 // So a row that says a new task waits says it waits until the work is
 // decided or turns up somewhere safe. This build takes the three answers
@@ -35,12 +37,12 @@ var (
 	}
 	phraseRunKeptWork = Phrase{
 		Outcome:     "Work kept in a local copy of this project is waiting on your decision.",
-		Consequence: "This validation goes ahead regardless, but no new task on the branch of a copy listed here starts until that copy's work is decided or turns up somewhere safe.",
+		Consequence: "This validation goes ahead regardless, but no new task that would start where a copy listed here stands begins until that copy's work is decided or turns up somewhere safe.",
 		Decision:    "Read what is kept, and how to decide it, with assistant status.",
 	}
 	phraseNoticeKeptWork = Phrase{
 		Outcome:     "This work's local copy was kept, because what it holds is not yet anywhere safe.",
-		Consequence: "It stays unless its work later turns up somewhere safe, and no new task on its branch starts until then or until it is decided; the person's own pushes still go ahead.",
+		Consequence: "It stays unless its work later turns up somewhere safe, and no new task that would start where it stands begins until then or until it is decided; the person's own pushes still go ahead.",
 		Decision:    "Tell the person, and read what it holds with assistant --json status; it is answered land with --answer land and --hold naming the entry's key.",
 	}
 )
