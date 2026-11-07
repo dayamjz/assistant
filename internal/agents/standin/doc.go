@@ -249,7 +249,8 @@
 // --ax-screen-reader among the flags before "--", and no --print. New's
 // runner starts one through agents.OpenTerminalWorker, in a tmux pane. It
 // models the CLI's interactive interface as it was observed in a tmux pane,
-// on version 2.1.301 with that flag, against a local server standing in
+// on version 2.1.301 with that flag, and for the interrupt keys on version
+// 2.1.308, against a local server standing in
 // for the model (#254), and serveInteractiveWorker and input state its
 // rules. In short: it puts its terminal in raw mode and asks for bracketed
 // paste; it opens on a first-run screen, and never leaves it, unless the
@@ -262,11 +263,21 @@
 // outside one as Enter; it takes a "!" or a "/" typed into an empty input as
 // a shell or a slash command, which it records and runs nothing for; it
 // shows a turn as running for Turn, queueing what is submitted meanwhile;
-// and its footer and input line are the text the CLI drew, redrawn in place.
+// it takes the Escape key as the end of a running turn, which Call.Interrupted
+// records and no reply answers, drawing the interrupted line where a turn that
+// had begun its reply would have gone and putting back in the input a turn's
+// message that had not, line by line, for Control-U to take out one press at a
+// time; and its footer and input are the text the CLI drew, redrawn in place,
+// each line of what is typed on a line of its own.
 // What it does not model is everything else the CLI draws and does: the
 // model's reply is the script's, a "!" command is not run, a paste is not
 // collapsed or wrapped, the footer is modelled in acceptEdits mode only,
-// and no first-run screen answers a key. Like the stream mode's sources,
+// no first-run screen answers a key, an Escape key with no turn running
+// draws nothing and is only counted, in Call.IdleEscapes, where the CLI was
+// observed to open a rewind menu or offer to clear unsent text, and the line
+// a restored message was drawn on stays on the screen above, where the CLI
+// took it away; nothing an adapter reads is above the footer.
+// Like the stream mode's sources,
 // this is an observation of one version that nothing here re-checks;
 // internal/agents runs the same probe against an installed CLI where there
 // is one, and says what the model rests on where there is not. The
