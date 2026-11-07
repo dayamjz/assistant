@@ -1,6 +1,9 @@
 package agents
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // DecodeCodexOutput exposes decodeCodexOutput so tests can feed real
 // `codex exec --json` JSONL without going through a process that only speaks
@@ -32,19 +35,27 @@ func ListUnder(ctx context.Context, dir string) ([]Identity, error) {
 }
 
 // ReadClaudeScreen is claudeScreen's reading of a screen as a word, "not
-// drawn", "drawn" or "ready", so a test can hold the reader to screens the
-// CLI drew.
-func ReadClaudeScreen(screen string) string {
-	switch claudeScreen(screen) {
+// drawn", "drawn", "ready" or "busy", so a test can hold the reader to
+// screens the CLI drew. The screen is the pane's rows, one to a line, and
+// cursor is the row tmux reported its cursor on, as the provider reads
+// them; -1 is a screen read with no cursor.
+func ReadClaudeScreen(screen string, cursor int) string {
+	switch claudeScreen(terminalScreen{rows: strings.Split(screen, "\n"), cursor: cursor}) {
 	case screenDrawn:
 		return "drawn"
 	case screenReady:
 		return "ready"
+	case screenBusy:
+		return "busy"
 	}
 	return "not drawn"
 }
 
-// ClaudeObservedVersion is the Claude Code version the terminal mode's
+// TerminalWidth is how many columns wide the pane a worker's server opens
+// is, so a test can build a line the pane draws over more than one row.
+const TerminalWidth = terminalWidth
+
+// ClaudeObservedVersion names the Claude Code versions the terminal mode's
 // observations were made on.
 const ClaudeObservedVersion = claudeObservedVersion
 
