@@ -81,8 +81,14 @@
 //
 // # A restart reaps the agent processes an earlier service recorded
 //
-// PRD section 11's step 5 is "reap orphaned agent processes ... and never
-// touch one whose run is still active", and reap.go is the run half of it.
+// PRD section 11's step 5 now leads with holding again every tmux worker an
+// earlier incarnation left running, then reaping orphaned agent processes.
+// recover still reaps (reapOrphans) before reconcileTasks / readoptWorkers,
+// so the Hold-before-Reap order the PRD states is not the order recover
+// runs. Today's reap walks run process records, not tmux pane workers, so
+// the disagreement is raised as issue 836 rather than editing the PRD.
+// reap.go remains the run half of the reap clause: "reap orphaned agent
+// processes ... and never touch one whose run is still active".
 // What makes an orphan findable is a record written while the process was
 // not yet one: containRunner's Started value, beside the registry entry it
 // adds, writes a run process record to internal/store naming the run, the
