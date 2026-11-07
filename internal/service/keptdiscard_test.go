@@ -39,7 +39,7 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 // the copy, its objects included, and the gate are byte for byte as they
 // were, and the entry, field for field but when it last surfaced, still
 // open and listed, so it still
-// holds its project's new tasks (P6, a refused discard keeps the copy and
+// holds the new tasks of its project on its branch (P6, a refused discard keeps the copy and
 // its entry). Before, the confirmation on the digest shown removed the
 // copy and answered the entry.
 func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {

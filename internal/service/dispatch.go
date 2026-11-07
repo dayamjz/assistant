@@ -185,7 +185,7 @@ import (
 // A held dispatch or launch gives its slot back, through releaseHeldSlot,
 // rather than settling it, because the slot is otherwise kept for the
 // service's lifetime and a held task has to dispatch as soon as its
-// project's entries are answered or closed. What asks again is every call of
+// holding entries are answered or closed. What asks again is every call of
 // dispatchDue: at open, after every release, after every answer that closes
 // an entry (keptanswer.go, keptcarryon.go), and after a
 // cleanup that removed a copy, which is the one way an entry closes without
@@ -480,7 +480,7 @@ func (d *dispatched) handSlot() func(tasks.Isolation) {
 // cannot be dispatched as written is errTaskRecord; a dispatch another caller
 // claimed first is store.ErrTaskMoved; a standing copy the platform cannot
 // sweep is a *dispatchUnswept, held for a person and otherwise unrecorded,
-// a task kept work in its project holds is a *store.DispatchHeldError, with
+// a task kept work on its branch holds is a *store.DispatchHeldError, with
 // nothing recorded and the slot given back,
 // unless that hold was answered retry; a sweep that ran and did not clear
 // the copy is a *copyUnswept; a copy that fails the assertion is an
@@ -834,7 +834,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 			resolved.State.State, resolved.State.Source)
 	}
 	record := resolved.Record
-	// Kept work in the task's project holds it before anything is swept,
+	// Kept work on the task's branch holds it before anything is swept,
 	// cut or claimed; the claim below asks again in its own transaction.
 	if s.beforeHoldRead != nil {
 		s.beforeHoldRead(id)

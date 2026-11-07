@@ -58,7 +58,7 @@ import (
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
 	// An entry already answered or closed takes no answer, and is refused
 	// as such before the confirmation is read: the deferred row's advice,
-	// to answer land or carry on while the project waits, is for an open
+	// to answer land or carry on while that branch waits, is for an open
 	// entry (the full review of 04c4696).
 	if !entry.Open() {
 		return machine.KeptWorkAnswered{}, refusedAnswered(entry)

@@ -1397,8 +1397,8 @@ here claims more:
 
 A discard refuses a copy whose loss it cannot read exactly: a shallow or partial history, a
 layout the program does not read, or a default branch it cannot read now. It also refuses a copy
-in which its removal would lose something it did not show. An entry over such a copy holds its
-project's new tasks until P12 cleanup proves its work landed, which may be never. For that copy
+in which its removal would lose something it did not show. An entry over such a copy holds the
+new tasks of its project on its branch until P12 cleanup proves its work landed, which may be never. For that copy
 alone you have one more answer, **remove anyway**. It removes the copy without P12's proof, the
 one exception P12 names.
 
