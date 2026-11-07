@@ -448,9 +448,10 @@ func OpenTerminalWorker(ctx context.Context, r Runner, t Terminal, spec WorkerSp
 // OpenTerminalSubordinate is OpenSubordinate for a terminal-hosted
 // subordinate coordinator, on OpenTerminalWorker's terms: the same
 // mechanism, under GrantSubordinate, which only it and OpenSubordinate
-// select. An adapter whose terminal interface was not observed under that
-// grant refuses it, as the Claude Code adapter does with
-// ErrTerminalGrantUnobserved.
+// select. An adapter whose terminal interface was not observed under the
+// grant's permission mode refuses it with ErrTerminalGrantUnobserved; the
+// Claude Code adapter starts one because GrantSubordinate writes the
+// observed acceptEdits mode while still denying editing and git.
 func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
 	spec.subordinate = true
 	return OpenTerminalWorker(ctx, r, t, spec)

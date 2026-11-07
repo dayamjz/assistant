@@ -4,6 +4,8 @@ package service_test
 
 import (
 	"os"
+	"os/exec"
+	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -111,6 +113,92 @@ func TestASurvivingTmuxSubordinatesServerWindowIsPlacedAsTheSubordinate(t *testi
 		if ended.Record.Standing() || !ended.SessionEnded {
 			t.Fatalf("domain.end answered %+v, want the delegation ended and the survivor ended", ended)
 		}
+	})
+}
+
+// Under session_provider tmux, domain.delegate starts the subordinate and
+// the held session answers an attach command a person can run (issue #769's
+// tmux half). task.peek of a task in the domain names that same shape of
+// attach for the task's own worker. The positive control is that the attach
+// command's socket answers tmux list-sessions.
+func TestATmuxSubordinateAnswersAnAttachCommand(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	launchedTmuxWorker(t, "task/tmux-sub-attach", func(w launched) {
+		d := delegateDomain(t, w, "alpha", "gated")
+		host := d.as.provider.(session.Host)
+		attach, err := host.AttachReference(d.as.session.Reference().String())
+		if err != nil || len(attach) == 0 {
+			t.Fatalf("AttachReference for the subordinate = %q (%v), want an attach command", attach, err)
+		}
+		i := slices.Index(attach, "-S")
+		if i < 0 || i+1 >= len(attach) {
+			t.Fatalf("the subordinate's attach command %q names no socket", attach)
+		}
+		if out, err := exec.Command(attach[0], attach[1], attach[2], "list-sessions").CombinedOutput(); err != nil {
+			t.Fatalf("running the subordinate's attach binary against its socket failed: %v: %s", err, out)
+		}
+		own := createdBy(t, d, machine.TaskCreateRequest{
+			Shape: "investigation", Project: "alpha attach", Instructions: "Look into it.\n", Repository: w.repository.ID,
+		}).Record.ID
+		waitRunning(t, w, own)
+		var peeked machine.TaskPeek
+		if err := w.running.client.Call(t.Context(), ipc.MethodTaskPeek, machine.TaskRequest{Task: own}, &peeked); err != nil {
+			t.Fatalf("task.peek of the domain's task: %v", err)
+		}
+		if len(peeked.Attach) == 0 {
+			t.Fatalf("task.peek of the domain's task named no attach command: %+v", peeked)
+		}
+	})
+}
+
+// Two delegated domains under tmux each hold a wake stream of their own:
+// admitting a subscription for one domain answers a publisher that is not
+// the other's, so a subordinate's wake stream cursor is never shared
+// (P14). The domain directories stay on disk after end-delegation because
+// every relaunch and every restart survivor start reads instructions.md
+// from them.
+func TestTwoTmuxSubordinatesHoldDistinctDomainWakeStreams(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P14)
+	launchedTmuxWorker(t, "task/tmux-two-domains", func(w launched) {
+		a := delegateDomain(t, w, "alpha", "gated")
+		b := delegateDomain(t, w, "beta", "gated")
+		alphaDir, err := w.home.Domain("alpha")
+		if err != nil {
+			t.Fatal(err)
+		}
+		betaDir, err := w.home.Domain("beta")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if alphaDir == betaDir {
+			t.Fatal("two domains resolved to the same directory")
+		}
+		first, err := w.running.service.DomainWakeStreamFor("alpha")
+		if err != nil || first == nil {
+			t.Fatalf("domain wake stream for alpha: %v, %v", first, err)
+		}
+		second, err := w.running.service.DomainWakeStreamFor("beta")
+		if err != nil || second == nil {
+			t.Fatalf("domain wake stream for beta: %v, %v", second, err)
+		}
+		if first == second {
+			t.Fatal("two domains share one wake stream publisher")
+		}
+		again, err := w.running.service.DomainWakeStreamFor("alpha")
+		if err != nil || again != first {
+			t.Fatalf("a second ask for alpha's stream = %p (%v), want the first %p", again, err, first)
+		}
+		var ended machine.DelegationEnded
+		if err := w.running.client.Call(t.Context(), ipc.MethodDomainEnd, machine.DomainEndRequest{Domain: "alpha"}, &ended); err != nil {
+			t.Fatalf("domain.end: %v", err)
+		}
+		if _, err := os.Stat(alphaDir); err != nil {
+			t.Fatalf("after end-delegation the domain directory is gone (%v); it must outlive the subordinate so a relaunch can read instructions.md", err)
+		}
+		_ = a
+		_ = b
 	})
 }
 
