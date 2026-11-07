@@ -23,8 +23,9 @@ import (
 // A restart of the service with three live tmux-hosted workers relaunches
 // none of them: the restart verb releases each worker rather than ending it,
 // its tmux server goes on running, and the next service re-adopts it from the
-// attempt's recorded session once the liveness probe verifies the pane and
-// the server on its recorded socket. Each task then still has its one attempt,
+// attempt's recorded session once re-adoption verifies the pane and the server
+// on its recorded socket (PRD section 11's step 5, session.Tmux.Readopt), a
+// check the liveness probe does not make. Each task then still has its one attempt,
 // so there are zero relaunch records, the same process answers under the same
 // reference, and a message sent through the new service reaches it and is
 // answered. That is #763's acceptance, and P15's owner for a terminal-hosted
