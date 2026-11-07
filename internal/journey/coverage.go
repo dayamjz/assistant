@@ -375,21 +375,21 @@ func Coverage() []Established {
 				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
 				"that prints no Go value; internal/cli's command-line tests drive init, doctor, eject " +
 				"and a push through the gate's hooks the same way. The renderers it enumerates as " +
-				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", write the four detailed " +
-				"evidence documents P13 names, the detail view, the relay of a finding that needs a " +
-				"decision, the usage view and the log view, and keep exact identifiers and stage " +
-				"names as P13 lets them; " +
+				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", write four of the five " +
+				"detailed evidence documents P13 names, the detail view, the relay of a finding that " +
+				"needs a decision, the usage view and the log view, each behind a phrase, and keep " +
+				"exact identifiers and stage names as P13 lets them; " +
 				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
 				"every line beside them, against counterfeits it must reject. The one it enumerates " +
-				"as a value, which is " + strings.Join(p13Value, ", ") + ", writes section 9's db path " +
-				"alone, no pointer before it and no label beside it, because a caller composes that " +
-				"answer into another command line; it keeps the path P13's evidence exception lets " +
-				"it, and internal/cli's own test for the verb cites P13 for writing the value and " +
-				"nothing else. None is enumerated as " +
+				"as a value, which is " + strings.Join(p13Value, ", ") + ", writes the fifth, section " +
+				"9's db path, alone, no pointer before it and no label beside it, because a caller " +
+				"composes that answer into another command line; it keeps the path P13's evidence " +
+				"exception lets it, and internal/cli's own test for the verb cites P13 for writing " +
+				"the value and nothing else. None is enumerated as " +
 				"unsettled: the plan, the last that was, speaks internal/custody's classes, refusals " +
 				"and steps through rows of the phrase table now that the custody module exists. " +
 				"The refusal and usage text the command surface writes on standard error, and the " +
-				"next-action line after it, are held by no test and are outside the citation. All three " +
+				"next-action line after it, are held by no test and are outside the citation. All four " +
 				"lists are checked against " +
 				"internal/cli's enumeration, so the note cannot name a renderer that package does not " +
 				"have or miss one it does. The fleet walk needs a service, so on a platform with no local " +

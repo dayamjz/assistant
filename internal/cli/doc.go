@@ -284,11 +284,12 @@
 // It takes the service out of the path on purpose. The verb opens no
 // database, creates nothing and asks the service nothing: the path is
 // internal/home's, so the answer is the same with the service up or down,
-// which is when the question is asked. That makes it one of the verbs the
-// next section lists as needing no service rather than the only one. It
-// promises no more than that, and db.go says so: what a reader does with the
-// file is the reader's, and the sentence telling a person to open it
-// read-only is the specification's and the README's.
+// which is when the question is asked. That is a different kind of
+// independence from the next section's working-copy verbs, which open the
+// home's database in this process when the service is down; this verb never
+// opens it. It promises no more than that, and db.go says so: what a reader
+// does with the file is the reader's, and the sentence telling a person to
+// open it read-only is the specification's and the README's.
 //
 // What a person reads is the path alone, which is the value voice in
 // render.go rather than an evidence row: a caller composes the answer into

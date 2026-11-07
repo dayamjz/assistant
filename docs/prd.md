@@ -2974,8 +2974,9 @@ P13's list names it; the line pointing at it is phrased. The local protocol
 carries the same read as one open method. No verb is added.
 
 **Reading the records without this program.** All truth is in the home's embedded database, so a
-person debugging a stuck home has nothing to `cat` or `grep` and reads it through this program's
-own views. `assistant db path` is the way out of that. It prints the database file of the home it
+person debugging a stuck home has nothing to `cat` or `grep` among those records and reads them
+through this program's own views; stage and service logs under the home remain ordinary files.
+`assistant db path` is the way out for the records. It prints the database file of the home it
 acted on, so a reader of the person's own can be pointed at the records. It names where the file
 is rather than reading it: it creates nothing, opens no database and asks the service nothing, so
 it answers the same with the service up or down, which is when a person debugging a stuck home
