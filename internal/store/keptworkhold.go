@@ -64,7 +64,10 @@ import (
 // the entry's branch afterwards (TransitionTaskShape), so work can begin
 // on the entry's branch without the entry being answered. The hold is read
 // at a dispatch and at a launch, and a promoted task has both behind it,
-// so nothing here reaches that decision.
+// so nothing here reaches that decision. Nor is a branch name a statement
+// about content: a task this does not hold may still change the lines the
+// kept copy changes and conflict with it where they integrate, which no
+// comparison of two recorded names can see.
 //
 // Nothing here is cached or appended: the hold is derived from the kept work
 // record and the attempt record on every read (P8), so an entry's answer or
