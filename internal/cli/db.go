@@ -52,9 +52,10 @@ func dbVerb(ctx context.Context, in *invocation) (any, error) {
 // The structured answer keeps a control character, so a caller that reads
 // --json recovers the path; it substitutes the Unicode replacement character
 // for a byte that is not valid UTF-8, which is Go's JSON encoding and not
-// this verb's choice. A home root holding such a byte is named exactly by
-// neither output, and this answers with what the home resolved to rather
-// than with a form a reader could repair.
+// this verb's choice. The printed line keeps that byte when the path holds no
+// control character, so it is the answer that still names the file, and this
+// answers with what the home resolved to rather than with a form a reader
+// could repair once the structured answer has rewritten it.
 func databasePath(_ context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags(dbVerbName+" path", func(*flag.FlagSet) {}); err != nil {
 		return nil, err

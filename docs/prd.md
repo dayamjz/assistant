@@ -2983,10 +2983,11 @@ be writing; this answers where the file is and promises nothing about the read. 
 before it, because a caller composes it into another command line, which P13 says. The printed line is
 not the file name byte for byte when the path holds a control character: that character is
 escaped, as this program escapes one in any line it prints. The structured answer keeps a control
-character, so a caller that reads `--json` recovers the path; a byte that is not valid UTF-8
-becomes the replacement character in it, which is Go's JSON encoding and not this verb's choice.
-A home root holding such a byte is named exactly by neither answer, and this verb does not repair
-that name. Naming the file
+character, so a caller that reads `--json` recovers the path. A byte that is not valid UTF-8
+becomes the replacement character in the structured answer, which is Go's JSON encoding and not
+this verb's choice; the printed line keeps that byte when the path holds no control character, so
+it is the answer that still names the file. This verb does not repair a path the structured answer
+has already rewritten. Naming the file
 adds no second source of truth: the records in it are the truth, read and written through the
 store on section 8's, P8's and P15's terms, and what this verb hands out is a path that nothing
 in the program reads back.

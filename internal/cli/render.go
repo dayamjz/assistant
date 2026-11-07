@@ -186,7 +186,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but four is phrased: what it prints is a phrase from
+// Every row but five is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
