@@ -45,10 +45,16 @@ func dbVerb(ctx context.Context, in *invocation) (any, error) {
 // The answer is read-only in the only sense this command can promise: it
 // hands over a path and does not open it. What a reader then does with the
 // file is the reader's, so the sentence telling a person to open it read-only
-// is PRD section 9's and the README's, and nothing here enforces it. The
-// rendering writes the path alone, with a control character escaped as every
-// line this program prints escapes one; the structured answer carries the
-// bytes.
+// is PRD section 9's and the README's, and nothing here enforces it.
+//
+// Neither answer promises the file name byte for byte. The rendering writes
+// the path alone and is exact unless it holds a control character, which it
+// escapes as every line this program prints escapes one; the structured
+// answer keeps a control character and substitutes the Unicode replacement
+// character for a byte that is not valid UTF-8, which is Go's JSON encoding
+// and not this verb's choice. A home root with either in it is named exactly
+// by neither output, and this answers with what the home resolved to rather
+// than with a form a reader could repair.
 func databasePath(_ context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags(dbVerbName+" path", func(*flag.FlagSet) {}); err != nil {
 		return nil, err

@@ -380,8 +380,10 @@ var (
 	// rather than through writePointed. The path goes through printable, as
 	// every line this package writes does, so a control character in a home
 	// root is escaped rather than written; that is the one case where this
-	// line is not the file's name byte for byte, and --json carries the
-	// bytes. PRD section 9 says so.
+	// line is not the file's name byte for byte. --json is not a repair for
+	// it: that answer keeps a control character but substitutes the
+	// replacement character for a byte that is not valid UTF-8, because that
+	// is what encoding/json does. PRD section 9 and db.go say so.
 	databaseRendering = rendering{name: "database", voice: VoiceValue, of: typeOf[machine.Database](),
 		render: func(w io.Writer, v any) { writeln(w, printable(v.(machine.Database).Path)) }}
 )

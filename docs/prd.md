@@ -2980,9 +2980,11 @@ holding the records. It names where the file is rather than reading it: it creat
 no database and asks the service nothing, so it answers the same with the service up or down,
 which is when a person debugging a stuck home asks, and opening the file read-only is the reader's
 to do. The answer is a detailed evidence document in P13's sense and the one printed with nothing
-before it, because a caller composes it into another command line, which P13 says. A control
-character in the path is escaped on the way out, as this program escapes one in any line it
-prints, so a home root holding one is read from the structured answer instead. Naming the file
+before it, because a caller composes it into another command line, which P13 says. Neither answer
+promises the file name byte for byte: the printed line escapes a control character, as this
+program escapes one in any line it prints, and the structured answer keeps a control character
+while a byte that is not valid UTF-8 becomes the replacement character in it. A home root holding
+either is named exactly by neither, and this verb does not repair such a name. Naming the file
 does not make it the source of truth: nothing this program decides is read from it, and what the
 records hold and how they are written stay section 8's, P8's and P15's.
 
