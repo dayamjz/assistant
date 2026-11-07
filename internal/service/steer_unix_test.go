@@ -574,12 +574,14 @@ func waitRelaunchedAs(t *testing.T, running serviceUnderTest, h *home.Home, task
 }
 
 // PRD section 6's "interrupt is not offered": task.interrupt is refused from
-// the worker with the worker code, as every coordinator method is,
-// and from this process with the records' refusal naming the capability no
-// adapter declares, while the same adapter's declaration of worker
-// sessions, which the stream worker runs on, shows the refusal is read off
-// a declaration and not off an adapter that declares nothing. The worker
-// runs on after both: nothing was interrupted.
+// the worker with the worker code, as every coordinator method is, and from
+// this process with a refusal naming capability "interrupt", which is not a
+// row of internal/agents' table. The stream worker runs on standin's Claude
+// adapter, which declares agents.CapabilityTerminalInterrupt (and the
+// conformance probe for it). This service still looks for the undeclared
+// name rather than serving that row, so the refusal reads as "has not
+// declared" even though the real capability is declared. The worker runs on
+// after both refusals: nothing was interrupted.
 func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
 	t.Parallel()
 	streamWorker(t, "task/interrupt", steerConfig, func(w launched, agent *standin.Agent) {
@@ -594,8 +596,11 @@ func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
 			t.Fatalf("task.interrupt = %v, want ErrRefused naming the undeclared interrupt capability", err)
 		}
 		declared := agent.Runner().Capabilities()
-		if !declared.Has(agents.CapabilityWorkerSessions) || declared.Has(agents.Capability("interrupt")) {
-			t.Fatalf("the worker's adapter declares %s, want worker sessions and no interrupt", declared)
+		if !declared.Has(agents.CapabilityWorkerSessions) || !declared.Has(agents.CapabilityTerminalInterrupt) {
+			t.Fatalf("the worker's adapter declares %s, want worker sessions and terminal interrupt", declared)
+		}
+		if declared.Has(agents.Capability("interrupt")) {
+			t.Fatalf("the worker's adapter declares the phantom interrupt capability in %s", declared)
 		}
 		if got := observed(t, listedTask, running.client, task); !readsRunning(got) {
 			t.Fatalf("after the refused interrupt the task reads %+v, want still running", got)

@@ -112,13 +112,15 @@ import (
 // resend: the stopped worker is gone, and the text reaches a new worker as
 // part of what it is started with.
 //
-// # Interrupt is undeclared
+// # Interrupt is undeclared here
 //
 // task.interrupt is refused with *agents.CapabilityError naming
-// capabilityInterrupt, which internal/agents' table has no row for and so no
-// declaration satisfies: ending a turn while keeping the process needs proof
-// the turn ended, which nothing reads, and PRD section 12 defers it. The
-// path is stop, then relaunch with a note.
+// capabilityInterrupt ("interrupt"). That string is not a row of
+// internal/agents' table. Adapters that can end a turn while keeping the
+// process declare agents.CapabilityTerminalInterrupt instead, with a
+// conformance probe for proof the turn ended. This service does not look
+// for that row and does not interrupt: the path is stop, then relaunch
+// with a note. Serving the declared capability is a separate change.
 //
 // # Residual gaps
 //
@@ -143,10 +145,12 @@ import (
 //   - No method reads a message record back; the record travels in
 //     task.message's answer, and an unacknowledged one surfaces as a wake.
 
-// capabilityInterrupt is the capability an interrupt needs. It is not a row
-// of internal/agents' table, by PRD section 12's deferral: a row needs a
-// conformance probe for proof a turn ended, which nothing has, so
-// Capabilities.Has answers false for it whatever an adapter declares.
+// capabilityInterrupt is the name this service's interrupt refusal carries.
+// It is not agents.CapabilityTerminalInterrupt: that row is what an adapter
+// declares when it can prove a turn ended, and Capabilities.Has answers for
+// it. This constant is a string no adapter declares, so Has is always false
+// for it and interruptTask refuses every call until a change here serves the
+// real capability.
 const capabilityInterrupt agents.Capability = "interrupt"
 
 // messageSendBound bounds a Send: a worker that is not reading its input
