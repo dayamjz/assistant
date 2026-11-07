@@ -1493,10 +1493,15 @@ answers through the next service, and no relaunch is recorded, so a restart
 does not count toward `relaunch_attempts`. A service killed outright leaves
 it running the same way, and the next start holds it again too. Before it
 holds one, the service checks that the process the task's attempt recorded is
-still running with its recorded start time and that the worker's own server,
-on the socket the attempt recorded, answers with that process. A worker that
-fails that check is not held: it reads as unobservable and is reported as a
-terminal-gone wake rather than relaunched beside, until it ends.
+still running with its recorded start time, that the worker's own server on
+the socket the attempt recorded answers with that process as its pane, and
+that the process leads its own process group under that server. A worker that
+verifies is held again and reads Live. One that fails is not held: if its
+process is gone it reads Dead and fleet reconciliation may relaunch it in
+place under `relaunch_attempts`; if the process is still present but the
+check could not verify it, it reads Unobserved, is reported as a
+terminal-gone wake with case `unobservable`, and is left alone rather than
+relaunched beside.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
@@ -1520,9 +1525,10 @@ And the resolved agent has to declare terminal workers, which Claude Code
 does. `assistant doctor` checks both when this file chooses tmux, and reports
 the stall by name before a task waits Dispatched. Cursor and Grok do not
 declare terminal workers; naming one under tmux fails that check the same
-way. A worker an earlier service started is never attached to or read
-through the new one: its terminal reads as unobservable until it ends, as it
-does under the default provider.
+way. Under the default (pipe) provider, a worker an earlier service started
+is never attached to or read through the new one: its terminal reads as
+unobservable until it ends. Under tmux, the hold-again check above is what
+attaches a verified survivor to the next service.
 
 A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering
