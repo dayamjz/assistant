@@ -9,18 +9,20 @@ import (
 )
 
 // The dispatch hold, PRD section 6's "kept work is answered before new task
-// work starts": while a project has an open kept work entry, no new task in
-// that project dispatches. This file is the one statement of which entries
+// work starts": while a project has an open kept work entry, no new task of
+// that project on the entry's branch dispatches. This file is the one
+// statement of which entries
 // hold which task, keptWorkHoldingTx, read by KeptWorkHolding and by
 // every dispatch claim, so the wait a surface shows and the refusal a
 // dispatch meets cannot disagree about what holds it.
 //
 // A task a carry-on claim names is held, first, by the open entries it
 // carries on until it owns their copy; an entry closed on a proof with the
-// claim owed holds nothing. Otherwise a task is held when all three are
+// claim owed holds nothing. Otherwise a task is held when all four are
 // true in one read: it names a project
-// (its repository), no attempt of it has recorded a terminal session, and an
-// entry of that project is open (neither answered nor closed). The second is
+// (its repository), no attempt of it has recorded a terminal session, an
+// entry of that project is open (neither answered nor closed), and that
+// entry's branch is the task's. The second is
 // what makes it a new task. A recorded session is the one fact here that a
 // worker started: SetAttemptSession writes it only after the process did,
 // so a task with one is work already under way, which PRD section 6 says the
@@ -43,31 +45,57 @@ import (
 // repository, holds no task, since kept work in one project never holds
 // another and that entry is in none.
 //
+// The branch is the overlap, PRD section 6's kept work as the owner
+// narrowed it on 2026-11-06 (decision 21): an entry holds a task that
+// works where its copy's work is, and no other. The two are compared as
+// their rows recorded them, the owner's branch written once with the entry
+// (KeptWork.Branch) and the task's as its own row stands, which intake
+// wrote and a promotion rewrites (TransitionTaskShape), and nothing
+// here reads what either stands on now. A branch neither names is the
+// project's base, where a copy with no branch of its own stands and where
+// an investigation task's clone is cut, so an entry naming none holds
+// exactly the tasks that name none, and a task naming none is held by
+// exactly those entries. Unknown is a side of the comparison on both
+// sides, never a wildcard on either: an entry that cannot say which branch
+// its work is on does not hold every task of its project, and a task that
+// names no branch is not held by every entry of its.
+//
+// What the overlap does not cover. An entry on a branch does not hold an
+// investigation task, which names none, and a promotion may give that task
+// the entry's branch afterwards (TransitionTaskShape), so work can begin
+// on the entry's branch without the entry being answered. The hold is read
+// at a dispatch and at a launch, and a promoted task has both behind it,
+// so nothing here reaches that decision. Nor is a branch name a statement
+// about content: a task this does not hold may still change the lines the
+// kept copy changes and conflict with it where they integrate, which no
+// comparison of two recorded names can see.
+//
 // Nothing here is cached or appended: the hold is derived from the kept work
 // record and the attempt record on every read (P8), so an entry's answer or
 // its closure on a proof lifts it on the next read, and a restart reads the
 // same answer the service before it did.
 
 // ErrDispatchHeld matches every *DispatchHeldError.
-var ErrDispatchHeld = errors.New("store: the task's project holds kept work nobody has decided, so the task is not dispatched")
+var ErrDispatchHeld = errors.New("store: the task's branch holds kept work nobody has decided, so the task is not dispatched")
 
 // DispatchHeldError is the refusal of a new task's dispatch while its
-// project has open kept work. BeginDispatchAttempt returns it and writes no
-// attempt. It names every entry that holds the task, oldest first.
+// project has open kept work on its branch. BeginDispatchAttempt returns it
+// and writes no attempt. It names every entry that holds the task, oldest
+// first.
 type DispatchHeldError struct {
 	// Task is the task that was not dispatched.
 	Task string
 	// Repository is its project.
 	Repository string
-	// Entries is every open entry of that project, oldest first, and never
-	// empty.
+	// Entries is every open entry of that project whose branch is the
+	// task's, oldest first, and never empty.
 	Entries []KeptWork
 }
 
 // Error names the task, the project and each entry's copy and owner.
 func (e *DispatchHeldError) Error() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "store: task %s is not dispatched, because its project %s holds kept work nobody has decided:", e.Task, e.Repository)
+	fmt.Fprintf(&b, "store: task %s is not dispatched, because its project %s holds kept work on its branch that nobody has decided:", e.Task, e.Repository)
 	for _, k := range e.Entries {
 		owner := "run " + k.RunID.Or("")
 		if task, ok := k.TaskID.Get(); ok {
@@ -85,7 +113,7 @@ func (e *DispatchHeldError) Unwrap() error { return ErrDispatchHeld }
 // KeptWorkHolding returns the open kept work entries that hold the task's
 // dispatch, oldest first, on this file's terms, and none for a task that is
 // not held: one naming no project, one launched before, or one whose project
-// has no open entry. A task that does not exist is ErrNotFound, wrapped. It
+// has no open entry on its branch. A task that does not exist is ErrNotFound, wrapped. It
 // is the read a dispatch and a surface decide a held task from; the claim a
 // dispatch makes reads the same thing again inside its own transaction.
 func (s *Store) KeptWorkHolding(ctx context.Context, taskID string) ([]KeptWork, error) {
@@ -241,8 +269,8 @@ func refuseHeldDispatchTx(ctx context.Context, tx *sql.Tx, taskID string) error 
 // returns the entries that hold the task and the task's project, which is
 // empty for a task naming none.
 func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWork, string, error) {
-	var repository Optional[string]
-	if err := tx.QueryRowContext(ctx, `SELECT repository_id FROM task WHERE id = ?`, taskID).Scan(&repository); err != nil {
+	var repository, branch Optional[string]
+	if err := tx.QueryRowContext(ctx, `SELECT repository_id, branch FROM task WHERE id = ?`, taskID).Scan(&repository, &branch); err != nil {
 		return nil, "", fmt.Errorf("task %s: %w", taskID, errNoRows(err))
 	}
 	project, ok := repository.Get()
@@ -276,7 +304,7 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 	if launched > 0 {
 		return nil, project, nil
 	}
-	rows, err := tx.QueryContext(ctx, openKeptWorkOfProject, project)
+	rows, err := tx.QueryContext(ctx, holdingKeptWorkOfBranch, project, branch)
 	if err != nil {
 		return nil, project, err
 	}
@@ -285,9 +313,18 @@ func keptWorkHoldingTx(ctx context.Context, tx *sql.Tx, taskID string) ([]KeptWo
 }
 
 // openKeptWorkOfProject is the query for one project's open entries, oldest
-// first, which the hold, a run's answer and a repository's removal all read.
+// first, which a run's answer and a repository's removal read. The hold
+// reads holdingKeptWorkOfBranch instead, which is narrower.
 const openKeptWorkOfProject = keptWorkColumns + ` FROM kept_work
 	WHERE repository_id = ? AND answer IS NULL AND closure IS NULL ORDER BY id`
+
+// holdingKeptWorkOfBranch is the query for the open entries of one project
+// that hold a task on some branch, oldest first: those whose branch is the
+// task's. The comparison is IS and not =, so a row recording no branch is
+// matched by a task that names none and by no other, which is this file's
+// base case rather than SQL's unknown.
+const holdingKeptWorkOfBranch = keptWorkColumns + ` FROM kept_work
+	WHERE repository_id = ? AND branch IS ? AND answer IS NULL AND closure IS NULL ORDER BY id`
 
 // scanKeptWorkRows reads every row of rows as a kept work entry and closes
 // rows.

@@ -21,15 +21,20 @@ func keptHoldTask(t *testing.T, s *Store, id, repo, branch string) {
 	}
 }
 
-// While a project has an open kept work entry, a new task in it is held at
+// While a project has an open kept work entry, a new task of that project on
+// the entry's branch is held at
 // its dispatch claim and nowhere else: BeginFirstTaskAttempt refuses it with
 // the typed refusal naming the entry and writes no attempt, KeptWorkHolding
-// reads the same entry, and the relaunch claim is not held. A task in
+// reads the same entry, and the relaunch claim is not held. A task of the
+// same project on another branch is not held and dispatches, which is the
+// narrowing the owner decided on 2026-11-06 (PRD decision 21): before it,
+// that task was held too and one entry stopped every task of its project. A
+// task in
 // another project, a task launched before, and a task naming no project are
 // not held, and an entry naming no project holds nothing. Once the entry is
 // answered the same task dispatches, read from the record again and from
 // nothing cached (P8).
-func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
+func TestOpenKeptWorkHoldsANewTasksDispatchOnItsBranchOnly(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P8)
@@ -40,10 +45,11 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 		UpstreamURL: "https://example.test/two.git", DefaultBranch: "main"}); err != nil {
 		t.Fatal(err)
 	}
-	keptHoldTask(t, s, "taskheldnewa", "repo-1", "one")
-	keptHoldTask(t, s, "taskrelaunch", "repo-1", "two")
-	keptHoldTask(t, s, "tasklaunched", "repo-1", "three")
-	keptHoldTask(t, s, "taskelsewher", "repo-2", "one")
+	keptHoldTask(t, s, "taskheldnewa", "repo-1", "topic")
+	keptHoldTask(t, s, "taskrelaunch", "repo-1", "topic")
+	keptHoldTask(t, s, "tasklaunched", "repo-1", "topic")
+	keptHoldTask(t, s, "taskotherbra", "repo-1", "other")
+	keptHoldTask(t, s, "taskelsewher", "repo-2", "topic")
 	seedTask(t, s, "tasknoprojct")
 	a := beginAttempt(t, s, "tasklaunched", 0)
 	if err := s.SetAttemptSession(ctx, "tasklaunched", a.Sequence, "ref-1", SessionHost{}); err != nil {
@@ -56,7 +62,7 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 		Holds: []string{"cccc"}, Reason: "unproven", Against: "mmmm"}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"taskheldnewa", "taskelsewher", "tasknoprojct"} {
+	for _, id := range []string{"taskheldnewa", "taskotherbra", "taskelsewher", "tasknoprojct"} {
 		if got, err := s.KeptWorkHolding(ctx, id); err != nil || len(got) != 0 {
 			t.Fatalf("with only a project-less entry, KeptWorkHolding(%s) = %+v, %v; want none", id, got, err)
 		}
@@ -80,10 +86,13 @@ func TestOpenKeptWorkHoldsANewTasksDispatchInItsProjectOnly(t *testing.T) {
 	if attempts, err := s.TaskAttempts(ctx, "taskheldnewa"); err != nil || len(attempts) != 0 {
 		t.Fatalf("a held dispatch wrote attempts %+v, %v", attempts, err)
 	}
-	for _, id := range []string{"tasklaunched", "taskelsewher", "tasknoprojct"} {
+	for _, id := range []string{"tasklaunched", "taskotherbra", "taskelsewher", "tasknoprojct"} {
 		if got, err := s.KeptWorkHolding(ctx, id); err != nil || len(got) != 0 {
 			t.Errorf("KeptWorkHolding(%s) = %+v, %v; want none", id, got, err)
 		}
+	}
+	if _, err := s.BeginFirstTaskAttempt(ctx, "taskotherbra", OnThisMachine()); err != nil {
+		t.Errorf("a task of the same project on another branch was refused: %v", err)
 	}
 	if _, err := s.BeginFirstTaskAttempt(ctx, "taskelsewher", OnThisMachine()); err != nil {
 		t.Errorf("a task in another project was refused: %v", err)
@@ -127,9 +136,9 @@ func TestALaunchClaimWithNoStartedWorkerLeavesItsTaskHeld(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
-	keptHoldTask(t, s, "taskclaimeda", "repo-1", "one")
-	keptHoldTask(t, s, "taskheldlnch", "repo-1", "two")
-	keptHoldTask(t, s, "taskstarteda", "repo-1", "three")
+	keptHoldTask(t, s, "taskclaimeda", "repo-1", "topic")
+	keptHoldTask(t, s, "taskheldlnch", "repo-1", "topic")
+	keptHoldTask(t, s, "taskstarteda", "repo-1", "topic")
 	claimed := beginAttempt(t, s, "taskclaimeda", 0)
 	held := beginAttempt(t, s, "taskheldlnch", 0)
 	started := beginAttempt(t, s, "taskstarteda", 0)
@@ -228,5 +237,63 @@ func TestAClosedEntrysUnfinishedCarryOnHoldsNothing(t *testing.T) {
 	}
 	if _, err := s.BeginFirstTaskAttempt(ctx, "tasknewcopya", OnThisMachine()); err != nil {
 		t.Fatalf("the new task's dispatch after the entry closed = %v; want it claimed", err)
+	}
+}
+
+// keptHoldInvestigation creates an investigation task of one repository,
+// which names no branch, with no attempt.
+func keptHoldInvestigation(t *testing.T, s *Store, id, repo string) {
+	t.Helper()
+	if _, err := s.CreateTask(context.Background(), Task{
+		ID: id, Shape: TaskInvestigation, Project: repo, Mode: "interactive", WorktreePath: "/worktrees/" + id,
+		RepositoryID: Known(repo),
+	}, Disposition{}); err != nil {
+		t.Fatalf("CreateTask %s: %v", id, err)
+	}
+}
+
+// A branch neither side names is the project's base and never a wildcard,
+// PRD section 6's kept work: an entry whose owner named no branch, an
+// investigation's copy, holds the project's tasks that name none and no
+// task on a branch, and an entry on a branch holds no task that names none.
+// Read the other way, a task naming no branch is held by exactly the
+// entries naming none. Without the base reading, unknown either widened the
+// hold back to the whole project or let every entry of it be escaped by
+// naming no branch.
+func TestAnEntryNamingNoBranchHoldsTheTasksThatNameNone(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s) // repo-1, branch topic
+	keptHoldInvestigation(t, s, "taskinvestga", "repo-1")
+	keptHoldInvestigation(t, s, "taskinvestgb", "repo-1")
+	keptHoldTask(t, s, "taskonbranch", "repo-1", "topic")
+
+	base, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "taskinvestga", CopyPath: "/tasks/taskinvestga/copy",
+		Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.Branch.IsKnown() {
+		t.Fatalf("the investigation's entry records branch %v; want none, which is what makes it the base case", base.Branch)
+	}
+	if got, err := s.KeptWorkHolding(ctx, "taskinvestgb"); err != nil || len(got) != 1 || got[0].ID != base.ID {
+		t.Fatalf("an investigation task is held by %+v, %v; want the entry naming no branch", got, err)
+	}
+	if got, err := s.KeptWorkHolding(ctx, "taskonbranch"); err != nil || len(got) != 0 {
+		t.Fatalf("a task on a branch is held by %+v, %v; want nothing, the entry naming no branch", got, err)
+	}
+
+	onBranch, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: "taskonbranch", CopyPath: "/tasks/taskonbranch/copy",
+		Holds: []string{"bbbb"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onBranch.Branch.Or("") != "topic" {
+		t.Fatalf("the delivery task's entry records branch %v; want topic", onBranch.Branch)
+	}
+	if got, err := s.KeptWorkHolding(ctx, "taskinvestgb"); err != nil || len(got) != 1 || got[0].ID != base.ID {
+		t.Fatalf("with both entries open an investigation task is held by %+v, %v; want the entry naming no branch alone", got, err)
 	}
 }

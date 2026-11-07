@@ -433,7 +433,7 @@ func TestOnlyTheCopyACarryOnAdoptedIsTakenAtAFirstClaimAndSweptAfterIt(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			entry := keepWorkIn(t, subject.records)
+			entry := keepWorkIn(t, subject.records, subject.task)
 			if _, err := subject.records.ClaimKeptWorkCarryOn(ctx, entry.ID, subject.task, identity.String(), store.ResolvedByPerson()); err != nil {
 				t.Fatal(err)
 			}
