@@ -417,8 +417,9 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 // The same, for a worker that exits by itself inside the window, with no
 // stop and no restart: this service still holds its session when it exits,
 // so only the probe says the worker is gone. Its copy is kept at once as one kept work
-// entry for the worker that ended inside the window, and a delivery task
-// created in the project waits on it. Keeping only a worker the service no
+// entry for the worker that ended inside the window, and a new investigation
+// task of the project, naming no branch as the copy's owner names none,
+// waits on it. Keeping only a worker the service no
 // longer held left this copy silent until the window passed.
 func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
 	t.Parallel()

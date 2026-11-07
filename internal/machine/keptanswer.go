@@ -205,14 +205,14 @@ type KeptWorkAnswered struct {
 // phraseKeptWorkLanded is the row a landed answer reads as.
 var phraseKeptWorkLanded = Phrase{
 	Outcome:     "The work in that local copy was taken into validation, as if you had sent it yourself.",
-	Consequence: "The copy stays until its work is somewhere safe, and new work in the same project no longer waits on it.",
+	Consequence: "The copy stays until its work is somewhere safe, and new work that would start where it stood no longer waits on it.",
 	Decision:    "Follow the validation with assistant status; it asks you only what it would ask of work you sent.",
 }
 
 // phraseKeptWorkCarriedOn is the row a carried-on answer reads as.
 var phraseKeptWorkCarriedOn = Phrase{
 	Outcome:     "New work was begun in that local copy, picking up what was already there.",
-	Consequence: "The work it continues stays as it finished, and new work in the same project no longer waits on that copy.",
+	Consequence: "The work it continues stays as it finished, and new work that would start where that copy stood no longer waits on it.",
 	Decision:    "Follow the new work with assistant tasks; it asks you what any work would.",
 }
 

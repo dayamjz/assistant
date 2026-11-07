@@ -1347,8 +1347,8 @@ func TestTwoLandAnswersStartOneRunBetweenThem(t *testing.T) {
 // program references are made read-only, so bringing the copy's commit
 // into the gate fails, as it does for a gate that cannot be written. The
 // answer is refused, no run is started, and the entry is open with no
-// claim, read by status and by the open kept work, and still holds its
-// project's new tasks; once the gate is writable again the same answer
+// claim, read by status and by the open kept work, and still holds the
+// new tasks of its project on its branch; once the gate is writable again the same answer
 // lands it. Without the answer kept apart
 // from its outcome, the entry reads answered land with no run and is
 // listed nowhere until a restart completes it.
