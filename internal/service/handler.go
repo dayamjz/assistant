@@ -333,8 +333,8 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 
 // keptWorkInStatus is the open kept work a status lists: every entry whose
 // project is repository, whichever branch it was kept on, because PRD
-// section 6 has kept work surface in status at once and holds a project
-// rather than a branch, and every entry whose owner names no project, an
+// section 6 has kept work surface in status at once while the hold itself
+// is on the entry's branch (decision 21), and every entry whose owner names no project, an
 // investigation task's with no repository among them, because such an entry
 // belongs to no working copy and so has to be shown by every status for a
 // status to show it at all. An empty repository is a working copy with no

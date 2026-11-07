@@ -393,8 +393,8 @@ func TestKeptWorkReadsItsMachineOffItsOwner(t *testing.T) {
 // the machine is read off the owner the entry outlived. An entry the task
 // cannot be carrying on is refused with nothing written: one not answered
 // carry on, the task's own, one of another branch, or one another task
-// carried on. A valid placement is still held while the project has an open
-// entry, on keptworkhold.go's terms. The finished task keeps its machine.
+// carried on. A valid placement is still held while an open entry on its
+// branch stands, on keptworkhold.go's terms. The finished task keeps its machine.
 func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P14)
@@ -501,7 +501,7 @@ func TestCarryOnGivesTheNewTaskTheKeptCopysMachine(t *testing.T) {
 	})
 
 	if _, err := s.BeginFirstTaskAttempt(ctx, newTask.ID, CarriedOnFrom(carried.ID)); !errors.Is(err, ErrDispatchHeld) {
-		t.Fatalf("carrying on while the project has an open entry = %v, want ErrDispatchHeld", err)
+		t.Fatalf("carrying on while an open entry on its branch stands = %v, want ErrDispatchHeld", err)
 	}
 	if got := attemptsOf(t, s, newTask.ID); len(got) != 0 || machineOf(t, s, newTask.ID) != "" {
 		t.Fatalf("the held dispatch left attempts %+v and machine %q", got, machineOf(t, s, newTask.ID))

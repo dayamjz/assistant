@@ -59,7 +59,7 @@ paths: ["internal/service/**"]
   an entry no task names once on the queue's third shape, an entry with
   `surfaced_at` recorded is raised on neither again, and status and the
   catch-up read list them. `dispatch.go` holds a new task's dispatch while its
-  project has an open entry, asking internal/store's one predicate
+  project has an open entry on the task's branch, asking internal/store's one predicate
   (`KeptWorkHolding`, `BeginFirstTaskAttempt` or, for a retried dispatch,
   `BeginDispatchAttempt` at the claim, and
   `launch.go`'s `ClaimAttemptLaunch` before the worker starts);

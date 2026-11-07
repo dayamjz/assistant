@@ -87,10 +87,10 @@ import (
 // answered land before its run exists. The claim is written first,
 // store.ClaimKeptWorkLanding, once, with who gave the answer, and leaves
 // the entry open: status, the catch-up read and the supervisor loop list
-// it, and its project's new tasks still wait on it. Then the run is
+// it, and the new tasks on its branch still wait on it. Then the run is
 // started through startPushedBranch, and the entry is answered land naming
 // the run in one write, store.RecordKeptWorkLanding, which is when it
-// closes and the project's tasks dispatch. Two answers landing one entry
+// closes and the tasks on its branch dispatch. Two answers landing one entry
 // get one claim between them, and the window between the claim and the
 // record, where a second answer finds the claim written and no run yet, is
 // held in this service's memory, landings, which completeLanding takes for
@@ -387,7 +387,7 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 		if err != nil {
 			// No run was handed to execution, here or by a landing before
 			// (none was found), so the claim is withdrawn and the entry is
-			// open again, listed and holding its project's dispatch as it
+			// open again, listed and holding its branch's dispatch as it
 			// was all along.
 			if _, withdrawErr := s.store.WithdrawKeptWorkLanding(ctx, entry.ID); withdrawErr != nil {
 				return machine.KeptWorkAnswered{}, fmt.Errorf("%w; the landing of kept work entry %d stands, owed: %w", err, entry.ID, withdrawErr)
@@ -407,7 +407,7 @@ func (s *Service) completeLanding(ctx context.Context, entry store.KeptWork) (ma
 		return machine.KeptWorkAnswered{}, err
 	}
 	s.log.Printf("kept work entry %d was answered land: run %s validates %s on %s", entry.ID, run, plan.head, plan.branch)
-	// The entry is answered now, so it no longer holds its project's
+	// The entry is answered now, so it no longer holds its branch's
 	// dispatch.
 	s.dispatchInBackground()
 	return machine.KeptWorkAnswered{Entry: landed, Effect: machine.KeptWorkLanded, Run: run}, nil

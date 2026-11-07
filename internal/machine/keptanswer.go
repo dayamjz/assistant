@@ -205,14 +205,14 @@ type KeptWorkAnswered struct {
 // phraseKeptWorkLanded is the row a landed answer reads as.
 var phraseKeptWorkLanded = Phrase{
 	Outcome:     "The work in that local copy was taken into validation, as if you had sent it yourself.",
-	Consequence: "The copy stays until its work is somewhere safe, and new work in the same project no longer waits on it.",
+	Consequence: "The copy stays until its work is somewhere safe, and new work that would start where it stood no longer waits on it.",
 	Decision:    "Follow the validation with assistant status; it asks you only what it would ask of work you sent.",
 }
 
 // phraseKeptWorkCarriedOn is the row a carried-on answer reads as.
 var phraseKeptWorkCarriedOn = Phrase{
 	Outcome:     "New work was begun in that local copy, picking up what was already there.",
-	Consequence: "The work it continues stays as it finished, and new work in the same project no longer waits on that copy.",
+	Consequence: "The work it continues stays as it finished, and new work that would start where that copy stood no longer waits on it.",
 	Decision:    "Follow the new work with assistant tasks; it asks you what any work would.",
 }
 
@@ -223,11 +223,11 @@ var phraseKeptWorkCarriedOn = Phrase{
 // digest last, or PhraseKeptWorkLosesNothing when nothing is listed.
 // Removing the copy on a confirmed discard is not in this build
 // (docs/prd.md, sections 6 and 9), so the row says what lets the
-// project's new work go ahead instead.
+// work that would start where that copy stands go ahead instead.
 var phraseKeptWorkDiscardShown = Phrase{
 	Outcome:     "Nothing was removed: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
 	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "To let new work go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
+	Decision:    "To let new work that would start where that copy stands go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
@@ -245,7 +245,7 @@ var PhraseKeptWorkLosesNothing = Phrase{
 // changes nothing, the copy and its entry as they were.
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",
-	Consequence: "The copy stays, with everything it holds, and new work in the same project still waits on it.",
+	Consequence: "The copy stays, with everything it holds, and new work that would start where it stands still waits on it.",
 	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything a discard would show as lost that you want to keep.",
 }
 

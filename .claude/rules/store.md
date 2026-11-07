@@ -109,7 +109,9 @@ paths: ["internal/store/**"]
   reservation whose owner is gone when it opens. `keptworkhold.go` is the
   dispatch hold's one predicate: a task naming a project, none of whose
   attempts recorded a session (a claim alone proves no worker started),
-  whose project has an open entry; the dispatch claims
+  whose project has an open entry on the task's own branch, a branch
+  neither the entry nor the task names being the project's base and never a
+  wildcard; the dispatch claims
   (`BeginFirstTaskAttempt`, and `BeginDispatchAttempt` for a retried
   dispatch) and `ClaimAttemptLaunch` (the last write before a worker starts)
   refuse it with `*DispatchHeldError` in their own transactions, and

@@ -243,8 +243,10 @@ func TestARestartKeepsAnUnchangedReportedCopyForAPromotion(t *testing.T) {
 // in its copy and files its report under a one-hour promotion_window, and a
 // restart ends it. The next service reads the worker gone long before the
 // window passes and keeps the copy at once as one kept work entry, for the
-// worker that ended inside the window, which holds a delivery task created
-// in the same project. Waiting for the window instead, the copy sat with no
+// worker that ended inside the window, which holds a new investigation task
+// of the same project: an investigation's copy names no branch, so the entry
+// stands at the project's base and holds the tasks that name none. Waiting
+// for the window instead, the copy sat with no
 // entry for up to the window and the new task dispatched.
 func TestAWorkerGoneInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
 	t.Parallel()
@@ -263,8 +265,8 @@ func TestAWorkerGoneInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *tes
 		}
 		var created machine.TaskCreated
 		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/inside-the-window",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}
@@ -361,8 +363,9 @@ func TestAReportedCopyHoldingWorkPastThePromotionWindowIsOneKeptWorkEntry(t *tes
 
 // PRD section 6's "kept work is answered before new task work starts" and
 // P15, for the entry the window writes: past a one-second promotion_window
-// over a copy holding a commit, a delivery task created in the same project
-// is not dispatched. It has no attempt through several passes, the service
+// over a copy holding a commit, a new investigation task of the same project
+// is not dispatched: an investigation's copy names no branch, so the entry
+// stands at the project's base and holds the tasks that name none. It has no attempt through several passes, the service
 // log says it waits, and task.get names the window's entry. Promoting the
 // investigation answers the entry carry on, naming the investigation itself
 // as the task that carries it on, relaunches a worker in the copy from the
@@ -383,8 +386,8 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 
 		var created machine.TaskCreated
 		if err := running.client.Call(ctx, ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/after-the-window",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}
@@ -414,8 +417,9 @@ func TestTheEntryAPromotionWindowWritesHoldsANewTaskUntilThePromotionAnswersIt(t
 // The same, for a worker that exits by itself inside the window, with no
 // stop and no restart: this service still holds its session when it exits,
 // so only the probe says the worker is gone. Its copy is kept at once as one kept work
-// entry for the worker that ended inside the window, and a delivery task
-// created in the project waits on it. Keeping only a worker the service no
+// entry for the worker that ended inside the window, and a new investigation
+// task of the project, naming no branch as the copy's owner names none,
+// waits on it. Keeping only a worker the service no
 // longer held left this copy silent until the window passed.
 func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t *testing.T) {
 	t.Parallel()
@@ -434,8 +438,8 @@ func TestAWorkerThatExitsInsideThePromotionWindowLeavesItsCopyAsKeptWorkAtOnce(t
 		}
 		var created machine.TaskCreated
 		if err := running.client.Call(t.Context(), ipc.MethodTaskCreate, machine.TaskCreateRequest{
-			Shape: "delivery", Project: "one", Instructions: "Do the work.\n", Mode: "interactive",
-			Repository: inv.repository.ID, Branch: "task/after-the-exit",
+			Shape: "investigation", Project: "one", Instructions: "Look again.\n", Mode: "interactive",
+			Repository: inv.repository.ID,
 		}, &created); err != nil {
 			t.Fatalf("creating a task in the investigation's project: %v", err)
 		}

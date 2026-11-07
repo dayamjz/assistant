@@ -2040,9 +2040,10 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// The proposal is read off the store as it stands now and never comes
 	// from graph state; decision.go says why.
 	answer.Proposals = s.proposals(ctx, record)
-	// The project's kept work, which holds new tasks and never a run, is
-	// named on every answer from the record as it stands now; a read that
-	// fails is logged and the answer names none.
+	// The project's kept work is named on every answer from the record as
+	// it stands now (surfacing is project-wide; the hold is on each entry's
+	// branch and never a run); a read that fails is logged and the answer
+	// names none.
 	if kept, err := s.store.OpenKeptWorkOf(ctx, record.RepositoryID); err != nil {
 		s.log.Printf("the kept work of run %s's project could not be read for its answer: %v", runID, err)
 	} else {
