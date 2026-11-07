@@ -1551,10 +1551,20 @@ func (s *Service) recover(ctx context.Context) {
 			s.continueRun(settled.ID)
 		}
 	}
-	// PRD section 11's step 5, after the runs are reconciled: every agent
-	// process an earlier service of this home recorded and did not live to
-	// end is looked for by its recorded identity and ended as its group,
-	// unless its run is still unfinished. reap.go owns the decision and its
+	// PRD section 11's step 5, after the runs are reconciled: hold again
+	// every task's worker an earlier incarnation left running, before
+	// anything below reads or removes it. The same body is asked again at
+	// the start of reconcileTasks before the fleet table; a worker already
+	// held is skipped there. reconcile.go owns the verification.
+	if s.terminals != nil {
+		bound, cancel := context.WithTimeout(ctx, reconcileProbeBound)
+		s.readoptWorkers(ctx, bound)
+		cancel()
+	}
+	// Step 5 then reaps orphaned agent processes: every agent process an
+	// earlier service of this home recorded and did not live to end is
+	// looked for by its recorded identity and ended as its group, unless
+	// its run is still unfinished. reap.go owns the decision and its
 	// outcomes; what it does not reach is stated there and in doc.go.
 	s.reaped = s.reapOrphans(ctx)
 	// A run that was already finished when recovery read it, and whose
@@ -1577,13 +1587,15 @@ func (s *Service) recover(ctx context.Context) {
 	// tasks its entry held are dispatched below.
 	s.completeLandingsAtOpen(ctx)
 	s.completeCarryOnsAtOpen(ctx)
-	// PRD section 11's fleet reconciliation, after the runs and before
+	// PRD section 11's fleet reconciliation, after step 5 and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a
 	// terminal gone with the work not landed is relaunched in its own copy.
-	// reconcile.go owns the table and the bound; the launch itself goes to a
-	// goroutine of this service's, so a home with several dead terminals
-	// comes back serving after the claims and not after the launches.
+	// Survivors were held again above; reconcileTasks asks that body again
+	// only for any it missed. reconcile.go owns the table and the bound; the
+	// launch itself goes to a goroutine of this service's, so a home with
+	// several dead terminals comes back serving after the claims and not
+	// after the launches.
 	s.reconcileTasks(ctx)
 	// PRD section 11's row for a subordinate coordinator's terminal gone,
 	// after the tasks: every standing delegation's session is re-probed on

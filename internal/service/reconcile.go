@@ -408,11 +408,13 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 // server that answers. Chosen, not measured beyond that.
 const readoptBound = 5 * time.Second
 
-// readoptWorkers holds again, before the table reads the fleet, every
-// worker that outlived the service before this one: a task whose latest
-// attempt records a reference naming its tmux server's socket, which no
-// session of this service holds, is handed to a tmux provider over the
-// adapter the attempt recorded, whose Readopt verifies the worker on
+// readoptWorkers holds again every worker that outlived the service before
+// this one. recover asks it as PRD section 11's step 5 before reaping or
+// removing copies, and reconcileTasks asks it again before the fleet table
+// reads; a worker already held is skipped. A task whose latest attempt
+// records a reference naming its tmux server's socket, which no session of
+// this service holds, is handed to a tmux provider over the adapter the
+// attempt recorded, whose Readopt verifies the worker on
 // session.Tmux.Readopt's terms. A worker that verifies is held as a launch
 // holds one, with its fallback watched as a launch's is, so its terminal
 // probes Live and the table leaves it alone: it is not relaunched. One that

@@ -537,14 +537,14 @@
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //
-// PRD section 11's fleet reconciliation runs inside recover, after the runs
-// are reconciled and before anything is served: the queued wakes are read
-// as input with store.QueuedWakes, which hands out nothing because a drain
-// is the coordinator's and hands rows out to whoever makes it, every tmux
-// worker an earlier service let go or left is held again where it verifies
-// (readoptWorkers), every task of this home is read with its terminal probed under a
-// bound, and a terminal gone with the work not landed is relaunched in the
-// copy it stood in. reconcile.go owns the table, which is keyed on the
+// PRD section 11's step 5 holds again every tmux worker an earlier service
+// left running (readoptWorkers) before it reaps orphaned agent processes or
+// removes copies. Fleet reconciliation then runs inside recover, after that
+// and before anything is served: the queued wakes are read as input with
+// store.QueuedWakes, which hands out nothing because a drain is the
+// coordinator's and hands rows out to whoever makes it, every task of this
+// home is read with its terminal probed under a bound, and a terminal gone
+// with the work not landed is relaunched in the copy it stood in. reconcile.go owns the table, which is keyed on the
 // resolved state, the source that decided it and the probed liveness, and
 // the bound, which is what keeps Open from hanging with the lock held behind
 // a provider that never answers; relaunch.go owns the one relaunch, which
