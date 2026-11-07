@@ -899,6 +899,16 @@ var (
 		Consequence: "No decision was opened and nothing begins it again; its local copy is removed only once that is proven safe.",
 		Decision:    "Nothing to decide.",
 	}
+	phraseTurnInterrupted = Phrase{
+		Outcome:     "The worker's turn was cut short, and the worker carries on.",
+		Consequence: "It waits for its next message and does nothing more with the work until one arrives.",
+		Decision:    "Send it a message saying what to do instead.",
+	}
+	phraseNoTurnRunning = Phrase{
+		Outcome:     "The worker had nothing under way, so nothing was cut short.",
+		Consequence: "It carries on and waits for its next message.",
+		Decision:    "Send it a message if it needs one.",
+	}
 	// PhraseStopUnverified is the row for a stop whose end the program could
 	// not show: the worker may still be running, and no decision was opened.
 	PhraseStopUnverified = Phrase{
@@ -931,6 +941,15 @@ func StopPhrase(stopped TaskStopped) Phrase {
 		return phraseFinishedWorkerStopped
 	}
 	return phraseWorkerStopped
+}
+
+// InterruptPhrase is what a person reads about an interrupt the worker was
+// shown to survive: its turn cut short, or no turn under way to cut.
+func InterruptPhrase(interrupted TaskInterrupted) Phrase {
+	if interrupted.Interrupted {
+		return phraseTurnInterrupted
+	}
+	return phraseNoTurnRunning
 }
 
 // The stream's own rows: what a person reads when the fleet view is told
@@ -2096,7 +2115,7 @@ func TablePhrases() []Phrase {
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
-		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
+		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified, phraseTurnInterrupted, phraseNoTurnRunning)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept, phraseRepairAdded, phraseRepairNotYetAdded)
 	out = append(out, keptWorkRows()...)
 	out = append(out, housekeepingRows()...)

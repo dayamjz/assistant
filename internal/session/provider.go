@@ -37,6 +37,12 @@ var ErrNotAttachable = errors.New("session: this session's worker has no termina
 // held again. Nothing is ended or held.
 var ErrNotDurable = errors.New("session: this provider's workers do not outlive the handle holding them")
 
+// ErrNotInterruptible is the answer of Interrupt on a provider whose
+// workers have no terminal to type an interrupt into, which every session
+// Pipe holds is: no adapter in this build declares an interrupt over a
+// pipe. Nothing is read or sent.
+var ErrNotInterruptible = errors.New("session: this provider's workers have no terminal to interrupt a turn in")
+
 // Host is a Provider as the service that launches through it holds one: the
 // five operations, the worker group set the provider produces, and the two
 // reads a caller holding only a recorded reference makes, a capture and the
@@ -89,6 +95,15 @@ type Host interface {
 	// Tmux.Readopt's terms, and is ErrNotDurable on a provider whose
 	// workers cannot outlive their handle.
 	Readopt(ctx context.Context, ref string) (*Session, error)
+	// Interrupt ends the turn a held worker is running and keeps the
+	// worker, answering whether a turn was running, on
+	// agents.InterruptTerminalWorker's terms through the adapter the
+	// provider was built over: a *agents.CapabilityError for an adapter
+	// that has not declared agents.CapabilityTerminalInterrupt. It is
+	// ErrNotHeld for a session this provider does not hold, and, with the
+	// session held, ErrNotInterruptible on a provider whose workers have
+	// no terminal.
+	Interrupt(ctx context.Context, s *Session) (bool, error)
 }
 
 // Provider is PRD section 8's terminal session provider: the five operations

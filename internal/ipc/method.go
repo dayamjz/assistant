@@ -127,12 +127,13 @@ const (
 	// through the one anchored relaunch. It is the coordinator's on
 	// MethodTaskCreate's terms.
 	MethodTaskStop Method = "task.stop"
-	// MethodTaskInterrupt asks to end a worker's turn while keeping its
-	// process. No adapter declares the capability that needs, so it is
-	// always refused naming that capability, PRD section 8's "undeclared
-	// means unavailable", and section 12 defers it. It is the coordinator's
-	// on MethodTaskCreate's terms, refused for a worker before the
-	// capability is asked.
+	// MethodTaskInterrupt ends the turn a running task's worker is running
+	// and keeps its process, answering once the turn read ended and the
+	// worker alive. It is served only for a worker whose adapter declares a
+	// terminal interrupt and whose session provider has a terminal to type
+	// it into, and refused, typed, otherwise: PRD section 8's "undeclared
+	// means unavailable". It is the coordinator's on MethodTaskCreate's
+	// terms, refused for a worker before anything is asked.
 	MethodTaskInterrupt Method = "task.interrupt"
 	// MethodTaskPeek reads a running task's worker's recent output, as the
 	// session provider holding it captures it, redacted and bounded, with
@@ -338,7 +339,7 @@ var specs = []Spec{
 	{MethodTaskRelay, KindRequest, AccessRestricted, "Record a reported investigation's findings relayed, for the coordinator."},
 	{MethodTaskMessage, KindRequest, AccessRestricted, "Send a message to a running task's worker, recorded first, for the coordinator."},
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
-	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
+	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn and keep the worker, where its adapter and terminal allow."},
 	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: hand out the queued wakes on offer, closing none."},
 	{MethodWakesPeek, KindRequest, AccessRestricted, "List the queued wakes without handing out or acknowledging any."},
