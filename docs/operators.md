@@ -17,6 +17,7 @@ This is the detailed **operator reference**, not a short tutorial. Use the [READ
 | How is unfinished work protected? | [Kept work](#kept-work) |
 | Can it merge without me? | [Unattended operating posture](#unattended-operating-posture), [Keep your CI required](#keep-your-ci-required), and [Merge order and stacking](#merge-order-and-stacking) |
 | What is not guaranteed? | [What a pass does not cover](#what-a-pass-does-not-cover) |
+| How do I run the gate on this repository without it reaching this repository? | [Running the gate on this repository, in shadow](dogfood.md) |
 
 **Safety reading rule:** A run **holds** when it needs a person's decision and **parks** when a bound ends its progress. Missing evidence is not success; do not bypass a refusal by assuming the underlying state. The details below are intentionally retained for agents and operators making decisions.
 
@@ -1863,3 +1864,12 @@ The checks in [Keep your CI required](#keep-your-ci-required) are the ones on
 a repository this gate validates. The checks on this repository are a
 different set. [AGENTS.md](../AGENTS.md) names the ones branch protection
 requires on `main` and points at the workflows that own their settings.
+
+## Validating this repository with the gate
+
+[Running the gate on this repository, in shadow](dogfood.md) is the runbook for
+sending this repository's own pull request heads through the gate while the
+gate's upstream is a private mirror, so nothing it pushes, proposes or merges
+reaches this repository. It is a setup guide and the places this repository is
+its own special case, in the order they are met; this page remains the
+reference for what each command means.
