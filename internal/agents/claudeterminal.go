@@ -35,11 +35,14 @@ import (
 // its terminal's socket: a configuration directory (claudeConfigFor) given
 // to the CLI as CLAUDE_CONFIG_DIR, which was observed to move the CLI's
 // state file, .claude.json, there, and a cache directory (claudeCacheFor)
-// given as XDG_CACHE_HOME, which is not the CLI's own variable but the one
-// a program following the XDG convention reads, so what the worker runs
-// caches per worker rather than in the operator's. A program that caches
-// there therefore starts cold for every worker and loses it at the end,
-// which is what the isolation costs. The state file is written before the
+// given as XDG_CACHE_HOME on the worker process's own environment, which is
+// not the CLI's own variable but the one a program following the XDG
+// convention reads. That assignment is what a checked-in test reads back
+// from the pane; whether a tool the CLI starts inherits it was not
+// measured, and a run left that cache directory empty, so the isolation
+// bought for tools that cache this way is the bound, not an observation.
+// The directory is removed with the worker either way. The state file is
+// written before the
 // CLI starts, holding three answers the CLI would otherwise ask a person
 // for on screens before its prompt: onboarding completed, the workspace
 // trusted for spec.Dir exactly and, where it differs, for the path that

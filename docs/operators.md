@@ -1499,11 +1499,11 @@ than its pipe mode, and reaches its conversation without anyone answering
 the CLI's first-run screens: each worker gets a configuration directory of
 its own, beside its terminal's socket in this home's `terminals` directory,
 that records onboarding as done, trusts the worker's copy, and approves its
-API key when it runs on one. Each worker also gets a cache directory of its own there, which it is
-given as `XDG_CACHE_HOME`, so a program the worker runs that caches by that
-convention caches per worker instead of in your `~/.cache`, and starts cold
-for each worker as the price. Both directories are removed when the worker
-ends.
+API key when it runs on one. Each worker also gets a cache directory of its
+own there, given as `XDG_CACHE_HOME` on the worker process's environment:
+that is the bound for a program that follows the XDG convention and inherits
+that environment, not a measured claim that every tool the CLI starts does.
+Both directories are removed when the worker ends.
 
 What a run of that worker leaves in your own home was measured once, and
 `StartInTerminal`'s documentation in `internal/agents` is where that
