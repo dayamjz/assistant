@@ -326,8 +326,11 @@ const claudeConfigVariable = "CLAUDE_CONFIG_DIR"
 
 // cacheHomeVariable is the variable that points a program following the XDG
 // base directory convention at a cache directory. It is not Claude Code's
-// own: it is read by whatever the worker runs, which is why a worker is
-// given one of its own rather than the operator's.
+// own. A start sets it on the worker process's environment to the
+// directory of that worker's own; whether a tool the CLI starts inherits
+// it was not measured, which is why StartInTerminal's documentation
+// states the assignment as a bound rather than as an observation of what
+// every child reads.
 const cacheHomeVariable = "XDG_CACHE_HOME"
 
 // withEnvValue is env with name set to value, whatever env held for it
