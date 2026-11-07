@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // The interactive mode models the Claude Code CLI's interactive interface as
@@ -394,15 +395,39 @@ func escape(src <-chan byte) (string, bool) {
 // is redrawn by the goroutine reading it and the rest by the one answering,
 // so every draw holds the mutex.
 type screen struct {
-	mu     sync.Mutex
-	w      io.Writer
+	mu sync.Mutex
+	w  io.Writer
+	// cols is the terminal's width, which rowsOf counts a line's rows
+	// against, or 0 where it could not be read.
+	cols   int
 	footer string
 	typed  string
 	// shown is whether a footer is on the screen now, which is what the
-	// next draw has to clear first, and rows is how many lines the input
-	// below it took.
+	// next draw has to clear first, and rows is how many rows the input
+	// below it took. back is how many rows above the footer the next draw
+	// starts at instead, which is undraw's.
 	shown bool
 	rows  int
+	back  int
+}
+
+// rowsOf is how many rows lines take on this screen: one each, and one more
+// for every time a line runs past the last column, where the terminal wraps
+// it onto the next row. A line exactly as wide as the terminal takes one
+// row, because the wrap waits for the character after it. Runes are counted
+// as one column each, which holds for the text this mode draws; a width it
+// could not read is one row per line.
+func (s *screen) rowsOf(lines []string) int {
+	rows := 0
+	for _, line := range lines {
+		cells := utf8.RuneCountInString(line)
+		if s.cols <= 0 || cells <= s.cols {
+			rows++
+			continue
+		}
+		rows += (cells + s.cols - 1) / s.cols
+	}
+	return rows
 }
 
 // prompt is the input for what is typed, its lines apart.
@@ -426,6 +451,21 @@ func (s *screen) input(text string) error {
 	return s.linesLocked()
 }
 
+// undraw takes the rows drawn took off the screen and draws typed in the
+// input in their place, in one redraw: what the CLI did to a turn it was
+// interrupted before any of its reply, where the message's own row went
+// off the screen and the message came back in the input.
+func (s *screen) undraw(drawn, typed string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.typed = typed
+	if !s.shown {
+		return nil
+	}
+	s.back = s.rowsOf(strings.Split(drawn, "\n"))
+	return s.linesLocked()
+}
+
 // lines draws text above the footer, each line of each argument on a line
 // of its own, and redraws the footer below it when one is set.
 func (s *screen) lines(texts ...string) error {
@@ -438,8 +478,10 @@ func (s *screen) linesLocked(texts ...string) error {
 	var b strings.Builder
 	if s.shown {
 		// The cursor is on the input's last line: back to its start, up to
-		// the footer, and clear all of it before drawing over it.
-		fmt.Fprintf(&b, "\r\x1b[%dA\x1b[J", s.rows)
+		// the footer and past whatever undraw is taking away, and clear all
+		// of it before drawing over it.
+		fmt.Fprintf(&b, "\r\x1b[%dA\x1b[J", s.rows+s.back)
+		s.back = 0
 	}
 	for _, text := range texts {
 		for _, line := range strings.Split(text, "\n") {
@@ -449,7 +491,7 @@ func (s *screen) linesLocked(texts ...string) error {
 	s.shown = s.footer != ""
 	if s.shown {
 		prompt := s.prompt()
-		s.rows = len(prompt)
+		s.rows = s.rowsOf(prompt)
 		b.WriteString(s.footer + "\r\n" + strings.Join(prompt, "\r\n"))
 	}
 	_, err := io.WriteString(s.w, b.String())
@@ -485,7 +527,8 @@ func (s *screen) setFooter(footer string) {
 // turn's message is recorded Interrupted and the interface is idle again,
 // with the observed interrupted line drawn in place of a reply when the
 // turn drew its exchange's Progress, and with the message put back in the
-// input when it drew nothing; one read with no turn running is counted in
+// input, its own row taken off the screen with it, when it drew nothing;
+// one read with no turn running is counted in
 // IdleEscapes and does nothing else. A shell or slash
 // command is recorded and drawn, and nothing is run for it.
 //
@@ -531,7 +574,7 @@ func serveInteractiveWorker(control string, args []string) int {
 
 	// The CLI asks the terminal for bracketed paste, which is what makes a
 	// paste arrive between markers at all.
-	out := &screen{w: os.Stdout}
+	out := &screen{w: os.Stdout, cols: columns(int(os.Stdout.Fd()))}
 	if _, err := io.WriteString(os.Stdout, "\x1b[?2004h"); err != nil {
 		return exitNoOutput
 	}
@@ -578,7 +621,8 @@ func serveInteractiveWorker(control string, args []string) int {
 			return true, exitNoRecord
 		}
 		in.setBusy(true)
-		if err := out.lines("you: " + text); err != nil {
+		message := "you: " + text
+		if err := out.lines(message); err != nil {
 			return true, exitNoOutput
 		}
 		if err := out.draw(footerBusy); err != nil {
@@ -605,8 +649,14 @@ func serveInteractiveWorker(control string, args []string) int {
 			}
 			in.setBusy(false)
 			if progress == "" {
-				// The message's own line stays drawn above, which the CLI
-				// took away; nothing an adapter reads is above the footer.
+				// The CLI took the message out of the conversation, its own
+				// row with it, and put it back in the input, so the row goes
+				// here too: a reader of the conversation takes the last one
+				// of them for the message a reply would answer.
+				out.setFooter(footerIdle)
+				if err := out.undraw(message, text); err != nil {
+					return true, exitNoOutput
+				}
 				in.restores <- text
 				return false, 0
 			}

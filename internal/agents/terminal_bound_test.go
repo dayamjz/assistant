@@ -457,3 +457,68 @@ func TestAClaudeTerminalSendCancelledDuringItsReadingKeepsTheClientsFailure(t *t
 	}
 	requireGone(t, ids)
 }
+
+// TestAnInterruptWhoseKeyClientFailsSaysTheKeyMayHaveLanded is review's case
+// against the interrupt's contract: the client carrying the key is the one
+// thing between a pressed key and a server that may have taken it already,
+// so the refusal it answers with is the one that cannot say what the key
+// did. An interrupt of a Claude Code turn whose send-keys client never
+// answers is ended at its bound and refused with an *agents.InterruptRefused
+// of agents.InterruptKeyUnknown, carrying agents.ErrTerminalClientTimedOut
+// and agents.ErrTerminalNotReady and no caller's deadline, with the client's
+// group gone, asked by identity. A caller reads the key's state off that
+// type: before it, the three states differed only in the words of an error
+// every refusal wrapped alike, and the contract said the key was pressed
+// wherever this one is used.
+func TestAnInterruptWhoseKeyClientFailsSaysTheKeyMayHaveLanded(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	requiresIdentityRead(t)
+	never := context.WithoutCancel(t.Context())
+	w := newWedgedTmux(t)
+	term := agents.Terminal{Tmux: w.tmux, Socket: filepath.Join(standin.SocketDir(t), "s")}
+	const long = "a turn whose interrupt is wedged"
+	agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+		{Contains: long, Reply: "the wedged turn's reply", Turn: time.Hour, Progress: "the reply begins"},
+	}}}, agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+	worker, err := agents.OpenTerminalWorker(never, agent.Runner(), term, workerSpec(t))
+	if err != nil {
+		t.Fatalf("starting a Claude Code terminal worker: %v", err)
+	}
+	t.Cleanup(worker.Close)
+	awaitInteractive(t, agent, answered(1))
+	if err := worker.Send(never, long); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	// The key is only pressed on a turn that has drawn part of its reply,
+	// so the wedge is armed once the pane draws that part: the interrupt
+	// then reads the screen with the real client and types with the wedged
+	// one.
+	for deadline := time.Now().Add(30 * time.Second); !strings.Contains(worker.Capture().Text, "the reply begins"); time.Sleep(20 * time.Millisecond) {
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the long turn never drew part of its reply:\n%s", worker.Capture().Text)
+		}
+	}
+	w.wedge(t, "send-keys")
+	done := make(chan error, 1)
+	returned := make(chan struct{})
+	go func() {
+		_, err := agents.InterruptTerminalWorker(never, agent.Runner(), worker)
+		done <- err
+		close(returned)
+	}()
+	ids := w.wedgedClient(t, returned)
+	within := agents.TmuxTypeBound + 3*agents.TmuxClientGrace + 2*time.Second
+	select {
+	case err = <-done:
+	case <-time.After(within):
+		t.Fatalf("an interrupt whose key client never answers was still blocked %s after it started, past the typing's bound of %s", within, agents.TmuxTypeBound)
+	}
+	var refused *agents.InterruptRefused
+	if !errors.As(err, &refused) || refused.Key != agents.InterruptKeyUnknown {
+		t.Fatalf("an interrupt whose key client never answers answered %v, want an *agents.InterruptRefused of %v", err, agents.InterruptKeyUnknown)
+	}
+	if !errors.Is(err, agents.ErrTerminalClientTimedOut) || !errors.Is(err, agents.ErrTerminalNotReady) || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the refusal was %v, want agents.ErrTerminalClientTimedOut and agents.ErrTerminalNotReady and no caller's deadline", err)
+	}
+	requireGone(t, ids)
+}
