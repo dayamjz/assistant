@@ -28,12 +28,13 @@ import (
 // outright takes the pane's process with it, so the terminal reads Dead,
 // through the handle while the service that launched it is up and by the
 // start-time read after a restart, and the restart relaunches in place. A
-// service that dies and leaves its worker running is the other half: the
-// next service holds no handle, so the terminal reads Unobserved, nothing
-// relaunches beside a worker that may still be writing, and the supervisor
-// loop surfaces it as terminal gone with the unobservable case at once,
-// then as dead once the worker is gone, and only a restart after that
-// relaunches it. "Unobserved forever" is therefore never silent: it is a
+// service that dies and leaves its worker running is the other half: a
+// worker the next service verifies is held again (readopt_unix_test.go),
+// and one it cannot verify leaves it holding no handle, so the terminal
+// reads Unobserved, nothing relaunches beside a worker that may still be
+// writing, and the supervisor loop surfaces it as terminal gone with the
+// unobservable case at once, then as dead once the worker is gone, and only
+// a restart after that relaunches it. "Unobserved forever" is therefore never silent: it is a
 // queued wake for a person on every pass window, and the relaunch waits on
 // proof of absence.
 
@@ -208,20 +209,21 @@ func TestUnderTmuxAServerKilledOutrightReadsDeadAndARestartRelaunches(t *testing
 	}
 }
 
-// The service dies and its worker does not: the next service holds no
-// handle to the surviving tmux session, so its probe answers Unobserved by
-// identity, reconciliation leaves the task alone rather than starting a
-// second worker beside one it cannot see, and the loop surfaces it at once
-// as terminal gone with the unobservable case, a queued wake for a person
-// that no later pass re-reads as absorbed. The survivor is produced by
+// The service dies and its worker does not, and the worker cannot be verified
+// as the one its attempt recorded: its server's socket is no longer at the
+// path the reference names, so the next service cannot hold it again
+// (readopt_unix_test.go has the survivor that verifies). Its probe answers
+// Unobserved by identity, reconciliation leaves the task alone rather than
+// starting a second worker beside one it cannot see, and the loop surfaces it
+// at once as terminal gone with the unobservable case, a queued wake for a
+// person that no later pass re-reads as absorbed. The survivor is produced by
 // forgetting the first service's sessions before it closes, which is what
-// SIGKILL of the service leaves, and it stays Unobserved for as long as it
-// stands: there is no re-adoption, because the new service cannot capture,
-// type into or attach to a terminal it did not create. Once a person ends
-// the survivor's server the pane's process goes with it, the same service
-// reads the reference Dead and surfaces the dead case, and nothing is
-// relaunched until the next start, which then does.
-func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched(t *testing.T) {
+// SIGKILL of the service leaves, and moving its socket aside, and it stays
+// Unobserved for as long as it stands. Once a person ends the survivor's
+// server the pane's process goes with it, the same service reads the
+// reference Dead and surfaces the dead case, and nothing is relaunched until
+// the next start, which then does.
+func TestUnderTmuxAnUnverifiedSurvivorReadsUnobservedAndIsSurfacedNotRelaunched(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P9)
 	const unestablished = "a restart under tmux relaunching once a survivor has gone"
@@ -240,6 +242,11 @@ func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched
 	})
 	homeIsFree(t, h)
 	t.Cleanup(func() { _ = exec.Command(standin.Tmux(t), "-S", socket, "kill-server").Run() })
+	moved := socket + ".moved"
+	if err := os.Rename(socket, moved); err != nil {
+		t.Fatalf("moving the survivor's socket aside: %v", err)
+	}
+	t.Cleanup(func() { _ = exec.Command(standin.Tmux(t), "-S", moved, "kill-server").Run() })
 	if presence, err := (agents.Identity{PID: first.PID, Start: first.Start}).Presence(); err != nil || presence != agents.PresencePresent {
 		t.Fatalf("the worker reads %q (%v) after its service closed, want it still running, or there is no survivor", presence, err)
 	}
@@ -268,7 +275,7 @@ func TestUnderTmuxASurvivorOfTheServiceReadsUnobservedAndIsSurfacedNotRelaunched
 
 		// A person ends the survivor's server; the pane's process goes with
 		// its terminal, and the same service reads the change.
-		if out, err := exec.Command(standin.Tmux(t), "-S", socket, "kill-server").CombinedOutput(); err != nil {
+		if out, err := exec.Command(standin.Tmux(t), "-S", moved, "kill-server").CombinedOutput(); err != nil {
 			t.Fatalf("ending the survivor's server: %v: %s", err, out)
 		}
 		waitState(t, running.client, id, "read its terminal Dead", func(r taskstate.Resolution) bool {

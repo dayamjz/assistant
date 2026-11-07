@@ -423,8 +423,10 @@ type Service struct {
 	// through the driver's provider alone. It is this service's memory,
 	// like the slot above: the attempt's record carries the session's
 	// reference and nothing durable carries the handle, so a service that
-	// restarts holds none of these and relaunches. Close ends every
-	// session here, and launch.go owns the map.
+	// restarts holds none of these until recovery holds again the tmux
+	// workers that verify (readoptWorkers), and relaunches the dead ones.
+	// Close ends every session here, after a restart has let go of the ones
+	// that can outlive it, and launch.go owns the map.
 	launched map[string]launchedWorker
 	// delegated holds, per domain, the session host and session
 	// subordinates.go started for the domain's subordinate coordinator and
@@ -593,6 +595,9 @@ type Service struct {
 	// use it to hold a launch at the point the record names a session still
 	// pending.
 	afterSessionRecorded func(id, ref string)
+	// atCloseStep runs as Close enters each step closingAt names. It is nil
+	// in production; this package's tests hold Close at a step with it.
+	atCloseStep func(step string)
 	// awaitingSessionRecord runs in sessionOf when the session it found is
 	// still pending, just before it waits for the record's write, with the
 	// task. It is nil in production and set only by this package's tests,
@@ -667,6 +672,13 @@ type Service struct {
 	stopBy struct {
 		once sync.Once
 		at   time.Time
+	}
+	// restartRelease orders releaseForRestart against a forced stop's
+	// claimForce: let is every process a worker let go names.
+	restartRelease struct {
+		mu     sync.Mutex
+		forced bool
+		let    []agents.Identity
 	}
 	work sync.WaitGroup
 	// sup is the supervisor loop's state: its beacon writer, its watchdog's
@@ -1112,20 +1124,25 @@ func (s *Service) Close() error {
 		if s.listener != nil {
 			errs = append(errs, s.listener.Close())
 		}
+		// A restart lets its workers go once no request can be served.
+		s.releaseForRestart()
 		s.cancelAdvancing()
 		s.stopWork()
 		s.closingAt("waiting for the background work it registered: runs it was advancing or carrying on, dispatches, launches, sweeps and settlements")
 		s.work.Wait()
 		s.closingAt("stopping the supervisor loop")
 		errs = append(errs, s.stopSupervision())
-		// The workers this service launched are ended here, after the work
+		// The workers this service holds are ended here, after the work
 		// that could record against them and before the store they were
 		// recorded in closes. What that ends is exactly the sessions this
-		// service's provider created and still holds, on the terms
-		// session.Provider.Close states; a worker an earlier service of this
-		// home launched is no session of this one and goes on, which
-		// launch.go states.
+		// service's providers hold, on the terms session.Provider.Close
+		// states, a worker held again at recovery among them; a restart has
+		// let go of every one that can outlive it unless the stop was forced
+		// first, and a worker an earlier service launched that was not held
+		// again is no session of this one and goes on, which launch.go states.
 		s.closingAt("ending the workers it launched")
+		// Again, for a worker a launch under way recorded since the first.
+		s.releaseForRestart()
 		errs = append(errs, s.closeSessions()...)
 		s.closingAt("ending the subordinate coordinators it launched")
 		errs = append(errs, s.closeSubordinates()...)
