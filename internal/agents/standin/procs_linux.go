@@ -3,6 +3,7 @@
 package standin
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -32,6 +33,17 @@ func readTable() ([]int, map[int]tableRecord, error) {
 	pids, err := processIDs()
 	return pids, nil, err
 }
+
+// errNoRecords is readRecord's answer on this platform, which reads no
+// record of a process (readTable).
+var errNoRecords = errors.New("this platform's process table holds no record of a process")
+
+// readRecord reads no record on this platform (readTable).
+func readRecord(int) (tableRecord, bool, error) { return tableRecord{}, false, errNoRecords }
+
+// recordedName predicts no command name on this platform, where no record is
+// read (readTable).
+func recordedName(string) (string, bool) { return "", false }
 
 // commandLine reads pid's executable, the link /proc holds for it, and its
 // arguments, argv[0] first, from its NUL-separated cmdline. Nothing is split
