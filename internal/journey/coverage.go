@@ -380,7 +380,12 @@ func Coverage() []Established {
 				"decision, the usage view and the log view, and keep exact identifiers and stage " +
 				"names as P13 lets them; " +
 				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
-				"every line beside them, against counterfeits it must reject. None is enumerated as " +
+				"every line beside them, against counterfeits it must reject. The one it enumerates " +
+				"as a value, which is " + strings.Join(p13Value, ", ") + ", writes section 9's db path " +
+				"alone, no pointer before it and no label beside it, because a caller composes that " +
+				"answer into another command line; it keeps the path P13's evidence exception lets " +
+				"it, and internal/cli's own test for the verb cites P13 for writing the value and " +
+				"nothing else. None is enumerated as " +
 				"unsettled: the plan, the last that was, speaks internal/custody's classes, refusals " +
 				"and steps through rows of the phrase table now that the custody module exists. " +
 				"The refusal and usage text the command surface writes on standard error, and the " +
@@ -418,14 +423,15 @@ func Coverage() []Established {
 	}
 }
 
-// p13Covered, p13Evidence and p13Remaining name internal/cli's human
-// renderers by the names its Renderings enumeration gives them, one list per
-// voice: the ones that speak through internal/machine's phrase table, the
-// evidence documents, and the ones that still print this build's own words
-// for want of settled wording. The P13 row's note is built from them, and
-// P13Renderers hands them to the test that holds all three to that
-// enumeration, so a renderer added or rerouted there fails here rather than
-// leaving the note to drift.
+// p13Covered, p13Evidence, p13Value and p13Remaining name internal/cli's
+// human renderers by the names its Renderings enumeration gives them, one
+// list per voice: the ones that speak through internal/machine's phrase
+// table, the evidence documents, the one whose whole answer is a value a
+// caller substitutes into another command line, and the ones that still
+// print this build's own words for want of settled wording. The P13 row's
+// note is built from them, and P13Renderers hands them to the test that
+// holds all four to that enumeration, so a renderer added or rerouted there
+// fails here rather than leaving the note to drift.
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install", "host wake",
 		"decision", "doctor", "lifecycle", "managed removal", "init", "plan", "eject", "health", "admission", "notification",
@@ -433,15 +439,16 @@ var (
 		"task promotion", "wakes", "queued wakes", "wakes acknowledged", "coordinator catch up", "supervision", "domain delegated", "delegation ended",
 		"worker event", "fallback"}
 	p13Evidence  = []string{"details", "findings", "usage", "log"}
+	p13Value     = []string{"database"}
 	p13Remaining []string
 )
 
 // P13Renderers returns the renderers the P13 row says the phrase table
-// covers, the ones it says are evidence documents, and the ones it says
-// remain, as copies, for the test that checks all three against
-// internal/cli's enumeration.
-func P13Renderers() (covered, evidence, remaining []string) {
-	return slices.Clone(p13Covered), slices.Clone(p13Evidence), slices.Clone(p13Remaining)
+// covers, the ones it says are evidence documents, the one it says writes a
+// value alone, and the ones it says remain, as copies, for the test that
+// checks all four against internal/cli's enumeration.
+func P13Renderers() (covered, evidence, value, remaining []string) {
+	return slices.Clone(p13Covered), slices.Clone(p13Evidence), slices.Clone(p13Value), slices.Clone(p13Remaining)
 }
 
 // PackageDir is this package's directory relative to the module root. Citations

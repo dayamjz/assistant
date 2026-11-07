@@ -241,12 +241,12 @@ func TestTheFleetIsSpokenInPhrasesThroughTheBinary(t *testing.T) {
 }
 
 // The P13 row names the renderers the phrase table covers, the evidence
-// documents and the ones that remain, and all three lists are internal/cli's
-// enumeration and not a list kept here: a renderer rerouted, reclassified,
-// added or removed there fails this rather than leaving the note to say what
-// used to be true.
+// documents, the one that writes a value alone and the ones that remain, and
+// all four lists are internal/cli's enumeration and not a list kept here: a
+// renderer rerouted, reclassified, added or removed there fails this rather
+// than leaving the note to say what used to be true.
 func TestTheP13RowNamesTheRenderersAsTheSurfaceEnumeratesThem(t *testing.T) {
-	covered, evidence, remaining := journey.P13Renderers()
+	covered, evidence, value, remaining := journey.P13Renderers()
 	want := map[cli.Voice][]string{}
 	for _, r := range cli.Renderings() {
 		want[r.Voice] = append(want[r.Voice], r.Name)
@@ -254,7 +254,7 @@ func TestTheP13RowNamesTheRenderersAsTheSurfaceEnumeratesThem(t *testing.T) {
 	for _, c := range []struct {
 		voice cli.Voice
 		got   []string
-	}{{cli.VoicePhrased, covered}, {cli.VoiceEvidence, evidence}, {cli.VoiceUnsettled, remaining}} {
+	}{{cli.VoicePhrased, covered}, {cli.VoiceEvidence, evidence}, {cli.VoiceValue, value}, {cli.VoiceUnsettled, remaining}} {
 		if !slices.Equal(c.got, want[c.voice]) {
 			t.Errorf("the row lists %v as %s; internal/cli enumerates %v", c.got, c.voice, want[c.voice])
 		}
@@ -269,7 +269,7 @@ func TestTheP13RowNamesTheRenderersAsTheSurfaceEnumeratesThem(t *testing.T) {
 			note = row.Note
 		}
 	}
-	for _, name := range slices.Concat(covered, evidence, remaining) {
+	for _, name := range slices.Concat(covered, evidence, value, remaining) {
 		if !strings.Contains(note, name) {
 			t.Errorf("the P13 note does not name the renderer %q", name)
 		}
