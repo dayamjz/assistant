@@ -63,6 +63,7 @@ assistant tasks                 # every task and its resolved state
 assistant --json tasks ID       # one task in full, with what decided its state
 assistant watch --once          # what waits on you, what landed, what is under way
 assistant db path               # the home's database file, to read the records yourself
+assistant --json dump           # every record as one JSON document, to copy or diff
 ```
 
 - `delivery` needs `--branch`; `investigation` names no branch. Give

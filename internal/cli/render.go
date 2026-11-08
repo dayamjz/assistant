@@ -85,18 +85,14 @@ const (
 	// forbidden set, or one beside text that is the person's own or an
 	// agent's, escaped.
 	VoicePhrased
-	// VoiceEvidence is a renderer that writes one of the four detailed
+	// VoiceEvidence is a renderer that writes one of the five detailed
 	// evidence documents P13 and PRD section 9 name a person as pointed at
-	// by a phrase - the detail view, the usage view, the log view, and the
-	// relay of a finding that needs a decision - which P13 lets keep exact
-	// identifiers and stage names. P13's list holds a fifth document,
-	// section 9's db path, and that one is written with no phrase before it,
-	// which is VoiceValue rather than this. A VoiceEvidence row carries the
-	// phrase-table row that points a person at it, and writeEvidence, which
-	// the run renderer writes the first and last through, and writePointed,
-	// which readOut writes the usage view and the log view through, write
-	// that row first, because the message that points at an evidence
-	// document stays phrased. VoiceValue carries no such pointer.
+	// by a phrase - the detail view, the usage view, the log view, the
+	// relay of a finding that needs a decision, and the dump - which P13
+	// lets keep exact identifiers and stage names. P13's list holds a sixth
+	// document, section 9's db path, written with no phrase before it
+	// (VoiceValue). A VoiceEvidence row carries the phrase that points at
+	// it; writeEvidence and writePointed write that row first.
 	VoiceEvidence
 	// VoiceValue is a renderer whose whole answer is one value a caller
 	// composes into another command line, and which writes that value alone:
@@ -342,6 +338,7 @@ var renderings = []rendering{
 	}},
 	usageRendering,
 	logRendering,
+	dumpRendering,
 	databaseRendering,
 }
 
@@ -369,12 +366,16 @@ var (
 		render: func(w io.Writer, v any) { readOutUsage(w, v.(machine.Usage)) },
 		points: machine.PhraseUsageFollows}
 	// logRendering is the log view, runs RUN --log=STAGE's answer, the
-	// fourth evidence document P13 names: it is an answer of its own, so it
-	// names its type and
-	// readOut writes it through writePointed, on the usage row's terms.
+	// fourth pointed evidence document P13 names: it is an answer of its
+	// own, so it names its type and readOut writes it through writePointed,
+	// on the usage row's terms.
 	logRendering = rendering{name: "log", voice: VoiceEvidence, of: typeOf[machine.StageLog](),
 		render: func(w io.Writer, v any) { readOutStageLog(w, v.(machine.StageLog)) },
 		points: machine.PhraseStageLogFollows}
+	// dumpRendering is section 9's dump, behind its pointer phrase.
+	dumpRendering = rendering{name: "dump", voice: VoiceEvidence, of: typeOf[machine.Dump](),
+		render: func(w io.Writer, v any) { readOutDump(w, v.(machine.Dump)) },
+		points: machine.PhraseDumpFollows}
 	// databaseRendering is the one value row, PRD section 9's db path: the
 	// path and nothing else, so a caller substituting the answer into
 	// another command line substitutes a path. It carries no pointer, which

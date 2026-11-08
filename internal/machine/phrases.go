@@ -1500,6 +1500,17 @@ var (
 		Consequence: "Only its end is shown, with a line saying where the whole of it is, and credentials were removed before it was kept.",
 		Decision:    "Nothing to decide from it alone.",
 	}
+	// PhraseDumpFollows points at section 9's dump, an evidence document of
+	// the home's records as of one read: every task snapshot the resolver
+	// reads, the task wakes and the kept work entries. It says the dump is a
+	// copy and not the source of truth, and that credentials were removed on
+	// the way out of free-text fields, because a reader who took the file for
+	// live state or for a full scrub would read it wrong.
+	PhraseDumpFollows = Phrase{
+		Outcome:     "A copy of this home's records follows, in the exact terms each was kept in.",
+		Consequence: "It is a snapshot taken after the fact for reading, not the live store, and credentials were removed from text fields on the way out.",
+		Decision:    "Nothing to decide from it alone.",
+	}
 	// PhraseInputsNotApplied is the row for a request whose run-starting
 	// inputs went to no run, because the branch already had one and the
 	// request attached to it. Which inputs they were is the structured
@@ -2147,7 +2158,7 @@ func TablePhrases() []Phrase {
 			out = append(out, CeilingHoldPhrase(standing))
 		}
 	}
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseDumpFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
 		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)

@@ -304,9 +304,9 @@ A refusal is a result that means stop and investigate. It is not an obstacle to 
 
 Everything Assistant says to you names the project outcome, the consequence, and the next decision. Internal terms do not appear: no task identifiers, no isolated-copy paths, no watcher or wake vocabulary, no stage names, no state labels, no compressed safety jargon. Worker reports and tool output are evidence to read, never text to relay.
 
-Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, the log view of one stage of a run, the relay of a finding that needs your decision, and `db path`. The message that points you at one of the first four still translates, and so does every plain status line.
+Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, the log view of one stage of a run, the relay of a finding that needs your decision, `dump`, and `db path`. The message that points you at one of the first five still translates, and so does every plain status line.
 
-`db path` is the one of those five printed with no message before it, which says nothing about an answer that is not an evidence document: the build `--version` reports is a bare value too. Its answer is the database file of the home and nothing else, because you compose that answer into another command (`sqlite3 -readonly "$(assistant db path)"`) and a line written before the path would become part of what you substituted. The sentence pointing you at it is section 9's and the README's instead of standard output's.
+`db path` is the one of those six printed with no message before it, which says nothing about an answer that is not an evidence document: the build `--version` reports is a bare value too. Its answer is the database file of the home and nothing else, because you compose that answer into another command (`sqlite3 -readonly "$(assistant db path)"`) and a line written before the path would become part of what you substituted. The sentence pointing you at it is section 9's and the README's instead of standard output's.
 
 **Prevents:** a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.
 
@@ -1735,11 +1735,11 @@ it states the evidence rather than deferring.
 
 This is a testable contract, not a style preference. The translation table below should be
 enforced by a test that asserts both the required wording and the absence of the internal terms.
-It governs everything a person reads except the five detailed evidence documents section 9
-names: the detail view, the usage view, the log view of one stage of a run, and the relay of a
-finding that needs your decision, each pointed at by a phrased message, and `db path`, which is
-printed with no message before it. Exact identifiers and stage names stay in those documents.
-The plain status lines are not evidence documents and stay phrased.
+It governs everything a person reads except the six detailed evidence documents section 9
+names: the detail view, the usage view, the log view of one stage of a run, the relay of a
+finding that needs your decision, and `dump`, each pointed at by a phrased message, and
+`db path`, which is printed with no message before it. Exact identifiers and stage names stay
+in those documents. The plain status lines are not evidence documents and stay phrased.
 
 | Internal term | What you hear instead |
 |---|---|
@@ -2905,6 +2905,7 @@ share the same decisions, the same options, and the same authority. Only the ren
 | `assistant rerun` | Start a fresh run from the last known head, inheriting the recorded intent. The last known head is the commit the branch's last run pushed, or the commit it was submitted with when it pushed nothing. When the checkout stands on another commit, rerun refuses and starts nothing: behind what the run pushed, it names `assistant sync`; anywhere else, it names a push to the gate or a start with an intent. Given `--intent`, the fresh run takes that intent in place of the recorded one and records it as supplied, which is acceptance criteria, the standing an intent given to a start has when nothing is said about it. That is all a replaced intent changes: the head a rerun validates and its refusal are the same with it or without it. An empty intent is refused as incorrect usage and starts nothing. |
 | `assistant sync` | Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation. |
 | `assistant tasks` | List fleet work with its resolved current state. |
+| `assistant dump` | Every record the resolver reads (tasks, attempts, wakes, holds, kept work, runs), as one JSON document, redacted on the way out. Given a task identifier, only that task's records. Read-only: it opens the database for reading, asks the service nothing and writes nothing, so it answers with the service up or down. It is a window onto the store for a person to copy, diff or feed to another tool, not a substitute for the database; the database stays the source of truth. It is a detailed evidence document in P13's sense; the line pointing at it is phrased. |
 | `assistant watch` | Fleet view: everything in flight, everything waiting on you. |
 | `assistant doctor` | Check every dependency, and decisively report whether a run can start at all. Once `init` has run, also print the one next step of a first run, read from where the checkout's change stands, from making a branch through the push that sends it; that read writes nothing and decides nothing about whether a run can start. |
 | `assistant service …` | Start, stop, restart, status. |
@@ -2992,16 +2993,31 @@ carries the same read as one open method. No verb is added.
 **Reading the records without this program.** The durable records of a home live in its embedded
 database, so a person debugging a stuck home has nothing to `cat` or `grep` among those records and
 reads them through this program's own views; stage and service logs, configuration, and other
-files under the home remain ordinary files beside them. `assistant db path` is the way out for the
-records. It prints the database file of the home it acted on, so a reader of the person's own can
-be pointed at the records. It names where the file is rather than reading it: it creates no home,
-opens no database and asks the service nothing, so it answers the same with the service up or down,
-which is when a person debugging a stuck home asks. Opening the file read-only is the reader's to
-do, and so is managing a file the service may be writing; this answers where the file is and
-promises nothing about the read. The answer is a detailed evidence document in P13's sense and the
-one printed with nothing before it, because a caller composes it into another command line, which
-P13 says. The printed line is not the file name byte for byte when the path holds a control
-character: that character is escaped through the value renderer's `printable` path. The
+files under the home remain ordinary files beside them. Two verbs are the way out for the records,
+and neither replaces the database.
+
+`assistant dump` writes every record the resolver reads as one JSON document, redacted on the way
+out through the credential remover: tasks with their attempts, runs, holds and the rest of each
+task snapshot, the task wakes, and kept work. Given a task identifier it narrows to that task.
+It opens the database read-only, creates nothing and asks the service nothing, so it answers with
+the service up or down. The dump of a home round-trips through the resolver to the same resolved
+state `assistant tasks` reports from those records. It is a snapshot taken after the fact, for a
+person to read, diff, attach to an issue, or feed to another tool. It has none of what the
+database buys: atomicity across a wake and its markers, one consistent read the resolver computes
+from (P8), graph checkpoints, writes anchored to a commit the run observed (P6), and concurrent
+writers that do not step on each other (P15). Those stay acceptance criteria of the store, so the
+database remains the source of truth and the dump stays cheap because it is read-only. The answer
+is a detailed evidence document in P13's sense; the line pointing at it is phrased.
+
+`assistant db path` prints the database file of the home it acted on, so a reader of the person's
+own can be pointed at the records. It names where the file is rather than reading it: it creates
+no home, opens no database and asks the service nothing, so it answers the same with the service
+up or down, which is when a person debugging a stuck home asks. Opening the file read-only is the
+reader's to do, and so is managing a file the service may be writing; this answers where the file
+is and promises nothing about the read. The answer is a detailed evidence document in P13's sense
+and the one printed with nothing before it, because a caller composes it into another command
+line, which P13 says. The printed line is not the file name byte for byte when the path holds a
+control character: that character is escaped through the value renderer's `printable` path. The
 structured answer keeps a control character, so a caller that reads `--json` recovers the path. A
 byte that is not valid UTF-8 becomes the replacement character in the structured answer, which is
 Go's JSON encoding and not this verb's choice; the printed line keeps that byte when the path
