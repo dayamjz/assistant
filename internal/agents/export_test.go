@@ -59,6 +59,14 @@ const TerminalWidth = terminalWidth
 // observations were made on.
 const ClaudeObservedVersion = claudeObservedVersion
 
+// ClaudeConfigFor and ClaudeCacheFor expose the two per-worker directories
+// the Claude Code terminal adapter derives from a terminal, so a test reads
+// the adapter's own answer rather than restating how it is composed.
+var (
+	ClaudeConfigFor = claudeConfigFor
+	ClaudeCacheFor  = claudeCacheFor
+)
+
 // AvailabilityMarker is one row of availabilityMarkers, exported so a test
 // can hold every row to the line it recognizes and to a near miss.
 type AvailabilityMarker struct {
