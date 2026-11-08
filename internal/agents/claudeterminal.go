@@ -40,13 +40,13 @@ import (
 // given as XDG_CACHE_HOME on the worker process's own environment, which is
 // not the CLI's own variable but the one a program following the XDG
 // convention reads; and a home directory (claudeHomeFor) given as HOME on
-// that same environment, so everything else the worker runs reads a home
-// of this worker's own rather than the service's. The XDG and HOME
-// assignments are what a checked-in test reads back from the pane; whether
-// a tool the CLI starts inherits them was not measured, and a run left the
-// cache directory empty, so the isolation bought for tools that cache this
-// way is the bound, not an observation. All three are removed with the
-// worker either way. The state file is written before the
+// that same environment. The XDG and HOME assignments are what a
+// checked-in test reads back from the pane; whether a tool the CLI starts
+// inherits them was not measured, and a run left the cache directory
+// empty, so the isolation bought for tools that follow those conventions
+// and inherit this environment is the bound, not an observation that
+// everything the worker runs is sealed to these directories. All three are
+// removed with the worker either way. The state file is written before the
 // CLI starts, holding three answers the CLI would otherwise ask a person
 // for on screens before its prompt: onboarding completed, the workspace
 // trusted for spec.Dir exactly and, where it differs, for the path that
@@ -57,13 +57,15 @@ import (
 //
 // The worker's HOME holds none of the operator's git configuration, so the
 // start carries the operator's git name and email onto the worker
-// explicitly as GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and
-// GIT_COMMITTER_EMAIL: a complete pair already on the worker's
-// environment, or otherwise user.name and user.email from the process's
-// git configuration (vcs.UserIdentity). A half-set env pair, or no pair
-// at all, is a refusal wrapping ErrNoGitIdentity before any directory is
-// made, so a host-derived identity never reaches a commit and a commit
-// never fails later for want of one.
+// process's environment explicitly as GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL,
+// GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL: a complete pair already on
+// that environment, or otherwise user.name and user.email from the
+// process's git configuration (vcs.UserIdentity). A half-set env pair, or
+// no pair at all, is a refusal wrapping ErrNoGitIdentity before any
+// directory is made, so a host-derived identity never reaches a started
+// worker. The four variables are what a checked-in test reads back from
+// the worker process; whether a tool the CLI starts (git among them)
+// inherits them was not measured.
 //
 // The approval is the last 20 characters of the key, which is what the CLI
 // was observed to keep for one: an approval holding them skipped the key
@@ -281,8 +283,9 @@ func claudeCacheFor(t Terminal) string { return t.Socket + ".cache" }
 // name theirs, so a start and an adoption of the same terminal name the
 // same directory. It is a third directory beside those two rather than
 // one of them: the configuration directory is the CLI's own state, the
-// cache directory is the XDG bound for tools, and HOME is what everything
-// else the worker runs (git among them) reads as the operator's home.
+// cache directory is the XDG bound for tools, and HOME is the bound given
+// as HOME on the worker process's environment for everything else that
+// reads that variable (git among them).
 func claudeHomeFor(t Terminal) string { return t.Socket + ".home" }
 
 // ErrNoGitIdentity is the refusal to start a Claude Code terminal worker

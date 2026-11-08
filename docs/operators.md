@@ -1552,10 +1552,12 @@ worker process's environment: the same kind of bound as `XDG_CACHE_HOME`
 above, not a measured claim that every tool the CLI starts inherits it or
 that nothing can reach your home another way. All three directories are
 removed when the worker ends.
-The start carries your git `user.name` and `user.email` into that `HOME`
-explicitly (as the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables), so a
-commit the worker makes keeps your identity; without a configured identity
-the start is refused rather than falling back to a host-derived one.
+The start carries your git `user.name` and `user.email` onto the worker
+process's environment explicitly (as the `GIT_AUTHOR_*` and
+`GIT_COMMITTER_*` variables): the same kind of bound as `HOME` above, not
+a measured claim that every tool the CLI starts inherits them. Without a
+complete identity the start is refused rather than falling back to a
+host-derived one.
 
 What a run of that worker leaves was measured once, and
 `StartInTerminal`'s documentation in `internal/agents` is where that

@@ -62,12 +62,13 @@ func TestAClaudeTerminalWorkerRunsUnderAHomeOfItsOwn(t *testing.T) {
 	}
 }
 
-// A commit a Claude Code terminal worker makes carries the operator's git
-// name and email, set on the worker explicitly, even though its HOME is a
-// fresh directory that holds none of the operator's git configuration. The
-// operator identity is given here through the environment git reads, which
-// is how a start that found it in the operator's configuration carries it;
-// the HOME the runner was given is empty of a gitconfig so a silent
+// The four GIT_* identity variables the adapter sets on a Claude Code
+// terminal worker reach a git that inherits that worker process's
+// environment, even though the worker's HOME holds none of the operator's
+// git configuration. The stand-in's Run path passes its own environment to
+// the shell (standin/run.go), so this measures the variables on the worker
+// process and a git that inherits them—not whether the real CLI's Bash tool
+// does. The HOME the runner was given is empty of a gitconfig so a silent
 // host-derived identity would be the only other answer.
 func TestAClaudeTerminalWorkerCommitsAsTheOperator(t *testing.T) {
 	const (
@@ -129,14 +130,37 @@ func TestAClaudeTerminalWorkerCommitsAsTheOperator(t *testing.T) {
 // A start whose environment and the process's git configuration name no
 // operator identity is refused before any directory is made, with an error
 // wrapping ErrNoGitIdentity, so a host-derived identity never reaches a
-// commit and a commit never fails later for want of one.
+// started worker.
 func TestAClaudeTerminalStartRefusedWithoutAGitIdentity(t *testing.T) {
+	assertClaudeTerminalStartRefusedForIdentity(t, nil, "")
+}
+
+// A start whose environment carries only half of a git identity pair is
+// refused with ErrNoGitIdentity even when the process git configuration
+// holds the missing half: a silent merge with UserIdentity would disagree
+// with what the variables looked like and is the regression the complete-
+// pair rule exists to catch.
+func TestAClaudeTerminalStartRefusedForAHalfSetGitIdentity(t *testing.T) {
+	t.Run("name only", func(t *testing.T) {
+		assertClaudeTerminalStartRefusedForIdentity(t, []string{
+			"GIT_AUTHOR_NAME=half-set-under-test",
+		}, "[user]\n\tname = config-under-test\n\temail = config-under-test@example.invalid\n")
+	})
+	t.Run("email only", func(t *testing.T) {
+		assertClaudeTerminalStartRefusedForIdentity(t, []string{
+			"GIT_AUTHOR_EMAIL=half-set-under-test@example.invalid",
+		}, "[user]\n\tname = config-under-test\n\temail = config-under-test@example.invalid\n")
+	})
+}
+
+func assertClaudeTerminalStartRefusedForIdentity(t *testing.T, half []string, gitconfig string) {
+	t.Helper()
 	term := terminalFor(t)
-	empty := filepath.Join(t.TempDir(), "empty-gitconfig")
-	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+	cfgPath := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(cfgPath, []byte(gitconfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("GIT_CONFIG_GLOBAL", empty)
+	t.Setenv("GIT_CONFIG_GLOBAL", cfgPath)
 	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	for _, name := range []string{
 		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
@@ -144,17 +168,18 @@ func TestAClaudeTerminalStartRefusedWithoutAGitIdentity(t *testing.T) {
 		t.Setenv(name, "")
 		_ = os.Unsetenv(name)
 	}
+	env := append([]string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_GLOBAL=" + cfgPath,
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	}, half...)
 	agent := standin.New(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond),
-		agents.WithBaseEnvironment(withStandinKey([]string{
-			"PATH=" + os.Getenv("PATH"),
-			"HOME=" + t.TempDir(),
-			"GIT_CONFIG_GLOBAL=" + empty,
-			"GIT_CONFIG_SYSTEM=/dev/null",
-		})))
+		agents.WithBaseEnvironment(withStandinKey(env)))
 
 	_, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
 	if !errors.Is(err, agents.ErrNoGitIdentity) {
-		t.Fatalf("a start without a git identity answered %v, want ErrNoGitIdentity", err)
+		t.Fatalf("a start without a complete git identity answered %v, want ErrNoGitIdentity", err)
 	}
 	for _, dir := range []string{
 		agents.ClaudeHomeFor(term), agents.ClaudeCacheFor(term), agents.ClaudeConfigFor(term),
