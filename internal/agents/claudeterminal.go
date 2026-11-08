@@ -22,27 +22,35 @@ import (
 //
 // Everything below was observed of Claude Code in a tmux pane, against a
 // local server standing in for the model (#254), on the versions
-// claudeObservedVersion names, and nothing here
-// re-checks it at run time except the one wait the screen reader states.
+// claudeObservedVersion names, except the section on the operator's home,
+// which names the version and the date its own measurement was made on.
+// Nothing here re-checks any of it at run time except the one wait the
+// screen reader states.
 // Where a later CLI draws or reads differently, the start or a send is
 // refused rather than typed blind, which is as far as that wait reaches.
 //
-// # Configuration directory
+// # Directories of its own
 //
-// A fresh directory is made for this worker alone, owner-only, beside its
-// terminal's socket (claudeConfigFor), and given to the CLI as
-// CLAUDE_CONFIG_DIR,
-// which was observed to move the CLI's state file, .claude.json, there. The
-// state file is written before the CLI starts, holding three answers the CLI
-// would otherwise ask a person for on screens before its prompt: onboarding
-// completed, the workspace trusted for spec.Dir exactly and, where it
-// differs, for the path that resolves to, and, for a worker on the API key,
-// the key approved. Nothing
-// here reads the operator's own configuration or copies anything out of it,
-// and the directory is removed once the worker has ended. Given that
-// variable, the CLI was observed to write no .claude.json under HOME; it
-// still wrote its caches there, and what else it reads from HOME is not
-// established here.
+// Two fresh directories are made for this worker alone, owner-only, beside
+// its terminal's socket: a configuration directory (claudeConfigFor) given
+// to the CLI as CLAUDE_CONFIG_DIR, which was observed to move the CLI's
+// state file, .claude.json, there, and a cache directory (claudeCacheFor)
+// given as XDG_CACHE_HOME on the worker process's own environment, which is
+// not the CLI's own variable but the one a program following the XDG
+// convention reads. That assignment is what a checked-in test reads back
+// from the pane; whether a tool the CLI starts inherits it was not
+// measured, and a run left that cache directory empty, so the isolation
+// bought for tools that cache this way is the bound, not an observation.
+// The directory is removed with the worker either way. The state file is
+// written before the
+// CLI starts, holding three answers the CLI would otherwise ask a person
+// for on screens before its prompt: onboarding completed, the workspace
+// trusted for spec.Dir exactly and, where it differs, for the path that
+// resolves to, and, for a worker on the API key, the key approved. Nothing
+// here reads the operator's own configuration or copies anything out of
+// it, and both directories are removed once the worker has ended; a start
+// that cannot make the cache directory removes the configuration directory
+// and is refused before any process exists.
 //
 // The approval is the last 20 characters of the key, which is what the CLI
 // was observed to keep for one: an approval holding them skipped the key
@@ -51,6 +59,39 @@ import (
 // is never written. A worker on the OAuth token approves no key and writes
 // no part of the token: given the token alone, Claude Code 2.1.292 was
 // observed to draw no screen about it.
+//
+// # What a run leaves in, and takes from, the operator's home
+//
+// Measured on 2026-11-06 against Claude Code 2.1.308 on macOS 27.2, by
+// giving a worker a HOME nothing else wrote to and reading that HOME after
+// the run: fs_usage, which would have shown every open, needs a privilege
+// the measuring account did not have, so this is what a worker left and
+// not the whole of what it touched. The measurement was made by hand and
+// nothing re-checks the whole of it; claudecli_test.go's probe re-runs the
+// part a checked-in test can, where a claude is on PATH: it gives a worker
+// a HOME of its own, fails on an entry left in that HOME's .cache or
+// .claude, and logs the rest of what the run left there and in the cache
+// directory below, so a later CLI's new write is reported rather than
+// assumed away. The marker read below is the part it does not re-run.
+//
+// With the two variables above set, the run left HOME's .cache and .claude
+// exactly as empty as it found them, and wrote its state file, its
+// history, its session and a cache of its own under CLAUDE_CONFIG_DIR. It
+// wrote two things elsewhere under HOME, neither of them the CLI's
+// configuration: an application bundle, Applications/Claude Code URL
+// Handler.app, and, where the worker's PATH reached a gh, the device
+// identifier gh writes for itself under .local/state/gh. What invoked gh
+// was not established. The cache directory this adapter makes was empty
+// after such a run, so it bounds what the worker runs rather than the CLI;
+// that is the directory the probe logs while the worker is still up,
+// since the worker's end removes it.
+//
+// A HOME holding a .claude/CLAUDE.md, a .claude/settings.json and a
+// .claude.json, each carrying a marker, produced no model request carrying
+// one, which is the only read this could observe; what else the CLI reads
+// from HOME is not established here. The worker's HOME is the service's
+// own, so everything else the worker runs reads the operator's home as
+// before, a git identity for the commits a worker makes among them.
 //
 // # Credential
 //
@@ -126,15 +167,20 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	if err != nil {
 		return nil, fmt.Errorf("drawing the terminal worker's session identifier: %w", err)
 	}
-	configDir := claudeConfigFor(t)
+	configDir, cacheDir := claudeConfigFor(t), claudeCacheFor(t)
 	err = seedClaudeConfig(spec.Dir, key, configDir)
 	if err != nil {
 		return nil, err
 	}
-	remove := func() { _ = os.RemoveAll(configDir) }
-	env = append(slices.DeleteFunc(env, func(kv string) bool {
-		return strings.HasPrefix(kv, claudeConfigVariable+"=")
-	}), claudeConfigVariable+"="+configDir)
+	if err := os.Mkdir(cacheDir, 0o700); err != nil {
+		// What this call made is removed and a directory standing there
+		// already is left as it is, which is the stance seedClaudeConfig
+		// takes for its own.
+		_ = os.RemoveAll(configDir)
+		return nil, fmt.Errorf("making the terminal worker's cache directory: %w", err)
+	}
+	remove := func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) }
+	env = withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir)
 
 	args := r.claudeTerminalWorkerArgs(spec, session)
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
@@ -154,21 +200,21 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 }
 
 // AdoptInTerminal holds again a Claude Code terminal worker on
-// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The
-// configuration directory it removes at the worker's end is the one its
-// start made beside the terminal's socket (claudeConfigFor), derived from
-// the socket the adoption verifies and never from anything the worker or
-// its server states, so nothing the worker can change names what is
-// removed.
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The two
+// directories it removes at the worker's end are the ones its start made
+// beside the terminal's socket, its configuration (claudeConfigFor) and
+// its cache (claudeCacheFor), each derived from the socket the adoption
+// verifies and never from anything the worker or its server states, so
+// nothing the worker can change names what is removed.
 func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
 	}
-	configDir := claudeConfigFor(t)
+	configDir, cacheDir := claudeConfigFor(t), claudeCacheFor(t)
 	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{
 		grace:   r.settings.grace,
 		maxOut:  r.settings.maxOut,
-		cleanup: func() { _ = os.RemoveAll(configDir) },
+		cleanup: func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) },
 	}, r.terminalTyping())
 	if err != nil {
 		return nil, err
@@ -181,6 +227,14 @@ func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Ide
 // terminal alone, a start and an adoption of the same terminal name the
 // same directory, and it sits in the socket's owner-only directory.
 func claudeConfigFor(t Terminal) string { return t.Socket + ".claude" }
+
+// claudeCacheFor is the cache directory of the Claude Code worker on t,
+// named from the terminal exactly as claudeConfigFor names its
+// configuration directory, so it too is a function of the terminal alone
+// and a start and an adoption of the same terminal name the same
+// directory. home.TerminalSockets, whose layout both sit in, records that
+// an adapter names a worker's directories this way.
+func claudeCacheFor(t Terminal) string { return t.Socket + ".cache" }
 
 // terminalLaunchSessionMeasure is the session identifier
 // TerminalLaunchCommandSize uses: the same length and shape sessionIdentifier
@@ -270,6 +324,21 @@ const ClaudeTokenVariable = "CLAUDE_CODE_OAUTH_TOKEN"
 // configuration directory.
 const claudeConfigVariable = "CLAUDE_CONFIG_DIR"
 
+// cacheHomeVariable is the variable that points a program following the XDG
+// base directory convention at a cache directory. It is not Claude Code's
+// own. A start sets it on the worker process's environment to the
+// directory of that worker's own; whether a tool the CLI starts inherits
+// it was not measured, which is why StartInTerminal's documentation
+// states the assignment as a bound rather than as an observation of what
+// every child reads.
+const cacheHomeVariable = "XDG_CACHE_HOME"
+
+// withEnvValue is env with name set to value, whatever env held for it
+// before, as the one assignment a started process reads.
+func withEnvValue(env []string, name, value string) []string {
+	return append(withoutEnvNames(env, name), name+"="+value)
+}
+
 // claudeApprovalSuffix is how many trailing characters of a key the CLI was
 // observed to keep as its approval.
 const claudeApprovalSuffix = 20
@@ -281,7 +350,9 @@ const claudeApprovalSuffix = 20
 // holds text, the cursor claudeLayout rests on, the mark that says an
 // input holds text and the interrupted line are 2.1.308's. Each piece
 // says which, and a reader holding a CLI against a stated version has
-// both to hold it against.
+// both to hold it against. What a run leaves in the operator's home is
+// not one of these: that measurement names its own date and version where
+// StartInTerminal states it.
 const claudeObservedVersion = "2.1.301 and 2.1.308"
 
 // ErrNoCredential is the refusal to start an agent whose credential is not

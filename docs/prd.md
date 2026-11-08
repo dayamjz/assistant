@@ -2998,7 +2998,7 @@ do, and so is managing a file the service may be writing; this answers where the
 promises nothing about the read. The answer is a detailed evidence document in P13's sense and the
 one printed with nothing before it, because a caller composes it into another command line, which
 P13 says. The printed line is not the file name byte for byte when the path holds a control
-character: that character is escaped, as this program escapes one in any line it prints. The
+character: that character is escaped through the value renderer's `printable` path. The
 structured answer keeps a control character, so a caller that reads `--json` recovers the path. A
 byte that is not valid UTF-8 becomes the replacement character in the structured answer, which is
 Go's JSON encoding and not this verb's choice; the printed line keeps that byte when the path

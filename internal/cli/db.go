@@ -48,7 +48,7 @@ func dbVerb(ctx context.Context, in *invocation) (any, error) {
 // is PRD section 9's and the README's, and nothing here enforces it.
 //
 // The rendering writes the path alone and is exact unless it holds a control
-// character, which it escapes as every line this program prints escapes one.
+// character, which the value renderer escapes through printable.
 // The structured answer keeps a control character, so a caller that reads
 // --json recovers the path; it substitutes the Unicode replacement character
 // for a byte that is not valid UTF-8, which is Go's JSON encoding and not
