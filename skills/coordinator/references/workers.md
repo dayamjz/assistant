@@ -50,9 +50,9 @@ recent events that fit in 16 KiB of `output` are shown: `earlier` counts the
 events read and not shown, `dropped` the bytes the capture let go before the
 read, and `liveness` is how the worker's terminal probed. By default
 (`session_provider: auto`) the service hosts a worker in tmux wherever tmux
-is installed and that worker's adapter can start there, so `attach` is the
-command a person runs to watch it and type into it; it is empty for a worker
-on pipes. What someone types there reaches the worker as its own input, the
+is installed, that worker's adapter can start there, and the home's path
+leaves room for the worker's socket, so `attach` is the command a person
+runs to watch it and type into it; it is empty for a worker on pipes. What someone types there reaches the worker as its own input, the
 same input a message is written to, and the program records nothing of it,
 so reconcile around it as you would around any change you did not make: read
 the task and its history rather than assuming your last message was the last
