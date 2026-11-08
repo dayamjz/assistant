@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -51,7 +52,6 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w := &claudePipeWorker{}
-	w.armTurn()
 	worker, err := startWorker(ctx, ClaudeName, procSpec{
 		bin: r.resolved, args: r.workerArguments(spec), dir: spec.Dir,
 		env: WorkerEnvironment(r.settings.base, spec.Env), grace: r.settings.grace, maxOut: r.settings.maxOut,
@@ -60,10 +60,10 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w.procWorker = worker
-	if err := w.waitBegun(ctx); err != nil {
-		worker.Close()
-		return nil, err
-	}
+	// Wait for the instructions turn's output without arming settle
+	// channels: Recorded replies have no system/init, and a late
+	// instructions result must not clear the first Send's arm.
+	w.waitCapture(ctx)
 	return w, nil
 }
 
@@ -163,6 +163,23 @@ func (w *claudePipeWorker) armTurn() {
 	w.settled, w.begun = make(chan struct{}), make(chan struct{})
 }
 
+func (w *claudePipeWorker) waitCapture(ctx context.Context) {
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if w.Capture().Text != "" {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.done:
+			return
+		case <-tick.C:
+		}
+	}
+}
+
 func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) error {
 	if settled == nil {
 		return nil
@@ -192,7 +209,9 @@ func (w *claudePipeWorker) waitBegun(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-w.done:
-		return ErrWorkerEnded
+		// Bytes were written; a Refuse exchange exits without init.
+		w.markIdle()
+		return nil
 	}
 }
 
