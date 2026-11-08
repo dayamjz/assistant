@@ -120,6 +120,46 @@ func TestATransportWithNoCredentialsRefuses(t *testing.T) {
 	}
 }
 
+// TestAZeroPeerRefusesCredentials is the contract Peer's doc states: a caller
+// has an error to handle rather than a zero value that reads like a valid
+// identity. A Peer that Identify never built must refuse, and one Identify
+// did build must still answer.
+func TestAZeroPeerRefusesCredentials(t *testing.T) {
+	var zero ipc.Peer
+	if zero.Identified() {
+		t.Error("a zero Peer reports Identified")
+	}
+	creds, err := zero.Credentials()
+	if !errors.Is(err, ipc.ErrUnidentifiedPeer) {
+		t.Fatalf("Credentials = (%v, %v), want ErrUnidentifiedPeer", creds, err)
+	}
+	if creds != (ipc.Credentials{}) {
+		t.Errorf("Credentials returned %s alongside a refusal", creds)
+	}
+
+	server, _ := acceptedPair(t)
+	peer := ipc.Identify(server)
+	if !platformIdentifiesPeers() {
+		if peer.Identified() {
+			t.Fatal("Identify reported an identified peer on a platform with no read")
+		}
+		if _, err := peer.Credentials(); !errors.Is(err, ipc.ErrUnidentifiedPeer) {
+			t.Fatalf("Credentials = %v, want ErrUnidentifiedPeer", err)
+		}
+		return
+	}
+	if !peer.Identified() {
+		t.Fatal("Identify did not identify this process over a local socket")
+	}
+	got, err := peer.Credentials()
+	if err != nil {
+		t.Fatalf("Credentials: %v", err)
+	}
+	if got.PID != os.Getpid() {
+		t.Errorf("PID = %d, want this process's %d", got.PID, os.Getpid())
+	}
+}
+
 func TestLocalMarkerReadsTheEnvironment(t *testing.T) {
 	env := map[string]string{"ASSISTANT_STAGE": "run=r1 stage=review"}
 	got := ipc.LocalMarker(func(name string) string { return env[name] })
