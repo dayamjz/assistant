@@ -157,7 +157,10 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		// flip on the one owed rule every answer is held to (owedOnCopy).
 		var claimed int64
 		var what string
-		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task ELSE 'claimed land' END
+		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE
+				WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task
+				WHEN discard_claimed_at IS NOT NULL THEN 'claimed discard'
+				ELSE 'claimed land' END
 			FROM kept_work WHERE task_id = ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, id).Scan(&claimed, &what); {
 		case err == nil:
 			return fmt.Errorf("%w: entry %d of its copy is %s", ErrKeptWorkCopyOwed, claimed, what)
