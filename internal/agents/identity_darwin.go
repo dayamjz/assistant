@@ -29,12 +29,13 @@ func startTime(pid int) (uint64, bool, error) {
 	return startOf(proc), true, nil
 }
 
-// EntryIdentity is the Identity Identify reads, taken from a process table
-// entry the caller already holds, such as one of the entries a single
-// kern.proc.all read returns, so a reading of the whole table names each
-// process as Identify would name it. It says nothing of whether the process
-// runs: an entry of one that has exited and not been reaped has an identity
-// too, where Identify reads that process as not running.
+// EntryIdentity is the PID and start time a process table entry carries,
+// taken from an entry the caller already holds, such as one of the entries
+// a single kern.proc.all read returns. It is the pair settle and
+// Presence compare against. It is not what Identify returns for every
+// entry: Identify reads a zombie as not running (found false and a zero
+// Identity), while this still returns that entry's PID and start so a
+// listing can name the unreaped row the table still holds.
 func EntryIdentity(entry *unix.KinfoProc) Identity {
 	return Identity{PID: int(entry.Proc.P_pid), Start: startOf(entry.Proc)}
 }

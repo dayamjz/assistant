@@ -180,7 +180,7 @@ func TestAListingSettlesBesideAZombie(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if _, err := processesWhere(kernel{}, func(processTable, int) (bool, error) { return false, nil }); err != nil {
+	if _, err := processesWhere(kernel{}, func(processTable, int) (bool, error) { return false, nil }, nil); err != nil {
 		t.Errorf("a listing beside the zombie %d: %v", proc.Pid, err)
 	}
 	_, _ = proc.Wait()
@@ -253,7 +253,7 @@ func TestAListingSettlesWhileProcessesItRefusedExit(t *testing.T) {
 		_, _, err := table.commandLine(pid)
 		return false, err
 	}
-	if _, err := processesWhere(table, refuseAll); err != nil {
+	if _, err := processesWhere(table, refuseAll, nil); err != nil {
 		t.Fatalf("a listing while processes it refused exit, one in each reading: %v", err)
 	}
 	if table.readings < 2 {
@@ -339,7 +339,7 @@ func TestAListingPassesOverAnotherUsersUnreadableProcess(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
 	table := &refusalsSeen{}
-	listed, err := processesWhere(table, func(processTable, int) (bool, error) { return true, nil })
+	listed, err := processesWhere(table, func(processTable, int) (bool, error) { return true, nil }, nil)
 	if err != nil {
 		t.Fatalf("a listing of every process: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestAListingSettlesBesideAnUnreadableProcessThatIsExiting(t *testing.T) {
 	}
 
 	exiting := &unreadableAsExiting{pid: sleeper.Process.Pid, exiting: true}
-	listed, err := processesWhere(exiting, refuseAll)
+	listed, err := processesWhere(exiting, refuseAll, nil)
 	if err != nil {
 		t.Fatalf("a listing beside process %d, unreadable and exiting: %v", sleeper.Process.Pid, err)
 	}
@@ -428,7 +428,7 @@ func TestAListingSettlesBesideAnUnreadableProcessThatIsExiting(t *testing.T) {
 		t.Fatalf("the listing %v names process %d, which it could not read", listed, sleeper.Process.Pid)
 	}
 
-	_, err = processesWhere(&unreadableAsExiting{pid: sleeper.Process.Pid}, refuseAll)
+	_, err = processesWhere(&unreadableAsExiting{pid: sleeper.Process.Pid}, refuseAll, nil)
 	var unsettled *unsettledError
 	if !errors.As(err, &unsettled) || unsettled.PID != sleeper.Process.Pid || !errors.Is(err, syscall.ENOENT) {
 		t.Fatalf("a listing beside process %d, unreadable and not exiting = %v; want it unsettled naming the process and its ENOENT", sleeper.Process.Pid, err)
@@ -491,7 +491,7 @@ func TestAProcessWhoseArgumentsReadEmptyIsReadAgain(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = in.Close(); _ = shell.Process.Kill(); _ = shell.Wait() })
 	table := &argumentsEmptyOnce{pid: shell.Process.Pid}
-	listed, err := processesWhere(table, matching(func(args []string) bool { return slices.Contains(args, token) }))
+	listed, err := processesWhere(table, matching(func(args []string) bool { return slices.Contains(args, token) }), nil)
 	if err != nil {
 		t.Fatalf("the listing beside the shell whose arguments read empty once: %v", err)
 	}
@@ -601,7 +601,7 @@ func TestAListingFindsWhatAMatchingProcessUnderARefusedShellStartsAsItExits(t *t
 		}
 		t.Errorf("mid %d was still running after starting %v", midPID, child)
 	}}
-	foundList, err := processesWhere(table, carries(value))
+	foundList, err := processesWhere(table, carries(value), nil)
 	if err != nil {
 		t.Fatalf("listing: %v", err)
 	}
@@ -686,7 +686,7 @@ func TestAListingDoesNotSettleAFailedReadThroughARefusedParent(t *testing.T) {
 		_, _, err := table.commandLine(pid)
 		return false, err
 	}
-	_, err = processesWhere(table, refuseAll)
+	_, err = processesWhere(table, refuseAll, nil)
 	var unsettled *unsettledError
 	if !errors.As(err, &unsettled) || unsettled.PID != sleepPID || !errors.Is(err, syscall.EIO) {
 		t.Fatalf("listing = %v; want unsettled naming sleep %d and EIO (a parent-outside settle returns nil here)", err, sleepPID)
@@ -752,7 +752,7 @@ func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
 		_, _, err := table.commandLine(pid)
 		return pid == sleeper.Process.Pid, err
 	}
-	_, err = processesWhere(table, acceptSleep)
+	_, err = processesWhere(table, acceptSleep, nil)
 	var unsettled *unsettledError
 	if !errors.As(err, &unsettled) {
 		t.Fatalf("listing = %v; want unsettled from the unread exit", err)
@@ -765,15 +765,22 @@ func TestUnreadExitBesideAMatchedProcessUnsettles(t *testing.T) {
 }
 
 // An unread exit in every reading beside a refused process keeps every
-// reading from settling (P15): every reading names a refused sleep and a
-// new real process that exited before it was identified, and that exit
-// unsettles each of the 64, the open #722 gap when never-read-whole
-// processes keep exiting. Presence for the sleep is the kernel's, so the
-// fixture is not a fabricated identity.
+// reading from settling in a listing of this binary (P15, #722) when the
+// process that exited could be the binary's: every reading names a refused
+// sleep and a new real child of this process that exited before it was
+// identified, which on Darwin its record makes a candidate as this
+// process's descendant, and which on Linux, where no reading holds a
+// record, every process is. That exit unsettles each of the 64. Presence
+// for the sleep is the kernel's, so the fixture is not a fabricated
+// identity.
 // Not parallel: it starts and ends a real process in each of its 64
 // readings, which would keep other tests' listings from settling.
 func TestUnreadExitsBesideARefusedProcessStillPreventSettling(t *testing.T) {
 	principles.Cite(t, principles.P15)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sleeper := exec.Command("sleep", "60")
 	if err := sleeper.Start(); err != nil {
 		t.Fatal(err)
@@ -784,7 +791,7 @@ func TestUnreadExitsBesideARefusedProcessStillPreventSettling(t *testing.T) {
 		_, _, err := table.commandLine(pid)
 		return false, err
 	}
-	_, err := processesWhere(table, refuseAll)
+	_, err = processesWhere(table, refuseAll, newCandidates(self))
 	var unsettled *unsettledError
 	if !errors.As(err, &unsettled) {
 		t.Fatalf("listing = %v; want unread exits beside a refused process to keep it from settling", err)
