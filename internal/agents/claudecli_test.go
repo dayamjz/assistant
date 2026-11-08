@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -327,6 +328,39 @@ func (f *fakeMessages) awaitReceived(t *testing.T, w agents.Worker, parts ...str
 	}
 }
 
+// entriesLogged bounds what entriesUnder lists, so a CLI that writes a tree
+// under HOME is reported rather than printed in full.
+const entriesLogged = 40
+
+// entriesUnder is every path under root, relative to it, in the order a walk
+// finds them, cut off at entriesLogged with a line saying so.
+func entriesUnder(t *testing.T, root string) []string {
+	t.Helper()
+	var found []string
+	err := filepath.WalkDir(root, func(path string, _ fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		if rel == "." {
+			return nil
+		}
+		if len(found) == entriesLogged {
+			found = append(found, "... and more")
+			return fs.SkipAll
+		}
+		found = append(found, rel)
+		return nil
+	})
+	if err != nil {
+		t.Logf("walking %s: %v", root, err)
+	}
+	return found
+}
+
 // The terminal_workers probe, held against an installed Claude Code rather
 // than the stand-in. The CLI is the real binary in a real tmux pane; the
 // model is fakeMessages on this machine, reached through ANTHROPIC_BASE_URL,
@@ -384,6 +418,13 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 	server := httptest.NewServer(api)
 	defer server.Close()
 	home := t.TempDir()
+	// The two directories the run must leave alone, made empty here so that
+	// anything in them afterwards is this run's.
+	for _, name := range []string{".cache", ".claude"} {
+		if err := os.Mkdir(filepath.Join(home, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	env := []string{
 		"PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin",
 		"HOME=" + home,
@@ -542,6 +583,26 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 		}
 		api.awaitReceived(t, worker, "conformance: a message after the interrupt")
 	}
+
+	// The run left the two directories it is pointed away from untouched,
+	// which is what a worker owes the operator's own home. What it did
+	// leave elsewhere under HOME, and in the cache directory it was given
+	// instead, is logged rather than asserted: it is the record the
+	// adapter's documentation rests on, and this probe is where a later
+	// CLI's new write shows up. The cache directory is read before Close,
+	// which removes it.
+	cached := entriesUnder(t, agents.ClaudeCacheFor(term))
+	t.Logf("the run left %d entries in the worker's own cache directory:\n%s",
+		len(cached), strings.Join(cached, "\n"))
+	worker.Close()
+	for _, name := range []string{".cache", ".claude"} {
+		entries, err := os.ReadDir(filepath.Join(home, name))
+		if err != nil || len(entries) > 0 {
+			t.Errorf("the installed CLI left %d entries in HOME's %s (%v), want it as empty as the run found it",
+				len(entries), name, err)
+		}
+	}
+	t.Logf("the run left this under a HOME of its own:\n%s", strings.Join(entriesUnder(t, home), "\n"))
 	if seen, ok := api.presentedAs(presented); !ok {
 		t.Errorf("the message requests presented the credential as %q, want %q every time", seen, presented)
 	}
