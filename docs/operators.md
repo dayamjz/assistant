@@ -1547,8 +1547,11 @@ API key when it runs on one. Each worker also gets a cache directory of its
 own there, given as `XDG_CACHE_HOME` on the worker process's environment:
 that is the bound for a program that follows the XDG convention and inherits
 that environment, not a measured claim that every tool the CLI starts does.
-And each worker gets a `HOME` of its own there, so nothing it runs reads or
-writes your home. All three directories are removed when the worker ends.
+And each worker gets a `HOME` of its own there, given as `HOME` on the
+worker process's environment: the same kind of bound as `XDG_CACHE_HOME`
+above, not a measured claim that every tool the CLI starts inherits it or
+that nothing can reach your home another way. All three directories are
+removed when the worker ends.
 The start carries your git `user.name` and `user.email` into that `HOME`
 explicitly (as the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables), so a
 commit the worker makes keeps your identity; without a configured identity

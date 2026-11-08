@@ -58,12 +58,12 @@ import (
 // The worker's HOME holds none of the operator's git configuration, so the
 // start carries the operator's git name and email onto the worker
 // explicitly as GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, GIT_COMMITTER_NAME and
-// GIT_COMMITTER_EMAIL: first any already set on the worker's environment,
-// otherwise user.name and user.email from the process's git configuration
-// (vcs.UserIdentity). Missing either is a refusal wrapping
-// ErrNoGitIdentity before any directory is made, so a host-derived
-// identity never reaches a commit and a commit never fails later for want
-// of one.
+// GIT_COMMITTER_EMAIL: a complete pair already on the worker's
+// environment, or otherwise user.name and user.email from the process's
+// git configuration (vcs.UserIdentity). A half-set env pair, or no pair
+// at all, is a refusal wrapping ErrNoGitIdentity before any directory is
+// made, so a host-derived identity never reaches a commit and a commit
+// never fails later for want of one.
 //
 // The approval is the last 20 characters of the key, which is what the CLI
 // was observed to keep for one: an approval holding them skipped the key
@@ -81,11 +81,14 @@ import (
 // the measuring account did not have, so this is what a worker left and
 // not the whole of what it touched. The measurement was made by hand and
 // nothing re-checks the whole of it; claudecli_test.go's probe re-runs the
-// part a checked-in test can, where a claude is on PATH: it gives a worker
-// a HOME of its own, fails on an entry left in that HOME's .cache or
-// .claude, and logs the rest of what the run left there and in the cache
-// directory below, so a later CLI's new write is reported rather than
-// assumed away. The marker read below is the part it does not re-run.
+// part a checked-in test can, where a claude is on PATH: the runner's base
+// environment names an operator HOME with empty .cache and .claude, the
+// adapter then points the worker at a HOME of its own, and the probe fails
+// if the operator HOME gains anything (including an entry in those two
+// directories) and logs what the run left in the worker's HOME and cache
+// directory while the worker is still up, so a later CLI's new write into
+// the operator home is reported rather than assumed away. The marker read
+// below is the part it does not re-run.
 //
 // With CLAUDE_CONFIG_DIR and XDG_CACHE_HOME set (and, as of this change,
 // HOME set to the worker's own directory), the run left the HOME it was
@@ -298,11 +301,14 @@ const (
 
 // claudeTerminalGitIdentity is env with the operator's git name and email
 // set on the four variables git reads for a commit's author and committer.
-// It takes a name and email already on env (author first, committer as
-// fallback for a half-set pair) and otherwise vcs.UserIdentity under the
-// process environment. Missing either is an error wrapping
-// ErrNoGitIdentity. The four variables are always written together so a
-// half-set inheritance cannot leave author and committer disagreeing.
+// It takes a complete pair already on env (author first, committer as
+// fallback for each half) or, when neither half is set, vcs.UserIdentity
+// under the process environment. A half-set env pair is refused rather
+// than merged with configuration, because UserIdentity is all-or-nothing
+// and a silent half-merge would disagree with what the variables looked
+// like. Missing a complete pair is an error wrapping ErrNoGitIdentity.
+// The four variables are always written together so author and committer
+// cannot disagree.
 func claudeTerminalGitIdentity(ctx context.Context, env []string) ([]string, error) {
 	name := lastValue(env, gitAuthorName)
 	if name == "" {
@@ -312,17 +318,15 @@ func claudeTerminalGitIdentity(ctx context.Context, env []string) ([]string, err
 	if email == "" {
 		email = lastValue(env, gitCommitterEmail)
 	}
-	if name == "" || email == "" {
+	switch {
+	case name != "" && email != "":
+		// Complete pair from the environment.
+	case name == "" && email == "":
 		cfgName, cfgEmail, err := vcs.UserIdentity(ctx)
 		if err != nil && !errors.Is(err, vcs.ErrNoUserIdentity) {
 			return nil, fmt.Errorf("reading the operator's git identity: %w", err)
 		}
-		if name == "" {
-			name = cfgName
-		}
-		if email == "" {
-			email = cfgEmail
-		}
+		name, email = cfgName, cfgEmail
 	}
 	if name == "" || email == "" {
 		return nil, fmt.Errorf("%w: a Claude Code terminal worker runs under a HOME of its own, so it needs a git user.name and user.email (or %s/%s) to carry into that HOME and neither is set",

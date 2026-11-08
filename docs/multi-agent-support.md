@@ -51,8 +51,8 @@ automatic selection.
   environment, the key winning when both are set (see `docs/operators.md`);
   each worker gets an isolated config directory that does not carry your
   login, a cache directory of its own as `XDG_CACHE_HOME` on the worker
-  process (tool inheritance of that variable is not measured), and a
-  `HOME` of its own with your git identity carried in explicitly; all
+  process, and a `HOME` of its own with your git identity carried in
+  explicitly (tool inheritance of those variables is not measured); all
   three are removed with the worker.
 
 ### 3. Codex (OpenAI Codex CLI)
