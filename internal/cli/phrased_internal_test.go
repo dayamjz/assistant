@@ -254,9 +254,13 @@ func fixtures(t *testing.T) map[string]any {
 		// and the program and nothing the set forbids.
 		"host wake": machine.HostWake{Pane: "%3", Program: "claude", Typed: machine.HostWakeNotice()},
 		"decision":  fixtureDecision(),
-		"details":   withDetails,
-		"findings":  fixtureDecision(),
-		"usage":     fixtureUsage(),
+		// The one value row: a home's database file, which carries the home
+		// path and the file name internal/home composes, both of which the
+		// derivation forbids a phrased row.
+		"database": machine.Database{Path: filepath.Join(root, "state.db")},
+		"details":  withDetails,
+		"findings": fixtureDecision(),
+		"usage":    fixtureUsage(),
 		// The end of a review's log: the run, the stage and the path name it,
 		// and a reply carries what the agent wrote.
 		"log": machine.StageLog{Run: sampleID, Stage: "review", Path: filepath.Join(root, "logs", sampleID, "review.log"),
@@ -643,14 +647,17 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 }
 
 // TestTheMessagePointingAtEvidenceIsPhrased is P13 for the four evidence
-// documents P13 names, the log view among them. P13 lets an evidence document keep exact
-// identifiers and stage names and keeps the message that points at one
-// phrased, so a run carrying the two a run carries is rendered and each
-// document is taken out from behind its pointer; what is left - the
-// pointers, the run's head, the notice that its starting inputs were not
-// applied, and the decision - is held to the derived forbidden set line by
-// line. The usage view and the log view are answers of their own, so each is
-// rendered the way runs reaches it, through readOut, and held the same way.
+// documents that are written behind a phrase, the log view among them. P13
+// names five evidence documents; the fifth is section 9's db path, written
+// alone as VoiceValue and held by its own test rather than this one. P13 lets
+// an evidence document keep exact identifiers and stage names and keeps the
+// message that points at one of the four phrased, so a run carrying the two a
+// run carries is rendered and each document is taken out from behind its
+// pointer; what is left - the pointers, the run's head, the notice that its
+// starting inputs were not applied, and the decision - is held to the derived
+// forbidden set line by line. The usage view and the log view are answers of
+// their own, so each is rendered the way runs reaches it, through readOut, and
+// held the same way.
 //
 // It is not passed for looking at nothing. Each evidence fixture is shown to
 // carry a forbidden word on its own, so taking it out is what lets the rest
@@ -698,7 +705,7 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 		blocks = append(blocks, block)
 	}
 	if len(blocks)+len(answers) != 4 {
-		t.Fatalf("%d renderers are evidence; P13 names four evidence documents", len(blocks)+len(answers))
+		t.Fatalf("%d renderers are VoiceEvidence; want the four pointed evidence documents P13 names (db path is VoiceValue)", len(blocks)+len(answers))
 	}
 	for name, block := range answers {
 		var answered bytes.Buffer

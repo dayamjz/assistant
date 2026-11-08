@@ -110,6 +110,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 | `assistant sync` | Reconcile a checkout with validated changes |
 | `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
 | `assistant --json status` | Consume structured status and find the repository identifier |
+| `assistant db path` | Print the home's database file, to point a reader of your own at the records; open it read-only (`sqlite3 -readonly "$(assistant db path)"`) |
 
 ## 1. Give each agent a job
 
