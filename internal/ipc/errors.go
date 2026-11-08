@@ -33,8 +33,9 @@ var (
 	// a malformed frame, a body that does not decode, or a stream method
 	// called as a request.
 	ErrInvalidRequest = sentinelFor(CodeInvalidRequest)
-	// ErrUnidentifiedPeer reports that a request needing authority arrived on
-	// a connection whose peer the kernel could not be asked about. It is a
+	// ErrUnidentifiedPeer reports that a request needing authority arrived
+	// without an identified peer: the kernel could not be asked about the
+	// connection, or the Peer value was never built by Identify. It is a
 	// refusal, not a warning: authority comes from the identification, so
 	// without one there is nothing to decide on.
 	ErrUnidentifiedPeer = sentinelFor(CodeUnidentifiedPeer)

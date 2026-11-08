@@ -169,7 +169,8 @@
 // anything, because a caller writes its own environment. The type split is what
 // keeps that from eroding: Marker and Credentials are different types, and a
 // Peer will not produce credentials without an error to handle when the kernel
-// could not be asked.
+// could not be asked, or when Identify never built the value: a zero Peer
+// refuses rather than reading as process 0.
 //
 // The containment question itself is not answered here. Ancestry is the seam,
 // and resolving a process tree and knowing which runs are active are both state
