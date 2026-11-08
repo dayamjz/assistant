@@ -2551,7 +2551,7 @@ interface column is what the rest of the system is allowed to depend on.
 | **forge** | Provider abstraction for pull requests, checks, and merge state. | One interface, one adapter per provider. |
 | **Fleet** |  |  |
 | **tasks** | Task records, the two shapes, intake, queueing, promotion, cleanup proofs. | Create, dispatch, promote, complete, clean up. |
-| **session** | Terminal session provider abstraction: create, capture, send, probe, close. | One interface; the default provider is the reference implementation. |
+| **session** | Terminal session provider abstraction: create, capture, send, probe, close. | One interface; pipe is the reference provider, and the configured default is `auto` (decision 33). |
 | **supervisor** | Wake classification, the durable queue, liveness beacons, the stop guard. | Classify a wake; drain the queue; assert supervision is live. |
 | **taskstate** | The current-state resolver. Computes a task's state on each read and stores nothing. Read-only and free of side effects. | One call in, one state plus source plus detail out. |
 | **Shared** |  |  |
