@@ -1498,17 +1498,19 @@ answers through the next service, and no relaunch is recorded, so a restart
 does not count toward `relaunch_attempts`. A service killed outright leaves
 it running the same way, and the next start holds it again too. Before it
 holds one, the service checks that the process the task's attempt recorded is
-still running with its recorded start time and that the worker's own server,
-on the socket the attempt recorded, answers with that process. A worker that
-passes is held again: you can attach and send through the new service as
-before, and no relaunch is recorded. A worker that fails because the
-process is gone, or because another process now sits at the recorded
-identity, reads as dead and is relaunched in place, counting toward
+still running with its recorded start time, that the worker's own server on
+the socket the attempt recorded answers with that process as its pane, and
+that the process leads its own process group under that server. A worker that
+passes is held again and reads Live: you can attach and send through the new
+service as before, and no relaunch is recorded. A worker that fails because
+the process is gone, or because another process now sits at the recorded
+identity, reads as Dead and is relaunched in place, counting toward
 `relaunch_attempts`. A worker that is still the recorded process but fails
-the check (the socket or pane no longer answers as that process) is not
-held and not relaunched beside: it reads as unobservable and is reported
-as a terminal-gone wake until it ends, after which a later reconcile can
-relaunch.
+any other part of the check (the socket or pane no longer answers as that
+process, or the process no longer leads its own process group under that
+server) is not held and not relaunched beside: it reads as Unobserved, is
+reported as a terminal-gone wake with case `unobservable` until it ends,
+after which a later reconcile can relaunch.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.

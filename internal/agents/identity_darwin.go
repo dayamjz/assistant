@@ -29,6 +29,16 @@ func startTime(pid int) (uint64, bool, error) {
 	return startOf(proc), true, nil
 }
 
+// EntryIdentity is the Identity Identify reads, taken from a process table
+// entry the caller already holds, such as one of the entries a single
+// kern.proc.all read returns, so a reading of the whole table names each
+// process as Identify would name it. It says nothing of whether the process
+// runs: an entry of one that has exited and not been reaped has an identity
+// too, where Identify reads that process as not running.
+func EntryIdentity(entry *unix.KinfoProc) Identity {
+	return Identity{PID: int(entry.Proc.P_pid), Start: startOf(entry.Proc)}
+}
+
 // startOf is the start time a process table entry carries, in microseconds
 // since the epoch, as startTime reads it.
 func startOf(proc unix.ExternProc) uint64 {
