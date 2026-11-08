@@ -93,7 +93,8 @@ type Call struct {
 	// Interrupted is every message whose turn ended on an interrupt, in
 	// order; each is also in Lines, and none was answered. An interactive
 	// worker records Escape; an app-server worker records turn/interrupt;
-	// an ACP worker records session/cancel.
+	// an ACP worker records session/cancel; a stream worker records
+	// control_request subtype interrupt.
 	Interrupted []string `json:"interrupted,omitempty"`
 	// IdleEscapes counts the Escape keys an interactive worker read with no
 	// turn running, each a key the CLI was observed to take another way:

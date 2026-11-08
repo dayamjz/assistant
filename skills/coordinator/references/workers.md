@@ -73,9 +73,9 @@ worker is still running. `interrupted` is `true` when a turn was running and
 was read ended, and `false` when the worker had nothing under way, so
 nothing was done. It is served for a worker hosted in tmux whose agent
 declares `terminal_interrupt` (Claude Code), and for a worker on the pipe
-provider whose agent declares `pipe_interrupt` (Codex over app-server `turn/interrupt`, Cursor
-over ACP `session/cancel`); anything else is refused with nothing done, and
-stopping is the path left. A worker whose input holds text someone typed into its
+provider whose agent declares `pipe_interrupt` (Claude Code over stream-json `control_request`,
+Codex over app-server `turn/interrupt`, Cursor over ACP `session/cancel`);
+anything else is refused with nothing done, and stopping is the path left. A worker whose input holds text someone typed into its
 terminal is not interrupted either, so their text stays theirs. A turn that
 has not yet begun its reply under tmux is not interrupted: the agent would
 put that message back in its input, where nothing can tell it from a
@@ -163,5 +163,5 @@ once the attempt is recorded; read whether the worker launched from the task.
 - **Interrupt only where an adapter proves the turn ended.** The service
   serves `task.interrupt` for a tmux worker whose agent declares
   `terminal_interrupt` (Claude Code) and for a pipe worker whose agent
-  declares `pipe_interrupt` (Codex, Cursor). Claude Code on a pipe declares
-  none yet and is refused; stop it instead.
+  declares `pipe_interrupt` (Claude Code, Codex, Cursor). An adapter that
+  declares neither is refused; stop it instead.

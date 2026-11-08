@@ -507,9 +507,10 @@ says reaches another task or the file. A worker heading the wrong way in the
 middle of a turn can be cut short with `assistant coordinator interrupt ID`
 and then sent a message, rather than stopped and relaunched: it is served
 for a Claude Code worker hosted in tmux (`session_provider: tmux`), which
-reads the turn's end off its screen, and for a Codex or Cursor worker on a
-pipe (`pipe_interrupt` over app-server `turn/interrupt` or ACP
-`session/cancel`), and refused for any other worker, with nothing done.
+reads the turn's end off its screen, and for a Claude Code, Codex, or Cursor
+worker on a pipe (`pipe_interrupt` over stream-json `control_request`,
+app-server `turn/interrupt`, or ACP `session/cancel`), and refused for any
+other worker, with nothing done.
 
 ## Keeping a repository's agent context true
 

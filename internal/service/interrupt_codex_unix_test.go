@@ -18,9 +18,10 @@ import (
 // provider with the Codex adapter: a worker running a long turn is
 // interrupted by task.interrupt, stays Running and Live, drops that turn,
 // and answers the next message. An idle interrupt presses nothing. A call
-// from the worker itself is covered by TestAnInterruptOnAPipeIsRefused
-// (Claude stream): Codex's app-server declines the test's shell command,
-// so that half is not re-asked here.
+// from the worker itself is covered by TestAnInterruptFromAPipeWorkerIsRefused
+// and TestAClaudePipeInterruptEndsTheTurnAndKeepsTheWorker: Codex's
+// app-server declines the test's shell command, so that half is not
+// re-asked here.
 func TestACodexPipeInterruptEndsTheTurnAndKeepsTheWorker(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)

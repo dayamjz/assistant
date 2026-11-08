@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -34,6 +36,9 @@ import (
 // hands the lines over as the bytes they are, marked OutputStreamJSON, which
 // ReadTranscript in transcript.go is the one reader of.
 //
+// Interrupt ends a running turn over control_request subtype interrupt once
+// system/init has been seen (CLI #98713), and the turn's end is a result line.
+//
 // What this buys is a worker the caller drives and ends on the terms Worker
 // states, over a wire this package frames rather than one it leaves to a
 // terminal. What it does not decide is anything the CLI does with a turn
@@ -45,18 +50,21 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	w := &claudePipeWorker{}
+	w.armTurn()
 	worker, err := startWorker(ctx, ClaudeName, procSpec{
-		bin:    r.resolved,
-		args:   r.workerArguments(spec),
-		dir:    spec.Dir,
-		env:    WorkerEnvironment(r.settings.base, spec.Env),
-		grace:  r.settings.grace,
-		maxOut: r.settings.maxOut,
-	}, spec.Instructions, claudeUserMessage, OutputStreamJSON)
+		bin: r.resolved, args: r.workerArguments(spec), dir: spec.Dir,
+		env: WorkerEnvironment(r.settings.base, spec.Env), grace: r.settings.grace, maxOut: r.settings.maxOut,
+	}, spec.Instructions, claudeUserMessage, OutputStreamJSON, w.observe)
 	if err != nil {
 		return nil, err
 	}
-	return worker, nil
+	w.procWorker = worker
+	if err := w.waitBegun(ctx); err != nil {
+		worker.Close()
+		return nil, err
+	}
+	return w, nil
 }
 
 // workerArguments builds a worker's command line: the configured entry's own
@@ -75,6 +83,167 @@ func (r *claudeRunner) workerArguments(spec WorkerSpec) []string {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose")
+}
+
+// claudePipeWorker is the Claude Code stream-json Worker with pipe interrupt.
+type claudePipeWorker struct {
+	*procWorker
+	mu             sync.Mutex
+	settled, begun chan struct{}
+	next           uint64
+}
+
+// Send delivers one stream-json user message, waiting for the prior result
+// and this turn's system/init so the next Send cannot race a late init.
+func (w *claudePipeWorker) Send(ctx context.Context, text string) error {
+	w.mu.Lock()
+	settled := w.settled
+	w.mu.Unlock()
+	if err := w.await(ctx, settled); err != nil {
+		return err
+	}
+	w.armTurn()
+	if err := w.procWorker.Send(ctx, text); err != nil {
+		w.markIdle()
+		return err
+	}
+	return w.waitBegun(ctx)
+}
+
+// Interrupt ends the turn over control_request subtype interrupt.
+func (w *claudePipeWorker) Interrupt(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	w.mu.Lock()
+	settled, begun := w.settled, w.begun
+	w.mu.Unlock()
+	if settled == nil {
+		return false, nil
+	}
+	select {
+	case <-begun:
+	case <-settled:
+		return false, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-w.done:
+		return false, ErrWorkerEnded
+	}
+	select {
+	case <-settled:
+		return false, nil
+	default:
+	}
+	w.mu.Lock()
+	w.next++
+	id := strconv.FormatUint(w.next, 10)
+	w.mu.Unlock()
+	var line bytes.Buffer
+	enc := json.NewEncoder(&line)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]any{
+		"type": "control_request", "request_id": id,
+		"request": map[string]string{"subtype": "interrupt"},
+	}); err != nil {
+		return false, err
+	}
+	if err := w.writeFramed(ctx, line.Bytes(), "", false); err != nil {
+		return false, err
+	}
+	if err := w.await(ctx, settled); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (w *claudePipeWorker) armTurn() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.settled, w.begun = make(chan struct{}), make(chan struct{})
+}
+
+func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) error {
+	if settled == nil {
+		return nil
+	}
+	select {
+	case <-settled:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return ErrWorkerEnded
+	}
+}
+
+func (w *claudePipeWorker) waitBegun(ctx context.Context) error {
+	w.mu.Lock()
+	settled, begun := w.settled, w.begun
+	w.mu.Unlock()
+	if settled == nil {
+		return nil
+	}
+	select {
+	case <-begun:
+		return nil
+	case <-settled:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-w.done:
+		return ErrWorkerEnded
+	}
+}
+
+func (w *claudePipeWorker) markIdle() {
+	w.mu.Lock()
+	settled, begun := w.settled, w.begun
+	w.settled, w.begun = nil, nil
+	w.mu.Unlock()
+	for _, ch := range []chan struct{}{begun, settled} {
+		if ch == nil {
+			continue
+		}
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+	}
+}
+
+func (w *claudePipeWorker) observe(line []byte) {
+	var msg struct{ Type, Subtype string }
+	if json.Unmarshal(line, &msg) != nil {
+		return
+	}
+	switch {
+	case msg.Type == "system" && msg.Subtype == "init":
+		w.mu.Lock()
+		begun := w.begun
+		w.mu.Unlock()
+		if begun == nil {
+			return
+		}
+		select {
+		case <-begun:
+		default:
+			close(begun)
+		}
+	case msg.Type == "result":
+		w.mu.Lock()
+		begun, settled := w.begun, w.settled
+		w.mu.Unlock()
+		if settled == nil {
+			return
+		}
+		select {
+		case <-begun:
+			w.markIdle()
+		default:
+		}
+	}
 }
 
 // claudeStreamMessage is one user message on a worker's standard input. Its

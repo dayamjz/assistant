@@ -345,6 +345,7 @@ type availabilityStream struct {
 	pending []byte
 	limit   int64
 	discard bool
+	onLine  func([]byte) // after observe; nil when unused
 }
 
 // Write retains bytes while updating live availability from complete bounded frames.
@@ -368,6 +369,9 @@ func (w *availabilityStream) Write(p []byte) (int, error) {
 		}
 		if !w.discard {
 			w.state.observe(w.pending)
+			if w.onLine != nil {
+				w.onLine(w.pending)
+			}
 		}
 		w.pending = nil
 		w.discard = false

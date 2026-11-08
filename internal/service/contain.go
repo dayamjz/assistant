@@ -235,14 +235,16 @@ type invocationLog func(agents.Served, agents.Purpose, agents.Result, error)
 
 func (c containedRunner) Name() string { return c.inner.Name() }
 
-// Capabilities is the wrapped agent's declaration less worker sessions, which
-// this wrapper does not carry; containRunner says why.
+// Capabilities is the wrapped agent's declaration less worker sessions and
+// pipe interrupt, which this wrapper does not carry; containRunner says why.
 func (c containedRunner) Capabilities() agents.Capabilities {
 	var kept []agents.Capability
 	for _, capability := range c.inner.Capabilities().List() {
-		if capability != agents.CapabilityWorkerSessions {
-			kept = append(kept, capability)
+		switch capability {
+		case agents.CapabilityWorkerSessions, agents.CapabilityPipeInterrupt:
+			continue
 		}
+		kept = append(kept, capability)
 	}
 	return agents.Declare(kept...)
 }
