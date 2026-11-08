@@ -66,18 +66,24 @@ func presentWithin(id agents.Identity, wait time.Duration) bool {
 // Finding 1 of #778's review, and the adopt half of #771's: what an adopted
 // Claude Code worker removes when it ends is not taken from anything the
 // worker's server says. A released worker whose server's environment was
-// pointed at another worker's configuration directory and cache directory
-// is adopted and closed; those other directories are still there, and the
-// directories derived from the terminal's socket are gone. The cache half
-// is the control that holds AdoptInTerminal's RemoveAll of claudeCacheFor:
-// without it, every other assertion here still passes.
+// pointed at another worker's configuration, cache and home directories is
+// adopted and closed; those other directories are still there, and the
+// directories derived from the terminal's socket are gone. The cache and
+// home halves are the controls that hold AdoptInTerminal's RemoveAll of
+// claudeCacheFor and claudeHomeFor: without either, every other assertion
+// here still passes.
 func TestAnAdoptedClaudeWorkerRemovesNoDirectoryItsServerNames(t *testing.T) {
 	released, term, agent := openClaudeTerminal(t, standin.Script{}, workerSpec(t))
 	_, otherTerm, _ := openClaudeTerminal(t, standin.Script{}, workerSpec(t))
 	victimConfig, victimCache := serverConfigDir(t, otherTerm), serverCacheDir(t, otherTerm)
+	victimHome := serverEnvDir(t, otherTerm, "HOME")
 	ownConfig, ownCache := serverConfigDir(t, term), serverCacheDir(t, term)
+	ownHome := serverEnvDir(t, term, "HOME")
 	if ownCache != agents.ClaudeCacheFor(term) {
 		t.Fatalf("the server's cache directory is %q, want the adapter's %q", ownCache, agents.ClaudeCacheFor(term))
+	}
+	if ownHome != agents.ClaudeHomeFor(term) {
+		t.Fatalf("the server's HOME is %q, want the adapter's %q", ownHome, agents.ClaudeHomeFor(term))
 	}
 	pane := identityOf(t, released)
 	if err := released.Release(); err != nil {
@@ -86,6 +92,7 @@ func TestAnAdoptedClaudeWorkerRemovesNoDirectoryItsServerNames(t *testing.T) {
 	for _, set := range []struct{ name, value string }{
 		{"CLAUDE_CONFIG_DIR", victimConfig},
 		{"XDG_CACHE_HOME", victimCache},
+		{"HOME", victimHome},
 	} {
 		if out, err := exec.Command(term.Tmux, "-S", term.Socket, "set-environment", "-g", set.name, set.value).CombinedOutput(); err != nil {
 			t.Fatalf("pointing the released worker's server at the other %s: %v: %s", set.name, err, out)
@@ -96,12 +103,12 @@ func TestAnAdoptedClaudeWorkerRemovesNoDirectoryItsServerNames(t *testing.T) {
 		t.Fatalf("adopting: %v", err)
 	}
 	held.Close()
-	for _, dir := range []string{victimConfig, victimCache} {
+	for _, dir := range []string{victimConfig, victimCache, victimHome} {
 		if _, err := os.Stat(dir); err != nil {
 			t.Fatalf("the other worker's directory %s after the adopted worker ended: %v, want it still there", dir, err)
 		}
 	}
-	for _, dir := range []string{ownConfig, ownCache} {
+	for _, dir := range []string{ownConfig, ownCache, ownHome} {
 		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("the adopted worker's own directory %s after it ended: %v, want it removed", dir, err)
 		}

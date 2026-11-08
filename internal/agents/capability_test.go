@@ -734,9 +734,10 @@ func TestEveryShippedAdapterConformsToItsDeclaration(t *testing.T) {
 
 // overTheWire builds each adapter this build ships over the stand-in, with
 // countProbeStep in its script. The Claude Code adapter's base environment
-// carries a key because a terminal worker is refused without one, and the
-// key is stand-in text, which the stand-in reads only to check its approval.
-// Grok Build and OpenAI are built from their factories over New's
+// carries a key because a terminal worker is refused without one, and a git
+// identity because a terminal worker is refused without one of those too;
+// the key is stand-in text, which the stand-in reads only to check its
+// approval. Grok Build and OpenAI are built from their factories over New's
 // arguments, which is the stand-in's command line; Main tells their one-shot
 // command lines apart.
 var overTheWire = map[string]func(t *testing.T) agents.Runner{
@@ -744,7 +745,7 @@ var overTheWire = map[string]func(t *testing.T) agents.Runner{
 		return standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep},
 			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{interruptProbeExchange}}},
 			agents.WithTerminationGrace(300*time.Millisecond),
-			agents.WithBaseEnvironment(withStandinKey(os.Environ())),
+			agents.WithBaseEnvironment(withStandinKey(withOperatorGitIdentity(os.Environ()))),
 		).Runner()
 	},
 	agents.CursorName: func(t *testing.T) agents.Runner {
@@ -791,6 +792,18 @@ const standinToken = "standin-placeholder-token-9876543210zyxwvuts"
 // worker reads.
 func withStandinKey(env []string) []string {
 	return append(slices.Clone(env), agents.ClaudeKeyVariable+"="+standinKey)
+}
+
+// withOperatorGitIdentity is env with a git author and committer the
+// adapter can carry into a worker, so a start that does not itself settle
+// the process's git configuration still reaches a terminal worker.
+func withOperatorGitIdentity(env []string) []string {
+	return append(slices.Clone(env),
+		"GIT_AUTHOR_NAME=operator-under-test",
+		"GIT_AUTHOR_EMAIL=operator-under-test@example.invalid",
+		"GIT_COMMITTER_NAME=operator-under-test",
+		"GIT_COMMITTER_EMAIL=operator-under-test@example.invalid",
+	)
 }
 
 // The worker probe has to be able to fail on a worker that cannot read what

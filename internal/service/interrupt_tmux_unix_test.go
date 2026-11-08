@@ -54,7 +54,10 @@ func claudeTerminalWorker(t *testing.T, body func(w launched, agent *standin.Age
 			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second),
-		agents.WithBaseEnvironment(append(os.Environ(), agents.ClaudeKeyVariable+"=standin-placeholder-key-0123456789abcdefghij")))
+		agents.WithBaseEnvironment(append(os.Environ(),
+			agents.ClaudeKeyVariable+"=standin-placeholder-key-0123456789abcdefghij",
+			"GIT_AUTHOR_NAME=operator-under-test", "GIT_AUTHOR_EMAIL=operator-under-test@example.invalid",
+			"GIT_COMMITTER_NAME=operator-under-test", "GIT_COMMITTER_EMAIL=operator-under-test@example.invalid")))
 	o := options(t, h)
 	o.Catalog = agents.NewCatalog(fixedFactory{runner: agent.Runner()}, cursorFactory{runner: agent.Runner()})
 	withServiceOptions(t, o, func(running serviceUnderTest) {

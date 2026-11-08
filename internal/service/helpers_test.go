@@ -85,7 +85,10 @@ func runQuietly(m *testing.M) int {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	cfg := filepath.Join(dir, "gitconfig")
-	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
+	// user.name and user.email are here so a Claude Code terminal worker the
+	// service starts under this process can carry an operator identity into
+	// its own HOME; repositories a test builds still set their own.
+	if err := os.WriteFile(cfg, []byte("[user]\n\tname = test\n\temail = test@example.invalid\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
 		fmt.Fprintln(os.Stderr, "writing the quiet git configuration:", err)
 		return 1
 	}
