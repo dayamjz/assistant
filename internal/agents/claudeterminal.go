@@ -124,8 +124,8 @@ import (
 //
 // The configured entry's own flags, then the spec's grant's flags with
 // spec.Route exactly as Start writes them for a pipe worker, a grant
-// claudeTerminalGrantRefusal admits being GrantWorker's alone, then
-// --ax-screen-reader, which draws the interface as flat text, and
+// claudeTerminalGrantRefusal admits (one whose flags write acceptEdits),
+// then --ax-screen-reader, which draws the interface as flat text, and
 // --session-id with an identifier drawn here, so the conversation is a new
 // one under a name this package chose and never one resumed. The
 // instructions come last, after "--", so instructions beginning with a dash
@@ -279,16 +279,20 @@ func (r *claudeRunner) WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error {
 }
 
 // claudeTerminalGrantRefusal refuses, with ErrTerminalGrantUnobserved, a
-// terminal spec whose grant runs the interface outside acceptEdits: the
-// ready screen claudeScreen reads, claudeFooterMark among it, was observed
-// in acceptEdits mode only, and GrantSubordinate runs in the default mode
-// so that it edits nothing. Widening the subordinate's grant to the
-// observed mode is not this package's decision, so the terminal-hosted
-// subordinate is refused and the pipe-hosted one, which reads no screen, is
-// the one this adapter starts.
+// terminal spec whose grant's flags put the interface outside acceptEdits:
+// the ready screen claudeScreen reads, claudeFooterMark among it, was
+// observed in acceptEdits mode only. GrantWorker and GrantSubordinate both
+// write that mode (the subordinate still denies editing and git by its
+// tool lists), so a terminal-hosted subordinate starts under the same
+// grant the pipe path uses. A grant whose flags name any other mode is
+// refused here rather than started with a readiness the adapter would be
+// guessing.
 func claudeTerminalGrantRefusal(spec WorkerSpec) error {
-	if spec.Grant() == GrantWorker {
-		return nil
+	flags := claudeGrantFlags(spec.Grant(), spec.Route)
+	for i := 0; i+1 < len(flags); i++ {
+		if flags[i] == "--permission-mode" && flags[i+1] == "acceptEdits" {
+			return nil
+		}
 	}
 	return &invocationFieldError{
 		field: "grant",

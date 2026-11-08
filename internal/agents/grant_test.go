@@ -184,13 +184,14 @@ func TestAWorkerRouteThatWouldReshapeTheToolListIsRefused(t *testing.T) {
 
 // A subordinate coordinator runs under the subordinate grant, which only
 // the subordinate entry point selects: started through OpenSubordinate with
-// a route, the Claude Code adapter writes the default permission mode, the
-// editing tools denied and the route alone allowed, so it edits nothing,
-// runs no git, and runs the coordinator client without a prompt; with no
-// route it is denied the shell too, which is the read grant's list. The
-// same spec through OpenWorker runs under the worker grant, which is the
-// control and what a caller can select: WorkerSpec.Grant is the worker's
-// for every spec a caller builds.
+// a route, the Claude Code adapter writes acceptEdits (so the same grant
+// reaches a terminal-hosted subordinate under tmux), the editing tools
+// denied and the route alone allowed, so it edits nothing, runs no git, and
+// runs the coordinator client without a prompt; with no route it is denied
+// the shell too, which is the read grant's list. The same spec through
+// OpenWorker runs under the worker grant, which is the control and what a
+// caller can select: WorkerSpec.Grant is the worker's for every spec a
+// caller builds.
 func TestTheClaudeSubordinateRunsUnderTheSubordinateGrant(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P4)
@@ -205,7 +206,7 @@ func TestTheClaudeSubordinateRunsUnderTheSubordinateGrant(t *testing.T) {
 		want  grantFlags
 	}{
 		{"a subordinate with a route", route, agents.OpenSubordinate,
-			grantFlags{mode: "default", denied: "Edit,Write,NotebookEdit,Bash(git:*)", allowed: "Bash(" + route + ":*)"}},
+			grantFlags{mode: "acceptEdits", denied: "Edit,Write,NotebookEdit,Bash(git:*)", allowed: "Bash(" + route + ":*)"}},
 		{"a subordinate with no route", "", agents.OpenSubordinate, readGrant},
 		{"a worker with the same route", route, agents.OpenWorker,
 			grantFlags{mode: "acceptEdits", allowed: "Bash(git:*),Bash(" + route + ":*)"}},

@@ -246,6 +246,14 @@ func (s *Service) SubordinateSessionOf(domain string) (session.Host, *session.Se
 	return s.subordinateSessionOf(domain)
 }
 
+// DomainWakeStreamFor exposes to this package's external tests the wake
+// stream publisher of a domain, made on the first ask as a subordinate's
+// subscription is. It exists only in the tests so two domains can be
+// shown to hold distinct publishers.
+func (s *Service) DomainWakeStreamFor(domain string) (*ipc.Publisher, error) {
+	return s.domainWakeStream(domain)
+}
+
 // AbandonSessionsForTest forgets every session this service launched
 // without ending it, so Close ends none of them. It is the shape a service
 // killed with SIGKILL leaves for a worker whose process outlives the

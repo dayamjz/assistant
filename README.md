@@ -114,7 +114,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 
 ## 1. Give each agent a job
 
-A primary coordinator can launch task workers and delegate a **named domain** to a subordinate coordinator. A subordinate manages tasks within its assigned domain; decisions beyond its authority escalate to the primary coordinator. This keeps ownership and permissions explicit.
+A primary coordinator can launch task workers and delegate a **named domain** to a subordinate coordinator. A subordinate manages tasks within its assigned domain; decisions beyond its authority escalate to the primary coordinator. This keeps ownership and permissions explicit. Under `session_provider: tmux`, a Claude subordinate starts in a terminal of its own the same way a worker does, so `peek` can name an `attach` command for work in that domain.
 
 You can define roles for workers, reviews, and fixes, choosing the **agent**, **model provider**, **model family and version**, **reasoning effort**, and a **context window** (`standard` or `1m`) where the adapter declares that window for the model. Roles can also specify an explicit fallback for recognized availability or quota failures. Assistant refuses unsupported model/agent combinations, and a context window the adapter has not declared, instead of silently substituting another one.
 
