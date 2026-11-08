@@ -81,23 +81,26 @@
 //
 // # A restart reaps the agent processes an earlier service recorded
 //
-// PRD section 11's step 5 is "reap orphaned agent processes ... and never
-// touch one whose run is still active", and reap.go is the run half of it.
-// What makes an orphan findable is a record written while the process was
-// not yet one: containRunner's Started value, beside the registry entry it
-// adds, writes a run process record to internal/store naming the run, the
-// invocation's purpose, the group the adapter reported and the leader's
-// identity as agents.Identify read it then, and the forget the adapter calls
-// once its termination of the tree has finished clears it. StageStarted
-// writes no record: it registers whatever group its caller states, and a
-// record of a group nothing here started is one recovery has no business
-// acting on. A record says an agent was launched and its end was not
-// recorded, never that anything runs now (P8), and nothing reads it as
-// liveness: whether a process is there is asked of agents.Identity.Presence.
+// PRD section 11's step 5 first holds again every worker an earlier
+// incarnation left running (readoptWorkers in reconcile.go), then reaps
+// orphaned agent processes and never touches one whose run is still active;
+// reap.go is the run half after that hold-again. What makes an orphan
+// findable is a record written while the process was not yet one:
+// containRunner's Started value, beside the registry entry it adds, writes a
+// run process record to internal/store naming the run, the invocation's
+// purpose, the group the adapter reported and the leader's identity as
+// agents.Identify read it then, and the forget the adapter calls once its
+// termination of the tree has finished clears it. StageStarted writes no
+// record: it registers whatever group its caller states, and a record of a
+// group nothing here started is one recovery has no business acting on. A
+// record says an agent was launched and its end was not recorded, never that
+// anything runs now (P8), and nothing reads it as liveness: whether a
+// process is there is asked of agents.Identity.Presence.
 //
-// recover reaps after the runs are reconciled and before anything is served.
-// Each record is decided from the run's reconciled status first: a group
-// this service registered itself, or a run internal/runs does not call
+// recover holds survivors again after the runs are reconciled, then reaps,
+// then removes copies, then reconciles the fleet, before anything is served.
+// Each reap record is decided from the run's reconciled status first: a
+// group this service registered itself, or a run internal/runs does not call
 // finished, is left untouched without a process being looked at. A status
 // this build does not recognize is refused as unverified rather than read as
 // finished, because internal/runs' reading of it as finished is the safe
@@ -543,14 +546,14 @@
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //
-// PRD section 11's fleet reconciliation runs inside recover, after the runs
-// are reconciled and before anything is served: the queued wakes are read
-// as input with store.QueuedWakes, which hands out nothing because a drain
-// is the coordinator's and hands rows out to whoever makes it, every tmux
-// worker an earlier service let go or left is held again where it verifies
-// (readoptWorkers), every task of this home is read with its terminal probed under a
-// bound, and a terminal gone with the work not landed is relaunched in the
-// copy it stood in. reconcile.go owns the table, which is keyed on the
+// PRD section 11's step 5 holds again every tmux worker an earlier service
+// left running (readoptWorkers) before it reaps orphaned agent processes or
+// removes copies. Fleet reconciliation then runs inside recover, after that
+// and before anything is served: the queued wakes are read as input with
+// store.QueuedWakes, which hands out nothing because a drain is the
+// coordinator's and hands rows out to whoever makes it, every task of this
+// home is read with its terminal probed under a bound, and a terminal gone
+// with the work not landed is relaunched in the copy it stood in. reconcile.go owns the table, which is keyed on the
 // resolved state, the source that decided it and the probed liveness, and
 // the bound, which is what keeps Open from hanging with the lock held behind
 // a provider that never answers; relaunch.go owns the one relaunch, which

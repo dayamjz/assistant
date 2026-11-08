@@ -79,7 +79,7 @@ assistant --json coordinator peek TASK_ID
 assistant coordinator message TASK_ID --text "Clarification for this task"
 ```
 
-A worker can be held, stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md), a short core that names the reference file to read for each of those situations, and the [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
+A worker can be held, interrupted mid-turn (a Claude Code worker in tmux), stopped, or require a person's decision; work is not automatically merged simply because tasks were created. Investigation tasks use `--shape investigation` without a delivery branch, and can later be promoted. For promotion, worker recovery, decision commands, and coordinator domain delegation, follow the [coordinator skill](skills/coordinator/SKILL.md), a short core that names the reference file to read for each of those situations, and the [operator guide](docs/operators.md). The coordinator manages tasks; the Git gate separately determines what may be delivered.
 
 ## Quick start: validate a branch
 
