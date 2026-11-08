@@ -288,11 +288,13 @@ func (r *claudeRunner) WorkerLaunchRefusal(t Terminal, spec WorkerSpec) error {
 // claudeTerminalGrantRefusal refuses, with ErrTerminalGrantUnobserved, a
 // terminal spec whose grant's flags put the interface outside acceptEdits:
 // the ready screen claudeScreen reads, claudeFooterMark among it, was
-// observed in acceptEdits mode only. GrantWorker and GrantSubordinate both
-// write that mode (the subordinate still denies editing and git by its
-// tool lists), so a terminal-hosted subordinate starts under the same
-// grant the pipe path uses. A grant whose flags name any other mode is
-// refused here rather than started with a readiness the adapter would be
+// observed in acceptEdits mode only. GrantWorker writes that mode, and
+// GrantSubordinate does when given a route (still denying editing and git
+// by its tool lists), so a terminal-hosted subordinate with a route
+// starts under the same grant the pipe path uses. With no route,
+// GrantSubordinate's flags are GrantRead's default mode and are refused
+// here; so is any other grant whose flags name a mode other than
+// acceptEdits, rather than started with a readiness the adapter would be
 // guessing.
 func claudeTerminalGrantRefusal(spec WorkerSpec) error {
 	flags := claudeGrantFlags(spec.Grant(), spec.Route)

@@ -220,6 +220,14 @@ import (
 //     made, so a caller whose bound is shorter than a turn has its text
 //     refused, nothing typed, rather than queued. The CLI was seen to queue
 //     a message pasted while a turn ran; nothing here relies on that.
+//   - That wait holds the same slot Interrupt takes before it can press
+//     Escape. When a send holds the slot, an interrupt whose own context
+//     ends first is refused with ErrTerminalNotReady and that error,
+//     Escape not typed, which
+//     TestAClaudeTerminalInterruptBehindAWaitingSendKeepsItsDeadline
+//     encodes for the behind-send case. The same test also admits an
+//     interrupt that takes the slot first and ends the turn: the shared
+//     slot serializes them; it does not promise which one wins.
 //   - The Claude Code typing tells its interface from the conversation
 //     above it by the row tmux reports the cursor on, since the
 //     conversation carries text this package did not write. One shape is
