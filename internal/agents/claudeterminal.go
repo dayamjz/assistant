@@ -264,10 +264,17 @@ func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Ide
 	return worker, nil
 }
 
-// terminalPreflight is StartInTerminal's credential refusal, read from the
-// environment a worker would be started under, on TerminalStartable's terms.
+// terminalPreflight is StartInTerminal's credential and git-identity
+// refusals, read from the environment a worker would be started under, on
+// TerminalStartable's terms: the same ErrNoCredential and ErrNoGitIdentity
+// StartInTerminal answers before making any worker directory, so auto can
+// fall back to a pipe rather than choose tmux and then fail the launch.
 func (r *claudeRunner) terminalPreflight() error {
-	_, _, err := claudeTerminalCredential(WorkerEnvironment(r.settings.base, nil), r.name)
+	env, _, err := claudeTerminalCredential(WorkerEnvironment(r.settings.base, nil), r.name)
+	if err != nil {
+		return err
+	}
+	_, err = claudeTerminalGitIdentity(context.Background(), env)
 	return err
 }
 

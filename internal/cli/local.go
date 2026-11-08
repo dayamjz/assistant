@@ -722,11 +722,16 @@ func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog)
 // autoSessionProvider is sessionProvider's row for auto, which is always OK
 // and says which provider a worker of the routed worker agent gets here, on
 // the same TerminalStartable and TerminalFits gates the service's sessionHost
-// uses for a launch (absolute tmux path included).
+// uses for a launch (absolute tmux path included). It answers for this
+// process's environment: a managed service's unit carries PATH only
+// (internal/managed), so a credential or git identity present only in the
+// shell doctor runs in can make this row say tmux while that service hosts
+// on pipes, the same caveat the commit-identity row names for its answer.
 func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents.Catalog, h *home.Home) machine.Check {
 	row := machine.Check{Name: machine.CheckSessionProvider, OK: true}
 	tmux, lookErr := doctorTmux()
 	selection, err := doctorWorkerRoute(ctx, cfg, catalog, false)
+	const envNote = "; answered for this process's environment (a managed service gets PATH only and may host on pipes without a credential or git identity there)"
 	switch {
 	case lookErr != nil:
 		row.Detail = "workers run on pipes (the default, auto): no tmux binary is on PATH, so a worker cannot outlive a restart of the service"
@@ -735,12 +740,12 @@ func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents
 			" and on pipes otherwise (the default, auto); the agent that would host workers could not be resolved here: " + err.Error()
 	case agents.TerminalStartable(selection.Resolution.Runner) != nil:
 		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto), so a worker cannot outlive a restart of the service: %v",
-			agents.TerminalStartable(selection.Resolution.Runner))
+			agents.TerminalStartable(selection.Resolution.Runner)) + envNote
 	case !session.TerminalFits(h, tmux):
 		row.Detail = "workers run on pipes (the default, auto): the home path leaves no room for a terminal socket, so a worker cannot outlive a restart of the service"
 	default:
 		row.Detail = fmt.Sprintf("workers run in tmux (the default, auto): tmux at %s, and %s declares %s",
-			tmux, selection.Resolution.Name, agents.CapabilityTerminalWorkers)
+			tmux, selection.Resolution.Name, agents.CapabilityTerminalWorkers) + envNote
 	}
 	return row
 }

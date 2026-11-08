@@ -296,11 +296,11 @@ type Terminal struct {
 	Socket string
 }
 
-// maxSocketPath is the longest local socket path this package passes to
+// MaxSocketPath is the longest local socket path this package passes to
 // tmux: one less than the 104 bytes macOS gives a socket path, which is also
 // within Linux's 108, so a path is refused here rather than truncated or
 // refused by the server in a message about something else.
-const maxSocketPath = 103
+const MaxSocketPath = 103
 
 // Validate refuses a Terminal that cannot be started as written, wrapping
 // ErrInvalidInvocation and naming the field.
@@ -311,10 +311,10 @@ func (t Terminal) Validate() error {
 	if !filepath.IsAbs(t.Socket) {
 		return &invocationFieldError{field: "Socket", reason: fmt.Sprintf("%q is not an absolute path", t.Socket)}
 	}
-	if len(t.Socket) > maxSocketPath {
+	if len(t.Socket) > MaxSocketPath {
 		return &invocationFieldError{
 			field:  "Socket",
-			reason: fmt.Sprintf("%d bytes exceeds the local socket path limit of %d", len(t.Socket), maxSocketPath),
+			reason: fmt.Sprintf("%d bytes exceeds the local socket path limit of %d", len(t.Socket), MaxSocketPath),
 		}
 	}
 	return nil
@@ -415,8 +415,10 @@ type terminalPreflight interface{ terminalPreflight() error }
 // a *CapabilityError when r has not declared CapabilityTerminalWorkers, and
 // what the adapter's own start would refuse for its environment, which for
 // the Claude Code adapter is ErrNoCredential when neither of its credential
-// variables is set. A nil answer is not a promise that a start succeeds; it
-// is what a caller choosing between a terminal and a pipe can know first.
+// variables is set and ErrNoGitIdentity when no complete git name/email is
+// available to carry into the worker's own HOME. A nil answer is not a
+// promise that a start succeeds; it is what a caller choosing between a
+// terminal and a pipe can know first.
 func TerminalStartable(r Runner) error {
 	if !r.Capabilities().Has(CapabilityTerminalWorkers) {
 		return &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalWorkers, Path: "the terminal worker"}

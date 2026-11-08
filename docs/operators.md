@@ -1431,7 +1431,10 @@ long to hold a terminal socket, and on pipes the
 service holds, which nothing can attach to, wherever it cannot.
 `assistant doctor`'s session provider row says which applies here for the
 worker the service would route (the worker role and agent list, a
-`roles.worker` pin included). To choose for yourself, set the provider in
+`roles.worker` pin included). It answers for the environment doctor runs
+in, so a credential or git identity present only in that shell can disagree
+with a managed service, which gets PATH only and may host on pipes without
+them. To choose for yourself, set the provider in
 your own configuration file, `config.yaml` under the home (by default
 `~/.assistant`), which is a YAML document:
 

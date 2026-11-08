@@ -422,9 +422,11 @@ func TestAReleasedTerminalWorkerIsHeldAgainOnlyOnceItVerifies(t *testing.T) {
 // TerminalStartable answers, before anything starts, what would stop a
 // terminal worker here: the Claude Code adapter refuses with ErrNoCredential
 // when neither of its credential variables is in the environment its worker
-// would start under, which its pipe worker does not need, and answers nil
-// once one is; the scripted adapter, which embeds that runner, needs none;
-// and an adapter that declares no terminal workers is a *CapabilityError.
+// would start under, which its pipe worker does not need; with a credential
+// but no complete git identity it refuses with ErrNoGitIdentity; and it
+// answers nil once both are present. The scripted adapter, which embeds that
+// runner, needs none; an adapter that declares no terminal workers is a
+// *CapabilityError.
 func TestTerminalStartableReadsTheAdaptersOwnRefusalFirst(t *testing.T) {
 	build := func(t *testing.T, f func(...agents.ClaudeOption) agents.Factory, env []string) agents.Runner {
 		t.Helper()
@@ -434,13 +436,39 @@ func TestTerminalStartableReadsTheAdaptersOwnRefusalFirst(t *testing.T) {
 		}
 		return r
 	}
-	bare := []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent"}
+	// Isolate git configuration so UserIdentity cannot invent an identity
+	// from the developer's own global config (same stance as the terminal
+	// HOME identity refusal tests).
+	emptyGit := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyGit, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyGit)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	for _, name := range []string{
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
+	} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
+	bare := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=/nonexistent",
+		"GIT_CONFIG_GLOBAL=" + emptyGit,
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	}
 	if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, bare)); !errors.Is(err, agents.ErrNoCredential) {
 		t.Errorf("claude with no credential answered %v, want ErrNoCredential", err)
 	}
+	identity := []string{"GIT_AUTHOR_NAME=n", "GIT_AUTHOR_EMAIL=n@example.com"}
 	for _, credential := range []string{agents.ClaudeKeyVariable + "=k", agents.ClaudeTokenVariable + "=t"} {
-		if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, append(bare, credential))); err != nil {
-			t.Errorf("claude with %s answered %v, want nil", strings.Split(credential, "=")[0], err)
+		credOnly := append(append([]string{}, bare...), credential)
+		if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, credOnly)); !errors.Is(err, agents.ErrNoGitIdentity) {
+			t.Errorf("claude with %s and no git identity answered %v, want ErrNoGitIdentity", strings.Split(credential, "=")[0], err)
+		}
+		ready := append(append([]string{}, credOnly...), identity...)
+		if err := agents.TerminalStartable(build(t, agents.ClaudeFactory, ready)); err != nil {
+			t.Errorf("claude with %s and a git identity answered %v, want nil", strings.Split(credential, "=")[0], err)
 		}
 	}
 	if err := agents.TerminalStartable(build(t, agents.ScriptedFactory, bare)); err != nil {

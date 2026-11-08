@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/session"
 )
@@ -106,18 +107,29 @@ func TestATerminalReferenceNamesItsSocket(t *testing.T) {
 // provider can fall back to a pipe for a home whose root is too long rather
 // than refuse every launch there.
 func TestATerminalFitsOnlyAHomeShortEnoughForItsSocket(t *testing.T) {
+	tmux := "/usr/bin/tmux"
+	// Pin agents.MaxSocketPath: TerminalFits reads that bound through Validate,
+	// so a wrong limit between a short and a long home still fails here.
+	atLimit := agents.Terminal{Tmux: tmux, Socket: "/" + strings.Repeat("a", agents.MaxSocketPath-1)}
+	if err := atLimit.Validate(); err != nil {
+		t.Fatalf("a socket of length %d: %v", agents.MaxSocketPath, err)
+	}
+	over := agents.Terminal{Tmux: tmux, Socket: "/" + strings.Repeat("a", agents.MaxSocketPath)}
+	if over.Validate() == nil {
+		t.Fatalf("a socket of length %d validated", agents.MaxSocketPath+1)
+	}
 	short, err := home.Open("/tmp/h")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !session.TerminalFits(short, "/usr/bin/tmux") {
+	if !session.TerminalFits(short, tmux) {
 		t.Error("a short home does not fit a terminal worker")
 	}
 	long, err := home.Open("/tmp/" + strings.Repeat("l", 100))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.TerminalFits(long, "/usr/bin/tmux") {
+	if session.TerminalFits(long, tmux) {
 		t.Error("a home past the socket path limit fits a terminal worker")
 	}
 	if session.TerminalFits(short, "tmux") {

@@ -1747,6 +1747,21 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	}
 	plant("claude")
 	t.Setenv("PATH", bin)
+	// Isolate git configuration so UserIdentity cannot invent an identity
+	// from the developer's own global config; auto's TerminalStartable gate
+	// needs a complete pair for tmux.
+	emptyGit := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyGit, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyGit)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	for _, name := range []string{
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
+	} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
 
 	h := newHome(t)
 	subject := newSubject(t)
@@ -1760,8 +1775,17 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	t.Setenv(agents.ClaudeKeyVariable, "a-key-for-the-row")
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found = findCheck(report, machine.CheckSessionProvider)
-	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run in tmux (the default, auto)") {
-		t.Fatalf("doctor's session provider row with the default, tmux and claude with a credential is %+v, want OK naming tmux", row)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run on pipes (the default, auto)") ||
+		!strings.Contains(row.Detail, "git identity") {
+		t.Fatalf("doctor's session provider row with a credential and no git identity is %+v, want OK naming pipes and the identity", row)
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "doctor-row")
+	t.Setenv("GIT_AUTHOR_EMAIL", "doctor-row@example.invalid")
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run in tmux (the default, auto)") ||
+		!strings.Contains(row.Detail, "this process's environment") {
+		t.Fatalf("doctor's session provider row with the default, tmux, credential and git identity is %+v, want OK naming tmux and the environment caveat", row)
 	}
 
 	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
