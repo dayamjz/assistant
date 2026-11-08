@@ -146,8 +146,14 @@ func TestATmuxSubordinateAnswersAnAttachCommand(t *testing.T) {
 		if err := w.running.client.Call(t.Context(), ipc.MethodTaskPeek, machine.TaskRequest{Task: own}, &peeked); err != nil {
 			t.Fatalf("task.peek of the domain's task: %v", err)
 		}
-		if len(peeked.Attach) == 0 {
-			t.Fatalf("task.peek of the domain's task named no attach command: %+v", peeked)
+		// Same shape as the subordinate's AttachReference: a tmux -S <socket>
+		// command, here for the domain task's own worker terminal.
+		pi := slices.Index(peeked.Attach, "-S")
+		if pi < 0 || pi+1 >= len(peeked.Attach) {
+			t.Fatalf("task.peek of the domain's task named no socket attach command: %q", peeked.Attach)
+		}
+		if out, err := exec.Command(peeked.Attach[0], peeked.Attach[1], peeked.Attach[2], "list-sessions").CombinedOutput(); err != nil {
+			t.Fatalf("running task.peek's attach binary against its socket failed: %v: %s", err, out)
 		}
 	})
 }
