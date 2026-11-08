@@ -2991,7 +2991,7 @@ database, so a person debugging a stuck home has nothing to `cat` or `grep` amon
 reads them through this program's own views; stage and service logs, configuration, and other
 files under the home remain ordinary files beside them. `assistant db path` is the way out for the
 records. It prints the database file of the home it acted on, so a reader of the person's own can
-be pointed at the records. It names where the file is rather than reading it: it creates nothing,
+be pointed at the records. It names where the file is rather than reading it: it creates no home,
 opens no database and asks the service nothing, so it answers the same with the service up or down,
 which is when a person debugging a stuck home asks. Opening the file read-only is the reader's to
 do, and so is managing a file the service may be writing; this answers where the file is and

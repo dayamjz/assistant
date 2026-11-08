@@ -376,14 +376,15 @@ var (
 	// path and nothing else, so a caller substituting the answer into
 	// another command line substitutes a path. It carries no pointer, which
 	// is what VoiceValue is for, and readOut reaches it like any phrased row
-	// rather than through writePointed. The path goes through printable, as
-	// every line this package writes does, so a control character in a home
-	// root is escaped rather than written; that is the one case where this
-	// line is not the file's name byte for byte. --json keeps that character,
-	// so a caller that reads the structured answer recovers the path; what
-	// it does not keep is a byte that is not valid UTF-8, which becomes the
-	// replacement character because that is what encoding/json does. PRD
-	// section 9 and db.go say so.
+	// rather than through writePointed. The path goes through printable, so
+	// a control character in a home root is escaped rather than written; that
+	// is the one case where this line is not the file's name byte for byte.
+	// Phrase rows written through writeln do not all go through printable;
+	// this row does because the path is the whole answer. --json keeps that
+	// character, so a caller that reads the structured answer recovers the
+	// path; what it does not keep is a byte that is not valid UTF-8, which
+	// becomes the replacement character because that is what encoding/json
+	// does. PRD section 9 and db.go say so.
 	databaseRendering = rendering{name: "database", voice: VoiceValue, of: typeOf[machine.Database](),
 		render: func(w io.Writer, v any) { writeln(w, printable(v.(machine.Database).Path)) }}
 )

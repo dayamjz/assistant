@@ -282,7 +282,7 @@
 // does not describe is a finding against the specification, as a verb is.
 //
 // It takes the service out of the path on purpose. The verb opens no
-// database, creates nothing and asks the service nothing: the path is
+// database, creates no home and asks the service nothing: the path is
 // internal/home's, so the answer is the same with the service up or down,
 // which is when the question is asked. That is a different kind of
 // independence from the next section's working-copy verbs, which open the

@@ -137,10 +137,12 @@ func TestTheDatabaseVerbServesItsSubcommandAndNothingElse(t *testing.T) {
 	}
 }
 
-// TestTheDatabasePathCreatesNothing holds the stuck-home promise: the verb
-// names the file and does not create the home. A --home that has never been
-// opened stays absent after the answer, so inserting a Create would fail this.
-func TestTheDatabasePathCreatesNothing(t *testing.T) {
+// TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase holds the stuck-home
+// promise: the verb names the file and neither creates the home nor opens
+// the database. A --home that has never been opened stays absent, and under
+// an existing home a missing state.db stays missing, so inserting Create or
+// an Open of the database would fail this.
+func TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "never-created")
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
@@ -155,7 +157,24 @@ func TestTheDatabasePathCreatesNothing(t *testing.T) {
 		t.Errorf("assistant db path wrote %q, want %q", got.stdout, want)
 	}
 	if _, err := os.Stat(root); !os.IsNotExist(err) {
-		t.Fatalf("db path created %s; the verb promises to create nothing", root)
+		t.Fatalf("db path created %s; the verb creates no home", root)
+	}
+
+	h := newHome(t)
+	path := h.Database()
+	_ = os.Remove(path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("%s should be absent before the command: %v", path, err)
+	}
+	under := run(t, h, h.Root(), "db", "path")
+	if under.code != machine.ExitOK {
+		t.Fatalf("assistant db path exited %s:\n%s%s", under.code, under.stdout, under.stderr)
+	}
+	if under.stdout != path+"\n" {
+		t.Errorf("assistant db path wrote %q, want %q", under.stdout, path+"\n")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("db path created or opened %s; the verb opens no database", path)
 	}
 }
 
