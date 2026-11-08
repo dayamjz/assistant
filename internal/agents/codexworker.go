@@ -298,8 +298,9 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 // Interrupt ends the turn the worker is running over turn/interrupt, on
 // InterruptibleWorker.Interrupt's terms. The request shape is Codex CLI
 // 0.166.0's TurnInterruptParams (threadId and turnId); the turn's end is
-// the idle that follows, which markIdle already settles a completed or
-// failed turn with. An interrupt with no turn under way sends nothing.
+// turn/completed with status interrupted (completeTurn) or the idle that
+// follows a completed turn, whichever markIdle sees first. An interrupt
+// with no turn under way sends nothing.
 func (w *codexWorker) Interrupt(ctx context.Context) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
@@ -435,15 +436,16 @@ func (w *codexWorker) receive(line []byte) {
 	}
 }
 
-// completeTurn reads a turn/completed notification. Only a failed one acts:
-// Codex CLI 0.163.0 was observed to end a failed turn this way after moving
-// the thread to systemError, with no idle after it, so the turn is settled
-// here or the next Send would wait on an idle that never comes. A completed
-// turn is still settled by its idle, as before, so an idle that follows a
-// turn/completed cannot settle the turn after it. The failure is classified
-// by codexTurnFailure, and only a recognized one is recorded, because a
-// recorded failure is what a worker handoff acts on and an ordinary failed
-// turn is not a reason to change agents.
+// completeTurn reads a turn/completed notification. A failed or interrupted
+// status settles the turn here: Codex CLI 0.163.0 was observed to end a
+// failed turn this way after moving the thread to systemError with no idle
+// after it, and CLI 0.166.0's TurnStatus interrupted is the same shape after
+// turn/interrupt, so Interrupt must not depend on a following idle. A
+// completed turn is still settled by its idle, as before, so an idle that
+// follows a turn/completed cannot settle the turn after it. A failure is
+// classified by codexTurnFailure, and only a recognized one is recorded,
+// because a recorded failure is what a worker handoff acts on and an
+// ordinary failed turn is not a reason to change agents.
 func (w *codexWorker) completeTurn(params json.RawMessage) {
 	var completed struct {
 		Turn struct {
@@ -454,18 +456,23 @@ func (w *codexWorker) completeTurn(params json.RawMessage) {
 			} `json:"error"`
 		} `json:"turn"`
 	}
-	if json.Unmarshal(params, &completed) != nil || completed.Turn.Status != "failed" {
+	if json.Unmarshal(params, &completed) != nil {
 		return
 	}
-	var message string
-	var info json.RawMessage
-	if e := completed.Turn.Error; e != nil {
-		message, info = e.Message, e.Info
+	switch completed.Turn.Status {
+	case "failed":
+		var message string
+		var info json.RawMessage
+		if e := completed.Turn.Error; e != nil {
+			message, info = e.Message, e.Info
+		}
+		if failure := codexTurnFailure(info, message); failure != nil {
+			w.availability.fail(failure)
+		}
+		w.markIdle()
+	case "interrupted":
+		w.markIdle()
 	}
-	if failure := codexTurnFailure(info, message); failure != nil {
-		w.availability.fail(failure)
-	}
-	w.markIdle()
 }
 
 // codexTurnFailure classifies a failed turn's error, structured field

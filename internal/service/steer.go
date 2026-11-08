@@ -161,16 +161,21 @@ import (
 //     the worker to have does not reach it through a note either.
 //   - No method reads a message record back; the record travels in
 //     task.message's answer, and an unacknowledged one surfaces as a wake.
-//   - An interrupt's proof is that a turn ended between the reading and the
-//     ready screen after the key, which the turn itself may have done in
-//     that window; the key then reaches an idle interface, once, which the
-//     CLI was observed to ignore. A key a person pressed in that window too
-//     is a second one, which the CLI was observed to answer with a menu,
-//     and the interrupt is then refused unread.
-//   - A turn that has not begun its reply is not interrupted: the
-//     interrupt waits for the reply under interruptBound and is refused
-//     when it does not begin, so a turn that thinks or waits longer than
-//     that before drawing anything cannot be interrupted.
+//   - Under tmux, an interrupt's proof is that a turn ended between the
+//     reading and the ready screen after the key, which the turn itself may
+//     have done in that window; the key then reaches an idle interface,
+//     once, which the CLI was observed to ignore. A key a person pressed in
+//     that window too is a second one, which the CLI was observed to answer
+//     with a menu, and the interrupt is then refused unread. A turn that
+//     has not begun its reply is not interrupted: the interrupt waits for
+//     the reply under interruptBound and is refused when it does not begin,
+//     so a turn that thinks or waits longer than that before drawing
+//     anything cannot be interrupted.
+//   - Under pipe, the cancel fires once the adapter has a turn id; there is
+//     no reply-begun gate. An idle or completed notification that arrives
+//     for a turn that finished itself after the cancel can answer
+//     interrupted true the same way the tmux key can reach an already-idle
+//     screen.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 
@@ -179,13 +184,15 @@ import (
 // it longer than this. Chosen, not measured.
 const messageSendBound = 10 * time.Second
 
-// interruptBound bounds an interrupt's Interrupt: the wait for a screen it
-// may press its key on and the wait for the ready screen after it. Chosen
-// over what Claude Code 2.1.308 was observed to take: ready within half a
-// second of the key, and, after a pasted message such as every message this
-// service sends, about four seconds with a notice in place of its footer,
-// which reads as no interface drawn, once before the turn reads running and
-// once more when the key puts the message back in the input.
+// interruptBound bounds an interrupt's Interrupt: under tmux, the wait for a
+// screen it may press its key on and the wait for the ready screen after
+// it; under pipe, the wait for the protocol to settle the turn after the
+// cancel. Chosen over what Claude Code 2.1.308 was observed to take on
+// tmux: ready within half a second of the key, and, after a pasted message
+// such as every message this service sends, about four seconds with a
+// notice in place of its footer, which reads as no interface drawn, once
+// before the turn reads running and once more when the key puts the
+// message back in the input.
 const interruptBound = 30 * time.Second
 
 // stopProbeBound bounds the probe that proves a stop. It is

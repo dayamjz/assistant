@@ -43,7 +43,7 @@ var ErrNotDurable = errors.New("session: this provider's workers do not outlive 
 // declared agents.CapabilityPipeInterrupt is refused with that package's
 // *CapabilityError instead, so undeclared stays that package's typed
 // refusal. Nothing is read or sent.
-var ErrNotInterruptible = errors.New("session: this provider's workers have no terminal to interrupt a turn in")
+var ErrNotInterruptible = errors.New("session: this provider's workers have no interrupt path for this session")
 
 // Host is a Provider as the service that launches through it holds one: the
 // five operations, the worker group set the provider produces, and the two
