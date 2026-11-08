@@ -168,18 +168,6 @@ func TestAClaudeTerminalStartRefusedWithoutAGitIdentity(t *testing.T) {
 	}
 }
 
-// withOperatorGitIdentity is env with a git author and committer the
-// adapter can carry into a worker, so a test that does not itself settle
-// the process's git configuration still reaches a start.
-func withOperatorGitIdentity(env []string) []string {
-	return append(append([]string{}, env...),
-		"GIT_AUTHOR_NAME=operator-under-test",
-		"GIT_AUTHOR_EMAIL=operator-under-test@example.invalid",
-		"GIT_COMMITTER_NAME=operator-under-test",
-		"GIT_COMMITTER_EMAIL=operator-under-test@example.invalid",
-	)
-}
-
 func awaitMeasureFile(t *testing.T, path string) string {
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
