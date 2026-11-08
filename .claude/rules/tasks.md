@@ -125,8 +125,12 @@ paths: ["internal/tasks/**"]
   journal; `standingDiscard` reads one a discard left and refuses, never
   removing, anything else at its name, a directory with no journal or a
   journal naming no copy's identity among it. A staging directory a
-  stopped first write left blocks nothing and is left. No discard answer
-  calls it yet; the removal that would is deferred to the rest of AGE-486.
+  stopped first write left blocks nothing and is left. The journal's
+  `Steps` record each set-aside action in order (`appendDiscardStep`);
+  `putBack` (`kept_putback.go`) reverses them and strikes each once
+  undone, refusing a move whose original path now holds something else
+  (`ErrAsideStands`). Set-aside of every loss item and `Cleaner.Discard`
+  are later links of the removal stack; no discard answer calls them yet.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after

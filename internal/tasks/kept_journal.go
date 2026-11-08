@@ -52,9 +52,52 @@ const journalName = "journal.json"
 // discardJournal is what a discard writes before each step. Copy is the
 // identity (CopyIdentity's written form) of the copy the discard began on,
 // read when its directory was made, so the copy can be told from anything
-// put at its path once the discard has moved it.
+// put at its path once the discard has moved it. Steps is the ordered
+// record of what was done, newest last: putBack reverses them and strikes
+// each once undone.
 type discardJournal struct {
-	Copy string `json:"copy"`
+	Copy  string        `json:"copy"`
+	Steps []discardStep `json:"steps,omitempty"`
+}
+
+// discardStepKind is one kind of journalled discard action. The set is closed.
+type discardStepKind string
+
+// The kinds a discard journals, in the order later links write them.
+const (
+	discardStepMove      discardStepKind = "move"
+	discardStepWriteBack discardStepKind = "writeBack"
+	discardStepHead      discardStepKind = "head"
+	discardStepRefDelete discardStepKind = "refDelete"
+	discardStepPONR      discardStepKind = "ponr"
+	discardStepFinish    discardStepKind = "finish"
+)
+
+// discardStep is one journalled action. Fields other than Kind are filled
+// for the kinds that use them and omitted otherwise.
+type discardStep struct {
+	Kind   discardStepKind `json:"kind"`
+	From   string          `json:"from,omitempty"`
+	To     string          `json:"to,omitempty"`
+	Path   string          `json:"path,omitempty"`
+	Held   string          `json:"held,omitempty"`
+	Ref    string          `json:"ref,omitempty"`
+	Object string          `json:"object,omitempty"`
+}
+
+// appendDiscardStep journals step after last on dir's journal, leaving the
+// copy identity unchanged. last must be the journal as standingDiscard or
+// the previous write read it.
+func appendDiscardStep(dir string, last *discardJournal, step discardStep) error {
+	if last == nil {
+		return fmt.Errorf("tasks: appending a discard step with no journal last written")
+	}
+	if step.Kind == "" {
+		return fmt.Errorf("tasks: a discard step names no kind")
+	}
+	next := *last
+	next.Steps = append(append([]discardStep(nil), last.Steps...), step)
+	return writeJournal(dir, last, next)
 }
 
 // beginDiscard makes the discard's directory beside the copy at copyPath,
