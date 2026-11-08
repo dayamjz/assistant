@@ -18,8 +18,8 @@ import (
 // The coordinator's task methods: task.create, task.promote and
 // task.relaunch, PRD section 9's three service methods beside the command
 // table (#95 lines A, E and J), and task.relay, the coordinator's record of
-// section 6's "findings relayed" (#278). Its paragraph's two steering methods,
-// task.message and task.stop, and the refused task.interrupt are steer.go's,
+// section 6's "findings relayed" (#278). Its paragraph's steering methods,
+// task.message, task.stop and task.interrupt, are steer.go's,
 // on this file's terms for who may ask and how a refusal crosses the wire.
 //
 // # None is a second implementation

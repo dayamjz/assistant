@@ -31,7 +31,7 @@ below: read one yourself, before you act, whenever its trigger applies.
 | --- | --- |
 | [references/catch-up.md](references/catch-up.md) | your session starts, your host cleared or compacted it, or it grew long and you reset it: start from `assistant --json coordinator catch-up` |
 | [references/tasks.md](references/tasks.md) | you create a task with `--overlaps`, `--delivery` or `--mode`, read a task's `policy` or `record.blocker_task`, or read the `watch` digest |
-| [references/workers.md](references/workers.md) | you message, peek at, stop or relaunch a worker; a wake is `terminal-gone`, `message-unacknowledged`, `stall-closed` or a stall hold; a command is refused `unplaced`, `unplaceable` or `not-at-terminal` |
+| [references/workers.md](references/workers.md) | you message, interrupt, peek at, stop or relaunch a worker; a wake is `terminal-gone`, `message-unacknowledged`, `stall-closed` or a stall hold; a command is refused `unplaced`, `unplaceable` or `not-at-terminal` |
 | [references/promotion.md](references/promotion.md) | an investigation reads `reported` or `held`: you read its report, promote it, or record its findings relayed |
 | [references/kept-work.md](references/kept-work.md) | a `kept-work` wake or a `kept_work_wakes` row arrives, a task reads `dispatched` naming `kept_work`, or an answer carries `kept_work_unread` |
 | [references/housekeeping.md](references/housekeeping.md) | you create a housekeeping pass, a `housekeeping_wakes` row arrives, or a pass reports or offers a retirement hold |

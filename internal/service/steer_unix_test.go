@@ -573,14 +573,14 @@ func waitRelaunchedAs(t *testing.T, running serviceUnderTest, h *home.Home, task
 	}
 }
 
-// PRD section 6's "interrupt is not offered": task.interrupt is refused from
-// the worker with the worker code, as every coordinator method is,
-// and from this process with the records' refusal naming the capability no
-// adapter declares, while the same adapter's declaration of worker
-// sessions, which the stream worker runs on, shows the refusal is read off
-// a declaration and not off an adapter that declares nothing. The worker
-// runs on after both: nothing was interrupted.
-func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
+// PRD section 6's interrupt is served only where a key can be typed: under
+// the pipe provider task.interrupt is refused from the worker with the
+// worker code, as every coordinator method is, and from this process with
+// the refusal naming the missing terminal, although the worker's adapter
+// declares a terminal interrupt, so the refusal is read off the provider
+// and not off an adapter that declares nothing. The worker runs on after
+// both: nothing was interrupted.
+func TestAnInterruptOnAPipeIsRefused(t *testing.T) {
 	t.Parallel()
 	streamWorker(t, "task/interrupt", steerConfig, func(w launched, agent *standin.Agent) {
 		running, task := w.running, w.task
@@ -588,14 +588,13 @@ func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
 		if _, code := callAs(t, w, ipc.MethodTaskInterrupt, request); code != ipc.CodeWorker {
 			t.Fatalf("task.interrupt from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
-		var out struct{}
+		var out machine.TaskInterrupted
 		err := running.client.Call(t.Context(), ipc.MethodTaskInterrupt, request, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "interrupt") || !strings.Contains(err.Error(), "has not declared") {
-			t.Fatalf("task.interrupt = %v, want ErrRefused naming the undeclared interrupt capability", err)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "no terminal to interrupt a turn in") {
+			t.Fatalf("task.interrupt = %v, want ErrRefused naming the missing terminal", err)
 		}
-		declared := agent.Runner().Capabilities()
-		if !declared.Has(agents.CapabilityWorkerSessions) || declared.Has(agents.Capability("interrupt")) {
-			t.Fatalf("the worker's adapter declares %s, want worker sessions and no interrupt", declared)
+		if declared := agent.Runner().Capabilities(); !declared.Has(agents.CapabilityTerminalInterrupt) {
+			t.Fatalf("the worker's adapter declares %s, want a terminal interrupt among it", declared)
 		}
 		if got := observed(t, listedTask, running.client, task); !readsRunning(got) {
 			t.Fatalf("after the refused interrupt the task reads %+v, want still running", got)

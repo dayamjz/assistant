@@ -341,6 +341,7 @@ func fixtures(t *testing.T) map[string]any {
 				WrittenAt: store.Known(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC))},
 			Delivery: store.DeliveryWritten, SentBy: "coordinator",
 		},
+		"task interrupt": machine.TaskInterrupted{Task: sampleID, Attempt: 2, Session: sampleID, Interrupted: true},
 		"task stop": machine.TaskStopped{
 			Task: sampleID, Attempt: 2, Session: sampleID, Ended: "the worker's process group was ended",
 			Hold: store.Hold{Key: "task/" + sampleID + "/stopped/2", TaskID: store.Known(sampleID), Subject: "whether to begin this work again"},
