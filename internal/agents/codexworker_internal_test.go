@@ -15,8 +15,9 @@ import (
 // then idle). It is not a live stdio capture: the ids are taken from the
 // 0.163.0 happy-path recording so a reader can join the two, and the
 // method names and status are what generate-json-schema emitted for
-// 0.166.0. Playing the frames through receive settles an outstanding turn
-// on the idle, which is the proof Interrupt waits on after the call.
+// 0.166.0. Playing frames through receive settles the turn on
+// turn/completed interrupted alone: idle may follow, but Interrupt must
+// not depend on it (the same no-idle shape failed turns already use).
 func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 	raw, err := os.ReadFile("testdata/codex-app-server-turn-interrupt-0.166.0.jsonl")
 	if err != nil {
@@ -46,6 +47,9 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 			}
 			continue
 		}
+		if message.Method == "thread/status/changed" {
+			break // prove settle without the trailing idle
+		}
 		if message.Method == "turn/completed" {
 			var completed struct {
 				Turn struct {
@@ -65,10 +69,10 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 	select {
 	case <-settled:
 	default:
-		t.Fatal("the fixture idle status did not finish the turn")
+		t.Fatal("turn/completed interrupted did not finish the turn without idle")
 	}
 	if w.turn != "" {
-		t.Fatalf("after idle the worker still names turn %q", w.turn)
+		t.Fatalf("after interrupted the worker still names turn %q", w.turn)
 	}
 }
 
