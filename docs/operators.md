@@ -1496,12 +1496,15 @@ holds one, the service checks that the process the task's attempt recorded is
 still running with its recorded start time, that the worker's own server on
 the socket the attempt recorded answers with that process as its pane, and
 that the process leads its own process group under that server. A worker that
-verifies is held again and reads Live. One that fails is not held: if its
-process is gone it reads Dead and fleet reconciliation may relaunch it in
-place under `relaunch_attempts`; if the process is still present but the
-check could not verify it, it reads Unobserved, is reported as a
-terminal-gone wake with case `unobservable`, and is left alone rather than
-relaunched beside.
+passes is held again and reads Live: you can attach and send through the new
+service as before, and no relaunch is recorded. A worker that fails because
+the process is gone, or because another process now sits at the recorded
+identity, reads as Dead and is relaunched in place, counting toward
+`relaunch_attempts`. A worker that is still the recorded process but fails
+the check (the socket or pane no longer answers as that process) is not
+held and not relaunched beside: it reads as Unobserved, is reported as a
+terminal-gone wake with case `unobservable` until it ends, after which a
+later reconcile can relaunch.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
@@ -1525,19 +1528,35 @@ And the resolved agent has to declare terminal workers, which Claude Code
 does. `assistant doctor` checks both when this file chooses tmux, and reports
 the stall by name before a task waits Dispatched. Cursor and Grok do not
 declare terminal workers; naming one under tmux fails that check the same
-way. Under the default (pipe) provider, a worker an earlier service started
-is never attached to or read through the new one: its terminal reads as
-unobservable until it ends. Under tmux, the hold-again check above is what
-attaches a verified survivor to the next service.
+way. Under the default (pipes) provider a worker an earlier service started
+is never attached to or read through the new one: a restart ends it and
+relaunches in place. Under tmux, the hold-again path above is what decides.
 
 A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering
 the CLI's first-run screens: each worker gets a configuration directory of
-its own, in the system's temporary directory, that records onboarding as
-done, trusts the worker's copy, and approves its API key when it runs on
-one, and the directory is removed when the worker ends. Your own `~/.claude.json` is not read or
-written; whether the CLI still reads anything else under your home, such as
-your settings, has not been established. That directory carries none of your
+its own, beside its terminal's socket in this home's `terminals` directory,
+that records onboarding as done, trusts the worker's copy, and approves its
+API key when it runs on one. Each worker also gets a cache directory of its
+own there, given as `XDG_CACHE_HOME` on the worker process's environment:
+that is the bound for a program that follows the XDG convention and inherits
+that environment, not a measured claim that every tool the CLI starts does.
+Both directories are removed when the worker ends.
+
+What a run of that worker leaves in your own home was measured once, and
+`StartInTerminal`'s documentation in `internal/agents` is where that
+measurement lives: the date, the CLI version, the method, what the method
+could not see, and every write it found. Read it there before you rely on
+any of it. For an operator the short of it is that a run left your
+`~/.cache` and `~/.claude` as it found them and wrote nothing into your own
+`~/.claude.json`, and that it did write outside them: an app bundle at
+`~/Applications/Claude Code URL Handler.app`, and the device identifier
+`gh` keeps for itself under `~/.local/state/gh` when the worker's `PATH`
+reaches a `gh`. The worker's `HOME` is still the service's own, so
+everything else it runs, git's identity among them, reads your home as
+before.
+
+The configuration directory carries none of your
 login, so the service needs a credential in its environment: either
 `ANTHROPIC_API_KEY`, an API key, or `CLAUDE_CODE_OAUTH_TOKEN`, the
 long-lived token `claude setup-token` prints for a Pro or Max subscription.
