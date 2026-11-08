@@ -1173,6 +1173,24 @@ type TaskStopped struct {
 	Finished taskstate.State `json:"finished,omitempty"`
 }
 
+// TaskInterrupted is the answer to task.interrupt: the attempt whose
+// worker was asked to end its turn and whether a turn was running. It is
+// answered only once the worker's screen read ready after the key, or read
+// ready before it so that no key was pressed, and its terminal then probed
+// Live; an interrupt short of either is a refusal.
+type TaskInterrupted struct {
+	// Task is the task whose worker was interrupted.
+	Task string `json:"task"`
+	// Attempt is the attempt whose worker it is.
+	Attempt int64 `json:"attempt"`
+	// Session is that attempt's session reference.
+	Session string `json:"session"`
+	// Interrupted is true when a turn was running and the key was pressed
+	// and the turn read ended after it, and false when no turn was running
+	// and nothing was pressed.
+	Interrupted bool `json:"interrupted"`
+}
+
 // Wakes is the answer to a drain of the wake queue: the rows on offer,
 // oldest first, as internal/store holds them after the drain. A drain hands
 // out what it returns and closes nothing, so every row here is still queued
