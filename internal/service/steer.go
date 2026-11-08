@@ -17,18 +17,21 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// Steering a running worker: PRD section 6's message and stop, two of the
-// coordinator's service methods section 9 puts beside the command table, and
-// the interrupt that section refuses as undeclared.
+// Steering a running worker: PRD section 6's message, stop and interrupt,
+// three of the coordinator's service methods section 9 puts beside the
+// command table.
 //
 // # Who may ask
 //
 // All three are the coordinator's on coordinator.go's terms: internal/ipc
 // declares them restricted, and refuseWorker refuses a caller the worker
 // group set places in any task's worker group before anything is read or
-// written, so no worker steers itself or a sibling. Who sent a message is
-// ipc.Request.MessageSender, derived from the surface and never read from
-// the request, so no value meaning a person reaches the record.
+// written, so no worker steers itself or a sibling. An interrupt is refused
+// to a subordinate coordinator as well, which section 9 names among what a
+// subordinate is refused.
+// Who sent a message is ipc.Request.MessageSender, derived from the surface
+// and never read from the request, so no value meaning a person reaches the
+// record.
 //
 // # A message is a record first
 //
@@ -112,19 +115,28 @@ import (
 // resend: the stopped worker is gone, and the text reaches a new worker as
 // part of what it is started with.
 //
-// # Interrupt is undeclared here
+// # An interrupt is served where it can be proven
 //
-// task.interrupt is refused with *agents.CapabilityError naming
-// capabilityInterrupt ("interrupt"). That string is not a row of
-// internal/agents' table. Adapters that can end a turn while keeping the
-// process declare agents.CapabilityTerminalInterrupt instead, with a
-// conformance probe for proof the turn ended. This service does not look
-// for that row and does not interrupt: the path is stop, then relaunch
-// with a note. Serving the declared capability is a separate change.
-//
-// PRD section 12 still says that proof is something "nothing reads yet".
-// That half is false once CapabilityTerminalInterrupt shipped; the
-// disagreement is raised as issue 833 rather than editing the PRD.
+// task.interrupt ends the turn the worker of the task's latest attempt is
+// running and keeps the worker, through the session provider's Interrupt
+// on the session this service holds for that attempt, bounded by
+// interruptBound, and answers only once that Interrupt read the turn ended
+// and the terminal probe then answered Live. What reads the turn ended is
+// internal/agents' agents.InterruptTerminalWorker: the key is pressed once
+// on a screen that reads a turn running that has begun its reply, with an
+// empty input, and the screen reads ready again after it; a screen that reads ready before it is
+// answered as no turn running, with nothing pressed. Only the tmux provider
+// can type a key, so the answer is refused, typed and with nothing pressed,
+// for a worker whose adapter has not declared
+// agents.CapabilityTerminalInterrupt (*agents.CapabilityError), for one on
+// the pipe provider (session.ErrNotInterruptible), for one this service
+// does not hold, and for a screen that never read either state within the
+// bound. A key typed and no ready screen read after it within the bound is
+// refused too, saying the key was typed, as is a worker the probe does not
+// read Live afterwards (*interruptUnverified). Each refusal names stop, then
+// relaunch with a note, as the path left. Nothing is recorded: an interrupt
+// opens no hold and writes no record, so what proves it is its answer and
+// the service's log line.
 //
 // # Residual gaps
 //
@@ -148,19 +160,32 @@ import (
 //     the worker to have does not reach it through a note either.
 //   - No method reads a message record back; the record travels in
 //     task.message's answer, and an unacknowledged one surfaces as a wake.
-
-// capabilityInterrupt is the name this service's interrupt refusal carries.
-// It is not agents.CapabilityTerminalInterrupt: that row is what an adapter
-// declares when it can prove a turn ended, and Capabilities.Has answers for
-// it. This constant is a string no adapter declares, so Has is always false
-// for it and interruptTask refuses every call until a change here serves the
-// real capability.
-const capabilityInterrupt agents.Capability = "interrupt"
+//   - An interrupt's proof is that a turn ended between the reading and the
+//     ready screen after the key, which the turn itself may have done in
+//     that window; the key then reaches an idle interface, once, which the
+//     CLI was observed to ignore. A key a person pressed in that window too
+//     is a second one, which the CLI was observed to answer with a menu,
+//     and the interrupt is then refused unread.
+//   - A turn that has not begun its reply is not interrupted: the
+//     interrupt waits for the reply under interruptBound and is refused
+//     when it does not begin, so a turn that thinks or waits longer than
+//     that before drawing anything cannot be interrupted.
+//   - An interrupt is not recorded, so after a restart nothing says one
+//     happened but the log.
 
 // messageSendBound bounds a Send: a worker that is not reading its input
 // holds the write until it does, and a coordinator's request is not held on
 // it longer than this. Chosen, not measured.
 const messageSendBound = 10 * time.Second
+
+// interruptBound bounds an interrupt's Interrupt: the wait for a screen it
+// may press its key on and the wait for the ready screen after it. Chosen
+// over what Claude Code 2.1.308 was observed to take: ready within half a
+// second of the key, and, after a pasted message such as every message this
+// service sends, about four seconds with a notice in place of its footer,
+// which reads as no interface drawn, once before the turn reads running and
+// once more when the key puts the message back in the input.
+const interruptBound = 30 * time.Second
 
 // stopProbeBound bounds the probe that proves a stop. It is
 // reconcileProbeTimeout's role at a stop, and the same length.
@@ -175,6 +200,21 @@ const stopGrace = reapGrace
 // launch, a relaunch or another stop in this service holds unsettled.
 // Nothing is recorded.
 var errSteerInFlight = errors.New("service: a dispatch, a launch, a relaunch or a stop of the task is in flight in this service")
+
+// interruptUnverified reports an interrupt the worker answered and whose
+// terminal the probe then did not read Live, so it is not answered as one
+// the worker survived.
+type interruptUnverified struct {
+	Task        string
+	Session     string
+	Observation session.Observation
+}
+
+// Error names the task, the session and what the probe answered.
+func (e *interruptUnverified) Error() string {
+	return fmt.Sprintf("service: the worker of task %s (session %s) was interrupted and could not be shown to be running after it: the probe answered %s (%s: %s)",
+		e.Task, e.Session, e.Observation.Liveness, e.Observation.Reason, e.Observation.Detail)
+}
 
 // errNoWorker reports a message or a stop asked of a task with no attempt
 // whose worker could be addressed: none was ever recorded, or the latest
@@ -528,29 +568,51 @@ func (s *Service) endHeldWorker(id, ref string) (bool, error) {
 	return true, nil
 }
 
-// interruptTask is task.interrupt: refused, for the coordinator, with the
-// capability nothing declares named, on the file comment's terms. A worker
-// is refused first, so the answer a worker reads is the one every
-// coordinator-only method gives it.
-func (s *Service) interruptTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (struct{}, error) {
+// interruptTask is task.interrupt, on the file comment's terms. A worker
+// and a subordinate coordinator are refused first, so the answer either
+// reads is the one every method not granted to it gives.
+func (s *Service) interruptTask(ctx context.Context, req ipc.Request, r machine.TaskRequest) (machine.TaskInterrupted, error) {
 	if _, err := s.refuseSubordinate(req); err != nil {
-		return struct{}{}, err
+		return machine.TaskInterrupted{}, err
 	}
 	if strings.TrimSpace(r.Task) == "" {
-		return struct{}{}, fmt.Errorf("%w: an interrupt names the task whose worker it is for", ipc.ErrInvalidRequest)
+		return machine.TaskInterrupted{}, fmt.Errorf("%w: an interrupt names the task whose worker it is for", ipc.ErrInvalidRequest)
 	}
-	refusal := &agents.CapabilityError{Capability: capabilityInterrupt, Path: "interrupting a worker's turn"}
-	if built, err := s.driverFor(ctx); err == nil {
-		refusal.Agent = built.agent.Name
-		if built.agent.Capabilities.Has(capabilityInterrupt) {
-			// Unreachable while the capability has no row: Has answers
-			// false for a capability the table does not recognize. It is
-			// refused rather than served, because nothing here interrupts.
-			return struct{}{}, fmt.Errorf("%w: %s declares %s and this build implements no interrupt", ipc.ErrRefused, built.agent.Name, capabilityInterrupt)
-		}
+	if s.terminals == nil {
+		return machine.TaskInterrupted{}, fmt.Errorf("%w: %w", ipc.ErrUnavailable, errRelaunchUnprobed)
 	}
-	return struct{}{}, fmt.Errorf("%w: %w; stop the worker and answer the stop's hold %q with a note instead",
-		ipc.ErrRefused, refusal, machine.AnswerRetry)
+	latest, ok, err := s.latestAttempt(ctx, r.Task)
+	if err != nil {
+		return machine.TaskInterrupted{}, err
+	}
+	ref, launched := latest.SessionRef.Get()
+	if !ok || !launched {
+		return machine.TaskInterrupted{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoWorker, r.Task)
+	}
+	refuse := func(err error) (machine.TaskInterrupted, error) {
+		s.log.Printf("the worker of task %s (session %s) was not interrupted for %s: %v", r.Task, ref, peerOf(req), err)
+		return machine.TaskInterrupted{}, fmt.Errorf("%w: %w; stop the worker and answer the stop's hold %q with a note instead",
+			ipc.ErrRefused, err, machine.AnswerRetry)
+	}
+	provider, held, ok := s.sessionOf(r.Task)
+	if !ok || held.Reference().String() != ref {
+		return refuse(fmt.Errorf("this service holds no session for the worker of the task's latest attempt (session %s)", ref))
+	}
+	bound, cancel := context.WithTimeout(ctx, interruptBound)
+	interrupted, err := provider.Interrupt(bound, held)
+	cancel()
+	if err != nil {
+		return refuse(err)
+	}
+	probe, cancel := context.WithTimeout(ctx, stopProbeBound)
+	observed := s.terminals.Probe(probe, ref)
+	cancel()
+	if observed.Liveness != taskstate.Live {
+		return refuse(&interruptUnverified{Task: r.Task, Session: ref, Observation: observed})
+	}
+	s.log.Printf("the worker of task %s attempt %d (session %s) was interrupted by %s; a turn was running: %t",
+		r.Task, latest.Sequence, ref, peerOf(req), interrupted)
+	return machine.TaskInterrupted{Task: r.Task, Attempt: latest.Sequence, Session: ref, Interrupted: interrupted}, nil
 }
 
 // steeringNote is what a relaunch of a stopped attempt adds after the

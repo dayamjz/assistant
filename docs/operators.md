@@ -503,7 +503,12 @@ is what it tells the agent.
 Session notes for one task are not project knowledge. Steer a running task
 with `assistant coordinator message ID --text ...`, which is recorded,
 delivered under a number and acknowledged by the worker; nothing a message
-says reaches another task or the file.
+says reaches another task or the file. A worker heading the wrong way in the
+middle of a turn can be cut short with `assistant coordinator interrupt ID`
+and then sent a message, rather than stopped and relaunched: it is served
+for a Claude Code worker hosted in tmux (`session_provider: tmux`), which
+reads the turn's end off its screen, and refused for any other worker, with
+nothing done.
 
 ## Keeping a repository's agent context true
 
