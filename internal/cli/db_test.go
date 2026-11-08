@@ -139,9 +139,11 @@ func TestTheDatabaseVerbServesItsSubcommandAndNothingElse(t *testing.T) {
 
 // TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase holds the stuck-home
 // promise: the verb names the file and neither creates the home nor opens
-// the database. A --home that has never been opened stays absent, and under
-// an existing home a missing state.db stays missing, so inserting Create or
-// an Open of the database would fail this.
+// the database. A --home that has never been opened stays absent (so an
+// unconditional Create fails it). Under an existing empty root, Create's
+// layout directories stay absent and a missing state.db stays missing (Create
+// writes those directories and never the database file, so locking only
+// state.db would miss a Create that ran once the root already existed).
 func TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "never-created")
@@ -166,6 +168,13 @@ func TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase(t *testing.T) {
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("%s should be absent before the command: %v", path, err)
 	}
+	// newHome Opens a TempDir and does not Create; Create would add these.
+	for _, dir := range []string{"worktrees", "evidence", "tasks", "logs", "terminals", "domains"} {
+		layout := filepath.Join(h.Root(), dir)
+		if _, err := os.Stat(layout); !os.IsNotExist(err) {
+			t.Fatalf("%s should be absent before the command so Create is locked: %v", layout, err)
+		}
+	}
 	under := run(t, h, h.Root(), "db", "path")
 	if under.code != machine.ExitOK {
 		t.Fatalf("assistant db path exited %s:\n%s%s", under.code, under.stdout, under.stderr)
@@ -175,6 +184,12 @@ func TestTheDatabasePathCreatesNoHomeAndOpensNoDatabase(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("db path created or opened %s; the verb opens no database", path)
+	}
+	for _, dir := range []string{"worktrees", "evidence", "tasks", "logs", "terminals", "domains"} {
+		layout := filepath.Join(h.Root(), dir)
+		if _, err := os.Stat(layout); !os.IsNotExist(err) {
+			t.Fatalf("db path created %s; the verb creates no home layout", layout)
+		}
 	}
 }
 
