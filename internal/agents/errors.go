@@ -139,9 +139,11 @@ func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 // observed in, so nothing could tell when a send may be typed. The Claude
 // Code adapter refuses such a grant in a terminal before anything starts,
 // rather than start a session whose readiness it would be guessing.
-// GrantWorker and GrantSubordinate both write acceptEdits, so a
-// terminal-hosted subordinate starts; a grant whose flags name another
-// mode still meets this refusal.
+// GrantWorker writes acceptEdits, and GrantSubordinate does when given a
+// route, so a terminal-hosted subordinate with a route starts; with no
+// route GrantSubordinate's flags are GrantRead's default mode and meet
+// this refusal, as does any other grant whose flags name a mode other
+// than acceptEdits.
 var ErrTerminalGrantUnobserved = errors.New("agents: the terminal interface was never observed under this grant's permission mode")
 
 // ErrGrantUnenforced reports a worker start under a grant the adapter has
