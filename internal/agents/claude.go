@@ -577,16 +577,22 @@ func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []s
 //     How the CLI reads a rule whose prefix holds spaces or quotes is the
 //     CLI's; what this buys is that the rule on the command line and the
 //     prefix the worker is told to type are the same text.
-//   - GrantSubordinate runs in the default mode with the built-in editing
-//     tools and git denied, and, given a route, commands beginning with it
+//   - GrantSubordinate runs in acceptEdits with the built-in editing tools
+//     and git denied, and, given a route, commands beginning with it
 //     allowed: "Bash(ROUTE:*)" in the allowed list and Edit, Write,
 //     NotebookEdit and "Bash(git:*)" in the denied one, so the route runs
-//     without a prompt, and editing and git are denied whatever allow rules
-//     the CLI's settings carry. The shell itself cannot be denied beside an
+//     without a prompt, editing and git are denied whatever allow rules
+//     the CLI's settings carry, and the same grant reaches a
+//     terminal-hosted subordinate whose ready screen was observed in
+//     acceptEdits only. The shell itself cannot be denied beside an
 //     allowed prefix of it, so any other command is what those settings
-//     allow, and one they do not meets a prompt nobody answers; that is
-//     the residual gap, and the route is what this grant rules in. With no
-//     route the shell is denied too, which is GrantRead's list exactly.
+//     allow. Under acceptEdits, a write tool those settings (or an MCP
+//     entry) enable that is not Edit, Write, or NotebookEdit is
+//     auto-approved rather than meeting an unanswered prompt; that is the
+//     residual gap, and the route is what this grant rules in. With no
+//     route the shell is denied too, which is GrantRead's list exactly
+//     (default mode), so a terminal start with no route is refused by
+//     claudeTerminalGrantRefusal.
 //
 // An unrecognized grant is GrantRead's, so a grant this function has not
 // learned is denied what GrantRead is denied. route is read only for
@@ -605,7 +611,7 @@ func claudeGrantFlags(g Grant, route string) []string {
 		if route == "" {
 			break
 		}
-		return []string{"--permission-mode", "default", "--disallowedTools", "Edit,Write,NotebookEdit,Bash(git:*)",
+		return []string{"--permission-mode", "acceptEdits", "--disallowedTools", "Edit,Write,NotebookEdit,Bash(git:*)",
 			"--allowedTools", "Bash(" + route + ":*)"}
 	}
 	return []string{"--permission-mode", "default", "--disallowedTools", "Edit,Write,NotebookEdit,Bash"}

@@ -24,9 +24,9 @@ the run commands, `sync`, and the service's stop and restart, with code
 Its grant denies editing and git and allows the `assistant coordinator`
 prefix, which is why `tasks` and `answer` are subcommands here as well as
 the `assistant tasks` and `assistant --task --answer` a first coordinator
-runs. With the Claude Code adapter a subordinate starts only under the pipe
-session provider; under `session_provider: tmux` its start is refused and
-logged, and under the default `auto` it stays on pipes. With Cursor it
+runs. With the Claude Code adapter a subordinate starts under the pipe
+session provider and under `tmux`, through the same grant; under the
+default `auto` it stays on pipes. With Cursor it
 starts under the same grant; with Codex its start is refused and logged.
 While a subordinate is starting, your own coordinator calls may answer
 `unavailable` for the few moments the start takes; ask again.

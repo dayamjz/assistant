@@ -137,10 +137,11 @@ func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 // ErrTerminalGrantUnobserved reports a terminal worker whose grant puts the
 // interactive interface in a permission mode its ready screen was never
 // observed in, so nothing could tell when a send may be typed. The Claude
-// Code adapter refuses a subordinate coordinator (GrantSubordinate, default
-// mode) in a terminal with it, before anything starts, rather than start a
-// session whose readiness it would be guessing; a pipe-hosted subordinate
-// reads no screen and is started.
+// Code adapter refuses such a grant in a terminal before anything starts,
+// rather than start a session whose readiness it would be guessing.
+// GrantWorker and GrantSubordinate both write acceptEdits, so a
+// terminal-hosted subordinate starts; a grant whose flags name another
+// mode still meets this refusal.
 var ErrTerminalGrantUnobserved = errors.New("agents: the terminal interface was never observed under this grant's permission mode")
 
 // ErrGrantUnenforced reports a worker start under a grant the adapter has
