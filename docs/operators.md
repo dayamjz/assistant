@@ -1501,10 +1501,11 @@ service as before, and no relaunch is recorded. A worker that fails because
 the process is gone, or because another process now sits at the recorded
 identity, reads as Dead and is relaunched in place, counting toward
 `relaunch_attempts`. A worker that is still the recorded process but fails
-the check (the socket or pane no longer answers as that process) is not
-held and not relaunched beside: it reads as Unobserved, is reported as a
-terminal-gone wake with case `unobservable` until it ends, after which a
-later reconcile can relaunch.
+any other part of the check (the socket or pane no longer answers as that
+process, or the process no longer leads its own process group under that
+server) is not held and not relaunched beside: it reads as Unobserved, is
+reported as a terminal-gone wake with case `unobservable` until it ends,
+after which a later reconcile can relaunch.
 `assistant service stop` still ends every worker, and a worker on pipes is
 ended by a restart too and relaunched in place, as before. While no service
 runs, a worker that goes on cannot push or reach the service.
