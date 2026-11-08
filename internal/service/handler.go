@@ -155,7 +155,7 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 			return s.peekTask(ctx, req, r)
 		})
 	case ipc.MethodTaskInterrupt:
-		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (struct{}, error) {
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskInterrupted, error) {
 			return s.interruptTask(ctx, req, r)
 		})
 	case ipc.MethodWakesList:

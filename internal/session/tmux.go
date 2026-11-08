@@ -118,6 +118,20 @@ func (t *Tmux) Release(s *Session) error {
 	return t.letGo(s, worker)
 }
 
+// Interrupt ends the turn a held worker is running on Host.Interrupt's
+// terms, through agents.InterruptTerminalWorker over the adapter this
+// provider was built over, which reads its declaration first.
+func (t *Tmux) Interrupt(ctx context.Context, s *Session) (bool, error) {
+	if !t.holds(s) {
+		return false, ErrNotHeld
+	}
+	worker, ok := s.worker.(agents.TerminalWorker)
+	if !ok {
+		return false, ErrNotInterruptible
+	}
+	return agents.InterruptTerminalWorker(ctx, t.runner, worker)
+}
+
 // ErrNotReadoptable is Readopt's refusal of a reference it will not try to
 // hold: one ParseReference refuses, another home's, a subordinate's, or one
 // that names no terminal or no start time, which every reference written

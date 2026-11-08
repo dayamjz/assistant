@@ -626,8 +626,9 @@ func (k InterruptKey) String() string {
 // InterruptRefused is every refusal TerminalWorker.Interrupt answers with,
 // so a caller reads the key's state off the type rather than off the words:
 // errors.As gives Key, and errors.Is reaches the refusal underneath
-// unchanged, whichever it is. Its message is that refusal's, which says the
-// same thing in words for whoever reads a log.
+// unchanged, whichever it is. Its message names Key and then the refusal,
+// so a log of "%v" says what the key did even when the refusal underneath
+// is a bare ErrWorkerEnded or ErrWorkerReleased with no words of its own.
 type InterruptRefused struct {
 	// Key is what the interrupt did with its key before it was refused.
 	Key InterruptKey
@@ -635,8 +636,10 @@ type InterruptRefused struct {
 	Err error
 }
 
-// Error is the underlying refusal's message.
-func (e *InterruptRefused) Error() string { return e.Err.Error() }
+// Error names what the key did, then the refusal underneath.
+func (e *InterruptRefused) Error() string {
+	return fmt.Sprintf("the interrupt %s: %v", e.Key, e.Err)
+}
 
 // Unwrap is the refusal this one carries.
 func (e *InterruptRefused) Unwrap() error { return e.Err }

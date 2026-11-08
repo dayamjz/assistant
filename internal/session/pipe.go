@@ -119,5 +119,14 @@ func (p *Pipe) Release(s *Session) error {
 	return ErrNotDurable
 }
 
+// Interrupt is ErrNotInterruptible for a session this provider holds and
+// ErrNotHeld for any other: a pipe's worker has no terminal.
+func (p *Pipe) Interrupt(_ context.Context, s *Session) (bool, error) {
+	if !p.holds(s) {
+		return false, ErrNotHeld
+	}
+	return false, ErrNotInterruptible
+}
+
 // Readopt is ErrNotDurable: no pipe's worker is held again.
 func (p *Pipe) Readopt(context.Context, string) (*Session, error) { return nil, ErrNotDurable }
