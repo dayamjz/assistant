@@ -145,8 +145,16 @@ paths: ["internal/store/**"]
   `TransitionTaskShape` refuses a promotion over one by that same
   condition, a landing claim as a carry-on claim. Each
   answer's claim and outcome are its own accessors, and there is no
-  generic answer write, so nothing writes an answer of discard: its
-  removal and record are deferred to AGE-486. `TransitionTaskShape` answers the promoted task's own copy's open
+  generic answer write. keptWorkDiscardMigration records a discard as two
+  facts: the claim (`discard_digest`, the confirmation's digest, with
+  `discard_lacks`, the commits it named, who and when), written whole on
+  an open entry by `ClaimKeptWorkDiscard`, which leaves it open and
+  listed, and withdrawn whole by `WithdrawKeptWorkDiscard` while it is
+  unanswered; and the answer, written only with `discarded_at` by
+  `RecordKeptWorkDiscard`, once the copy is gone, which the triggers
+  enforce, closing every other open entry of the copy the caller verified
+  (`ErrKeptWorkUnverified` otherwise), the set `OpenKeptWorkOfCopy` lists.
+  `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
   section 6's promotion paragraph says; it takes the promoter's `Resolver`
