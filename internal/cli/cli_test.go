@@ -34,7 +34,7 @@ import (
 // The bare command is the empty name and is covered by the tests below rather
 // than here, because a command with no verb cannot be told from no arguments
 // at all.
-var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "watch", "doctor", "service", "eject"}
+var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "watch", "doctor", "service", "db", "eject"}
 
 // unspecified are commands this product could plausibly have and that PRD
 // section 9 does not describe. A verb this surface needs and that section does
@@ -71,10 +71,13 @@ func TestEveryCommandTheSpecificationNamesIsServed(t *testing.T) {
 	subject := newSubject(t)
 	for _, name := range specified {
 		args := []string{name}
-		if name == "service" {
-			// The one command with subcommands. Its bare form names none, and
+		switch name {
+		case "service":
+			// The two commands with subcommands. A bare form names none, and
 			// naming none is itself incorrect usage.
 			args = append(args, "status")
+		case "db":
+			args = append(args, "path")
 		}
 		if got := run(t, h, subject, args...); got.code == machine.ExitUsage {
 			t.Fatalf("assistant %s is refused as incorrect usage:\n%s", name, got.stderr)

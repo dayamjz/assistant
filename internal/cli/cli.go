@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -130,6 +131,7 @@ var verbs = []verb{
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},
 	{"doctor", "Check every dependency, and decisively report whether a run can start at all.", doctor},
 	{"service", "Start, stop, restart, status.", serviceVerb},
+	{dbVerbName, "Where this home's records are kept, for a reader that opens them itself.", dbVerb},
 	{"eject", "Remove the gate and its records.", eject},
 }
 
@@ -555,6 +557,69 @@ func subcommandHelp(verb, listing string) helpAnswer {
 	b.WriteString(listing)
 	fmt.Fprintf(&b, "\n\n  %s <subcommand> --help lists that subcommand's own flags.", commandName(verb))
 	return helpAnswer{text: b.String()}
+}
+
+// subcommand is one subcommand of a verb PRD section 9's table gives a single
+// row: what a caller types after the verb, the line that verb's help reads
+// out for it, and what it runs. The two verbs with a table of these are
+// service and db.
+type subcommand struct {
+	name    string
+	summary string
+	run     func(context.Context, *invocation) (any, error)
+}
+
+// dispatchSubcommand runs the subcommand of verb that the command line names,
+// taking it from wherever it stands among the arguments rather than from the
+// first of them, so a global flag written between the verb and the subcommand
+// is a flag and not a subcommand nobody recognizes. What is left is the
+// subcommand's to parse, with the flags around it still in the order they
+// were written, so --help written beside a subcommand is that subcommand's
+// and lists its flags.
+//
+// With no subcommand, --help anywhere after the verb is answered with the
+// verb's subcommand table, and anything else is incorrect usage phrased as
+// what the verb needs and the subcommands to choose from. It is one
+// dispatcher for both tables rather than one each, because what a verb with
+// subcommands does with the words after it is one rule (P14); the verbs
+// outside PRD section 9's table take their subcommand from the first argument
+// instead, which gate.go, host.go and coordinator.go each say why.
+func dispatchSubcommand(ctx context.Context, in *invocation, verb string, actions []subcommand) (any, error) {
+	for _, action := range actions {
+		for i, arg := range in.args {
+			if arg != action.name {
+				continue
+			}
+			in.args = append(append([]string{}, in.args[:i]...), in.args[i+1:]...)
+			return action.run(ctx, in)
+		}
+	}
+	if slices.ContainsFunc(in.args, isHelp) {
+		return nil, subcommandHelp(verb, subcommandListing(actions))
+	}
+	return nil, subcommandRefusal(verb, in.args, subcommandNames(actions))
+}
+
+// subcommandListing is a verb's table read out one line each, for its help,
+// so a help cannot list a subcommand the verb does not dispatch or leave one
+// out.
+func subcommandListing(actions []subcommand) string {
+	var b strings.Builder
+	b.WriteString("\nSubcommands:\n")
+	for _, action := range actions {
+		fmt.Fprintf(&b, "  %-8s %s\n", action.name, action.summary)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// subcommandNames is a verb's table read out, for a refusal that says what
+// was expected.
+func subcommandNames(actions []subcommand) []string {
+	names := make([]string, 0, len(actions))
+	for _, action := range actions {
+		names = append(names, action.name)
+	}
+	return names
 }
 
 // subcommandRefusal is incorrect usage of a verb that takes a subcommand and

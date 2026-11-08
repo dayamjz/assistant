@@ -70,7 +70,7 @@ type Rendering struct {
 	Voice Voice
 }
 
-// Voice is the rule P13 holds one renderer's lines to. It is one of three,
+// Voice is the rule P13 holds one renderer's lines to. It is one of four,
 // and the renderings table gives every row exactly one.
 type Voice int
 
@@ -86,16 +86,28 @@ const (
 	// agent's, escaped.
 	VoicePhrased
 	// VoiceEvidence is a renderer that writes one of the four detailed
-	// evidence documents P13 and PRD section 9 name - the detail view, the
-	// usage view, the log view, and the relay of a finding that needs a
-	// decision - which P13 lets keep exact identifiers and stage names. Its
-	// row carries the phrase-table row that points a person at it, and writeEvidence,
-	// which the run renderer writes the first and last through, and
-	// writePointed, which readOut writes the usage view and the log view
-	// through, write that row first,
-	// because the message that points at an evidence document stays
-	// phrased.
+	// evidence documents P13 and PRD section 9 name a person as pointed at
+	// by a phrase - the detail view, the usage view, the log view, and the
+	// relay of a finding that needs a decision - which P13 lets keep exact
+	// identifiers and stage names. P13's list holds a fifth document,
+	// section 9's db path, and that one is written with no phrase before it,
+	// which is VoiceValue rather than this. A VoiceEvidence row carries the
+	// phrase-table row that points a person at it, and writeEvidence, which
+	// the run renderer writes the first and last through, and writePointed,
+	// which readOut writes the usage view and the log view through, write
+	// that row first, because the message that points at an evidence
+	// document stays phrased. VoiceValue carries no such pointer.
 	VoiceEvidence
+	// VoiceValue is a renderer whose whole answer is one value a caller
+	// composes into another command line, and which writes that value alone:
+	// no pointer before it, no label beside it, and nothing after it. PRD
+	// section 9's db path is the one, and the value it writes is a path, so
+	// P13's evidence exception is what lets it carry one; what makes it a
+	// voice of its own rather than an evidence row is that a pointer would
+	// become part of what the caller substitutes, which is the whole use the
+	// specification gives the verb. The sentence pointing a person at it is
+	// section 9's and the README's instead.
+	VoiceValue
 )
 
 // String is the voice's name, for a test's message.
@@ -105,6 +117,8 @@ func (v Voice) String() string {
 		return "phrased"
 	case VoiceEvidence:
 		return "evidence"
+	case VoiceValue:
+		return "value"
 	default:
 		return "unsettled"
 	}
@@ -171,7 +185,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but four is phrased: what it prints is a phrase from
+// Every row but five is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
@@ -186,10 +200,14 @@ func writePointed(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The four that are not phrased are named, so that the claim about the
-// rest is bounded by an enumeration. They are evidence documents, which P13
-// names as the exception to its rule and P13 and PRD section 9 name as four
-// documents:
+// The five that are not phrased are named, so that the claim about the
+// rest is bounded by an enumeration. All five keep exact identifiers under
+// P13's evidence exception, and they differ in how a person is pointed at
+// them: four are evidence documents written behind a phrase that points at
+// each, which P13 and PRD section 9 name as the four pointed at, and the fifth is
+// the value row, which is written alone because a pointer would become part
+// of what a caller substitutes; VoiceValue says so and databaseRendering is
+// the row. The four:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -210,6 +228,10 @@ func writePointed(w io.Writer, row rendering, value any) {
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
 //     view, so it is the fourth evidence document P13's list names.
+//
+// And the fifth row, which is not one of those four: database is PRD section
+// 9's db path, the database file of the home the command acted on, written
+// as the value alone.
 //
 // The first two name no answer type, so readOut never dispatches to either;
 // the run renderer reaches each through writeEvidence, behind the phrased
@@ -320,6 +342,7 @@ var renderings = []rendering{
 	}},
 	usageRendering,
 	logRendering,
+	databaseRendering,
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,
@@ -352,6 +375,21 @@ var (
 	logRendering = rendering{name: "log", voice: VoiceEvidence, of: typeOf[machine.StageLog](),
 		render: func(w io.Writer, v any) { readOutStageLog(w, v.(machine.StageLog)) },
 		points: machine.PhraseStageLogFollows}
+	// databaseRendering is the one value row, PRD section 9's db path: the
+	// path and nothing else, so a caller substituting the answer into
+	// another command line substitutes a path. It carries no pointer, which
+	// is what VoiceValue is for, and readOut reaches it like any phrased row
+	// rather than through writePointed. The path goes through printable, so
+	// a control character in a home root is escaped rather than written; that
+	// is the one case where this line is not the file's name byte for byte.
+	// Phrase rows written through writeln do not all go through printable;
+	// this row does because the path is the whole answer. --json keeps that
+	// character, so a caller that reads the structured answer recovers the
+	// path; what it does not keep is a byte that is not valid UTF-8, which
+	// becomes the replacement character because that is what encoding/json
+	// does. PRD section 9 and db.go say so.
+	databaseRendering = rendering{name: "database", voice: VoiceValue, of: typeOf[machine.Database](),
+		render: func(w io.Writer, v any) { writeln(w, printable(v.(machine.Database).Path)) }}
 )
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
