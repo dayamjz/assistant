@@ -305,11 +305,12 @@ var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when i
 // or the next start, and the entry can be answered after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
-// ErrKeptWorkUnverified is TransitionTaskShape's and MarkKeptWorkCarriedOn's refusal of a flip or a mark over a
-// copy with an open kept work entry the caller did not verify the copy for:
-// the flip would answer it carry on, and every answer to a kept copy is
-// given only for a copy the kept-copy verification took. Nothing is
-// written.
+// ErrKeptWorkUnverified is TransitionTaskShape's, MarkKeptWorkCarriedOn's
+// and RecordKeptWorkDiscard's refusal of a flip, mark or discard record
+// over a copy with an open kept work entry the caller did not verify the
+// copy for: the write would answer that entry, and every answer to a kept
+// copy is given only for a copy the kept-copy verification took. Nothing
+// is written.
 var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before it would be answered")
 
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
@@ -600,10 +601,11 @@ func (s *Store) OpenKeptWork(ctx context.Context) ([]KeptWork, error) {
 
 // OpenKeptWorkOfCopy returns every open entry recorded at copyPath, neither
 // answered nor closed, oldest first: the copy kept at each state it was
-// kept at. It is the set a carry on of any one of them closes
-// (MarkKeptWorkCarriedOn), so it is the read internal/service makes to
-// hold the copy to every one of them before it claims, moves or adopts
-// the copy, and never the answered entry alone.
+// kept at. It is the set a carry on or a discard of any one of them closes
+// (MarkKeptWorkCarriedOn, RecordKeptWorkDiscard), so it is the read
+// internal/service makes to hold the copy to every one of them before it
+// claims, moves, adopts or removes the copy, and never the answered entry
+// alone.
 func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
 		return nil, err
@@ -621,7 +623,7 @@ func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]Kept
 
 // openKeptWorkOfCopy is the one spelling of an open entry of a copy, by
 // its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn
-// closes beside the entry marked.
+// and RecordKeptWorkDiscard close beside the entry marked.
 const openKeptWorkOfCopy = `copy_path = ? AND answer IS NULL AND closure IS NULL`
 
 // MarkKeptWorkSurfaced records that the entry was raised to someone at at.

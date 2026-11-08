@@ -85,10 +85,11 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // answered carry-on as (PRD section 6: "the promotion records the entry's
 // answer as carry on, which closes it"), naming the promoted task as the
 // task carrying them on, in this same transaction; a zero Resolver is
-// ErrNoResolver and nothing is written. A copy one of whose entries holds a
-// carry on claimed and not yet carried out is refused with
-// ErrKeptWorkCopyOwed, wrapped, and nothing is written: that carry on is
-// moving the copy to another task, and is carried out or withdrawn first.
+// ErrNoResolver and nothing is written. A copy one of whose entries holds
+// an answer claimed and not yet carried out (a landing, a carry on or a
+// discard) is refused with ErrKeptWorkCopyOwed, wrapped, and nothing is
+// written: that answer still needs the copy where it stands, and is
+// carried out or withdrawn first.
 //
 // verified is the entries the caller verified the copy for before this
 // write (internal/tasks' Promote asks the kept-copy verification of each).
@@ -151,10 +152,9 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 		if tip != anchor {
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
-		// An entry of the copy holding an answer not yet carried out, a
-		// carry on claimed, which is moving the copy the promotion would
-		// continue in to another task, or a landing claimed, refuses the
-		// flip on the one owed rule every answer is held to (owedOnCopy).
+		// An entry of the copy holding an answer not yet carried out (a
+		// landing, a carry on or a discard claimed) refuses the flip on
+		// the one owed rule every answer is held to (owedOnCopy).
 		var claimed int64
 		var what string
 		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE
