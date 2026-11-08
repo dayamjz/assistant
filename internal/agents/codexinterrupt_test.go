@@ -10,9 +10,8 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
-// Fail-before for #767's Codex item: a Codex pipe worker running a long
-// turn cannot be interrupted today. InterruptPipeWorker refuses with a
-// CapabilityError naming pipe_interrupt, and the turn finishes on its own.
+// A Codex pipe worker running a long turn is interrupted over turn/interrupt,
+// stays alive, and answers the next message.
 func TestCodexPipeInterruptEndsATurnAndKeepsTheWorker(t *testing.T) {
 	const long = "conformance: a turn long enough to interrupt"
 	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
