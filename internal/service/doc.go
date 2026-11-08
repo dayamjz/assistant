@@ -500,9 +500,11 @@
 // path leaves room for the socket (session.TerminalFits), and a
 // session.Pipe otherwise, and the one config.KeySessionProvider names when
 // the operator's file names one.
-// driverFor builds one more the same way over the resolved agent, which
-// starts a subordinate coordinator's session and answers a reference no
-// launch of this service holds by identity alone, on terminals.go's terms.
+// driverFor builds one more over the resolved agent through driverHost: under
+// auto that is always a session.Pipe (subordinates stay on pipes), and under
+// an explicit provider it is sessionHost's; it starts a subordinate
+// coordinator's session and answers a reference no launch of this service
+// holds by identity alone, on terminals.go's terms.
 // The sessions a launch creates are held per task, one per attempt, beside
 // the tmux workers an earlier service let go across a restart, which
 // recovery holds again (reconcile.go's readoptWorkers); Close ends exactly

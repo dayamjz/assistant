@@ -192,9 +192,11 @@ type Options struct {
 	// PipeByDefault resolves session_provider auto, the default, to the
 	// pipe provider for every worker, which is what auto resolves to on a
 	// machine with no tmux, rather than looking for tmux. internal/cli
-	// leaves it false, so the product hosts a worker in tmux wherever tmux
-	// is installed and the worker's adapter declares terminal workers; a
-	// test whose subject is not the provider sets it so its workers keep the
+	// leaves it false, so the product hosts a worker in tmux wherever
+	// sessionHost would: tmux on PATH, the worker's adapter can start a
+	// terminal worker here (agents.TerminalStartable, Claude credential
+	// included), and the home's path leaves room for the socket; a test
+	// whose subject is not the provider sets it so its workers keep the
 	// pipe shape it scripts. It changes nothing under an explicit provider.
 	PipeByDefault bool
 	// hooks are the seams this package's tests drive the loop through. They

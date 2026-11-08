@@ -1424,9 +1424,11 @@ worker's adapter can start one there (today: Claude, which in a terminal needs
 where on pipes it uses the CLI's own login), unless the home's path is too
 long to hold a terminal socket, and on pipes the
 service holds, which nothing can attach to, wherever it cannot.
-`assistant doctor`'s session provider row says which applies here. To choose
-for yourself, set the provider in your own configuration file, `config.yaml`
-under the home (by default `~/.assistant`), which is a YAML document:
+`assistant doctor`'s session provider row says which applies here for the
+worker the service would route (the worker role and agent list, a
+`roles.worker` pin included). To choose for yourself, set the provider in
+your own configuration file, `config.yaml` under the home (by default
+`~/.assistant`), which is a YAML document:
 
 ```yaml
 session_provider: tmux # or pipe, or auto, the default
