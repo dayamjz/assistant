@@ -119,10 +119,11 @@ const (
 	// carries pipeInterrupter is what Resolve checks a declaration against.
 	// Codex declares it over app-server turn/interrupt, held to the
 	// stand-in's model of CLI 0.166.0's schema (TurnInterruptParams and
-	// TurnStatus interrupted). Cursor's ACP session/cancel and Claude
-	// Code's stream-json control_request are the same claim with proofs of
-	// their own, and are not declared until each has a probe. The
-	// conformance suite holds a declaration to the stand-in.
+	// TurnStatus interrupted). Cursor declares it over ACP session/cancel,
+	// held to the stand-in's model of the documented CancelNotification
+	// (stopReason cancelled). Claude Code's stream-json control_request is
+	// the same claim with a proof of its own, and is not declared until it
+	// has a probe. The conformance suite holds a declaration to the stand-in.
 	CapabilityPipeInterrupt Capability = "pipe_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token
