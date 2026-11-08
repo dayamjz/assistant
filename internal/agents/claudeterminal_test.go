@@ -843,7 +843,11 @@ func TestAClaudeTerminalDefusesLinesTheScreenWouldReadAsItsOwn(t *testing.T) {
 // grant runs in acceptEdits so the ready screen the adapter reads applies,
 // with editing and git still denied and the route alone allowed. The same
 // spec through OpenTerminalWorker on a terminal of its own is the control
-// under the worker grant.
+// under the worker grant. A subordinate with no route falls through to
+// GrantRead's default-mode flags, which the ready screen was never observed
+// under, so OpenTerminalSubordinate is refused with ErrTerminalGrantUnobserved
+// and the stand-in records no call (the positive control that deleting
+// claudeTerminalGrantRefusal would fail).
 func TestAClaudeTerminalSubordinateStartsUnderItsGrant(t *testing.T) {
 	principles.Cite(t, principles.P4)
 	const route = "/opt/assistant/bin/assistant --home /var/lib/assistant coordinator"
@@ -851,6 +855,13 @@ func TestAClaudeTerminalSubordinateStartsUnderItsGrant(t *testing.T) {
 	spec.Route = route
 	agent := standin.New(t, standin.Script{},
 		agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+	noRoute := workerSpec(t)
+	if _, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), terminalFor(t), noRoute); !errors.Is(err, agents.ErrTerminalGrantUnobserved) {
+		t.Fatalf("OpenTerminalSubordinate with no route = %v, want ErrTerminalGrantUnobserved", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Fatalf("the refused no-route subordinate started %d agent processes, want none", len(calls))
+	}
 	subordinate, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), terminalFor(t), spec)
 	if err != nil {
 		t.Fatalf("OpenTerminalSubordinate = %v, want it started under the subordinate grant", err)

@@ -152,12 +152,12 @@ func TestATmuxSubordinateAnswersAnAttachCommand(t *testing.T) {
 	})
 }
 
-// Two delegated domains under tmux each hold a wake stream of their own:
-// admitting a subscription for one domain answers a publisher that is not
-// the other's, so a subordinate's wake stream cursor is never shared
-// (P14). The domain directories stay on disk after end-delegation because
-// every relaunch and every restart survivor start reads instructions.md
-// from them.
+// Two delegated domains under tmux each hold a wake stream publisher of
+// their own: DomainWakeStreamFor for one domain answers a publisher that
+// is not the other's, so a subordinate's wake stream cursor is never
+// shared (P14). The domain directories stay on disk after end-delegation
+// because every relaunch and every restart survivor start reads
+// instructions.md from them.
 func TestTwoTmuxSubordinatesHoldDistinctDomainWakeStreams(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P14)

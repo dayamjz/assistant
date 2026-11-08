@@ -586,9 +586,13 @@ func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []s
 //     terminal-hosted subordinate whose ready screen was observed in
 //     acceptEdits only. The shell itself cannot be denied beside an
 //     allowed prefix of it, so any other command is what those settings
-//     allow, and one they do not meets a prompt nobody answers; that is
-//     the residual gap, and the route is what this grant rules in. With no
-//     route the shell is denied too, which is GrantRead's list exactly.
+//     allow. Under acceptEdits, a write tool those settings (or an MCP
+//     entry) enable that is not Edit, Write, or NotebookEdit is
+//     auto-approved rather than meeting an unanswered prompt; that is the
+//     residual gap, and the route is what this grant rules in. With no
+//     route the shell is denied too, which is GrantRead's list exactly
+//     (default mode), so a terminal start with no route is refused by
+//     claudeTerminalGrantRefusal.
 //
 // An unrecognized grant is GrantRead's, so a grant this function has not
 // learned is denied what GrantRead is denied. route is read only for
