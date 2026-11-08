@@ -425,7 +425,7 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 			t.Fatal(err)
 		}
 	}
-	env := []string{
+	env := withOperatorGitIdentity([]string{
 		"PATH=" + filepath.Dir(claude) + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin",
 		"HOME=" + home,
 		"LANG=C.UTF-8",
@@ -434,7 +434,7 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 		// Without it the CLI was seen to write a copy of itself, a few
 		// hundred megabytes, under a fresh HOME on every run.
 		"DISABLE_AUTOUPDATER=1",
-	}
+	})
 
 	version, err := askInstalled(t.Context(), probeWait, claude, env, "--version")
 	if err != nil {
@@ -584,26 +584,47 @@ func probeInstalledClaude(t *testing.T, variable, value, presented string) {
 		api.awaitReceived(t, worker, "conformance: a message after the interrupt")
 	}
 
-	// The run left the two directories it is pointed away from untouched,
-	// which is what a worker owes the operator's own home. What it did
-	// leave elsewhere under HOME, and in the cache directory it was given
-	// instead, is logged rather than asserted: it is the record the
-	// adapter's documentation rests on, and this probe is where a later
-	// CLI's new write shows up. The cache directory is read before Close,
-	// which removes it.
+	// The operator HOME the runner was given must gain nothing: the worker
+	// runs under a HOME of its own. What it did leave in that per-worker
+	// HOME, and in the cache directory beside it, is logged rather than
+	// asserted: it is the record the adapter's documentation rests on, and
+	// this probe is where a later CLI's new write shows up. The worker's
+	// directories are read before Close, which removes them.
+	workerHome := agents.ClaudeHomeFor(term)
 	cached := entriesUnder(t, agents.ClaudeCacheFor(term))
 	t.Logf("the run left %d entries in the worker's own cache directory:\n%s",
 		len(cached), strings.Join(cached, "\n"))
+	t.Logf("the run left this under the worker's own HOME:\n%s", strings.Join(entriesUnder(t, workerHome), "\n"))
 	worker.Close()
 	for _, name := range []string{".cache", ".claude"} {
 		entries, err := os.ReadDir(filepath.Join(home, name))
 		if err != nil || len(entries) > 0 {
-			t.Errorf("the installed CLI left %d entries in HOME's %s (%v), want it as empty as the run found it",
+			t.Errorf("the installed CLI left %d entries in the operator HOME's %s (%v), want it as empty as the run found it",
 				len(entries), name, err)
 		}
 	}
-	t.Logf("the run left this under a HOME of its own:\n%s", strings.Join(entriesUnder(t, home), "\n"))
+	top, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("reading the operator HOME after the run: %v", err)
+	}
+	if len(top) != 2 || !topEntry(top, ".cache") || !topEntry(top, ".claude") {
+		names := make([]string, len(top))
+		for i, e := range top {
+			names[i] = e.Name()
+		}
+		t.Errorf("the operator HOME holds %v after the run, want only the empty .cache and .claude the probe made", names)
+	}
 	if seen, ok := api.presentedAs(presented); !ok {
 		t.Errorf("the message requests presented the credential as %q, want %q every time", seen, presented)
 	}
+}
+
+// topEntry reports whether entries holds a top-level name.
+func topEntry(entries []os.DirEntry, name string) bool {
+	for _, e := range entries {
+		if e.Name() == name {
+			return true
+		}
+	}
+	return false
 }

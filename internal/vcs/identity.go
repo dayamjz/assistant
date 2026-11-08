@@ -2,9 +2,51 @@ package vcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 )
+
+// ErrNoUserIdentity is returned when git's configuration names no user.name
+// or no user.email for this process. It is the typed refusal UserIdentity
+// makes, so a caller can tell a missing identity from a git that would not
+// run.
+var ErrNoUserIdentity = errors.New("vcs: git's configuration names no user identity")
+
+// UserIdentity is the name and email git's configuration gives this process
+// for commits when no repository-local identity overrides them: user.name
+// and user.email as ConfigValue reports them under the process environment
+// (global and system configuration, and any GIT_CONFIG_GLOBAL the
+// environment names). Either key unset is ErrNoUserIdentity. It does not
+// settle a host-derived identity: a process with no configured name or
+// email is refused even where git var would invent one from the user and
+// host, which is the answer a caller that wants only a configured identity
+// to carry elsewhere needs.
+func UserIdentity(ctx context.Context, opts ...Option) (name, email string, err error) {
+	dir, err := os.MkdirTemp("", "assistant-user-identity-*")
+	if err != nil {
+		return "", "", fmt.Errorf("vcs: making a scratch directory for UserIdentity: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	repo, err := InitBare(ctx, filepath.Join(dir, "bare.git"), opts...)
+	if err != nil {
+		return "", "", err
+	}
+	name, nameSet, err := repo.ConfigValue(ctx, "user.name")
+	if err != nil {
+		return "", "", err
+	}
+	email, emailSet, err := repo.ConfigValue(ctx, "user.email")
+	if err != nil {
+		return "", "", err
+	}
+	if !nameSet || name == "" || !emailSet || email == "" {
+		return "", "", ErrNoUserIdentity
+	}
+	return name, email, nil
+}
 
 // Identity is the author and the committer git names for a commit made in a
 // repository, each as git writes it into a commit's header without the

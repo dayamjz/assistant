@@ -1547,20 +1547,24 @@ API key when it runs on one. Each worker also gets a cache directory of its
 own there, given as `XDG_CACHE_HOME` on the worker process's environment:
 that is the bound for a program that follows the XDG convention and inherits
 that environment, not a measured claim that every tool the CLI starts does.
-Both directories are removed when the worker ends.
+And each worker gets a `HOME` of its own there, so nothing it runs reads or
+writes your home. All three directories are removed when the worker ends.
+The start carries your git `user.name` and `user.email` into that `HOME`
+explicitly (as the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables), so a
+commit the worker makes keeps your identity; without a configured identity
+the start is refused rather than falling back to a host-derived one.
 
-What a run of that worker leaves in your own home was measured once, and
+What a run of that worker leaves was measured once, and
 `StartInTerminal`'s documentation in `internal/agents` is where that
 measurement lives: the date, the CLI version, the method, what the method
 could not see, and every write it found. Read it there before you rely on
-any of it. For an operator the short of it is that a run left your
-`~/.cache` and `~/.claude` as it found them and wrote nothing into your own
-`~/.claude.json`, and that it did write outside them: an app bundle at
-`~/Applications/Claude Code URL Handler.app`, and the device identifier
-`gh` keeps for itself under `~/.local/state/gh` when the worker's `PATH`
-reaches a `gh`. The worker's `HOME` is still the service's own, so
-everything else it runs, git's identity among them, reads your home as
-before.
+any of it. For an operator the short of it is that, with the per-worker
+directories above, a run left the home it was given's `~/.cache` and
+`~/.claude` as it found them, and that the writes observed outside them (an
+app bundle at `Applications/Claude Code URL Handler.app`, and the device
+identifier `gh` keeps under `.local/state/gh` when the worker's `PATH`
+reaches a `gh`) now land in the worker's own `HOME` and are removed with
+it.
 
 The configuration directory carries none of your
 login, so the service needs a credential in its environment: either

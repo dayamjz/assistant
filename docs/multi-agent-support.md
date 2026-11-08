@@ -50,9 +50,10 @@ automatic selection.
   `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) in the service
   environment, the key winning when both are set (see `docs/operators.md`);
   each worker gets an isolated config directory that does not carry your
-  login, and a cache directory of its own as `XDG_CACHE_HOME` on the
-  worker process (tool inheritance of that variable is not measured); both
-  are removed with the worker, and its `HOME` is the service's own.
+  login, a cache directory of its own as `XDG_CACHE_HOME` on the worker
+  process (tool inheritance of that variable is not measured), and a
+  `HOME` of its own with your git identity carried in explicitly; all
+  three are removed with the worker.
 
 ### 3. Codex (OpenAI Codex CLI)
 

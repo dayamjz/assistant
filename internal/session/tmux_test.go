@@ -306,7 +306,9 @@ func TestTmuxStartsAClaudeCodeWorkerWithItsRoute(t *testing.T) {
 	const route = "/opt/assistant/bin/assistant worker"
 	claude := standin.New(t, standin.Script{}, agents.WithTerminationGrace(2*time.Second),
 		agents.WithBaseEnvironment([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
-			agents.ClaudeKeyVariable + "=standin-placeholder-key-0123456789abcdefghij"}))
+			agents.ClaudeKeyVariable + "=standin-placeholder-key-0123456789abcdefghij",
+			"GIT_AUTHOR_NAME=operator-under-test", "GIT_AUTHOR_EMAIL=operator-under-test@example.invalid",
+			"GIT_COMMITTER_NAME=operator-under-test", "GIT_COMMITTER_EMAIL=operator-under-test@example.invalid"}))
 	p := session.NewTmux(sub.home, claude.Runner(), standin.Tmux(t))
 	spec := sub.spec("begin the task")
 	spec.Route = route
