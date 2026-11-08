@@ -1544,9 +1544,11 @@ And the resolved agent has to declare terminal workers, which Claude Code
 does. `assistant doctor` checks both when this file chooses tmux, and reports
 the stall by name before a task waits Dispatched. Cursor and Grok do not
 declare terminal workers; naming one under tmux fails that check the same
-way. Under the default (pipes) provider a worker an earlier service started
-is never attached to or read through the new one: a restart ends it and
-relaunches in place. Under tmux, the hold-again path above is what decides.
+way. Under `pipe`, and under `auto` when the worker was hosted on a pipe, a
+worker an earlier service started is never attached to or read through the
+new one: a restart ends it and relaunches in place. Under `tmux`, and under
+`auto` when the worker was hosted in tmux, the hold-again path above is what
+decides.
 
 A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering
