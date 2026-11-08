@@ -1228,11 +1228,13 @@ the one command its grant allows. It is placed by the process it runs in,
 exactly as a worker is, so every task it creates is written into its domain
 and it reaches only that domain's tasks: it holds `create`, `tasks`,
 `message`, `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`,
-`acknowledge` and `supervision` over them, its `tasks` listing shows the
-domain alone, and it is refused `promote`, `answer`, `listen`, `delegate`,
-`end-delegation`, marking the catch-up read, starting, rerunning or
-cancelling a run, `sync`, and stopping or restarting the service, with code
-`subordinate`; a task outside its domain is refused with code
+`acknowledge`, `listen` and `supervision` over them, its `tasks` listing
+shows the domain alone and its `listen` its own domain's stream, and it is
+refused `promote`, `answer`, `interrupt`, `create --housekeeping`,
+`catch-up`, `delegate`, `end-delegation`, marking the catch-up read,
+starting, rerunning or cancelling a run, `sync`, and stopping or restarting
+the service, with code `subordinate`; a task outside its domain is refused
+with code
 `outside-domain`. `tasks` and `answer` are coordinator subcommands as well
 as the `assistant tasks` and `assistant --task --answer` a first
 coordinator runs, because the subordinate's grant allows the
@@ -1265,9 +1267,7 @@ assistant --domain DOMAIN --answer retry        # begin its coordinator once mor
 assistant --domain DOMAIN --answer stop         # end the delegation instead
 ```
 
-A subordinate is never handed a wake about a domain, its own included. What
-this build does not do: a subordinate cannot hold `listen`, so it waits
-with `await`.
+A subordinate is never handed a wake about a domain, its own included.
 
 ## Unattended operating posture
 
