@@ -2905,7 +2905,7 @@ share the same decisions, the same options, and the same authority. Only the ren
 | `assistant rerun` | Start a fresh run from the last known head, inheriting the recorded intent. The last known head is the commit the branch's last run pushed, or the commit it was submitted with when it pushed nothing. When the checkout stands on another commit, rerun refuses and starts nothing: behind what the run pushed, it names `assistant sync`; anywhere else, it names a push to the gate or a start with an intent. Given `--intent`, the fresh run takes that intent in place of the recorded one and records it as supplied, which is acceptance criteria, the standing an intent given to a start has when nothing is said about it. That is all a replaced intent changes: the head a rerun validates and its refusal are the same with it or without it. An empty intent is refused as incorrect usage and starts nothing. |
 | `assistant sync` | Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation. |
 | `assistant tasks` | List fleet work with its resolved current state. |
-| `assistant dump` | Every record the resolver reads (tasks, attempts, wakes, holds, kept work, runs), as one JSON document, redacted on the way out. Given a task identifier, only that task's records. Read-only: it opens the database for reading, asks the service nothing and writes nothing, so it answers with the service up or down. It is a window onto the store for a person to copy, diff or feed to another tool, not a substitute for the database; the database stays the source of truth. It is a detailed evidence document in P13's sense; the line pointing at it is phrased. |
+| `assistant dump` | Every record the resolver reads (tasks, attempts, holds, runs), plus the task wakes and kept work, as one JSON document, redacted on the way out. Given a task identifier, only that task's records. Read-only: it opens the database for reading, asks the service nothing and writes nothing, so it answers with the service up or down. It is a window onto the store for a person to copy, diff or feed to another tool, not a substitute for the database; the database stays the source of truth. It is a detailed evidence document in P13's sense; the line pointing at it is phrased. |
 | `assistant watch` | Fleet view: everything in flight, everything waiting on you. |
 | `assistant doctor` | Check every dependency, and decisively report whether a run can start at all. Once `init` has run, also print the one next step of a first run, read from where the checkout's change stands, from making a branch through the push that sends it; that read writes nothing and decides nothing about whether a run can start. |
 | `assistant service …` | Start, stop, restart, status. |
@@ -2998,16 +2998,18 @@ and neither replaces the database.
 
 `assistant dump` writes every record the resolver reads as one JSON document, redacted on the way
 out through the credential remover: tasks with their attempts, runs, holds and the rest of each
-task snapshot, the task wakes, and kept work. Given a task identifier it narrows to that task.
+task snapshot, plus the task wakes and kept work. Given a task identifier it narrows to that task.
 It opens the database read-only, creates nothing and asks the service nothing, so it answers with
-the service up or down. The dump of a home round-trips through the resolver to the same resolved
-state `assistant tasks` reports from those records. It is a snapshot taken after the fact, for a
-person to read, diff, attach to an issue, or feed to another tool. It has none of what the
-database buys: atomicity across a wake and its markers, one consistent read the resolver computes
-from (P8), graph checkpoints, writes anchored to a commit the run observed (P6), and concurrent
-writers that do not step on each other (P15). Those stay acceptance criteria of the store, so the
-database remains the source of truth and the dump stays cheap because it is read-only. The answer
-is a detailed evidence document in P13's sense; the line pointing at it is phrased.
+the service up or down. The dump is one consistent read of those records (P8). Fed through the
+resolver it answers the same resolved state `assistant tasks` reports from those records alone:
+live inputs a task list can take (a live terminal, an advancing run) are not in the dump, so the
+match is over what the records decide. It is a snapshot taken after the fact, for a person to
+read, diff, attach to an issue, or feed to another tool. It has none of what else the database
+buys: atomicity across a wake and its markers, graph checkpoints, writes anchored to a commit the
+run observed (P6), and concurrent writers that do not step on each other (P15). Those stay
+acceptance criteria of the store, so the database remains the source of truth and the dump stays
+cheap because it is read-only. The answer is a detailed evidence document in P13's sense; the line
+pointing at it is phrased.
 
 `assistant db path` prints the database file of the home it acted on, so a reader of the person's
 own can be pointed at the records. It names where the file is rather than reading it: it creates

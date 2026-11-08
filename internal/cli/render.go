@@ -181,7 +181,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but five is phrased: what it prints is a phrase from
+// Every row but six is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
@@ -196,14 +196,14 @@ func writePointed(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The five that are not phrased are named, so that the claim about the
-// rest is bounded by an enumeration. All five keep exact identifiers under
+// The six that are not phrased are named, so that the claim about the
+// rest is bounded by an enumeration. All six keep exact identifiers under
 // P13's evidence exception, and they differ in how a person is pointed at
-// them: four are evidence documents written behind a phrase that points at
-// each, which P13 and PRD section 9 name as the four pointed at, and the fifth is
+// them: five are evidence documents written behind a phrase that points at
+// each, which P13 and PRD section 9 name as the five pointed at, and the sixth is
 // the value row, which is written alone because a pointer would become part
 // of what a caller substitutes; VoiceValue says so and databaseRendering is
-// the row. The four:
+// the row. The five:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -224,8 +224,11 @@ func writePointed(w io.Writer, row rendering, value any) {
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
 //     view, so it is the fourth evidence document P13's list names.
+//   - dump is section 9's dump: every record the resolver reads, plus the
+//     task wakes and kept work, as one JSON document, redacted on the way
+//     out. It is the fifth pointed evidence document P13's list names.
 //
-// And the fifth row, which is not one of those four: database is PRD section
+// And the sixth row, which is not one of those five: database is PRD section
 // 9's db path, the database file of the home the command acted on, written
 // as the value alone.
 //

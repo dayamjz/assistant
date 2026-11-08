@@ -2,6 +2,8 @@ package cli_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -170,13 +172,34 @@ func TestDumpRoundTripsThroughTheResolverToTheSameTasksOutput(t *testing.T) {
 }
 
 // TestDumpCreatesNoHomeAndAsksTheServiceNothing holds the stuck-home
-// promise: dump opens the database read-only and never starts the service.
+// promise: dump opens the database read-only, creates nothing, and never
+// starts the service. A --home that has never been opened stays absent.
+// Under an existing root with a database already seeded, Create's layout
+// directories stay absent (Create would write them; dump must not).
 func TestDumpCreatesNoHomeAndAsksTheServiceNothing(t *testing.T) {
 	t.Parallel()
+	root := filepath.Join(t.TempDir(), "never-created")
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("%s should be absent before the command: %v", root, err)
+	}
+	absent := runArgs(t, t.TempDir(), "--home", root, "--json", "dump")
+	if absent.code == machine.ExitOK {
+		t.Fatalf("assistant --json dump under a never-created home exited OK:\n%s%s", absent.stdout, absent.stderr)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("dump created %s; the verb creates no home", root)
+	}
+
 	h := newHome(t)
 	records := openStore(t, h)
 	if err := records.Close(); err != nil {
 		t.Fatal(err)
+	}
+	for _, dir := range []string{"worktrees", "evidence", "tasks", "logs", "terminals", "domains"} {
+		layout := filepath.Join(h.Root(), dir)
+		if _, err := os.Stat(layout); !os.IsNotExist(err) {
+			t.Fatalf("%s should be absent before the command so Create is locked: %v", layout, err)
+		}
 	}
 	// No serve: the verb must answer without the service.
 	got := run(t, h, h.Root(), "--json", "dump")
@@ -189,5 +212,11 @@ func TestDumpCreatesNoHomeAndAsksTheServiceNothing(t *testing.T) {
 	}
 	if len(document.Tasks) != 0 || len(document.Wakes) != 0 || len(document.KeptWork) != 0 {
 		t.Errorf("empty home dump = %+v, want empty slices", document)
+	}
+	for _, dir := range []string{"worktrees", "evidence", "tasks", "logs", "terminals", "domains"} {
+		layout := filepath.Join(h.Root(), dir)
+		if _, err := os.Stat(layout); !os.IsNotExist(err) {
+			t.Fatalf("dump created %s; the verb creates no home layout", layout)
+		}
 	}
 }

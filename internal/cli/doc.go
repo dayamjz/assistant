@@ -274,11 +274,11 @@
 // # Where the records are, for a reader that is not this program
 //
 // dump in dump.go is PRD section 9's dump: every record the resolver reads,
-// as one JSON document, redacted on the way out, from a read-only open that
-// asks the service nothing. db in db.go is PRD section 9's path verb for a
-// person debugging a home from outside this binary: db path writes the
-// database file of the home the command acted on, so the records can be
-// opened with a reader of their own.
+// plus the task wakes and kept work, as one JSON document, redacted on the
+// way out, from a read-only open that asks the service nothing. db in db.go
+// is PRD section 9's path verb for a person debugging a home from outside
+// this binary: db path writes the database file of the home the command
+// acted on, so the records can be opened with a reader of their own.
 // It is a row of the verb table because that section describes it, and
 // dbActions is the one owner of what it answers; a subcommand that section
 // does not describe is a finding against the specification, as a verb is.
