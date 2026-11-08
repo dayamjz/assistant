@@ -1717,9 +1717,10 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 // doctor reports the operator's session_provider before a task stalls
 // Dispatched: the default, auto, is fine and names tmux where it can host
 // the agent's workers and pipes where it cannot, a Claude Code worker with no
-// credential in the environment among them; tmux with a binary and an
-// agent that declares terminal_workers is fine; tmux without the binary, or with an
-// agent that has not declared the capability, is not OK and names the stall.
+// credential in the environment among them; tmux with a binary and an agent
+// that can start a terminal worker here is fine; tmux without the binary, or
+// with an agent that cannot start a terminal worker here (for Claude: missing
+// credential or git identity), is not OK and names the stall.
 // It stays serial because PATH is process state.
 func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	if runtime.GOOS == "windows" {
