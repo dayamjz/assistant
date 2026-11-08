@@ -660,15 +660,16 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 // default, which hosts a worker in tmux where tmux is on PATH, the worker's
 // routed adapter can start a terminal worker and the home's path leaves room
 // for the socket, and on a pipe otherwise; the row says which. tmux needs a
-// tmux binary on PATH and a worker adapter that declares terminal_workers;
-// without either, every launch is refused and the task stays Dispatched,
-// which is the stall this row names before an operator waits on one. It reads
-// the operator's file the way the service does at start, and selects the
-// worker adapter the same way a launch does (agents.Route over the worker
-// role and agent list), so a roles.worker pin is what the row names. It does
-// not block a run: gate validation does not need a worker terminal, and a
-// missing prerequisite is a fleet launch refusal rather than a run-start
-// refusal.
+// tmux binary on PATH and a worker adapter that can start a terminal worker
+// here (agents.TerminalStartable: terminal_workers, and for Claude a
+// credential and a complete git identity); without those, every launch is
+// refused and the task stays Dispatched, which is the stall this row names
+// before an operator waits on one. It reads the operator's file the way the
+// service does at start, and selects the worker adapter the same way a
+// launch does (agents.Route over the worker role and agent list), so a
+// roles.worker pin is what the row names. It does not block a run: gate
+// validation does not need a worker terminal, and a missing prerequisite is
+// a fleet launch refusal rather than a run-start refusal.
 func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog) machine.Check {
 	cfg, err := service.GlobalConfig(h.ConfigFile())
 	if err != nil {
@@ -704,18 +705,18 @@ func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog)
 				err.Error(),
 		}
 	}
-	if !selection.Resolution.Capabilities.Has(agents.CapabilityTerminalWorkers) {
+	if err := agents.TerminalStartable(selection.Resolution.Runner); err != nil {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
-			Detail: fmt.Sprintf("session_provider is tmux and %s has not declared %s, so every launch is refused and the task stays dispatched",
-				selection.Resolution.Name, agents.CapabilityTerminalWorkers),
+			Detail: fmt.Sprintf("session_provider is tmux and %s cannot start a terminal worker here, so every launch is refused and the task stays dispatched: %v",
+				selection.Resolution.Name, err),
 		}
 	}
 	return machine.Check{
 		Name: machine.CheckSessionProvider,
 		OK:   true,
-		Detail: fmt.Sprintf("tmux at %s, and %s declares %s",
-			tmux, selection.Resolution.Name, agents.CapabilityTerminalWorkers),
+		Detail: fmt.Sprintf("tmux at %s, and %s can start a terminal worker here",
+			tmux, selection.Resolution.Name),
 	}
 }
 

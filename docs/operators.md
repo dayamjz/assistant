@@ -1544,11 +1544,13 @@ shell of your own, not the worker's server.
 
 Two things it needs. tmux has to be on the service's PATH; without it every
 launch is refused and the task stays dispatched, which the service log says.
-And the resolved agent has to declare terminal workers, which Claude Code
-does. `assistant doctor` checks both when this file chooses tmux, and reports
-the stall by name before a task waits Dispatched. Cursor and Grok do not
-declare terminal workers; naming one under tmux fails that check the same
-way. Under `pipe`, and under `auto` when the worker was hosted on a pipe, a
+And the resolved agent has to be able to start a terminal worker here, which
+for Claude Code means it declares terminal workers, a credential is in the
+service's environment, and a complete git name and email is available to
+carry into the worker's own HOME. `assistant doctor` checks those when this
+file chooses tmux, and reports the stall by name before a task waits
+Dispatched. Cursor and Grok do not declare terminal workers; naming one under
+tmux fails that check the same way. Under `pipe`, and under `auto` when the worker was hosted on a pipe, a
 worker an earlier service started is never attached to or read through the
 new one: a restart ends it and relaunches in place. Under `tmux`, and under
 `auto` when the worker was hosted in tmux, the hold-again path above is what

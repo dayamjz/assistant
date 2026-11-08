@@ -101,9 +101,10 @@ import (
 // For auto, the default, it is the tmux provider when r could start a
 // terminal worker here (agents.TerminalStartable: it declares terminal
 // workers and, for the Claude Code adapter, a credential and a complete git
-// identity are in its environment, which its pipe worker does not need), a
-// tmux binary resolves and the home's socket path fits the platform's limit,
-// and the pipe provider otherwise, which is the fallback auto names;
+// identity are available — from the environment or git's configured
+// user.name/user.email — which its pipe worker does not need), a tmux binary
+// resolves and the home's socket path fits the platform's limit, and the
+// pipe provider otherwise, which is the fallback auto names;
 // Options.PipeByDefault makes it the pipe provider without looking. Routing
 // under auto does not require terminal workers (routeWorker), so the adapter
 // decides here and is never refused for lacking them.

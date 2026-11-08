@@ -1794,10 +1794,22 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found = findCheck(report, machine.CheckSessionProvider)
 	if !found || !row.OK || row.Blocking ||
-		!strings.Contains(row.Detail, "tmux") || !strings.Contains(row.Detail, string(agents.CapabilityTerminalWorkers)) {
-		t.Fatalf("doctor's session provider row with tmux and claude is %+v, want OK naming tmux and %s",
-			row, agents.CapabilityTerminalWorkers)
+		!strings.Contains(row.Detail, "tmux") || !strings.Contains(row.Detail, "can start a terminal worker") {
+		t.Fatalf("doctor's session provider row with tmux, claude, credential and git identity is %+v, want OK naming tmux and a startable worker",
+			row)
 	}
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || row.OK || row.Blocking || !strings.Contains(row.Detail, "stays dispatched") ||
+		!strings.Contains(row.Detail, "git identity") {
+		t.Fatalf("doctor's session provider row with tmux and no git identity is %+v, want not OK naming the dispatched stall and identity", row)
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "doctor-row")
+	t.Setenv("GIT_AUTHOR_EMAIL", "doctor-row@example.invalid")
 
 	// Same file, no tmux on PATH: the row fails closed and names the stall.
 	noTmux := t.TempDir()
