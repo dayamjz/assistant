@@ -38,7 +38,7 @@ func seamPeers() []struct {
 		name string
 		peer Peer
 	}{
-		{"an identified peer", Peer{creds: Credentials{PID: 1, UID: 0, GID: 0}}},
+		{"an identified peer", Peer{creds: Credentials{PID: 1, UID: 0, GID: 0}, ok: true}},
 		{"an unidentified peer", Peer{err: fmt.Errorf("%w: no answer for this transport", ErrUnidentifiedPeer)}},
 	}
 }
