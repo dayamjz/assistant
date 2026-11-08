@@ -47,30 +47,36 @@ func (c Credentials) String() string {
 //
 // The identification either succeeded or it did not, and this type makes a
 // caller face that: there is no field to read the credentials out of, only
-// Credentials, which returns the refusal when the kernel could not be asked.
-// A caller reaching for authority therefore has an error to handle rather than
-// a zero value that reads like a valid identity.
+// Credentials, which returns the refusal when the kernel could not be asked
+// and when Identify never built the value. A caller reaching for authority
+// therefore has an error to handle rather than a zero value that reads like a
+// valid identity.
 type Peer struct {
 	creds  Credentials
 	err    error
+	ok     bool
 	marker Marker
 }
 
 // Credentials returns what the kernel attributes to the peer, or a refusal
 // wrapping ErrUnidentifiedPeer when it could not be asked: a transport that is
-// not a local socket, a platform with no answer for one, or a socket the
-// kernel would not answer about.
+// not a local socket, a platform with no answer for one, a socket the kernel
+// would not answer about, or a Peer that Identify never built (the zero value).
 func (p Peer) Credentials() (Credentials, error) {
 	if p.err != nil {
 		return Credentials{}, p.err
+	}
+	if !p.ok {
+		return Credentials{}, fmt.Errorf("%w: peer was never identified", ErrUnidentifiedPeer)
 	}
 	return p.creds, nil
 }
 
 // Identified reports whether the peer was identified. It is for a diagnostic
 // that wants to say so without an error to handle; a decision uses
-// Credentials, which cannot be read without handling the refusal.
-func (p Peer) Identified() bool { return p.err == nil }
+// Credentials, which cannot be read without handling the refusal. A zero Peer
+// is not identified.
+func (p Peer) Identified() bool { return p.ok }
 
 // Marker returns what the peer said about its own environment, which is
 // evidence and never authorization. See MarkerVar.
@@ -99,7 +105,7 @@ func Identify(conn net.Conn) Peer {
 	if err != nil {
 		return Peer{err: fmt.Errorf("%w: %w", ErrUnidentifiedPeer, err)}
 	}
-	return Peer{creds: creds}
+	return Peer{creds: creds, ok: true}
 }
 
 // LocalMarker reads this process's own marker from the environment, for a

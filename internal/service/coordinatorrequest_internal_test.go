@@ -16,10 +16,11 @@ import (
 // identifies every client. The package's TestMain runs the tests in the
 // foreground of a terminal (standin.AtTerminal), so the coordinator's
 // methods place this process as a shell at a terminal: the coordinator.
-// A zero ipc.Request is not that: its peer reads as process 0, which has
-// no terminal above it and is refused the coordinator's methods as
-// unplaced. The peer is read once, since it is the same process for every
-// test; a socket that cannot be made fails the test that asked.
+// A zero ipc.Request is not that: its peer was never identified, so
+// Credentials refuses with ErrUnidentifiedPeer rather than reading as a
+// process, and coordinator methods that need placement refuse that peer.
+// The peer is read once, since it is the same process for every test; a
+// socket that cannot be made fails the test that asked.
 func coordinatorRequest(tb testing.TB) ipc.Request {
 	tb.Helper()
 	req, err := thisProcess()
