@@ -100,13 +100,13 @@ import (
 //
 // For auto, the default, it is the tmux provider when r could start a
 // terminal worker here (agents.TerminalStartable: it declares terminal
-// workers and, for the Claude Code adapter, a credential is in its
-// environment, which its pipe worker does not need), a tmux binary resolves
-// and the home's socket path fits the platform's limit, and the pipe provider otherwise, which is the fallback
-// auto names; Options.PipeByDefault makes it the pipe provider without
-// looking. Routing under auto does not require terminal
-// workers (routeWorker), so the adapter decides here and is never refused for
-// lacking them.
+// workers and, for the Claude Code adapter, a credential and a complete git
+// identity are in its environment, which its pipe worker does not need), a
+// tmux binary resolves and the home's socket path fits the platform's limit,
+// and the pipe provider otherwise, which is the fallback auto names;
+// Options.PipeByDefault makes it the pipe provider without looking. Routing
+// under auto does not require terminal workers (routeWorker), so the adapter
+// decides here and is never refused for lacking them.
 func (s *Service) sessionHost(r agents.Runner) session.Host {
 	switch s.cfg.SessionProvider {
 	case config.SessionProviderTmux:
@@ -126,10 +126,11 @@ func (s *Service) sessionHost(r agents.Runner) session.Host {
 // autoSessionHost is sessionHost's auto branch: the tmux provider when a
 // worker of r can be hosted there, else false so the caller builds a pipe.
 // A fallback is logged when r could have used a terminal (it declares
-// terminal workers) but did not: missing credential, no tmux binary, or a
-// home path too long for the socket. An adapter without terminal workers
-// stays on pipes with no log, which is the ordinary choice under auto;
-// doctor's session-provider row still names which provider auto picks.
+// terminal workers) but did not: missing credential or git identity, no
+// tmux binary, or a home path too long for the socket. An adapter without
+// terminal workers stays on pipes with no log, which is the ordinary choice
+// under auto; doctor's session-provider row still names which provider auto
+// picks.
 func (s *Service) autoSessionHost(r agents.Runner) (session.Host, bool) {
 	if !s.autoTmux {
 		return nil, false

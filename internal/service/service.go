@@ -194,10 +194,11 @@ type Options struct {
 	// machine with no tmux, rather than looking for tmux. internal/cli
 	// leaves it false, so the product hosts a worker in tmux wherever
 	// sessionHost would: tmux on PATH, the worker's adapter can start a
-	// terminal worker here (agents.TerminalStartable, Claude credential
-	// included), and the home's path leaves room for the socket; a test
-	// whose subject is not the provider sets it so its workers keep the
-	// pipe shape it scripts. It changes nothing under an explicit provider.
+	// terminal worker here (agents.TerminalStartable: Claude credential and
+	// git identity included), and the home's path leaves room for the
+	// socket; a test whose subject is not the provider sets it so its
+	// workers keep the pipe shape it scripts. It changes nothing under an
+	// explicit provider.
 	PipeByDefault bool
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
