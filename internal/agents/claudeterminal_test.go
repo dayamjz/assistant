@@ -19,10 +19,11 @@ import (
 )
 
 // claudeTerminalEnv is a base environment for a Claude Code terminal worker
-// over the stand-in: a PATH, a HOME of the test's own, and the stand-in key.
+// over the stand-in: a PATH, a HOME of the test's own, a git identity the
+// adapter carries into the worker, and the stand-in key.
 func claudeTerminalEnv(t *testing.T) []string {
 	t.Helper()
-	return withStandinKey([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()})
+	return withStandinKey(withOperatorGitIdentity([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}))
 }
 
 // openClaudeTerminal starts a Claude Code terminal worker over the
@@ -120,7 +121,7 @@ func TestAClaudeTerminalWorkerReachesItsConversationWithNobodyThere(t *testing.T
 			t.Fatal(err)
 		}
 	}
-	env := withStandinKey([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CLAUDE_CONFIG_DIR=" + userConfig})
+	env := withStandinKey(withOperatorGitIdentity([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "CLAUDE_CONFIG_DIR=" + userConfig}))
 	worker, _, agent := openClaudeTerminal(t, standin.Script{}, spec, agents.WithBaseEnvironment(env))
 
 	call := awaitInteractive(t, agent, answered(1))
@@ -193,7 +194,7 @@ func TestAClaudeTerminalWorkerCachesIntoADirectoryOfItsOwn(t *testing.T) {
 		Exchanges: []standin.Exchange{{Contains: "run:", Run: true}},
 	}}
 	worker, term, _ := openClaudeTerminal(t, script, spec, agents.WithBaseEnvironment(
-		withStandinKey([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "XDG_CACHE_HOME=/the/operator/cache"})))
+		withStandinKey(withOperatorGitIdentity([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "XDG_CACHE_HOME=/the/operator/cache"}))))
 	if err := worker.Send(t.Context(), "run: env > env.txt"); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -453,7 +454,7 @@ func TestAClaudeTerminalWorkerStartsOnTheOneCredentialItIsHanded(t *testing.T) {
 		{"both, the key wins whichever comes first", []string{key, token}, []string{agents.ClaudeKeyVariable}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			env := append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, c.set...)
+			env := withOperatorGitIdentity(append([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir()}, c.set...))
 			spec := workerSpec(t)
 			_, _, agent := openClaudeTerminal(t, standin.Script{}, spec, agents.WithBaseEnvironment(env))
 			call := awaitInteractive(t, agent, answered(1))
@@ -510,7 +511,7 @@ func TestAClaudeTerminalWorkerIsRefusedWithoutACredential(t *testing.T) {
 // which both must carry, so a scan that looked at nothing fails rather than
 // passing.
 func TestAClaudeTerminalWorkersTokenIsInNoRecordOrCapture(t *testing.T) {
-	env := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), agents.ClaudeTokenVariable + "=" + standinToken}
+	env := withOperatorGitIdentity([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), agents.ClaudeTokenVariable + "=" + standinToken})
 	spec := workerSpec(t)
 	worker, _, agent := openClaudeTerminal(t, standin.Script{}, spec, agents.WithBaseEnvironment(env))
 	const sent = "a message after the instructions"

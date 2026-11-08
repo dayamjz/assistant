@@ -12,6 +12,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // StartInTerminal starts Claude Code as a terminal worker on t: the CLI's
@@ -31,26 +33,39 @@ import (
 //
 // # Directories of its own
 //
-// Two fresh directories are made for this worker alone, owner-only, beside
+// Three fresh directories are made for this worker alone, owner-only, beside
 // its terminal's socket: a configuration directory (claudeConfigFor) given
 // to the CLI as CLAUDE_CONFIG_DIR, which was observed to move the CLI's
-// state file, .claude.json, there, and a cache directory (claudeCacheFor)
+// state file, .claude.json, there; a cache directory (claudeCacheFor)
 // given as XDG_CACHE_HOME on the worker process's own environment, which is
 // not the CLI's own variable but the one a program following the XDG
-// convention reads. That assignment is what a checked-in test reads back
-// from the pane; whether a tool the CLI starts inherits it was not
-// measured, and a run left that cache directory empty, so the isolation
-// bought for tools that cache this way is the bound, not an observation.
-// The directory is removed with the worker either way. The state file is
-// written before the
+// convention reads; and a home directory (claudeHomeFor) given as HOME on
+// that same environment. The XDG and HOME assignments are what a
+// checked-in test reads back from the pane; whether a tool the CLI starts
+// inherits them was not measured, and a run left the cache directory
+// empty, so the isolation bought for tools that follow those conventions
+// and inherit this environment is the bound, not an observation that
+// everything the worker runs is sealed to these directories. All three are
+// removed with the worker either way. The state file is written before the
 // CLI starts, holding three answers the CLI would otherwise ask a person
 // for on screens before its prompt: onboarding completed, the workspace
 // trusted for spec.Dir exactly and, where it differs, for the path that
 // resolves to, and, for a worker on the API key, the key approved. Nothing
-// here reads the operator's own configuration or copies anything out of
-// it, and both directories are removed once the worker has ended; a start
-// that cannot make the cache directory removes the configuration directory
-// and is refused before any process exists.
+// here reads the operator's own Claude configuration or copies anything
+// out of it. A start that cannot make the cache or home directory removes
+// what it had just made and is refused before any process exists.
+//
+// The worker's HOME holds none of the operator's git configuration, so the
+// start carries the operator's git name and email onto the worker
+// process's environment explicitly as GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL,
+// GIT_COMMITTER_NAME and GIT_COMMITTER_EMAIL: a complete pair already on
+// that environment, or otherwise user.name and user.email from the
+// process's git configuration (vcs.UserIdentity). A half-set env pair, or
+// no pair at all, is a refusal wrapping ErrNoGitIdentity before any
+// directory is made, so a host-derived identity never reaches a started
+// worker. The four variables are what a checked-in test reads back from
+// the worker process; whether a tool the CLI starts (git among them)
+// inherits them was not measured.
 //
 // The approval is the last 20 characters of the key, which is what the CLI
 // was observed to keep for one: an approval holding them skipped the key
@@ -68,30 +83,39 @@ import (
 // the measuring account did not have, so this is what a worker left and
 // not the whole of what it touched. The measurement was made by hand and
 // nothing re-checks the whole of it; claudecli_test.go's probe re-runs the
-// part a checked-in test can, where a claude is on PATH: it gives a worker
-// a HOME of its own, fails on an entry left in that HOME's .cache or
-// .claude, and logs the rest of what the run left there and in the cache
-// directory below, so a later CLI's new write is reported rather than
-// assumed away. The marker read below is the part it does not re-run.
+// part a checked-in test can, where a claude is on PATH: the runner's base
+// environment names an operator HOME with empty .cache and .claude, the
+// adapter then points the worker at a HOME of its own, and the probe fails
+// if the operator HOME gains anything (including an entry in those two
+// directories) and logs what the run left in the worker's HOME and cache
+// directory while the worker is still up, so a later CLI's new write into
+// the operator home is reported rather than assumed away. The marker read
+// below is the part it does not re-run.
 //
-// With the two variables above set, the run left HOME's .cache and .claude
-// exactly as empty as it found them, and wrote its state file, its
-// history, its session and a cache of its own under CLAUDE_CONFIG_DIR. It
-// wrote two things elsewhere under HOME, neither of them the CLI's
-// configuration: an application bundle, Applications/Claude Code URL
-// Handler.app, and, where the worker's PATH reached a gh, the device
-// identifier gh writes for itself under .local/state/gh. What invoked gh
-// was not established. The cache directory this adapter makes was empty
-// after such a run, so it bounds what the worker runs rather than the CLI;
-// that is the directory the probe logs while the worker is still up,
-// since the worker's end removes it.
+// With CLAUDE_CONFIG_DIR and XDG_CACHE_HOME set (and, as of this change,
+// HOME set to the worker's own directory), the run left the HOME it was
+// given's .cache and .claude exactly as empty as it found them, and wrote
+// its state file, its history, its session and a cache of its own under
+// CLAUDE_CONFIG_DIR. It wrote two things elsewhere under that HOME,
+// neither of them the CLI's configuration: an application bundle,
+// Applications/Claude Code URL Handler.app, and, where the worker's PATH
+// reached a gh, the device identifier gh writes for itself under
+// .local/state/gh. What invoked gh was not established. Under the
+// per-worker HOME those writes land in the worker's own directory and are
+// removed with it, so the operator's home is no longer where they appear.
+// The cache directory this adapter makes was empty after such a run, so it
+// bounds what the worker runs rather than the CLI; that is the directory
+// the probe logs while the worker is still up, since the worker's end
+// removes it.
 //
 // A HOME holding a .claude/CLAUDE.md, a .claude/settings.json and a
 // .claude.json, each carrying a marker, produced no model request carrying
 // one, which is the only read this could observe; what else the CLI reads
-// from HOME is not established here. The worker's HOME is the service's
-// own, so everything else the worker runs reads the operator's home as
-// before, a git identity for the commits a worker makes among them.
+// from HOME is not established here. ANTHROPIC_API_KEY and
+// CLAUDE_CODE_OAUTH_TOKEN are environment, so the credential path does not
+// depend on files under the operator's HOME; a Claude CLI login that lived
+// only under the operator's HOME or keychain is not a credential this
+// start accepts.
 //
 // # Credential
 //
@@ -157,6 +181,10 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	if err != nil {
 		return nil, err
 	}
+	env, err = claudeTerminalGitIdentity(ctx, env)
+	if err != nil {
+		return nil, err
+	}
 	if !utf8.ValidString(spec.Instructions) {
 		return nil, &invocationFieldError{field: "Instructions", reason: "is not valid UTF-8"}
 	}
@@ -167,7 +195,7 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	if err != nil {
 		return nil, fmt.Errorf("drawing the terminal worker's session identifier: %w", err)
 	}
-	configDir, cacheDir := claudeConfigFor(t), claudeCacheFor(t)
+	configDir, cacheDir, homeDir := claudeConfigFor(t), claudeCacheFor(t), claudeHomeFor(t)
 	err = seedClaudeConfig(spec.Dir, key, configDir)
 	if err != nil {
 		return nil, err
@@ -179,8 +207,17 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 		_ = os.RemoveAll(configDir)
 		return nil, fmt.Errorf("making the terminal worker's cache directory: %w", err)
 	}
-	remove := func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) }
-	env = withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir)
+	if err := os.Mkdir(homeDir, 0o700); err != nil {
+		_ = os.RemoveAll(configDir)
+		_ = os.RemoveAll(cacheDir)
+		return nil, fmt.Errorf("making the terminal worker's home directory: %w", err)
+	}
+	remove := func() {
+		_ = os.RemoveAll(configDir)
+		_ = os.RemoveAll(cacheDir)
+		_ = os.RemoveAll(homeDir)
+	}
+	env = withEnvValue(withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir), "HOME", homeDir)
 
 	args := r.claudeTerminalWorkerArgs(spec, session)
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
@@ -200,21 +237,26 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 }
 
 // AdoptInTerminal holds again a Claude Code terminal worker on
-// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The two
-// directories it removes at the worker's end are the ones its start made
-// beside the terminal's socket, its configuration (claudeConfigFor) and
-// its cache (claudeCacheFor), each derived from the socket the adoption
-// verifies and never from anything the worker or its server states, so
-// nothing the worker can change names what is removed.
+// AdoptTerminalWorker's terms, typed into as StartInTerminal's is. The
+// three directories it removes at the worker's end are the ones its start
+// made beside the terminal's socket, its configuration (claudeConfigFor),
+// its cache (claudeCacheFor) and its home (claudeHomeFor), each derived
+// from the socket the adoption verifies and never from anything the
+// worker or its server states, so nothing the worker can change names
+// what is removed.
 func (r *claudeRunner) AdoptInTerminal(ctx context.Context, t Terminal, pane Identity) (TerminalWorker, error) {
 	if err := t.Validate(); err != nil {
 		return nil, err
 	}
-	configDir, cacheDir := claudeConfigFor(t), claudeCacheFor(t)
+	configDir, cacheDir, homeDir := claudeConfigFor(t), claudeCacheFor(t), claudeHomeFor(t)
 	worker, err := adoptTerminalWorker(ctx, t, pane, procSpecTerminal{
-		grace:   r.settings.grace,
-		maxOut:  r.settings.maxOut,
-		cleanup: func() { _ = os.RemoveAll(configDir); _ = os.RemoveAll(cacheDir) },
+		grace:  r.settings.grace,
+		maxOut: r.settings.maxOut,
+		cleanup: func() {
+			_ = os.RemoveAll(configDir)
+			_ = os.RemoveAll(cacheDir)
+			_ = os.RemoveAll(homeDir)
+		},
 	}, r.terminalTyping())
 	if err != nil {
 		return nil, err
@@ -235,6 +277,70 @@ func claudeConfigFor(t Terminal) string { return t.Socket + ".claude" }
 // directory. home.TerminalSockets, whose layout both sit in, records that
 // an adapter names a worker's directories this way.
 func claudeCacheFor(t Terminal) string { return t.Socket + ".cache" }
+
+// claudeHomeFor is the HOME directory of the Claude Code worker on t,
+// named from the terminal exactly as claudeConfigFor and claudeCacheFor
+// name theirs, so a start and an adoption of the same terminal name the
+// same directory. It is a third directory beside those two rather than
+// one of them: the configuration directory is the CLI's own state, the
+// cache directory is the XDG bound for tools, and HOME is the bound given
+// as HOME on the worker process's environment for everything else that
+// reads that variable (git among them).
+func claudeHomeFor(t Terminal) string { return t.Socket + ".home" }
+
+// ErrNoGitIdentity is the refusal to start a Claude Code terminal worker
+// whose environment and the process's git configuration name no operator
+// name and email to carry into the worker. The error wrapping it says so.
+var ErrNoGitIdentity = errors.New("agents: no git identity to carry into the worker")
+
+// git identity variables the adapter sets on a worker so its commits keep
+// the operator's name and email under a HOME of the worker's own.
+const (
+	gitAuthorName     = "GIT_AUTHOR_NAME"
+	gitAuthorEmail    = "GIT_AUTHOR_EMAIL"
+	gitCommitterName  = "GIT_COMMITTER_NAME"
+	gitCommitterEmail = "GIT_COMMITTER_EMAIL"
+)
+
+// claudeTerminalGitIdentity is env with the operator's git name and email
+// set on the four variables git reads for a commit's author and committer.
+// It takes a complete pair already on env (author first, committer as
+// fallback for each half) or, when neither half is set, vcs.UserIdentity
+// under the process environment. A half-set env pair is refused rather
+// than merged with configuration, because UserIdentity is all-or-nothing
+// and a silent half-merge would disagree with what the variables looked
+// like. Missing a complete pair is an error wrapping ErrNoGitIdentity.
+// The four variables are always written together so author and committer
+// cannot disagree.
+func claudeTerminalGitIdentity(ctx context.Context, env []string) ([]string, error) {
+	name := lastValue(env, gitAuthorName)
+	if name == "" {
+		name = lastValue(env, gitCommitterName)
+	}
+	email := lastValue(env, gitAuthorEmail)
+	if email == "" {
+		email = lastValue(env, gitCommitterEmail)
+	}
+	switch {
+	case name != "" && email != "":
+		// Complete pair from the environment.
+	case name == "" && email == "":
+		cfgName, cfgEmail, err := vcs.UserIdentity(ctx)
+		if err != nil && !errors.Is(err, vcs.ErrNoUserIdentity) {
+			return nil, fmt.Errorf("reading the operator's git identity: %w", err)
+		}
+		name, email = cfgName, cfgEmail
+	}
+	if name == "" || email == "" {
+		return nil, fmt.Errorf("%w: a Claude Code terminal worker runs under a HOME of its own, so it needs a git user.name and user.email (or %s/%s) to carry into that HOME and neither is set",
+			ErrNoGitIdentity, gitAuthorName, gitAuthorEmail)
+	}
+	env = withEnvValue(env, gitAuthorName, name)
+	env = withEnvValue(env, gitAuthorEmail, email)
+	env = withEnvValue(env, gitCommitterName, name)
+	env = withEnvValue(env, gitCommitterEmail, email)
+	return env, nil
+}
 
 // terminalLaunchSessionMeasure is the session identifier
 // TerminalLaunchCommandSize uses: the same length and shape sessionIdentifier
