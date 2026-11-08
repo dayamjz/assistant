@@ -180,6 +180,104 @@ func TestAClaudeTerminalWorkerReachesItsConversationWithNobodyThere(t *testing.T
 	}
 }
 
+// A Claude Code terminal worker caches into a directory of its own, which
+// is gone once the worker is. The environment is read from the running
+// worker, by a command run in its pane, rather than from what the adapter
+// says it built, and the directory is the one the adapter derives from the
+// terminal rather than a path this test spells. The control is
+// CLAUDE_CONFIG_DIR beside it, which the worker has carried since #254: a
+// read that found nothing fails here rather than passing.
+func TestAClaudeTerminalWorkerCachesIntoADirectoryOfItsOwn(t *testing.T) {
+	spec := workerSpec(t)
+	script := standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "run:", Run: true}},
+	}}
+	worker, term, _ := openClaudeTerminal(t, script, spec, agents.WithBaseEnvironment(
+		withStandinKey([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "XDG_CACHE_HOME=/the/operator/cache"})))
+	if err := worker.Send(t.Context(), "run: env > env.txt"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	env := awaitWorkerEnvironment(t, filepath.Join(spec.Dir, "env.txt"))
+
+	cache := agents.ClaudeCacheFor(term)
+	if got := env["XDG_CACHE_HOME"]; got != cache {
+		t.Errorf("the worker caches into %q, want its own %q", got, cache)
+	}
+	if got := env["CLAUDE_CONFIG_DIR"]; got != agents.ClaudeConfigFor(term) {
+		t.Errorf("the worker's configuration directory is %q, want %q", got, agents.ClaudeConfigFor(term))
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		t.Fatalf("the worker's cache directory: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("the worker's cache directory is %v, want owner-only", perm)
+	}
+
+	worker.Close()
+	for _, dir := range []string{cache, agents.ClaudeConfigFor(term)} {
+		if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s outlived the worker: %v", dir, err)
+		}
+	}
+}
+
+// A start that cannot make its cache directory is refused, and takes with
+// it the configuration directory it had just seeded and nothing else: what
+// already stood where the cache directory goes is left exactly as it was.
+// It is made here with a file in it, so a start that removed it would be
+// removing content, which a test against an empty directory would miss.
+func TestAClaudeTerminalStartRefusedByItsCacheDirectoryKeepsWhatStoodThere(t *testing.T) {
+	term := terminalFor(t)
+	cache := agents.ClaudeCacheFor(term)
+	if err := os.Mkdir(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	kept, held := filepath.Join(cache, "kept"), "not this start's"
+	if err := os.WriteFile(kept, []byte(held), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := standin.New(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond),
+		agents.WithBaseEnvironment(claudeTerminalEnv(t)))
+
+	_, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, workerSpec(t))
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("a start over a cache directory that already exists answered %v, want it refused", err)
+	}
+	if got, err := os.ReadFile(kept); err != nil || string(got) != held {
+		t.Errorf("the refused start left %q (%v) in the cache directory, want %q untouched", got, err, held)
+	}
+	if _, err := os.Stat(agents.ClaudeConfigFor(term)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the configuration directory the refused start seeded outlived it: %v", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Errorf("the refused start ran the CLI %d times: %v", len(calls), calls)
+	}
+}
+
+// awaitWorkerEnvironment reads the environment a command in the worker's
+// pane wrote to path, as names to values.
+func awaitWorkerEnvironment(t *testing.T, path string) map[string]string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		raw, err := os.ReadFile(path)
+		if err == nil && strings.Contains(string(raw), "\n") {
+			env := map[string]string{}
+			for _, line := range strings.Split(string(raw), "\n") {
+				if name, value, ok := strings.Cut(line, "="); ok {
+					env[name] = value
+				}
+			}
+			return env
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker's command never wrote its environment: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 // Each terminal worker opens a conversation of its own under an identifier
 // drawn for it, and resumes none, so no worker's memory is another session's.
 // That is the fixer side of P4 for a worker: its memory is its own and lasts
