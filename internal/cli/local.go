@@ -685,7 +685,7 @@ func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog)
 			Name: machine.CheckSessionProvider,
 			OK:   true,
 			Detail: "workers run on pipes, as session_provider pipe in " + h.ConfigFile() +
-				" chooses; remove it to host each in an attachable terminal where tmux is installed",
+				" chooses; remove it for auto, which hosts each in an attachable terminal where tmux is on PATH, the worker's agent can start there, and the home's path leaves room for its socket",
 		}
 	}
 	tmux, lookErr := doctorTmux()

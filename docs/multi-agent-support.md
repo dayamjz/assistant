@@ -407,8 +407,10 @@ A retry that failed before a session was recorded reuses dispatch's existing
 standing-copy sweep and the same relaunch bound.
 
 Cursor workers run on pipes: under `session_provider: pipe`, and under the
-default, `auto`, which hosts a worker in tmux only when its adapter declares
-terminal workers. Worker backup capabilities are checked before any worker starts. A tmux provider
+default, `auto`, which hosts a worker in tmux only where a tmux binary is on
+the service's PATH, the adapter can start a terminal worker there (Cursor
+does not declare that), and the home's path leaves room for the worker's
+socket. Worker backup capabilities are checked before any worker starts. A tmux provider
 is refused for Cursor rather than replaced, because Cursor terminal support
  is not declared. Its ACP client grants only read/edit/search requests and
 literal git or worker-route commands without shell operators; other permission

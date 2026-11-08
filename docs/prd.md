@@ -60,9 +60,13 @@ to it and never to you.
 
 ### Promise 1: parallel work you can watch
 
-Every worker is one you can read and reach. In phase 1 the Claude Code worker runs in its
-command line's standard-input stream-json mode: you read it through the service's capture
-and reach it through Send. Under the tmux session provider it runs in its interactive interface instead, typed into through Send; that mode is an option, not a promise. If you intervene directly in a worker, that
+Every worker is one you can read and reach. By default (`session_provider: auto`) a Claude Code
+worker runs in its interactive interface under tmux wherever a tmux binary is on the service's
+PATH, the adapter can start a terminal worker there, and the home's path leaves room for the
+worker's socket, so you read and reach it through that terminal; elsewhere, and under
+`session_provider: pipe`, it runs in its command line's standard-input stream-json mode and you
+read it through the service's capture and reach it through Send. Under `session_provider: tmux`
+it always runs in the interactive interface. If you intervene directly in a worker, that
 intervention is authoritative and the coordinator reconciles around it.
 
 ### Promise 2: nothing unvalidated is shared
@@ -2551,7 +2555,7 @@ interface column is what the rest of the system is allowed to depend on.
 | **forge** | Provider abstraction for pull requests, checks, and merge state. | One interface, one adapter per provider. |
 | **Fleet** |  |  |
 | **tasks** | Task records, the two shapes, intake, queueing, promotion, cleanup proofs. | Create, dispatch, promote, complete, clean up. |
-| **session** | Terminal session provider abstraction: create, capture, send, probe, close. | One interface; pipe is the reference provider, and the configured default is `auto` (decision 33). |
+| **session** | Terminal session provider abstraction: create, capture, send, probe, close. | One interface; pipe is the reference provider. |
 | **supervisor** | Wake classification, the durable queue, liveness beacons, the stop guard. | Classify a wake; drain the queue; assert supervision is live. |
 | **taskstate** | The current-state resolver. Computes a task's state on each read and stores nothing. Read-only and free of side effects. | One call in, one state plus source plus detail out. |
 | **Shared** |  |  |

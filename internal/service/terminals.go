@@ -158,9 +158,10 @@ func (s *Service) autoSessionHost(r agents.Runner) (session.Host, bool) {
 // launch holds: sessionHost's, except that auto is the pipe provider here.
 // auto is the default so that a task's worker can outlive a restart, which a
 // subordinate does not (PRD section 9's domain.delegate relaunches it at
-// restart), and the Claude Code adapter refuses a terminal-hosted
-// subordinate, so auto keeps subordinates where the earlier pipe default
-// had them. Probes answer on one identity rule under either provider.
+// restart), so auto keeps subordinates on pipes where the earlier pipe
+// default had them; under session_provider tmux a Claude subordinate still
+// starts in a terminal the same way a worker does. Probes answer on one
+// identity rule under either provider.
 func (s *Service) driverHost(r agents.Runner) session.Host {
 	if s.cfg.SessionProvider == config.SessionProviderAuto {
 		return session.NewPipe(s.home, r)

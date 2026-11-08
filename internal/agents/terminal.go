@@ -480,8 +480,9 @@ func OpenTerminalWorker(ctx context.Context, r Runner, t Terminal, spec WorkerSp
 // mechanism, under GrantSubordinate, which only it and OpenSubordinate
 // select. An adapter whose terminal interface was not observed under the
 // grant's permission mode refuses it with ErrTerminalGrantUnobserved; the
-// Claude Code adapter starts one because GrantSubordinate writes the
-// observed acceptEdits mode while still denying editing and git.
+// Claude Code adapter starts one when GrantSubordinate is given a route
+// (acceptEdits while still denying editing and git) and refuses without
+// a route, where those flags are GrantRead's default mode.
 func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
 	spec.subordinate = true
 	return OpenTerminalWorker(ctx, r, t, spec)
