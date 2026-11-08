@@ -194,8 +194,13 @@ func (r *codexRunner) Capabilities() Capabilities { return codexDeclaration }
 
 // codexDeclaration is what Capabilities and the factory's Declares both return.
 var codexDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions,
+	CapabilityPipeInterrupt,
 	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
 	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
+
+// pipeInterrupt is the Runner half of CapabilityPipeInterrupt: Start's
+// workers implement InterruptibleWorker over turn/interrupt.
+func (*codexRunner) pipeInterrupt() {}
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces

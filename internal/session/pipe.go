@@ -119,13 +119,16 @@ func (p *Pipe) Release(s *Session) error {
 	return ErrNotDurable
 }
 
-// Interrupt is ErrNotInterruptible for a session this provider holds and
-// ErrNotHeld for any other: a pipe's worker has no terminal.
-func (p *Pipe) Interrupt(_ context.Context, s *Session) (bool, error) {
+// Interrupt ends the turn a held worker is running on Host.Interrupt's
+// terms, through agents.InterruptPipeWorker over the adapter this provider
+// was built over, which reads its declaration first. An adapter that has
+// not declared agents.CapabilityPipeInterrupt is refused with that
+// package's *CapabilityError; ErrNotInterruptible is not this path.
+func (p *Pipe) Interrupt(ctx context.Context, s *Session) (bool, error) {
 	if !p.holds(s) {
 		return false, ErrNotHeld
 	}
-	return false, ErrNotInterruptible
+	return agents.InterruptPipeWorker(ctx, p.runner, s.worker)
 }
 
 // Readopt is ErrNotDurable: no pipe's worker is held again.

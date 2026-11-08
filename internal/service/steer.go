@@ -121,22 +121,23 @@ import (
 // running and keeps the worker, through the session provider's Interrupt
 // on the session this service holds for that attempt, bounded by
 // interruptBound, and answers only once that Interrupt read the turn ended
-// and the terminal probe then answered Live. What reads the turn ended is
-// internal/agents' agents.InterruptTerminalWorker: the key is pressed once
-// on a screen that reads a turn running that has begun its reply, with an
-// empty input, and the screen reads ready again after it; a screen that reads ready before it is
-// answered as no turn running, with nothing pressed. Only the tmux provider
-// can type a key, so the answer is refused, typed and with nothing pressed,
-// for a worker whose adapter has not declared
-// agents.CapabilityTerminalInterrupt (*agents.CapabilityError), for one on
-// the pipe provider (session.ErrNotInterruptible), for one this service
-// does not hold, and for a screen that never read either state within the
-// bound. A key typed and no ready screen read after it within the bound is
-// refused too, saying the key was typed, as is a worker the probe does not
-// read Live afterwards (*interruptUnverified). Each refusal names stop, then
-// relaunch with a note, as the path left. Nothing is recorded: an interrupt
-// opens no hold and writes no record, so what proves it is its answer and
-// the service's log line.
+// and the terminal probe then answered Live. Under tmux, what reads the
+// turn ended is agents.InterruptTerminalWorker: the key is pressed once on
+// a screen that reads a turn running that has begun its reply, with an
+// empty input, and the screen reads ready again after it; a screen that
+// reads ready before it is answered as no turn running, with nothing
+// pressed. Under pipe, it is agents.InterruptPipeWorker: the adapter's
+// protocol cancel, with the turn's end read off the protocol. The answer
+// is refused for a worker whose adapter has not declared the capability
+// that provider needs (*agents.CapabilityError naming
+// CapabilityTerminalInterrupt or CapabilityPipeInterrupt), for one this
+// service does not hold, and for a screen that never read either state
+// within the bound. A key typed and no ready screen read after it within
+// the bound is refused too, saying the key was typed, as is a worker the
+// probe does not read Live afterwards (*interruptUnverified). Each refusal
+// names stop, then relaunch with a note, as the path left. Nothing is
+// recorded: an interrupt opens no hold and writes no record, so what
+// proves it is its answer and the service's log line.
 //
 // # Residual gaps
 //

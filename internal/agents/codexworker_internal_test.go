@@ -9,6 +9,69 @@ import (
 	"testing"
 )
 
+// The interrupt fixture is the request and follow-on notifications Codex
+// CLI 0.166.0's generated app-server schema names for turn/interrupt
+// (TurnInterruptParams with threadId and turnId; TurnStatus interrupted;
+// then idle). It is not a live stdio capture: the ids are taken from the
+// 0.163.0 happy-path recording so a reader can join the two, and the
+// method names and status are what generate-json-schema emitted for
+// 0.166.0. Playing the frames through receive settles an outstanding turn
+// on the idle, which is the proof Interrupt waits on after the call.
+func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
+	raw, err := os.ReadFile("testdata/codex-app-server-turn-interrupt-0.166.0.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled := make(chan struct{})
+	w := &codexWorker{
+		procWorker: &procWorker{out: &tailWriter{limit: 1 << 20}, availability: &workerAvailability{}},
+		settled:    settled,
+		turn:       "01a14d4d-cbd4-7262-95c0-856c2dab1db0",
+		thread:     "01a14d4d-cb48-7a02-be16-3b3737212b9e",
+	}
+	var sawInterrupt, sawInterrupted bool
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var message codexMessage
+		if json.Unmarshal([]byte(line), &message) != nil {
+			t.Fatalf("fixture line does not decode: %s", line)
+		}
+		if message.Method == "turn/interrupt" {
+			sawInterrupt = true
+			var params struct {
+				Thread string `json:"threadId"`
+				Turn   string `json:"turnId"`
+			}
+			if json.Unmarshal(message.Params, &params) != nil || params.Thread == "" || params.Turn == "" {
+				t.Fatalf("turn/interrupt params are %s, want threadId and turnId", message.Params)
+			}
+			continue
+		}
+		if message.Method == "turn/completed" {
+			var completed struct {
+				Turn struct {
+					Status string `json:"status"`
+				} `json:"turn"`
+			}
+			if json.Unmarshal(message.Params, &completed) != nil || completed.Turn.Status != "interrupted" {
+				t.Fatalf("turn/completed is %s, want status interrupted", message.Params)
+			}
+			sawInterrupted = true
+		}
+		w.receive([]byte(line))
+	}
+	if !sawInterrupt || !sawInterrupted {
+		t.Fatalf("fixture missing interrupt request (%t) or interrupted status (%t)", sawInterrupt, sawInterrupted)
+	}
+	select {
+	case <-settled:
+	default:
+		t.Fatal("the fixture idle status did not finish the turn")
+	}
+	if w.turn != "" {
+		t.Fatalf("after idle the worker still names turn %q", w.turn)
+	}
+}
+
 // The lines in testdata are the Codex CLI 0.163.0's app-server frames,
 // recorded from a live stdio session that answered "ready". The home path
 // in those frames is replaced; the method names, the thread id's place,

@@ -148,6 +148,9 @@ type codexWorker struct {
 	ended         *WorkerError
 	thread, route string
 	model, effort string
+	// turn is the id of the turn a Send last had accepted and that has not
+	// settled, empty when the worker is idle. turn/interrupt names it.
+	turn string
 }
 
 func (w *codexWorker) open(ctx context.Context, dir string) error {
@@ -272,11 +275,63 @@ func (w *codexWorker) Send(ctx context.Context, text string) error {
 	if w.effort != "" {
 		params["effort"] = w.effort
 	}
-	if _, err := w.call(ctx, "turn/start", params); err != nil {
+	started, err := w.call(ctx, "turn/start", params)
+	if err != nil {
 		w.markIdle()
 		return err
 	}
+	var accepted struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(started.Result, &accepted) != nil || accepted.Turn.ID == "" {
+		w.markIdle()
+		return errors.New("agents: Codex app-server returned no turn")
+	}
+	w.mu.Lock()
+	w.turn = accepted.Turn.ID
+	w.mu.Unlock()
 	return nil
+}
+
+// Interrupt ends the turn the worker is running over turn/interrupt, on
+// InterruptibleWorker.Interrupt's terms. The request shape is Codex CLI
+// 0.166.0's TurnInterruptParams (threadId and turnId); the turn's end is
+// the idle that follows, which markIdle already settles a completed or
+// failed turn with. An interrupt with no turn under way sends nothing.
+func (w *codexWorker) Interrupt(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	select {
+	case w.send <- struct{}{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-w.done:
+		return false, w.endedError()
+	}
+	defer func() { <-w.send }()
+	w.mu.Lock()
+	turnID, settled := w.turn, w.settled
+	w.mu.Unlock()
+	if turnID == "" || settled == nil {
+		return false, nil
+	}
+	if _, err := w.call(ctx, "turn/interrupt", map[string]any{
+		"threadId": w.thread,
+		"turnId":   turnID,
+	}); err != nil {
+		return false, err
+	}
+	select {
+	case <-settled:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-w.done:
+		return false, w.endedError()
+	}
 }
 
 // finishTurn waits for the turn a previous Send accepted. The channel is
@@ -305,6 +360,7 @@ func (w *codexWorker) markIdle() {
 	w.mu.Lock()
 	settled := w.settled
 	w.settled = nil
+	w.turn = ""
 	w.mu.Unlock()
 	if settled != nil {
 		close(settled)
