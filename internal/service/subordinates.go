@@ -139,11 +139,11 @@ import (
 //   - A subordinate's grant denies editing and git and allows its route;
 //     any other command is what its agent's own settings allow, which
 //     internal/agents names for GrantSubordinate. The Claude Code adapter
-//     refuses a terminal-hosted subordinate (agents.ErrTerminalGrantUnobserved),
-//     so under session_provider tmux a delegation's start fails, logged,
-//     and the subordinate runs only under the pipe provider. The Cursor
-//     adapter holds the grant in its permission handler; the Codex adapter
-//     cannot and refuses the start (agents.ErrGrantUnenforced), logged.
+//     starts a terminal-hosted subordinate under that grant (acceptEdits
+//     with those denials), so under session_provider tmux a Claude
+//     subordinate starts the same way a worker does. The Cursor adapter
+//     holds the grant in its permission handler; the Codex adapter cannot
+//     and refuses the start (agents.ErrGrantUnenforced), logged.
 //   - While a subordinate is starting, every peer placement reads as
 //     neither is refused unavailable, the first coordinator's own requests
 //     included, for as long as the start takes. gate.admit places a push

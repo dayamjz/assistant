@@ -220,13 +220,6 @@ import (
 //     made, so a caller whose bound is shorter than a turn has its text
 //     refused, nothing typed, rather than queued. The CLI was seen to queue
 //     a message pasted while a turn ran; nothing here relies on that.
-//   - That wait holds the same slot Interrupt takes before it can press
-//     Escape. A send blocked on a long turn therefore keeps Interrupt from
-//     ending that turn: Escape is not typed, and an interrupt whose own
-//     context ends first is refused with ErrTerminalNotReady and that
-//     error, which
-//     TestAClaudeTerminalInterruptBehindAWaitingSendKeepsItsDeadline
-//     encodes. The turn ends when it ends; interrupt does not cut in.
 //   - The Claude Code typing tells its interface from the conversation
 //     above it by the row tmux reports the cursor on, since the
 //     conversation carries text this package did not write. One shape is
@@ -455,9 +448,10 @@ func OpenTerminalWorker(ctx context.Context, r Runner, t Terminal, spec WorkerSp
 // OpenTerminalSubordinate is OpenSubordinate for a terminal-hosted
 // subordinate coordinator, on OpenTerminalWorker's terms: the same
 // mechanism, under GrantSubordinate, which only it and OpenSubordinate
-// select. An adapter whose terminal interface was not observed under that
-// grant refuses it, as the Claude Code adapter does with
-// ErrTerminalGrantUnobserved.
+// select. An adapter whose terminal interface was not observed under the
+// grant's permission mode refuses it with ErrTerminalGrantUnobserved; the
+// Claude Code adapter starts one because GrantSubordinate writes the
+// observed acceptEdits mode while still denying editing and git.
 func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
 	spec.subordinate = true
 	return OpenTerminalWorker(ctx, r, t, spec)

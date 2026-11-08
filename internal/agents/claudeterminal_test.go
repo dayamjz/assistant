@@ -839,36 +839,52 @@ func TestAClaudeTerminalDefusesLinesTheScreenWouldReadAsItsOwn(t *testing.T) {
 	}
 }
 
-// A terminal-hosted subordinate coordinator is refused by the Claude Code
-// adapter before anything starts: its grant runs the interface in the
-// default mode, and the ready screen the adapter reads was observed in
-// acceptEdits only, so OpenTerminalSubordinate is refused with
-// ErrTerminalGrantUnobserved and the stand-in records no call. The control is the same spec through
-// OpenTerminalWorker, which starts under the worker grant.
-func TestAClaudeTerminalSubordinateIsRefusedBeforeItStarts(t *testing.T) {
+// A terminal-hosted subordinate coordinator starts under GrantSubordinate
+// through the Claude Code terminal adapter (issue #769's tmux half): the
+// grant runs in acceptEdits so the ready screen the adapter reads applies,
+// with editing and git still denied and the route alone allowed. The same
+// spec through OpenTerminalWorker on a terminal of its own is the control
+// under the worker grant. A subordinate with no route falls through to
+// GrantRead's default-mode flags, which the ready screen was never observed
+// under, so OpenTerminalSubordinate is refused with ErrTerminalGrantUnobserved
+// and the stand-in records no call (the positive control that deleting
+// claudeTerminalGrantRefusal would fail).
+func TestAClaudeTerminalSubordinateStartsUnderItsGrant(t *testing.T) {
 	principles.Cite(t, principles.P4)
 	const route = "/opt/assistant/bin/assistant --home /var/lib/assistant coordinator"
 	spec := workerSpec(t)
 	spec.Route = route
-	term := terminalFor(t)
 	agent := standin.New(t, standin.Script{},
 		agents.WithTerminationGrace(300*time.Millisecond), agents.WithBaseEnvironment(claudeTerminalEnv(t)))
-	if _, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), term, spec); !errors.Is(err, agents.ErrTerminalGrantUnobserved) {
-		t.Fatalf("OpenTerminalSubordinate = %v, want ErrTerminalGrantUnobserved", err)
+	noRoute := workerSpec(t)
+	if _, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), terminalFor(t), noRoute); !errors.Is(err, agents.ErrTerminalGrantUnobserved) {
+		t.Fatalf("OpenTerminalSubordinate with no route = %v, want ErrTerminalGrantUnobserved", err)
 	}
 	if calls := agent.Calls(); len(calls) != 0 {
-		t.Fatalf("the refused subordinate started %d agent processes, want none", len(calls))
+		t.Fatalf("the refused no-route subordinate started %d agent processes, want none", len(calls))
 	}
-	worker, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), term, spec)
+	subordinate, err := agents.OpenTerminalSubordinate(t.Context(), agent.Runner(), terminalFor(t), spec)
+	if err != nil {
+		t.Fatalf("OpenTerminalSubordinate = %v, want it started under the subordinate grant", err)
+	}
+	call := awaitInteractive(t, agent, answered(1))
+	subordinate.Close()
+	want := grantFlags{mode: "acceptEdits", denied: "Edit,Write,NotebookEdit,Bash(git:*)", allowed: "Bash(" + route + ":*)"}
+	if got := grantOf(call.Args); got != want {
+		t.Errorf("the terminal subordinate ran under %+v, want %+v", got, want)
+	}
+	worker, err := agents.OpenTerminalWorker(t.Context(), agent.Runner(), terminalFor(t), spec)
 	if err != nil {
 		t.Fatalf("the control worker: %v", err)
 	}
-	call := awaitInteractive(t, agent, answered(1))
+	workerWant := workerGrant
+	workerWant.allowed += ",Bash(" + route + ":*)"
+	call = awaitInteractive(t, agent, func(c standin.Call) bool {
+		return len(c.Lines) >= 1 && grantOf(c.Args) == workerWant
+	})
 	worker.Close()
-	want := workerGrant
-	want.allowed += ",Bash(" + route + ":*)"
-	if got := grantOf(call.Args); got != want {
-		t.Errorf("the terminal worker ran under %+v, want %+v", got, want)
+	if got := grantOf(call.Args); got != workerWant {
+		t.Errorf("the terminal worker ran under %+v, want %+v", got, workerWant)
 	}
 }
 
