@@ -4,9 +4,9 @@ import "context"
 
 // InterruptibleWorker is a Worker whose running turn can be ended over the
 // pipe while the process stays up, the mechanism CapabilityPipeInterrupt
-// names. An adapter declares that capability exactly when Start's workers
-// implement this; Resolve refuses a declaration that disagrees with the
-// Runner carrying pipeInterrupter.
+// names. Resolve checks only the Runner's empty pipeInterrupter marker
+// against the declaration; InterruptPipeWorker is what refuses a declared
+// adapter whose Start workers omit this interface (*AdapterError).
 type InterruptibleWorker interface {
 	Worker
 
