@@ -67,6 +67,9 @@ func Subcommands() map[string][][2]string {
 	for _, action := range serviceActions {
 		out["service"] = append(out["service"], [2]string{action.name, action.summary})
 	}
+	for _, action := range dbActions {
+		out[dbVerbName] = append(out[dbVerbName], [2]string{action.name, action.summary})
+	}
 	for _, hook := range gateHooks {
 		out[gateVerbName] = append(out[gateVerbName], [2]string{hook.name, hook.summary})
 	}
