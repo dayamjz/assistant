@@ -80,8 +80,8 @@ tidy:
 # Its test step is scripts/ci-test.sh (the race suite under
 # scripts/leak-check.py). The make target it runs is make lint-guard-test,
 # on Ubuntu. Its lint job is the golangci-lint action, not make lint.
-# The Release workflow (.github/workflows/release.yml) runs make check
-# on ubuntu-latest and macos-latest.
+# The Release workflow (.github/workflows/release.yml) does not run it
+# either: its check job runs make lint and then scripts/ci-test.sh.
 # The gate config (.no-mistakes.yaml) sets commands.test to empty and
 # commands.lint to "make lint".
 check: lint test
