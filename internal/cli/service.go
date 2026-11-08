@@ -8,8 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"slices"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -42,11 +40,7 @@ const readyPoll = 25 * time.Millisecond
 // section 9's table gives one row. The list is the one owner of which four
 // there are: it names the subcommand a command line holds and it runs the one
 // that was named.
-var serviceActions = []struct {
-	name    string
-	summary string
-	run     func(context.Context, *invocation) (any, error)
-}{
+var serviceActions = []subcommand{
 	{"start", "Launch the service in the background and wait until it answers a readiness check; --install hands it to this computer's service manager.", startService},
 	{"stop", "Stop the service; refused while runs are active unless --force is given; --uninstall stops handing it to the service manager.",
 		func(ctx context.Context, in *invocation) (any, error) {
@@ -59,51 +53,10 @@ var serviceActions = []struct {
 	{"status", "Report whether the service answers a readiness check.", serviceStatus},
 }
 
-// serviceVerb runs the subcommand the command line names.
-//
-// The subcommand is taken from wherever it stands rather than from the first
-// argument, so a global flag written between the verb and it is a flag and not
-// a subcommand nobody recognizes. What is left is the subcommand's to parse,
-// with the flags around it still in the order they were written, so --help
-// written beside a subcommand is that subcommand's and lists its flags.
-//
-// With no subcommand, --help anywhere after the verb is answered with the
-// subcommand table, and anything else is incorrect usage phrased as what the
-// verb needs and the subcommands to choose from.
+// serviceVerb runs the subcommand the command line names, on
+// dispatchSubcommand's terms, which the db verb shares.
 func serviceVerb(ctx context.Context, in *invocation) (any, error) {
-	for _, action := range serviceActions {
-		for i, arg := range in.args {
-			if arg != action.name {
-				continue
-			}
-			in.args = append(append([]string{}, in.args[:i]...), in.args[i+1:]...)
-			return action.run(ctx, in)
-		}
-	}
-	if slices.ContainsFunc(in.args, isHelp) {
-		return nil, subcommandHelp("service", serviceUsage())
-	}
-	return nil, subcommandRefusal("service", in.args, serviceActionNames())
-}
-
-// serviceUsage is the four read out one line each, for the verb's help.
-func serviceUsage() string {
-	var b strings.Builder
-	b.WriteString("\nSubcommands:\n")
-	for _, action := range serviceActions {
-		fmt.Fprintf(&b, "  %-8s %s\n", action.name, action.summary)
-	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-// serviceActionNames is the four read out, for a refusal that says what was
-// expected.
-func serviceActionNames() []string {
-	names := make([]string, 0, len(serviceActions))
-	for _, action := range serviceActions {
-		names = append(names, action.name)
-	}
-	return names
+	return dispatchSubcommand(ctx, in, "service", serviceActions)
 }
 
 // serviceStatus reports whether the service is running, which is a real answer
