@@ -10,7 +10,7 @@ runs:
     # install go1.25.0; v6 installs the `toolchain` directive's version when
     # one is present, which go.mod pins for darwin/arm64's race detector
     # (#321), and sets GOTOOLCHAIN=local so no later step switches away.
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@v7
       with:
         go-version-file: go.mod
         cache: true
