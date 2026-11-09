@@ -319,21 +319,21 @@ var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when i
 
 // ErrKeptWorkCopyOwed is returned by ClaimKeptWorkLanding,
 // ClaimKeptWorkCarryOn, ClaimKeptWorkDiscard, ClaimKeptWorkRemoveAnyway and
-// TransitionTaskShape for an
-// entry of a copy that holds an answer not yet carried out: a landing, a
-// carry on or a discard claimed on any entry of the copy, this one
-// included. Each of those still needs the copy where it stands, and a
-// second answer could move it, remove it, or land it twice. Nothing is
-// written; the owed answer is completed or withdrawn by its own next call
-// or the next start, and the entry can be answered after.
+// TransitionTaskShape for an entry of a copy that holds an answer not yet
+// carried out: a landing, a carry on, a discard or a remove-anyway claimed
+// on any entry of the copy, this one included. A second answer could move
+// the copy, remove it, land it twice, or release the entry while another
+// claim still needs it. Nothing is written; the owed answer is completed
+// or withdrawn by its own next call (or, for land/carry-on/discard, the
+// next service start), and the entry can be answered after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
-// ErrKeptWorkUnverified is TransitionTaskShape's, MarkKeptWorkCarriedOn's
-// and RecordKeptWorkDiscard's refusal of a flip, mark or discard record
-// over a copy with an open kept work entry the caller did not verify the
-// copy for: the write would answer that entry, and every answer to a kept
-// copy is given only for a copy the kept-copy verification took. Nothing
-// is written.
+// ErrKeptWorkUnverified is TransitionTaskShape's, MarkKeptWorkCarriedOn's,
+// RecordKeptWorkDiscard's and RecordKeptWorkRemoveAnyway's refusal of a
+// flip, mark, discard or remove-anyway record over a copy with an open
+// kept work entry the caller did not verify the copy for: the write would
+// answer that entry, and every answer to a kept copy is given only for a
+// copy the kept-copy verification took. Nothing is written.
 var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before it would be answered")
 
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
@@ -645,8 +645,9 @@ func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]Kept
 }
 
 // openKeptWorkOfCopy is the one spelling of an open entry of a copy, by
-// its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn
-// and RecordKeptWorkDiscard close beside the entry marked.
+// its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn,
+// RecordKeptWorkDiscard and RecordKeptWorkRemoveAnyway close beside the
+// entry marked.
 const openKeptWorkOfCopy = `copy_path = ? AND answer IS NULL AND closure IS NULL`
 
 // MarkKeptWorkSurfaced records that the entry was raised to someone at at.
@@ -1565,8 +1566,9 @@ func (s *Store) RecordKeptWorkRemoveAnyway(ctx context.Context, id int64, verifi
 }
 
 // KeptWorkRemoveAnywaysOwed returns every open entry holding a
-// remove-anyway claim, oldest first: a release a stopped service left,
-// which the next start completes or withdraws.
+// remove-anyway claim, oldest first. Completing or withdrawing those
+// claims at service start is not this package's; the reader only lists
+// them so a caller can.
 func (s *Store) KeptWorkRemoveAnywaysOwed(ctx context.Context) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
 		return nil, err
