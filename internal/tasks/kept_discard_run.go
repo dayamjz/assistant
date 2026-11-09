@@ -230,7 +230,7 @@ func (c *Cleaner) finishDiscard(dir string, last *discardJournal) error {
 	if movedTo == "" {
 		return fmt.Errorf("tasks: finishDiscard with no ponr step in the journal")
 	}
-	if !hasDiscardStep(*last, discardStepFinish) {
+	if !journalHasStep(*last, discardStepFinish) {
 		if err := appendDiscardStep(dir, last, discardStep{Kind: discardStepFinish}); err != nil {
 			return err
 		}
@@ -243,4 +243,14 @@ func (c *Cleaner) finishDiscard(dir string, last *discardJournal) error {
 		return fmt.Errorf("tasks: removing the discard's set-aside paths at %s: %w", paths, err)
 	}
 	return nil
+}
+
+// journalHasStep reports whether j records a step of kind.
+func journalHasStep(j discardJournal, kind discardStepKind) bool {
+	for _, s := range j.Steps {
+		if s.Kind == kind {
+			return true
+		}
+	}
+	return false
 }

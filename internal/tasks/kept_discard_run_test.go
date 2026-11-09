@@ -35,7 +35,7 @@ func TestAConfirmedDiscardRemovesATaskClonePastItsPointOfNoReturn(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("standingDiscard after Discard = found %v, %v; want the discard directory left for the outcome", found, err)
 	}
-	if !hasDiscardStep(j, discardStepFinish) {
+	if !journalHasStep(j, discardStepFinish) {
 		t.Fatalf("journal steps = %+v; want a finish step", j.Steps)
 	}
 	if _, err := os.Lstat(filepath.Join(dir, "clone")); !errors.Is(err, fs.ErrNotExist) {
@@ -160,16 +160,7 @@ func TestADiscardResumesPastItsPointOfNoReturnAndFinishes(t *testing.T) {
 		t.Fatalf("moved clone still stands after resume: %v", err)
 	}
 	j, found, err := s.cleaner.standingDiscard(tk.copy)
-	if err != nil || !found || !hasDiscardStep(j, discardStepFinish) {
+	if err != nil || !found || !journalHasStep(j, discardStepFinish) {
 		t.Fatalf("after resume, journal = %+v found %v err %v; want finish", j, found, err)
 	}
-}
-
-func hasDiscardStep(j discardJournal, kind discardStepKind) bool {
-	for _, s := range j.Steps {
-		if s.Kind == kind {
-			return true
-		}
-	}
-	return false
 }
