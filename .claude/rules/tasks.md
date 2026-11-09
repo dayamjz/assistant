@@ -135,8 +135,15 @@ paths: ["internal/tasks/**"]
   (JSON base64), so put-back matches non-UTF-8 content. head/refDelete/ponr/finish
   kinds are named on the journal but not reversed until later removal links
   write them.
-  Set-aside of every loss item and `Cleaner.Discard` are those later
-  links; no discard answer calls them yet.
+  `setAsideLoss` (`kept_setaside.go`) moves `LostChanged`/`LostNew` file
+  paths when the one `readCopyState` used for the move still matches the
+  loss seal,   and writes back missing `LostChanged`/`LostDeleted` stage-0 index
+  blobs, including children under a `LostDeleted` directory path (an
+  unshown missing tracked path is `ErrLossChanged`); `LostRepository`
+  stays for the clone move at the point of no return. It refuses
+  `LostStaged`, directory moves, and symlink/gitlink write-backs until
+  later links. `Cleaner.Discard` (PONR/finish) and HEAD/ref set-aside
+  are those later links; no discard answer calls them yet.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after
