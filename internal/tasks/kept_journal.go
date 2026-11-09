@@ -101,7 +101,11 @@ func appendDiscardStep(dir string, last *discardJournal, step discardStep) error
 	}
 	next := *last
 	next.Steps = append(append([]discardStep(nil), last.Steps...), step)
-	return writeJournal(dir, last, next)
+	if err := writeJournal(dir, last, next); err != nil {
+		return err
+	}
+	*last = next
+	return nil
 }
 
 // beginDiscard makes the discard's directory beside the copy at copyPath,

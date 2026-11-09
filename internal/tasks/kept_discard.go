@@ -134,12 +134,15 @@ import (
 // # The removal is deferred
 //
 // PRD section 6's removal on a confirmed discard is deferred to AGE-486.
-// The discard directory and journal (beginDiscard, kept_journal.go) and
-// the move aside (moveAsRead in kept_state.go) are on main; no discard
-// answer calls them yet, and nothing in this build removes a copy on a
-// discard answer. In this build a copy kept for its work is removed only
-// by P12 cleanup on a proof (cleanup.go), which is what closes its entry
-// once its work is pushed somewhere safe.
+// The discard directory and journal (beginDiscard, kept_journal.go), the
+// move aside (moveAsRead in kept_state.go), put-back of move/writeBack
+// (kept_putback.go), and set-aside of working-tree loss file paths
+// (setAsideLoss in kept_setaside.go) are on main; no discard answer calls
+// them yet, and nothing in this build removes a copy on a discard answer.
+// HEAD/ref set-aside, staged/repository paths, and Cleaner.Discard's
+// point of no return remain later links. In this build a copy kept for
+// its work is removed only by P12 cleanup on a proof (cleanup.go), which
+// is what closes its entry once its work is pushed somewhere safe.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {
