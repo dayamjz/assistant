@@ -17,6 +17,8 @@ const keptWorkAnswerCheckWidenVersion = 73
 // it, that value is admitted while land/carry-on/discard and a wake that
 // names the entry still stand (the rebuild may not lose rows or break
 // FKs). Without the rebuild a later remove-anyway answer cannot be written.
+// Seeding the schema-72 database uses SQL rather than RecordKeptWork: the
+// current keptWorkColumns name columns migration 74 adds.
 func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -31,31 +33,45 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	}
 	s := &Store{write: older, read: older, redact: workingRedactor()}
 	run := seedRun(t, s)
-	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{
-		RunID: run.ID, CopyPath: "/worktrees/widen-a", Holds: []string{"aaaa"}, Reason: "unproven", Against: "mmmm",
-	})
+	at := encodeTime(nowUTC())
+	res, err := older.ExecContext(ctx, `INSERT INTO kept_work (run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at, lacks, against)
+		VALUES (?, ?, ?, '/worktrees/widen-a', ?, 'unproven', '', ?, '[]', 'mmmm')`,
+		run.ID, run.RepositoryID, run.Branch, `["aaaa"]`, at)
 	if err != nil {
 		t.Fatal(err)
 	}
-	landed, _, err := s.RecordKeptWork(ctx, KeptCopy{
-		RunID: run.ID, CopyPath: "/worktrees/widen-b", Holds: []string{"bbbb"}, Reason: "unproven", Against: "mmmm",
-	})
+	entryID, err := res.LastInsertId()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ClaimKeptWorkLanding(ctx, landed.ID, ResolvedByPerson()); err != nil {
+	res, err = older.ExecContext(ctx, `INSERT INTO kept_work (run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at, lacks, against,
+		landing_claimed_at, landing_by, answer, answered_by, answered_at, landed_run)
+		VALUES (?, ?, ?, '/worktrees/widen-b', ?, 'unproven', '', ?, '[]', 'mmmm', ?, 'person', 'land', 'person', ?, 'run-landed')`,
+		run.ID, run.RepositoryID, run.Branch, `["bbbb"]`, at, at, at)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RecordKeptWorkLanding(ctx, landed.ID, "run-landed"); err != nil {
+	landedID, err := res.LastInsertId()
+	if err != nil {
 		t.Fatal(err)
 	}
 	inc := incarnationOf(t, s)
-	wake, err := s.AppendKeptWorkWake(ctx, inc, KeptWorkWakeRequest{KeptWork: entry.ID, Kind: "kept-work", Marker: "kept-work:widen"})
+	wakeRes, err := older.ExecContext(ctx, `INSERT INTO kept_work_wake (kept_work, kind, marker, created_at)
+		VALUES (?, 'kept-work', 'kept-work:widen', ?)`, entryID, at)
 	if err != nil {
 		t.Fatal(err)
 	}
+	wakeID, err := wakeRes.LastInsertId()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := older.ExecContext(ctx, `UPDATE kept_work SET surfaced_at = ? WHERE id = ?`, at, entryID); err != nil {
+		t.Fatal(err)
+	}
+	_ = inc
+	_ = wakeID
 	_, err = older.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = 'person', answered_at = ? WHERE id = ?`,
-		encodeTime(nowUTC()), entry.ID)
+		encodeTime(nowUTC()), entryID)
 	if err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
 		t.Fatalf("answer remove-anyway before widen = %v; want a CHECK refusal", err)
 	}
@@ -64,33 +80,39 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	}
 
 	opened := openStoreAt(t, path)
-	got, err := opened.KeptWorkEntry(ctx, entry.ID)
-	if err != nil || !got.Open() || got.CopyPath != entry.CopyPath {
+	got, err := opened.KeptWorkEntry(ctx, entryID)
+	if err != nil || !got.Open() || got.CopyPath != "/worktrees/widen-a" {
 		t.Fatalf("after widen the open entry reads %+v, %v; want it as it was", got, err)
 	}
-	landedGot, err := opened.KeptWorkEntry(ctx, landed.ID)
+	landedGot, err := opened.KeptWorkEntry(ctx, landedID)
 	if err != nil || landedGot.Answer.Or("") != KeptLand {
 		t.Fatalf("after widen the landed entry reads %+v, %v; want land", landedGot, err)
 	}
 	wakes, err := opened.KeptWorkWakes(ctx)
-	if err != nil || len(wakes) == 0 || wakes[0].KeptWork != entry.ID {
-		t.Fatalf("after widen wakes = %+v, %v; want the wake naming entry %d (was %+v)", wakes, err, entry.ID, wake)
+	if err != nil || len(wakes) == 0 || wakes[0].KeptWork != entryID {
+		t.Fatalf("after widen wakes = %+v, %v; want the wake naming entry %d", wakes, err, entryID)
 	}
 	// Seals on kept_work must stand after the rebuild: DROP TABLE removes
 	// them, and a recreate that was skipped would still pass row/wake checks.
-	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET holds = '[]' WHERE id = ?`, entry.ID); err == nil ||
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET holds = '[]' WHERE id = ?`, entryID); err == nil ||
 		!strings.Contains(err.Error(), "written once") {
 		t.Fatalf("rewrite holds after widen = %v; want the written-once seal", err)
 	}
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'nope', answered_by = 'person', answered_at = ? WHERE id = ?`,
-		encodeTime(nowUTC()), entry.ID); err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
+		encodeTime(nowUTC()), entryID); err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
 		t.Fatalf("answer nope after widen = %v; want a CHECK refusal", err)
 	}
-	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = 'person', answered_at = ? WHERE id = ?`,
-		encodeTime(nowUTC()), entry.ID); err != nil {
-		t.Fatalf("answer remove-anyway after widen = %v; want it admitted", err)
+	// After migration 74 the remove-anyway answer needs its claim columns;
+	// the CHECK itself is what link 1 widened.
+	claimed, err := opened.ClaimKeptWorkRemoveAnyway(ctx, entryID, "discard refused: shallow", []string{"aaaa"}, ResolvedByPerson())
+	if err != nil {
+		t.Fatalf("claim remove-anyway after widen = %v; want it admitted", err)
 	}
-	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answered_by = 'other' WHERE id = ?`, entry.ID); err == nil ||
+	done, err := opened.RecordKeptWorkRemoveAnyway(ctx, entryID, nil)
+	if err != nil || done.Answer.Or("") != KeptRemoveAnyway || !done.RemovedAnywayAt.IsKnown() {
+		t.Fatalf("record remove-anyway after widen = %+v, %v; want it released", done, err)
+	}
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answered_by = 'other' WHERE id = ?`, claimed.ID); err == nil ||
 		!strings.Contains(err.Error(), "answered once") {
 		t.Fatalf("rewrite answered_by after widen = %v; want the answered-once seal", err)
 	}

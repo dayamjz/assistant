@@ -223,6 +223,11 @@ const keptWorkCarryOnMigration = "kept work carry-on task"
 // is a constant.
 const keptWorkDiscardMigration = "kept work discard"
 
+// keptWorkRemoveAnywayMigration names the migration that adds a
+// remove-anyway answer's claim and outcome on kept work, for the reason
+// sealCheckpointTableMigration is a constant.
+const keptWorkRemoveAnywayMigration = "kept work remove-anyway"
+
 // housekeepingMigration names the migration that adds PRD section 6's
 // housekeeping mark on the task row, for the reason
 // sealCheckpointTableMigration is a constant.
@@ -3069,6 +3074,58 @@ var schema = []migration{
 		version:    73,
 		name:       keptWorkAnswerCheckWidenMigration,
 		statements: nil,
+	},
+	{
+		version: 74,
+		name:    keptWorkRemoveAnywayMigration,
+		statements: []string{
+			// A remove-anyway answer, PRD section 6's release of the entry
+			// while keeping the copy, as two facts on discard's shape. The
+			// claim is remove_anyway_claimed_at, remove_anyway_by,
+			// remove_anyway_refusal and remove_anyway_shown, written
+			// together by ClaimKeptWorkRemoveAnyway on an open entry
+			// (which stays open) and withdrawn by
+			// WithdrawKeptWorkRemoveAnyway while unanswered. The outcome
+			// is answer remove-anyway with removed_anyway_at, written by
+			// RecordKeptWorkRemoveAnyway with the copy still standing.
+			`ALTER TABLE kept_work ADD COLUMN remove_anyway_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN remove_anyway_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN remove_anyway_refusal TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN remove_anyway_shown TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN removed_anyway_at TEXT`,
+			`CREATE TRIGGER kept_work_remove_anyway_is_claimed_whole
+				BEFORE UPDATE OF remove_anyway_claimed_at, remove_anyway_by, remove_anyway_refusal, remove_anyway_shown ON kept_work
+				WHEN (NEW.remove_anyway_claimed_at IS NOT OLD.remove_anyway_claimed_at OR NEW.remove_anyway_by IS NOT OLD.remove_anyway_by
+						OR NEW.remove_anyway_refusal IS NOT OLD.remove_anyway_refusal OR NEW.remove_anyway_shown IS NOT OLD.remove_anyway_shown)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND (
+						(OLD.remove_anyway_claimed_at IS NULL AND OLD.remove_anyway_by IS NULL AND OLD.remove_anyway_refusal IS NULL
+							AND OLD.remove_anyway_shown IS NULL
+							AND NEW.remove_anyway_claimed_at IS NOT NULL AND NEW.remove_anyway_by IS NOT NULL
+							AND NEW.remove_anyway_refusal IS NOT NULL AND NEW.remove_anyway_shown IS NOT NULL
+							AND (NEW.answer IS NULL OR (NEW.answer = 'remove-anyway' AND NEW.removed_anyway_at IS NOT NULL)))
+						OR (NEW.answer IS NULL
+							AND OLD.remove_anyway_claimed_at IS NOT NULL AND OLD.remove_anyway_by IS NOT NULL
+							AND OLD.remove_anyway_refusal IS NOT NULL AND OLD.remove_anyway_shown IS NOT NULL
+							AND NEW.remove_anyway_claimed_at IS NULL AND NEW.remove_anyway_by IS NULL
+							AND NEW.remove_anyway_refusal IS NULL AND NEW.remove_anyway_shown IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s remove-anyway is claimed whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_remove_anyway_answer_is_its_release
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'remove-anyway' AND (NEW.removed_anyway_at IS NULL OR NEW.remove_anyway_claimed_at IS NULL
+					OR NEW.remove_anyway_refusal IS NULL OR NEW.remove_anyway_shown IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered remove-anyway only with the release of the entry its claim named');
+				END`,
+			`CREATE TRIGGER kept_work_removed_anyway_once
+				BEFORE UPDATE OF removed_anyway_at ON kept_work
+				WHEN OLD.removed_anyway_at IS NOT NULL OR NEW.removed_anyway_at IS NULL OR NEW.remove_anyway_claimed_at IS NULL
+					OR NEW.remove_anyway_refusal IS NULL OR NEW.answer IS NOT 'remove-anyway'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is removed anyway once, with its remove-anyway answer, after its remove-anyway was claimed');
+				END`,
+		},
 	},
 }
 

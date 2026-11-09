@@ -154,6 +154,16 @@ paths: ["internal/store/**"]
   `RecordKeptWorkDiscard`, once the copy is gone, which the triggers
   enforce, closing every other open entry of the copy the caller verified
   (`ErrKeptWorkUnverified` otherwise), the set `OpenKeptWorkOfCopy` lists.
+  keptWorkAnswerCheckWidenMigration rebuilds `kept_work` so answer CHECK
+  admits `remove-anyway`. keptWorkRemoveAnywayMigration records
+  remove-anyway as two facts on discard's shape: the claim
+  (`remove_anyway_refusal`, the discard refusal overridden, with
+  `remove_anyway_shown`, what of the loss was shown, who and when),
+  written whole by `ClaimKeptWorkRemoveAnyway` and withdrawn whole by
+  `WithdrawKeptWorkRemoveAnyway` while unanswered; and the answer,
+  written only with `removed_anyway_at` by `RecordKeptWorkRemoveAnyway`
+  with the copy still standing, closing every other open entry of the
+  copy the caller verified.
   `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
