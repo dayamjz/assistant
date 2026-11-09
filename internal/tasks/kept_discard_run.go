@@ -88,10 +88,10 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 			return nil
 		}
 		if pb := putBack(dir, last); pb != nil {
-			return fmt.Errorf("%w (and putting back: %v)", err, pb)
+			return fmt.Errorf("%w (and putting back: %w)", err, pb)
 		}
 		if rm := os.RemoveAll(dir); rm != nil {
-			return fmt.Errorf("%w (and clearing the discard directory: %v)", err, rm)
+			return fmt.Errorf("%w (and clearing the discard directory: %w)", err, rm)
 		}
 		return err
 	}
@@ -111,7 +111,7 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 		// Rename failed: still before the point of no return; strike ponr and put back.
 		moveErr := fmt.Errorf("tasks: moving the clone to %s: %w", to, err)
 		if strikeErr := strikeUnreachedRemovalSteps(dir, &last, entry.CopyPath); strikeErr != nil {
-			return fmt.Errorf("%v (and striking ponr: %v)", moveErr, strikeErr)
+			return fmt.Errorf("%w (and striking ponr: %w)", moveErr, strikeErr)
 		}
 		return refuse(moveErr)
 	}

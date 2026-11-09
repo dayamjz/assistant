@@ -55,8 +55,8 @@ const journalName = "journal.json"
 // read when its directory was made, so the copy can be told from anything
 // put at its path once the discard has moved it. Steps is the ordered
 // record of what was done, newest last: putBack reverses move and
-	// writeBack and strikes each once undone; ponr and finish are not
-	// reversed (past the point of no return Discard only finishes).
+// writeBack and strikes each once undone; ponr and finish are not
+// reversed (past the point of no return Discard only finishes).
 type discardJournal struct {
 	Copy  string        `json:"copy"`
 	Steps []discardStep `json:"steps,omitempty"`
