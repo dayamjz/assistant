@@ -155,7 +155,13 @@ roles:
 The review uses a fresh context, separate from the fix role's session.
 Codex pipe workers are a separate `codex app-server` thread and are not
 that review session. Terminal workers are not declared, so a tmux session
-provider still refuses a Codex pin.
+provider still refuses a Codex pin. The worker's app-server client accepts a
+command approval only for git or the worker route without shell operators,
+read inside the shell line the CLI asks with (`/bin/zsh -lc 'git push ...'`
+as recorded from Codex CLI 0.166.0), and declines every other command
+approval. It accepts file-change approvals without reading their paths, so
+the CLI's workspace-write sandbox is what limits where a write lands. Any
+other approval is declined.
 
 ### Claude roles
 
