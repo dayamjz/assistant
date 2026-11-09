@@ -164,3 +164,196 @@ func TestADiscardResumesPastItsPointOfNoReturnAndFinishes(t *testing.T) {
 		t.Fatalf("after resume, journal = %+v found %v err %v; want finish", j, found, err)
 	}
 }
+
+// A journalled ponr whose rename never happened, with the copy still at
+// its path, is before the point of no return: Discard puts everything
+// back and carries out the removal afresh (PRD: clone at its path has
+// not passed).
+func TestADiscardWithAnUnreachedPONRPutsBackAndContinues(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, shown := keptWithWork(t)
+	ctx := context.Background()
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDiscardStep(dir, &last, discardStep{
+		Kind: discardStepPONR, From: tk.copy, To: filepath.Join(dir, "clone"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.Discard(ctx, entry, "", shown.Digest); err != nil {
+		t.Fatalf("Discard with unreached ponr = %v; want put-back then a fresh removal", err)
+	}
+	if _, err := os.Lstat(tk.copy); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("after a full Discard, the copy should be gone: %v", err)
+	}
+}
+
+// When ponr is journalled but the clone is neither at its path nor in the
+// discard directory, Discard refuses without deleting the set-asides (P6).
+func TestADiscardRefusesWhenPONRSideCannotBeRead(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, shown := keptWithWork(t)
+	ctx := context.Background()
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(dir, "clone")
+	if err := appendDiscardStep(dir, &last, discardStep{
+		Kind: discardStepPONR, From: tk.copy, To: to,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Rename never happened; something else removed the copy.
+	if err := os.RemoveAll(tk.copy); err != nil {
+		t.Fatal(err)
+	}
+	aside := filepath.Join(dir, "paths", "scratch.txt")
+	before, err := os.ReadFile(aside)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.cleaner.Discard(ctx, entry, "", shown.Digest)
+	if !errors.Is(err, ErrDiscardStateUnreadable) {
+		t.Fatalf("Discard = %v; want ErrDiscardStateUnreadable", err)
+	}
+	if raw, err := os.ReadFile(aside); err != nil || string(raw) != string(before) {
+		t.Fatalf("set-aside after refusal = %q, %v; want it left untouched", raw, err)
+	}
+}
+
+// pastPointOfNoReturn is decided from where the clone stands, never from
+// a missing copyPath alone (review of #860): in the discard directory is
+// past; at the copy path is not; both gone without finish is unreadable.
+func TestPastPointOfNoReturnReadsTheCloneNotTheJournalAlone(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, _, shown := keptWithWork(t)
+	ctx := context.Background()
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(dir, "clone")
+	if err := appendDiscardStep(dir, &last, discardStep{
+		Kind: discardStepPONR, From: tk.copy, To: to,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Unreached ponr, copy still at path: not past.
+	past, err := pastPointOfNoReturn(tk.copy, last)
+	if past || err != nil {
+		t.Fatalf("unreached ponr with copy at path = %v, %v; want not past", past, err)
+	}
+
+	if err := renameNoReplace(tk.copy, to); err != nil {
+		t.Fatal(err)
+	}
+	// Clone in the discard directory: past, even with an impostor at the path.
+	if err := os.Mkdir(tk.copy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	past, err = pastPointOfNoReturn(tk.copy, last)
+	if !past || err != nil {
+		t.Fatalf("clone in discard dir with impostor at path = %v, %v; want past", past, err)
+	}
+	if err := os.Remove(tk.copy); err != nil {
+		t.Fatal(err)
+	}
+
+	// Both gone, no finish: unreadable (do not finish-delete set-asides).
+	if err := os.RemoveAll(to); err != nil {
+		t.Fatal(err)
+	}
+	aside := filepath.Join(dir, "paths", "scratch.txt")
+	if _, err := os.Lstat(aside); err != nil {
+		t.Fatalf("setup: set-aside must still stand: %v", err)
+	}
+	past, err = pastPointOfNoReturn(tk.copy, last)
+	if past || !errors.Is(err, ErrDiscardStateUnreadable) {
+		t.Fatalf("both gone without finish = %v, %v; want ErrDiscardStateUnreadable", past, err)
+	}
+	if _, err := os.Lstat(aside); err != nil {
+		t.Fatalf("unreadable state must not have touched the set-aside: %v", err)
+	}
+
+	// Finish journalled, both gone: past (retry deletes).
+	if err := appendDiscardStep(dir, &last, discardStep{Kind: discardStepFinish}); err != nil {
+		t.Fatal(err)
+	}
+	past, err = pastPointOfNoReturn(tk.copy, last)
+	if !past || err != nil {
+		t.Fatalf("finish journalled, both gone = %v, %v; want past", past, err)
+	}
+}
+
+// An impostor at the copy's path after a successful rename does not make
+// Discard put back into it or delete the moved clone via the pre-PONR arm:
+// the clone in the discard directory is past, so finish removes it (P6).
+func TestADiscardPastPONRFinishesEvenIfSomethingStandsAtTheCopyPath(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, shown := keptWithWork(t)
+	ctx := context.Background()
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(dir, "clone")
+	if err := appendDiscardStep(dir, &last, discardStep{
+		Kind: discardStepPONR, From: tk.copy, To: to,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameNoReplace(tk.copy, to); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(tk.copy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(tk.copy, "impostor.txt"), "not the clone\n")
+
+	if err := s.cleaner.Discard(ctx, entry, "", shown.Digest); err != nil {
+		t.Fatalf("Discard with impostor at path = %v", err)
+	}
+	if _, err := os.Lstat(to); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("moved clone still stands: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(tk.copy, "impostor.txt")); err != nil {
+		t.Fatalf("impostor should be left (not putBack target): %v", err)
+	}
+	j, found, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil || !found || !journalHasStep(j, discardStepFinish) {
+		t.Fatalf("journal after finish = %+v found %v err %v", j, found, err)
+	}
+}

@@ -17,6 +17,12 @@ import (
 // Loss seals for the copy now, so the confirmation is of another loss.
 var ErrConfirmMismatch = errors.New("tasks: the confirmed digest is not what discarding the copy would lose now")
 
+// ErrDiscardStateUnreadable is returned when a standing discard's journal
+// has a ponr step but neither the copy's path nor the journalled move
+// target stands, and finish was never journalled, so which side of the
+// point of no return the discard is on cannot be verified (P6).
+var ErrDiscardStateUnreadable = errors.New("tasks: which side of the discard's point of no return the copy is on cannot be read")
+
 // Discard removes the entry's copy when digest is exactly what Loss seals
 // for it now (PRD section 6's "Removing a discarded copy" for a task's
 // clone): verify, re-read the loss, set working-tree loss aside, clean-read,
@@ -119,26 +125,49 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 	return c.finishDiscard(dir, &last)
 }
 
-// pastPointOfNoReturn reports whether the copy has left its path after a
-// journalled ponr, reading the path and not the journal alone (PRD).
+// pastPointOfNoReturn reports whether the discard is past its point of no
+// return, reading the copy and not the journal alone (PRD): a clone that
+// stands at copyPath has not passed; one that stands at the journalled
+// ponr target (in the discard directory) has. A journalled finish with
+// both gone is a finished removal being retried. Anything else with a
+// ponr step and neither path standing is ErrDiscardStateUnreadable.
 func pastPointOfNoReturn(copyPath string, j discardJournal) (bool, error) {
-	var sawPONR bool
+	var to string
+	finished := false
 	for _, s := range j.Steps {
-		if s.Kind == discardStepPONR {
-			sawPONR = true
+		switch s.Kind {
+		case discardStepPONR:
+			to = s.To
+		case discardStepFinish:
+			finished = true
 		}
 	}
-	if !sawPONR {
+	if to == "" {
 		return false, nil
 	}
-	_, err := os.Lstat(copyPath)
+	_, toErr := os.Lstat(to)
 	switch {
-	case err == nil:
+	case toErr == nil:
+		// Clone stands in the discard directory: past, even if something
+		// else now stands at the original path.
+		return true, nil
+	case !errors.Is(toErr, fs.ErrNotExist):
+		return false, toErr
+	}
+	_, fromErr := os.Lstat(copyPath)
+	switch {
+	case fromErr == nil:
+		// Still at its path, and never arrived at To: not past.
 		return false, nil
-	case errors.Is(err, fs.ErrNotExist):
+	case !errors.Is(fromErr, fs.ErrNotExist):
+		return false, fromErr
+	case finished:
+		// Both gone after a journalled finish: retry the deletes.
 		return true, nil
 	default:
-		return false, err
+		// ponr journalled, rename never observed, both paths gone: refuse
+		// rather than finish-delete set-asides or put back into nothing.
+		return false, fmt.Errorf("%w: nothing stands at %s or %s", ErrDiscardStateUnreadable, copyPath, to)
 	}
 }
 
