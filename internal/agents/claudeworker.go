@@ -174,8 +174,10 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 	bound := time.NewTimer(5 * time.Second)
 	defer bound.Stop()
 	// Prefer a protocol result so trailing instructions frames finish
-	// before Start returns; otherwise a stable Capture covers Recorded
-	// replies that have no result line.
+	// before Start returns. A Capture that never shows system/init is a
+	// Recorded reply: wait until it stops growing. Never treat a quiet
+	// gap after init as settled; that would re-open the trailing-frame
+	// race the result wait closes.
 	var last int
 	stable := time.NewTimer(100 * time.Millisecond)
 	defer stable.Stop()
@@ -185,21 +187,23 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 			return
 		}
 		n := len(text)
-		if n > 0 && n == last {
-			select {
-			case <-stable.C:
-				return
-			default:
-			}
-		} else {
-			last = n
-			if !stable.Stop() {
+		if n > 0 && !strings.Contains(text, `"subtype":"init"`) {
+			if n == last {
 				select {
 				case <-stable.C:
+					return
 				default:
 				}
+			} else {
+				last = n
+				if !stable.Stop() {
+					select {
+					case <-stable.C:
+					default:
+					}
+				}
+				stable.Reset(100 * time.Millisecond)
 			}
-			stable.Reset(100 * time.Millisecond)
 		}
 		select {
 		case <-ctx.Done():
