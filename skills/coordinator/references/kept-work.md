@@ -24,19 +24,22 @@ place of `--task` for a run's copy.
 - `--answer discard` shows what would be lost with a digest, which you may
   read (each path and name also in `path_bytes` or `name_bytes`, its exact
   bytes in base64, since a JSON string loses a byte that is not UTF-8), and
-  removes nothing: removing the copy on a confirmation is not in this build,
-  and `--confirm` is refused. A confirmation is the person's alone: it is
-  refused under `--json` and from any process not in the foreground of a
-  terminal, which your tool's commands are not, so never try to give one.
+  without `--confirm` removes nothing. With `--confirm DIGEST` from a
+  terminal's foreground, a task's clone is removed when that digest still
+  seals the copy; a run's worktree confirmation is still refused. A
+  confirmation is the person's alone: it is refused under `--json` and from
+  any process not in the foreground of a terminal, which your tool's
+  commands are not, so never try to give one.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
-land and carry-on, or committing or removing its uncommitted work and pushing
-its commits, after which the program removes the copy on that proof when it
-next looks at it, which is not immediate, and with it, unchecked, files git
-ignores, commits only a reflog reaches and the copy's hooks, which the
-discard preview lists, so they should copy out what they want first;
-removing it by hand leaves the entry open. Promoting an investigation whose
-copy has an entry answers that entry carry on by itself.
+land, carry-on, or discard with `--confirm` for a task's clone, or committing
+or removing its uncommitted work and pushing its commits, after which the
+program removes the copy on that proof when it next looks at it, which is not
+immediate, and with it, unchecked, files git ignores, commits only a reflog
+reaches and the copy's hooks, which the discard preview lists, so they should
+copy out what they want first; removing it by hand leaves the entry open.
+Promoting an investigation whose copy has an entry answers that entry carry
+on by itself.
 
 ## New tasks it holds
 

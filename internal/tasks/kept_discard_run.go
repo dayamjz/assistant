@@ -31,11 +31,13 @@ var ErrDiscardStateUnreadable = errors.New("tasks: which side of the discard's p
 // refused until a later link. On any refusal before the point of no return
 // it puts everything back and clears the discard directory so a later
 // confirmation can begin; past that point it never puts back and only
-// finishes deletion. A stop past the point of no return is taken up on the
-// next call by reading where the clone stands (its path and the journalled
-// ponr target), never the journal alone. The discard directory remains
-// after a finished removal for the outcome owner to delete. ErrLossChanged
-// is a copy that moved under the discard after the confirmed read.
+// finishes deletion. A stop is taken up on the next call from where the
+// clone stands and from the journal: the journalled ponr target standing
+// is past; a journalled finish is past even when that target is gone (an
+// impostor at the copy path included); the copy still at its path without
+// finish is not. The discard directory remains after a finished removal
+// for the outcome owner to delete. ErrLossChanged is a copy that moved
+// under the discard after the confirmed read.
 func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, digest string) error {
 	if !entry.TaskID.IsKnown() {
 		return fmt.Errorf("tasks: Discard of a run's worktree is not yet implemented")
