@@ -48,7 +48,8 @@ const (
 	// Codex declares it over the app-server protocol recorded from CLI
 	// 0.163.0: initialize, initialized, thread/start, and turn/start, with
 	// the command approvals a worker's git and route run under recorded
-	// from CLI 0.166.0.
+	// from CLI 0.166.0, and a subordinate's untrusted thread (every command
+	// asks) recorded from the same CLI.
 	// The conformance suite holds these declarations to the
 	// mechanism against the stand-in, which is all it can hold them to: the
 	// package documentation states what that does not establish about the

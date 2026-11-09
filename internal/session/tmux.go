@@ -193,9 +193,9 @@ func (t *Tmux) Subordinates() *Subordinates { return t.subordinates }
 // states, hosted in a tmux server of its own exactly as Create hosts a
 // worker, with the server recorded as the placement's host and reported
 // by Session.Host. It starts through agents.OpenTerminalSubordinate, so it
-// runs under agents.GrantSubordinate. An adapter that cannot enforce that
-// grant in a terminal refuses the start (the Codex adapter with
-// agents.ErrGrantUnenforced); the Claude Code adapter starts one.
+// runs under agents.GrantSubordinate. An adapter that cannot host a
+// terminal worker refuses that path (Codex declares none); the Claude
+// Code adapter starts one under the grant.
 func (t *Tmux) Delegate(ctx context.Context, spec SubordinateSpec) (*Session, error) {
 	if err := home.ValidDomain(spec.Domain); err != nil {
 		return nil, err

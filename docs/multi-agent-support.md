@@ -161,7 +161,10 @@ read inside the shell line the CLI asks with (`/bin/zsh -lc 'git push ...'`
 as recorded from Codex CLI 0.166.0), and declines every other command
 approval. It accepts file-change approvals without reading their paths, so
 the CLI's workspace-write sandbox is what limits where a write lands. Any
-other approval is declined.
+other approval is declined. A subordinate coordinator starts the same
+app-server under `approvalPolicy: untrusted` (recorded from CLI 0.166.0),
+so every command reaches the client before it runs; approvals then allow
+only the coordinator route, and file-change approvals are declined.
 
 ### Claude roles
 

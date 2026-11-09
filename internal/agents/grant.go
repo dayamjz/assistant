@@ -23,8 +23,9 @@ package agents
 // Like a review it is denied only what its grant names, so another command
 // its agent's own settings allow stays allowed. The Claude Code adapter
 // writes it as flags, the Cursor adapter holds every permission request to
-// it, and the Codex adapter, which cannot, refuses a subordinate with
-// ErrGrantUnenforced. Which of the two
+// it, and the Codex adapter holds it by starting the app-server thread under
+// approvalPolicy untrusted (every command asks) and answering only the
+// route. Which of the two
 // a started process runs under is the entry point's, OpenWorker or
 // OpenSubordinate, and never the spec's: WorkerSpec.Grant reads a field only
 // those set.

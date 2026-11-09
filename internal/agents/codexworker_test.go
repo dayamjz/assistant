@@ -246,23 +246,53 @@ func liveGit(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-// The Codex adapter refuses a subordinate coordinator before anything
-// starts, with ErrGrantUnenforced, both at the launch-refusal ask and at
-// OpenSubordinate, and the stand-in records no call; the same spec through
-// OpenWorker starts, the control that the refusal is the grant's.
-func TestCodexRefusesASubordinateItCannotHoldToItsGrant(t *testing.T) {
+// The Codex adapter starts a subordinate coordinator under GrantSubordinate
+// the same way it starts a worker, with the app-server thread under
+// approvalPolicy untrusted so every command asks before it runs. A grant
+// it has no translation for is still refused with ErrGrantUnenforced before
+// anything starts.
+func TestCodexStartsASubordinateUnderItsGrant(t *testing.T) {
 	principles.Cite(t, principles.P4)
 	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{}})
 	spec := agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Coordinate the domain.", Route: "echo routed"}
-	if _, err := agents.OpenSubordinate(t.Context(), agent.Runner(), spec); !errors.Is(err, agents.ErrGrantUnenforced) {
-		t.Fatalf("OpenSubordinate on Codex = %v, want ErrGrantUnenforced", err)
-	}
-	if calls := agent.Calls(); len(calls) != 0 {
-		t.Fatalf("the refused subordinate started %d processes", len(calls))
-	}
-	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), spec)
+	sub, err := agents.OpenSubordinate(t.Context(), agent.Runner(), spec)
 	if err != nil {
-		t.Fatalf("the control worker: %v", err)
+		t.Fatalf("OpenSubordinate on Codex: %v", err)
 	}
-	worker.Close()
+	sub.Close()
+	if calls := agent.Calls(); len(calls) != 1 {
+		t.Fatalf("the subordinate started %d processes, want 1", len(calls))
+	}
+}
+
+// A Codex subordinate accepts only its route and declines git: the stand-in
+// asks each Run exchange as Codex CLI 0.166.0 asked a command approval, and
+// the adapter's GrantSubordinate answers accept only for the route.
+func TestACodexSubordinateHoldsApprovalsToItsGrant(t *testing.T) {
+	route := "echo routed"
+	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "run ", Run: true}},
+	}})
+	sub, err := agents.OpenSubordinate(t.Context(), agent.Runner(), agents.WorkerSpec{
+		Dir: t.TempDir(), Instructions: "Coordinate.", Route: route,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	for _, test := range []struct{ command, want string }{
+		{"git status", "permission refused"},
+		{route, "routed"},
+	} {
+		if err := sub.Send(t.Context(), "run "+test.command); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for !strings.Contains(sub.Capture().Text, test.want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("after %q the capture never held %q: %s", test.command, test.want, sub.Capture().Text)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 }

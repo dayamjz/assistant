@@ -203,6 +203,79 @@ func TestACodexApprovalIsReadInsideItsShellLine(t *testing.T) {
 	}
 }
 
+// The lines in testdata are the Codex CLI 0.166.0's app-server frames of one
+// turn under approvalPolicy untrusted (workspace-write), recorded from a
+// live stdio session: both git status and echo arrived as
+// item/commandExecution/requestApproval before they ran. Replayed into a
+// subordinate worker with a route, both are declined (neither is the route),
+// which is the grant that refuses git and every command but the route.
+func TestRecordedCodexUntrustedApprovalsAreAnsweredOnTheSubordinateGrant(t *testing.T) {
+	raw, err := os.ReadFile("testdata/codex-app-server-subordinate-untrusted-0.166.0.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := &recordedReplies{}
+	settled := make(chan struct{})
+	w := &codexWorker{
+		route: "/opt/assistant --home /tmp/home coordinator",
+		grant: GrantSubordinate,
+		procWorker: &procWorker{
+			out: &tailWriter{limit: 1 << 20}, availability: &workerAvailability{},
+			stdin: replies, stdinOpen: true, frame: plainLine,
+			done: make(chan struct{}), slot: make(chan struct{}, 1),
+		},
+		settled: settled,
+	}
+	commands := map[int]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var request struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Kind    string `json:"kind"`
+				Command string `json:"command"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(line), &request) == nil && request.ID != nil && request.Method == "item/commandExecution/requestApproval" {
+			commands[*request.ID] = request.Params.Command
+		}
+		w.receive([]byte(line))
+	}
+	if len(commands) != 2 {
+		t.Fatalf("the recording asked for %d command approvals, want 2: %v", len(commands), commands)
+	}
+	want := map[int]string{0: "decline", 1: "decline"}
+	if got := replies.decisions(t); !maps.Equal(got, want) {
+		t.Fatalf("the recorded approvals %v were answered %v, want %v", commands, got, want)
+	}
+	select {
+	case <-settled:
+	default:
+		t.Fatal("the recorded idle did not finish the turn")
+	}
+}
+
+// A subordinate grant declines every file-change approval and accepts only
+// the route among commands; a worker grant still accepts git and file changes.
+func TestACodexSubordinateGrantDeclinesEditsAndGit(t *testing.T) {
+	replies := &recordedReplies{}
+	w := &codexWorker{
+		route: "/opt/assistant coordinator", grant: GrantSubordinate,
+		procWorker: &procWorker{
+			stdin: replies, stdinOpen: true, frame: plainLine,
+			done: make(chan struct{}), slot: make(chan struct{}, 1),
+		},
+	}
+	w.receive([]byte(`{"method":"item/fileChange/requestApproval","id":1,"params":{"files":[{"path":"x"}]}}`))
+	w.receive([]byte(`{"method":"item/commandExecution/requestApproval","id":2,"params":{"kind":"command","command":"/bin/zsh -lc 'git status'"}}`))
+	w.receive([]byte(`{"method":"item/commandExecution/requestApproval","id":3,"params":{"kind":"command","command":"/bin/zsh -lc '/opt/assistant coordinator tasks'"}}`))
+	got := replies.decisions(t)
+	want := map[int]string{1: "decline", 2: "decline", 3: "accept"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("subordinate approvals answered %v, want %v", got, want)
+	}
+}
+
 // A command approval of any kind but command is declined whatever command
 // it names: writeStdin is input to a process already running, and null is
 // no kind the schema has. An approval with no kind, a server older than the
