@@ -130,14 +130,16 @@ import (
 // protocol cancel, with the turn's end read off the protocol. The answer
 // is refused for a worker whose adapter has not declared the capability
 // that provider needs (*agents.CapabilityError naming
-// CapabilityTerminalInterrupt or CapabilityPipeInterrupt), for one this
-// service does not hold, and for a screen that never read either state
-// within the bound. A key typed and no ready screen read after it within
-// the bound is refused too, saying the key was typed, as is a worker the
-// probe does not read Live afterwards (*interruptUnverified). Each refusal
-// names stop, then relaunch with a note, as the path left. Nothing is
-// recorded: an interrupt opens no hold and writes no record, so what
-// proves it is its answer and the service's log line.
+// CapabilityTerminalInterrupt or CapabilityPipeInterrupt), and for one
+// this service does not hold. Under tmux, a screen that never read either
+// state within the bound is refused, and a key typed with no ready screen
+// after it within the bound is refused saying the key was typed. Under
+// pipe, a cancel whose settle the adapter never observes within the bound
+// is refused on that miss. A worker the probe does not read Live afterwards
+// is *interruptUnverified under either provider. Each refusal names stop,
+// then relaunch with a note, as the path left. Nothing is recorded: an
+// interrupt opens no hold and writes no record, so what proves it is its
+// answer and the service's log line.
 //
 // # Residual gaps
 //

@@ -436,16 +436,18 @@ func (w *codexWorker) receive(line []byte) {
 	}
 }
 
-// completeTurn reads a turn/completed notification. A failed or interrupted
-// status settles the turn here: Codex CLI 0.163.0 was observed to end a
-// failed turn this way after moving the thread to systemError with no idle
-// after it, and CLI 0.166.0's TurnStatus interrupted is the same shape after
-// turn/interrupt, so Interrupt must not depend on a following idle. A
-// completed turn is still settled by its idle, as before, so an idle that
-// follows a turn/completed cannot settle the turn after it. A failure is
-// classified by codexTurnFailure, and only a recognized one is recorded,
-// because a recorded failure is what a worker handoff acts on and an
-// ordinary failed turn is not a reason to change agents.
+// completeTurn reads a turn/completed notification. A failed status settles
+// the turn here: Codex CLI 0.163.0 was observed to end a failed turn this
+// way after moving the thread to systemError with no idle after it.
+// TurnStatus interrupted is also recognized when present (CLI 0.166.0's
+// schema and the stand-in emit it after turn/interrupt; no live stdio
+// capture in this tree shows it), so Interrupt need not depend only on a
+// following idle when that status arrives. A completed turn is still
+// settled by its idle, as before, so an idle that follows a turn/completed
+// cannot settle the turn after it. A failure is classified by
+// codexTurnFailure, and only a recognized one is recorded, because a
+// recorded failure is what a worker handoff acts on and an ordinary failed
+// turn is not a reason to change agents.
 func (w *codexWorker) completeTurn(params json.RawMessage) {
 	var completed struct {
 		Turn struct {
