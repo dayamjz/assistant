@@ -106,7 +106,7 @@ func TestARemoteHostUnderAnotherProviderIsRefused(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
 	for doc, provider := range map[string]string{
-		`{"remote_hosts": [` + remoteHost + `]}`:                             `"pipe"`,
+		`{"remote_hosts": [` + remoteHost + `]}`:                             `"auto"`,
 		`{"session_provider": "pipe", "remote_hosts": [` + remoteHost + `]}`: `"pipe"`,
 		`{"session_provider": "tmux", "remote_hosts": [` + remoteHost + `]}`: `"tmux"`,
 	} {
@@ -215,8 +215,8 @@ func TestTheRemoteAndPlacementDefaultsChangeNothing(t *testing.T) {
 	if c.RemoteDisconnectGrace != 30*time.Minute {
 		t.Errorf("RemoteDisconnectGrace = %v, want 30m", c.RemoteDisconnectGrace)
 	}
-	if c.SessionProvider != SessionProviderPipe {
-		t.Errorf("SessionProvider = %q, want pipe", c.SessionProvider)
+	if c.SessionProvider != SessionProviderAuto {
+		t.Errorf("SessionProvider = %q, want auto", c.SessionProvider)
 	}
 }
 
