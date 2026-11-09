@@ -140,7 +140,7 @@ func (s *Service) finishDiscardClaim(ctx context.Context, entry store.KeptWork, 
 		// after put-back before PONR).
 		if errors.Is(err, tasks.ErrConfirmMismatch) || errors.Is(err, tasks.ErrLossChanged) {
 			if _, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID); werr != nil && !errors.Is(werr, store.ErrKeptWorkNotDiscard) {
-				return machine.KeptWorkAnswered{}, fmt.Errorf("%v (and withdrawing the claim: %w)", err, werr)
+				return machine.KeptWorkAnswered{}, fmt.Errorf("%w (and withdrawing the claim: %w)", err, werr)
 			}
 		}
 		return machine.KeptWorkAnswered{}, refusedDiscard(entry, err)
