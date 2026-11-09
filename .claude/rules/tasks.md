@@ -73,10 +73,10 @@ paths: ["internal/tasks/**"]
   `kept_test.go` places every reason for both.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
   as this build takes it: the preview (`Loss`) and, in
-  `kept_discard_run.go`, `Cleaner.Discard` for a task's clone through its
-  point of no return (set-aside, clean read, rename, finish). The service
-  discard answer calls `Discard` for a task's clone; a run's worktree
-  removal and HEAD/ref set-aside remain later links. `Loss` is
+  `kept_discard_run.go`, `Cleaner.Discard` for a task's clone or a run's
+  worktree through its point of no return (set-aside, clean read, rename
+  or worktree remove, finish). The service discard answer calls
+  `Discard` for both. HEAD/ref set-aside remains a later link. `Loss` is
   also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose: the commits that anything the
   removal destroys names reaches (HEAD, a reference, a root reference such
@@ -147,9 +147,9 @@ paths: ["internal/tasks/**"]
   stays for the clone move at the point of no return. It   refuses
   `LostStaged`, directory moves, and symlink/gitlink write-backs until
   later links. `Cleaner.Discard` (`kept_discard_run.go`) takes a task's
-  clone through PONR/finish on top of set-aside; HEAD/ref set-aside and
-  a run's worktree remain later links. The service discard answer calls
-  `Discard` for a task's clone.
+  clone or a run's worktree through PONR/finish on top of set-aside;
+  HEAD/ref set-aside remains a later link. The service discard answer
+  calls `Discard` for both.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after

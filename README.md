@@ -338,7 +338,7 @@ A **hold** is a stage or task waiting for a person's decision; a **parked run** 
 | Role-specific agent, provider, model, effort, and fallback | **Available** (adapter/model constraints apply) |
 | Nine-stage validation and GitHub/GitLab delivery | **Available** |
 | Usage records, per-run budgets, home-wide ceilings | **Available** |
-| Kept-work visibility, dispatch hold, land, carry on, and confirmed discard of a task's clone | **Available**. A run's worktree confirmation is still refused ([operator guide](docs/operators.md#kept-work)). |
+| Kept-work visibility, dispatch hold, land, carry on, and confirmed discard of a task's clone or a run's worktree | **Available** ([operator guide](docs/operators.md#kept-work)). |
 | Cross-machine placement, bridge, herdr provider | **Refused in this build.** The schema accepts the keys. The service does not start when `config.yaml` sets one. [Operator guide](docs/operators.md#watch-a-worker-in-a-terminal). |
 | Role-level configurable context windows | **Available** (a role names `context` as `standard` or `1m` beside a complete model triple; an undeclared window is refused before launch). See [multi-agent support](docs/multi-agent-support.md). |
 | Automatic cloud worker provisioning | **Future direction** |

@@ -157,11 +157,9 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // its streams terminals or not (the review of 1608c5e: a person who
 // redirects standard error is still at the terminal), it reaches the
 // service, which places this test's process in its terminal's foreground,
-// and is refused with the row saying a run's worktree confirmation is still
-// deferred. Either way the copy and its entry are as they were. The rows are
-// held to the vocabulary.
-// --confirm beside any other answer, or with no digest, is incorrect usage
-// before anything is asked.
+// and removes the worktree on that confirmation. The rows are held to the
+// vocabulary. --confirm beside any other answer, or with no digest, is
+// incorrect usage before anything is asked.
 func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

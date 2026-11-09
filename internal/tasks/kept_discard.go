@@ -25,10 +25,9 @@ import (
 // shows exactly what will be lost, and it removes the copy only on that
 // answer". This file is the half of that the copy itself decides: what
 // would be lost, read from the copy and the entry now. Cleaner.Discard
-// (kept_discard_run.go) removes a task's clone on a confirmed digest
-// through its point of no return; internal/service's discard answer calls
-// it for that case. A run's worktree removal remains a later link, so a
-// worktree confirmation is still refused. Loss is also what a land decides
+// (kept_discard_run.go) removes a task's clone or a run's worktree on a
+// confirmed digest through its point of no return; internal/service's
+// discard answer calls it for both. Loss is also what a land decides
 // from. Nothing here records a discard's claim or outcome.
 //
 // # What would be lost
@@ -183,8 +182,8 @@ type Loss struct {
 	Objects []LostObject
 	// Digest seals exactly this, everything above as shown, each path by
 	// what it is lost holding (seal): the value a confirmation names. A
-	// task's clone is removed when that digest still seals the copy; a
-	// run's worktree confirmation is still refused.
+	// task's clone or a run's worktree is removed when that digest still
+	// seals the copy.
 	Digest string
 	// files is Files with what each path is lost holding, which the digest
 	// seals.

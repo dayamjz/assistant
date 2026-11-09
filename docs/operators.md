@@ -820,8 +820,8 @@ a directory lost whole named once with a trailing slash; whether git
 reports a change, a file or a stash; and a digest of exactly what is
 shown, each file by what it holds. Without `--confirm` it records and removes
 nothing. Given again with `--confirm DIGEST` from a terminal's foreground, a
-task's clone is removed when that digest still seals the copy; a run's
-worktree confirmation is still refused, with nothing read or changed. A
+task's clone or a run's worktree is removed when that digest still seals the
+copy. A
 confirmation is accepted only from a terminal, in the foreground: under
 `--json`, from a script, a background job or an agent's tool it is refused
 first, with a line saying so, and the service decides that from the calling

@@ -128,9 +128,9 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 
 // removeWorktreeAtPONR journals ponr and removes the run's worktree through
 // the non-force RemoveWorktree under the gate's copies lock. A git refusal
-// while the path and gate record both still stand is before PONR (strike
-// and put back). Once either is gone the discard is past PONR and finish
-// removes remains by force.
+// while the path still stands is before PONR (strike and put back). Once
+// the path is gone the discard is past PONR and finish removes remains by
+// force.
 func (c *Cleaner) removeWorktreeAtPONR(ctx context.Context, entry store.KeptWork, gatePath, dir string, last *discardJournal, refuse func(error) error) error {
 	if gatePath == "" {
 		return refuse(fmt.Errorf("tasks: Discard of a run's worktree needs the gate path"))
