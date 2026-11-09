@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 )
 
-// putBack reverses every step the journal records, newest first, striking
-// each from the journal once it is undone, so a stop takes up where it
-// stopped (PRD section 6, "A refusal puts everything back"). A move whose
-// original path now holds something else is refused with ErrAsideStands
-// naming both; the aside and the step stay. writeBack steps undo first in
-// reverse order: a file still holding exactly what the discard wrote is
-// taken out, a missing path is struck, and anything else stays.
+// putBack reverses the journal's move and writeBack steps, newest first,
+// striking each once undone so a stop takes up where it stopped (PRD
+// section 6's refusal put-back, for the kinds this link journals). head,
+// refDelete, ponr and finish steps are refused: later removal links that
+// write them must reverse them here before a discard journals them. A
+// move whose original path and aside both stand is ErrAsideStands naming
+// both; if the aside is already gone the move is treated as done (a stop
+// after the rename and before the strike). writeBack: exact content is
+// taken out, a missing path is struck, anything else stays.
 //
 // It does not take the discard's claim back: that is the caller's
 // (WithdrawKeptWorkDiscard). It does not remove the discard's directory.
@@ -46,18 +48,25 @@ func putBack(dir string, j discardJournal) error {
 	return nil
 }
 
-// putBackMove puts a moved path back only when nothing stands at From.
+// putBackMove puts a moved path back only when nothing stands at From. If
+// the aside is already gone, the move is treated as done so a stop between
+// the rename and the journal strike can resume.
 func putBackMove(step discardStep) error {
 	if step.From == "" || step.To == "" {
 		return fmt.Errorf("tasks: putBack: a move step names no from or to")
 	}
-	if _, err := os.Lstat(step.From); err == nil {
+	_, fromErr := os.Lstat(step.From)
+	_, toErr := os.Lstat(step.To)
+	switch {
+	case errors.Is(toErr, fs.ErrNotExist):
+		// Already restored, or the aside never stood: strike.
+		return nil
+	case toErr != nil:
+		return fmt.Errorf("tasks: putBack: the set-aside at %s: %w", step.To, toErr)
+	case fromErr == nil:
 		return fmt.Errorf("%w at %s: something stands where the set-aside at %s goes back", ErrAsideStands, step.From, step.To)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	if _, err := os.Lstat(step.To); err != nil {
-		return fmt.Errorf("tasks: putBack: the set-aside at %s: %w", step.To, err)
+	case !errors.Is(fromErr, fs.ErrNotExist):
+		return fromErr
 	}
 	if err := os.MkdirAll(filepath.Dir(step.From), 0o700); err != nil {
 		return err

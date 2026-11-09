@@ -125,12 +125,15 @@ paths: ["internal/tasks/**"]
   journal; `standingDiscard` reads one a discard left and refuses, never
   removing, anything else at its name, a directory with no journal or a
   journal naming no copy's identity among it. A staging directory a
-  stopped first write left blocks nothing and is left. The journal's
+  stopped first write left blocks nothing and is left.   The journal's
   `Steps` record each set-aside action in order (`appendDiscardStep`);
-  `putBack` (`kept_putback.go`) reverses them and strikes each once
-  undone, refusing a move whose original path now holds something else
-  (`ErrAsideStands`). Set-aside of every loss item and `Cleaner.Discard`
-  are later links of the removal stack; no discard answer calls them yet.
+  `putBack` (`kept_putback.go`) reverses `move` and `writeBack` steps and
+  strikes each once undone, treating an already-restored move (aside gone)
+  as done, and refusing a move whose original path and aside both stand
+  (`ErrAsideStands`). head/refDelete/ponr/finish kinds are named on the
+  journal but not reversed until later removal links write them.
+  Set-aside of every loss item and `Cleaner.Discard` are those later
+  links; no discard answer calls them yet.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after
