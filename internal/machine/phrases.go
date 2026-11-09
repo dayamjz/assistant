@@ -294,12 +294,13 @@ var phraseLandedLocallyNow = Phrase{
 // structured rendering carries and this row points at, and the row names
 // the three answers. It says what this build does: the task starts once
 // every entry is decided or its work turns up somewhere safe; the answers
-// are given on section 9's hold answer, and discard shows what removing
-// the copy would lose and removes nothing (its removal is deferred).
+// are given on section 9's hold answer, and a discard of a task's clone
+// removes the copy on confirmation while a run's worktree confirmation is
+// still refused.
 var phraseTaskWaitsOnKeptWork = Phrase{
 	Outcome:     "This work has not begun, because work kept in a local copy, standing where this work would start, is waiting on your decision first.",
 	Consequence: "It begins on its own once that copy's work is decided or turns up somewhere safe; your own pushes and work already under way go ahead regardless.",
-	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key, and in this build discard shows what removing it would lose without removing it.",
+	Decision:    "Read which copy with assistant --json tasks and the work's identifier; its answers are land, carry on or discard, given with --answer and --hold naming the entry's key; discard of a task's clone removes the copy on --confirm with the digest shown, and a run's worktree confirmation is still refused.",
 }
 
 // phraseTaskKeptWorkUnread is the row for a task the program dispatched

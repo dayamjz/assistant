@@ -1214,11 +1214,11 @@ A withdraw is refused, and changes nothing, while the claimed outcome is
   no claim is left to withdraw, and what that run does afterwards, cancelled or not, reaches you
   as a push's run does;
 - a carry on once its task has begun an attempt;
-- a discard's claim, once AGE-486 gives a discard one, once its removal has begun. <kbd>proposed</kbd>
-  For a discard and a remove anyway, its removal has begun once it is past its **point of no
-  return**, which [removing a discarded copy](#discard-removal) defines; a claim a stopped service
-  left owed is taken up by that section's recovery at the next start, before any withdraw can be
-  given.
+- a discard's claim once its removal has begun: past its **point of no return**, which
+  [removing a discarded copy](#discard-removal) defines. A claim a stopped service left owed is
+  taken up by that section's recovery at the next start, before any withdraw can be given.
+  <kbd>proposed</kbd> A remove-anyway claim is mid-flight on the same terms once its outcome has
+  begun, on [remove anyway](#remove-anyway)'s terms.
 
 A carry on that moved the copy is not mid-flight. Its withdraw moves the copy
 back to the path the entry names, as one move, only when the copy at the new task's path is the
