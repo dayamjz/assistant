@@ -46,7 +46,9 @@ const (
 	// mode, and the scripted adapter the tests run against declares it over
 	// plain lines. Cursor declares it over ACP session/prompt messages.
 	// Codex declares it over the app-server protocol recorded from CLI
-	// 0.163.0: initialize, initialized, thread/start, and turn/start.
+	// 0.163.0: initialize, initialized, thread/start, and turn/start, with
+	// the command approvals a worker's git and route run under recorded
+	// from CLI 0.166.0.
 	// The conformance suite holds these declarations to the
 	// mechanism against the stand-in, which is all it can hold them to: the
 	// package documentation states what that does not establish about the
