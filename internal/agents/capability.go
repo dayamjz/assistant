@@ -123,10 +123,10 @@ const (
 	// TurnInterruptParams). completeTurn recognizes TurnStatus interrupted
 	// when present; that status is held by the schema fixture and the
 	// stand-in, not by a live stdio capture, and idle after the turn ends
-	// remains the settle path the 0.163.0 recording shows. New does not
-	// refuse a CLI below 0.166.0. Other adapters are not declared until each
-	// has a probe of its own. The conformance suite holds a declaration to
-	// the stand-in.
+	// remains the settle path the 0.163.0 recording shows. New refuses a
+	// CLI below 0.166.0 so the capability is not advertised there. Other
+	// adapters are not declared until each has a probe of its own. The
+	// conformance suite holds a declaration to the stand-in.
 	CapabilityPipeInterrupt Capability = "pipe_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token

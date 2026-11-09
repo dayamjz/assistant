@@ -109,8 +109,14 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 		turn:    "turn-wait",
 		thread:  "thread-wait",
 	}
-	answered := make(chan struct{})
 	releaseSettle := make(chan struct{})
+	reachedWait := make(chan struct{})
+	oldWait := waitAfterCodexInterruptCancel
+	t.Cleanup(func() { waitAfterCodexInterruptCancel = oldWait })
+	waitAfterCodexInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}, endedErr func() error) (bool, error) {
+		close(reachedWait)
+		return oldWait(ctx, settled, ended, endedErr)
+	}
 	go func() {
 		defer stdinR.Close()
 		sc := bufio.NewScanner(stdinR)
@@ -123,7 +129,6 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 				continue
 			}
 			w.receive([]byte(`{"id":` + string(req.ID) + `,"result":{}}`))
-			close(answered)
 			<-releaseSettle
 			w.receive([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-wait","status":"interrupted"}}}`))
 			return
@@ -141,25 +146,14 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 	}()
 
 	select {
-	case <-answered:
-	case err := <-done:
-		if err == nil {
-			err = errors.New("Interrupt returned before turn/interrupt was answered")
-		}
-		t.Fatal(err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("turn/interrupt was never answered")
-	}
-	// Positive control: give a cancel-alone return time to lose before
-	// settle is released. The proof itself is channel order (answered
-	// before settle), not that Interrupt took at least N milliseconds.
-	select {
+	case <-reachedWait:
 	case err := <-done:
 		if err == nil {
 			err = errors.New("Interrupt returned on turn/interrupt alone")
 		}
 		t.Fatal(err)
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(5 * time.Second):
+		t.Fatal("Interrupt never reached the post-cancel settle wait")
 	}
 	close(releaseSettle)
 	if err := <-done; err != nil {

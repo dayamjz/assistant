@@ -328,13 +328,20 @@ func (w *codexWorker) Interrupt(ctx context.Context) (bool, error) {
 	}); err != nil {
 		return false, err
 	}
+	return waitAfterCodexInterruptCancel(ctx, settled, w.done, w.endedError)
+}
+
+// waitAfterCodexInterruptCancel waits for settled after turn/interrupt
+// returned. Tests may replace it to observe that Interrupt reached this wait
+// rather than returning on the cancel RPC alone.
+var waitAfterCodexInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}, endedErr func() error) (bool, error) {
 	select {
 	case <-settled:
 		return true, nil
 	case <-ctx.Done():
 		return false, ctx.Err()
-	case <-w.done:
-		return false, w.endedError()
+	case <-ended:
+		return false, endedErr()
 	}
 }
 

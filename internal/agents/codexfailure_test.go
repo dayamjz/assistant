@@ -207,7 +207,7 @@ func TestAMissingCodexBinaryIsATypedRefusalBeforeAnythingStarts(t *testing.T) {
 		t.Skip("the vanished-binary half needs an executable script, which this test writes for a unix shell")
 	}
 	bin := filepath.Join(t.TempDir(), "codex")
-	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex-cli 0.166.0; exit 0; fi\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	recorded := &recorder{}
