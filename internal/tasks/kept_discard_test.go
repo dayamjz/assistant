@@ -25,8 +25,8 @@ import (
 // to a tracked file and a second untracked file change it while every name
 // and indicator stays the same, and staging the edit, whose content the
 // working tree holds as shown, leaves it as it was; Loss refuses a copy
-// that is gone. The digest is what a confirmation would be held to; the
-// removal is deferred to AGE-486.
+// that is gone. The digest is what a confirmation is held to when a task's
+// clone is removed.
 func TestADiscardPreviewDigestsExactlyTheCopyAsItStands(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	principles.Cite(t, principles.P6)

@@ -90,7 +90,7 @@ func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
 		for _, confirm := range []string{shown.Loss.Digest, "not-the-digest"} {
 			_, err := answer(confirm)
 			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), machine.PhraseDiscardRemovalDeferred.String()) {
-				t.Fatalf("a confirmation with %q = %v; want it refused with the row saying removal is not in this build", confirm, err)
+				t.Fatalf("a confirmation with %q = %v; want it refused with the worktree-deferred row", confirm, err)
 			}
 			if now := fileTree(t, entry.CopyPath, nil); now != copyShown {
 				t.Fatalf("the refused confirmation changed the worktree:\n%s\nwant\n%s", now, copyShown)
@@ -900,10 +900,9 @@ func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath
 // confirmation as without one (the full review of 04c4696): the entry is
 // carried on, so its copy moved and its branch's dispatch is free, and a
 // discard given --confirm is refused naming the first answer and never
-// with the row saying removal is deferred, whose advice to answer land or
-// carry on, and that that branch still waits, would be wrong. Before, the
-// confirmation was refused as deferred before the entry was read as
-// answered.
+// with the worktree-deferred row, whose advice to answer land or carry on,
+// and that that branch still waits, would be wrong. Before, a confirmation
+// was refused as deferred before the entry was read as answered.
 func TestADiscardOfAnAnsweredEntryIsRefusedAsAnsweredWithOrWithoutAConfirmation(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
