@@ -286,7 +286,7 @@ func TestTheRegisteredNamespaceIsThisDirectory(t *testing.T) {
 // it, the longest pattern those calls pass, eight base36 digits of process
 // identifier, the full width of a start time, and the longest suffix
 // os.MkdirTemp appends, still leaves room for a socket under the bound
-// terminal.go records as maxSocketPath.
+// terminal.go records as MaxSocketPath.
 func TestAStampedNameLeavesRoomForASocket(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example\n"), 0o644); err != nil {

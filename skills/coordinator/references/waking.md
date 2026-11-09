@@ -97,9 +97,10 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   again, then arm the wait again; wakes still queued are drained at once,
   the ones you were handed before the restart and did not acknowledge
   included.
-  A restart can change the queue first: on start the service relaunches a
-  task whose worker's terminal is gone and whose work has not landed, up
-  to `relaunch_attempts` times (2 unless configured), and records that
+  A restart can change the queue first: under the default provider a worker
+  in tmux is held again rather than relaunched, and a worker on pipes (or
+  one whose terminal is gone) is relaunched in its copy up to
+  `relaunch_attempts` times (2 unless configured). A relaunch records that
   task's queued `terminal-gone` wake about the replaced worker as handled
   by the program, so the wait no longer returns it. After a restart read
   `assistant tasks` as well as the queue.
