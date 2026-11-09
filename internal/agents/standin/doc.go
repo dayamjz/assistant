@@ -191,7 +191,8 @@
 // thread/start, an in-progress turn/start result, item/completed
 // agentMessage, and thread/status/changed idle, recorded in
 // internal/agents/testdata. A command a Run exchange names is asked as
-// item/commandExecution/requestApproval and run only after accept. A
+// item/commandExecution/requestApproval, in the shell line Codex CLI 0.166.0
+// asked with, and run only after accept. A
 // handshake that is not that recorded order is refused, so an adapter that
 // drifts from it fails here. An exchange's Recorded frames replace the
 // agent message and the idle, which is how a test plays back the failed

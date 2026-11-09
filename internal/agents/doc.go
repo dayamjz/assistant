@@ -462,11 +462,15 @@
 //
 // Codex pipe workers use `codex app-server` over a persistent process:
 // initialize, an initialized notification, thread/start, and turn/start.
-// The parser reads the frame shapes recorded from CLI 0.163.0. The worker
-// thread is created for that process and is not the fixer session `codex
-// exec resume` keeps, so a review cannot resume it. Terminal workers are
-// not declared. A command approval is accepted only for literal git or the
-// worker route; other approvals are declined. A sandbox that runs a command
+// The parser reads the frame shapes recorded from CLI 0.163.0, and the
+// command approvals recorded from CLI 0.166.0. The worker thread is created
+// for that process and is not the fixer session `codex exec resume` keeps,
+// so a review cannot resume it. Terminal workers are not declared. A
+// command approval is accepted only for literal git or the worker route,
+// read inside the shell line the CLI asks with, and every other command
+// approval is declined. A file-change approval is accepted without its
+// paths being read, so the workspace-write sandbox limits where a write
+// lands; any other approval is declined. A sandbox that runs a command
 // without asking is the CLI's own, and this package does not widen it.
 //
 // Explicit role fallback recognizes a bounded set of agent error signatures.
