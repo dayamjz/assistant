@@ -94,15 +94,15 @@ paths: ["internal/service/**"]
   none recorded); the answer
   written only with the adoption and the claim withdrawn when intake
   refuses the task; land and carry on are each completed at open when a
-  stopped service left them. Discard (`keptdiscard.go`) is the preview
-  alone, what would be lost with a digest through `internal/tasks`'
-  `Loss`, recording and removing nothing; a confirmation is refused before
-  anything is read, from a peer `foreground.go`'s relation does not place
-  in a terminal's foreground with `discardOffTerminal` (the row
-  `machine.PhraseDiscardNeedsTerminal`, wire code not-at-terminal) and from
-  any other with `discardDeferred` (the row
-  `machine.PhraseDiscardRemovalDeferred`), its removal deferred to AGE-486
-  (docs/prd.md, sections 6 and 9). A promotion answers its copy's entry carry on in the
+  stopped service left them.   Discard (`keptdiscard.go`) shows the loss through `internal/tasks`'
+  `Loss` without Confirm; with Confirm from a terminal's foreground it
+  claims (`ClaimKeptWorkDiscard`), removes a task's clone through
+  `Cleaner.Discard`, records (`RecordKeptWorkDiscard`), clears the discard
+  directory, and redispatches (`completeDiscardsAtOpen` resumes a stopped
+  claim). Off-terminal confirmations are `discardOffTerminal`
+  (`PhraseDiscardNeedsTerminal`); a run's worktree confirmation is still
+  `discardDeferred` (`PhraseDiscardRemovalDeferred`) until worktree
+  `Discard` lands. A promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the
   copy for; `refusalOf` refuses a copy it does not take

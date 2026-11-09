@@ -26,22 +26,9 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 	return machine.KeptWorkAnswerRequest{Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptDiscard), Confirm: confirm}
 }
 
-// PRD section 6's discard as this build takes it (docs/prd.md, sections 6
-// and 9, the owner's decision of 2026-10-25), through the real socket on a
-// run's kept copy, a worktree of the gate. A discard alone shows exactly
-// what would be lost, the commit the default branch lacks and the digest
-// of the copy's state, naming no path of its working tree, the .git file
-// pointing at the gate among them; it records nothing, the entry reads as
-// it did and is still listed, and the worktree's files, index, references
-// and logs are as they were (its read may add objects it fetches). A
-// confirmation, with the digest shown or with another, is refused with the
-// row saying the removal is not in this build, before the copy is read:
-// the copy, its objects included, and the gate are byte for byte as they
-// were, and the entry, field for field but when it last surfaced, still
-// open and listed, so it still
-// holds the new tasks of its project on its branch (P6, a refused discard keeps the copy and
-// its entry). Before, the confirmation on the digest shown removed the
-// copy and answered the entry.
+// A discard of a run's worktree alone shows what would be lost; a
+// confirmation is still refused (Cleaner.Discard of a worktree is not yet
+// implemented), leaving the copy and entry as they were (P6).
 func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -160,6 +147,44 @@ func fileTree(t *testing.T, root string, keep func(rel string) bool) string {
 	}
 	slices.Sort(lines)
 	return strings.Join(lines, "\n")
+}
+
+// A confirmed discard of a task's clone removes the copy and answers the
+// entry (PRD section 6; P6/P15). Fail-before: confirmation was refused with
+// PhraseDiscardRemovalDeferred and the copy stood.
+func TestAConfirmedDiscardOfATasksCloneRemovesTheCopy(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
+			shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil ||
+			done.Effect != machine.KeptWorkDiscarded || done.Entry.Answer.Or("") != store.KeptDiscard {
+			t.Fatalf("the confirmed discard = %+v, %v; want discarded", done, err)
+		}
+		if _, err := os.Stat(entry.CopyPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the copy still stands at %s after confirmation: %v", entry.CopyPath, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Open() ||
+			still.Answer.Or("") != store.KeptDiscard || !still.DiscardedAt.IsKnown() {
+			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard", still, err)
+		}
+	})
 }
 
 // A discard whose basis cannot be established now is refused naming why,
