@@ -7,17 +7,20 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -621,7 +624,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(machine.Check{Name: machine.CheckAgent, OK: true, Blocking: true, Detail: resolution.Name})
 	}
 	add(namedOnlyAgents(ctx, catalog))
-	add(sessionProvider(ctx, in.home.ConfigFile(), catalog))
+	add(sessionProvider(ctx, in.home, catalog))
 
 	// The upstream is read first because which host the code-host row
 	// probes is the one the upstream names; the rows are still reported in
@@ -653,32 +656,40 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 }
 
 // sessionProvider reports whether the operator's chosen terminal session
-// provider can host workers here. The default pipe always can. tmux needs a
-// tmux binary on PATH and an agent that declares terminal_workers; without
-// either, every launch is refused and the task stays Dispatched, which is
-// the stall this row names before an operator waits on one. It reads the
-// operator's file the way the service does at start, and resolves the agent
-// list that file names (defaults included), which is what launches go
-// through. It does not block a run: gate validation does not need a worker
-// terminal, and a missing prerequisite is a fleet launch refusal rather than
-// a run-start refusal.
-func sessionProvider(ctx context.Context, configFile string, catalog *agents.Catalog) machine.Check {
-	cfg, err := service.GlobalConfig(configFile)
+// provider can host workers here. pipe always can, and so can auto, the
+// default, which hosts a worker in tmux where tmux is on PATH, the worker's
+// routed adapter can start a terminal worker and the home's path leaves room
+// for the socket, and on a pipe otherwise; the row says which. tmux needs a
+// tmux binary on PATH and a worker adapter that can start a terminal worker
+// here (agents.TerminalStartable: terminal_workers, and for Claude a
+// credential and a complete git identity); without those, every launch is
+// refused and the task stays Dispatched, which is the stall this row names
+// before an operator waits on one. It reads the operator's file the way the
+// service does at start, and selects the worker adapter the same way a
+// launch does (agents.Route over the worker role and agent list), so a
+// roles.worker pin is what the row names. It does not block a run: gate
+// validation does not need a worker terminal, and a missing prerequisite is
+// a fleet launch refusal rather than a run-start refusal.
+func sessionProvider(ctx context.Context, h *home.Home, catalog *agents.Catalog) machine.Check {
+	cfg, err := service.GlobalConfig(h.ConfigFile())
 	if err != nil {
 		return machine.Check{
 			Name:   machine.CheckSessionProvider,
 			Detail: "the home's configuration could not be read, so whether workers can launch under it is unknown: " + err.Error(),
 		}
 	}
+	if cfg.SessionProvider == config.SessionProviderAuto {
+		return autoSessionProvider(ctx, cfg, catalog, h)
+	}
 	if cfg.SessionProvider != config.SessionProviderTmux {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
 			OK:   true,
-			Detail: "workers run on pipes (the default); set session_provider: tmux in " +
-				configFile + " to host each in an attachable terminal",
+			Detail: "workers run on pipes, as session_provider pipe in " + h.ConfigFile() +
+				" chooses; remove it for auto, which hosts each in an attachable terminal where tmux is on PATH, the worker's agent can start there, and the home's path leaves room for its socket",
 		}
 	}
-	tmux, lookErr := exec.LookPath("tmux")
+	tmux, lookErr := doctorTmux()
 	if lookErr != nil {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
@@ -686,7 +697,7 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 				lookErr.Error(),
 		}
 	}
-	resolution, err := agents.Resolve(ctx, cfg.Agent, catalog)
+	selection, err := doctorWorkerRoute(ctx, cfg, catalog, true)
 	if err != nil {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
@@ -694,19 +705,91 @@ func sessionProvider(ctx context.Context, configFile string, catalog *agents.Cat
 				err.Error(),
 		}
 	}
-	if !resolution.Runner.Capabilities().Has(agents.CapabilityTerminalWorkers) {
+	if err := agents.TerminalStartable(selection.Resolution.Runner); err != nil {
 		return machine.Check{
 			Name: machine.CheckSessionProvider,
-			Detail: fmt.Sprintf("session_provider is tmux and %s has not declared %s, so every launch is refused and the task stays dispatched",
-				resolution.Name, agents.CapabilityTerminalWorkers),
+			Detail: fmt.Sprintf("session_provider is tmux and %s cannot start a terminal worker here, so every launch is refused and the task stays dispatched: %v",
+				selection.Resolution.Name, err),
 		}
 	}
 	return machine.Check{
 		Name: machine.CheckSessionProvider,
 		OK:   true,
-		Detail: fmt.Sprintf("tmux at %s, and %s declares %s",
-			tmux, resolution.Name, agents.CapabilityTerminalWorkers),
+		Detail: fmt.Sprintf("tmux at %s, and %s can start a terminal worker here",
+			tmux, selection.Resolution.Name),
 	}
+}
+
+// autoSessionProvider is sessionProvider's row for auto, which is always OK
+// and says which provider a worker of the routed worker agent gets here, on
+// the same TerminalStartable and TerminalFits gates the service's sessionHost
+// uses for a launch (absolute tmux path included). It answers for this
+// process's environment: a managed service's unit carries PATH only
+// (internal/managed), so a credential or git identity present only in the
+// shell doctor runs in can make this row say tmux while that service hosts
+// on pipes, the same caveat the commit-identity row names for its answer.
+func autoSessionProvider(ctx context.Context, cfg config.Config, catalog *agents.Catalog, h *home.Home) machine.Check {
+	row := machine.Check{Name: machine.CheckSessionProvider, OK: true}
+	tmux, lookErr := doctorTmux()
+	selection, err := doctorWorkerRoute(ctx, cfg, catalog, false)
+	const envNote = "; answered for this process's environment (a managed service gets PATH only and may host on pipes without a credential or git identity there)"
+	switch {
+	case lookErr != nil:
+		row.Detail = "workers run on pipes (the default, auto): no tmux binary is on PATH, so a worker cannot outlive a restart of the service"
+	case err != nil:
+		row.Detail = "workers run in tmux where their agent declares " + string(agents.CapabilityTerminalWorkers) +
+			" and on pipes otherwise (the default, auto); the agent that would host workers could not be resolved here: " + err.Error()
+	case agents.TerminalStartable(selection.Resolution.Runner) != nil:
+		row.Detail = fmt.Sprintf("workers run on pipes (the default, auto), so a worker cannot outlive a restart of the service: %v",
+			agents.TerminalStartable(selection.Resolution.Runner)) + envNote
+	case !session.TerminalFits(h, tmux):
+		row.Detail = "workers run on pipes (the default, auto): the home path leaves no room for a terminal socket, so a worker cannot outlive a restart of the service"
+	default:
+		row.Detail = fmt.Sprintf("workers run in tmux (the default, auto): tmux at %s, and %s declares %s",
+			tmux, selection.Resolution.Name, agents.CapabilityTerminalWorkers) + envNote
+	}
+	return row
+}
+
+// doctorTmux is the absolute tmux path sessionHost would hold: LookPath then
+// Abs, so TerminalFits answers the same as a launch.
+func doctorTmux() (string, error) {
+	tmux, err := exec.LookPath("tmux")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(tmux)
+}
+
+// doctorWorkerRoute selects the adapter a task worker would launch with, on
+// the same terms as service.routeWorker for the worker role: a roles.worker
+// pin, else the agent list, with NeedForWorker(tmux) when the provider is
+// explicit tmux.
+func doctorWorkerRoute(ctx context.Context, cfg config.Config, catalog *agents.Catalog, tmux bool) (agents.Selection, error) {
+	role, err := cfg.Roles.ForRecorded(config.RoleWorker)
+	if err != nil {
+		return agents.Selection{}, err
+	}
+	entries := cfg.Agent
+	override := doctorAgentPin(entries)
+	if role.Agent != "" {
+		entries = []string{role.Agent}
+		override = role.Agent
+	}
+	return agents.Route(ctx, catalog, entries, agents.NeedForWorker(tmux), override)
+}
+
+// doctorAgentPin is the operator pin routeWorker uses: a single named entry
+// that is not auto.
+func doctorAgentPin(entries []string) string {
+	if len(entries) != 1 {
+		return ""
+	}
+	entry := strings.TrimSpace(entries[0])
+	if entry == "" || entry == agents.AutoEntry {
+		return ""
+	}
+	return entry
 }
 
 // namedOnlyAgents reports the adapters that resolve on this machine but that
