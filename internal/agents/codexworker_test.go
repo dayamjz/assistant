@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -163,6 +164,86 @@ func TestInstalledCodexAppServerWorker(t *testing.T) {
 		case <-tick.C:
 		}
 	}
+}
+
+// TestInstalledCodexWorkerGitRunsUnderItsGrant is the live probe that
+// recorded testdata/codex-app-server-approvals-0.166.0.jsonl, there with
+// an escalated echo first, run against the installed CLI and model: one
+// turn asks for an escalated touch, a git commit and an escalated git push
+// to a bare repository beside the copy, so each comes to the adapter as a
+// command approval. The push reaching the repository is the adapter's
+// accept of git read inside the CLI's shell line, and the touched file not
+// existing is its decline of anything else; a model that runs the touch
+// without asking, which the sandbox would allow, fails it the same way.
+// It skips unless ASSISTANT_CODEX_WORKER_LIVE=1, because it spends a model
+// turn.
+func TestInstalledCodexWorkerGitRunsUnderItsGrant(t *testing.T) {
+	if os.Getenv("ASSISTANT_CODEX_WORKER_LIVE") != "1" {
+		t.Skip("set ASSISTANT_CODEX_WORKER_LIVE=1 to probe the installed CLI and model")
+	}
+	binary, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	bare, work := filepath.Join(root, "gate.git"), filepath.Join(root, "work")
+	liveGit(t, root, "init", "--quiet", "--bare", bare)
+	liveGit(t, root, "init", "--quiet", work)
+	for _, setting := range [][]string{{"user.name", "probe"}, {"user.email", "probe@example.invalid"}, {"gc.auto", "0"}, {"maintenance.auto", "false"}} {
+		liveGit(t, work, "config", setting[0], setting[1])
+	}
+	liveGit(t, work, "commit", "--quiet", "--allow-empty", "-m", "probe")
+	marker := filepath.Join(root, "declined-marker")
+	liveGit(t, work, "remote", "add", "origin", bare)
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(binary)).New(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
+	defer cancel()
+	instructions := "This is a protocol probe. Use the shell tool for exactly these commands, in this order, each as its own tool call:\n" +
+		"1. touch " + marker + " (with sandbox_permissions set to require_escalated)\n" +
+		"2. git commit --allow-empty -m probe-two (in the normal sandbox, no escalation)\n" +
+		"3. git push origin HEAD:refs/heads/probe (with sandbox_permissions set to require_escalated)\n" +
+		"If a command is declined, do not retry it. If command 2 fails in the sandbox, rerun it once with require_escalated. " +
+		"Run nothing else. When done, reply with exactly PROBE_DONE."
+	worker, err := agents.OpenWorker(ctx, runner, agents.WorkerSpec{Dir: work, Instructions: instructions, Effort: "low"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for !strings.Contains(worker.Capture().Text, "PROBE_DONE") {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("installed Codex did not finish the probe: %s", worker.Capture().Text)
+		case <-worker.Done():
+			t.Fatalf("installed Codex exited: %s", worker.Capture().Text)
+		case <-tick.C:
+		}
+	}
+	if pushed := liveGit(t, bare, "for-each-ref", "--format=%(refname)"); !strings.Contains(pushed, "refs/heads/probe") {
+		t.Fatalf("the accepted git push did not reach the bare repository: %q\n%s", pushed, worker.Capture().Text)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the touch the grant does not allow ran (%v): %s", err, worker.Capture().Text)
+	}
+}
+
+// liveGit runs git for the live probe's own setup, with automatic
+// maintenance off so no background git outlives the test (#119) and an
+// identity stated, since a runner may have none.
+func liveGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "gc.auto=0", "-c", "maintenance.auto=false",
+		"-c", "user.name=probe", "-c", "user.email=probe@example.invalid"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
 }
 
 // The Codex adapter refuses a subordinate coordinator before anything
