@@ -1623,8 +1623,7 @@ owns the whole of what a subordinate may ask and what it is refused.
   screen, and one declaring `pipe_interrupt` reads it off the pipe protocol, each held to it by
   a conformance probe as section 8 holds every declaration. Where the provider's path has no
   declaring adapter, an interrupt is refused naming what is missing, per section 8's rule that
-  undeclared means unavailable, and the path is stop, then relaunch with a note. Section 12
-  defers adapters that have not yet declared a pipe interrupt.
+  undeclared means unavailable, and the path is stop, then relaunch with a note.
 
 Not in this design: switching agent or model on relaunch, since agent selection is trusted
 configuration (P7) and a worker names no model; answering a permission prompt a worker's agent
@@ -3747,7 +3746,6 @@ Everything here is load-bearing. Removing any one of them removes a promise.
 - **Delegate coordinators in a home of their own.** The most complex feature in either source project, and it only earned its cost at a fleet size you had not reached, which is why it was deferred. It is no longer deferred in that form: section 2's subordinate coordinator, a named domain of tasks inside this one home, replaces it, on the terms section 14's decision 20 records.
 - **The direct delivery mode.** The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.
 - **Ranking agents by remaining quota.** Section 10's roles are how you name which agent, model provider, model type, model version, effort, and context window each role runs. The program does not rank them by remaining quota or by price. Explicit failover after a recognized availability failure is section 10's separate rule. Ranking stays deferred, and section 9's usage view is the measurement it would start from.
-- **Pipe interrupts.** Codex declares `pipe_interrupt` over app-server `turn/interrupt`, Cursor over ACP `session/cancel`, and Claude Code over stream-json `control_request` subtype `interrupt`, each with a conformance probe.
 - **Transcript-based intent inference.** Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.
 - **Away mode.** Requires the supervision loop to be trustworthy first.
 - **Evidence publishing to a branch.** Store evidence locally and link it. Publishing is an optimization.

@@ -112,7 +112,7 @@ const (
 	// CapabilityPipeInterrupt is an adapter whose pipe workers can have a
 	// running turn ended while the agent goes on, with the end read off the
 	// protocol rather than a screen. That reading is the proof PRD section
-	// 12 asks of a pipe interrupt before it is offered, and section 6's
+	// 6 asks of a pipe interrupt before it is offered, and section 6's
 	// steering offers it under the pipe provider once an adapter declares
 	// it. InterruptibleWorker.Interrupt is the mechanism,
 	// InterruptPipeWorker the route this package serves, and a Runner that

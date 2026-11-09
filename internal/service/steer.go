@@ -171,11 +171,12 @@ import (
 //     the reply under interruptBound and is refused when it does not begin,
 //     so a turn that thinks or waits longer than that before drawing
 //     anything cannot be interrupted.
-//   - Under pipe, the cancel fires once the adapter has a turn id; there is
-//     no reply-begun gate. An idle or completed notification that arrives
-//     for a turn that finished itself after the cancel can answer
-//     interrupted true the same way the tmux key can reach an already-idle
-//     screen.
+//   - Under pipe, Codex and Cursor cancel once the adapter has a turn or
+//     session id, with no reply-begun gate. Claude waits for system/init
+//     before control_request (CLI #98713). An idle or completed notification
+//     that arrives for a Codex turn that finished itself after the cancel
+//     can answer interrupted true the same way the tmux key can reach an
+//     already-idle screen; Cursor requires stopReason cancelled.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 

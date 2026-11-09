@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -60,9 +61,10 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w.procWorker = worker
-	// Wait for the instructions turn's output without arming settle
-	// channels: Recorded replies have no system/init, and a late
-	// instructions result must not clear the first Send's arm.
+	// Wait for the instructions turn to finish printing without arming
+	// settle channels: a late instructions result must not clear the
+	// first Send's arm, and trailing frames must not still be growing
+	// when that arm is set.
 	w.waitCapture(ctx)
 	return w, nil
 }
@@ -171,9 +173,33 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 	// ended under a hurry before any line) cannot hold Start forever.
 	bound := time.NewTimer(5 * time.Second)
 	defer bound.Stop()
+	// Prefer a protocol result so trailing instructions frames finish
+	// before Start returns; otherwise a stable Capture covers Recorded
+	// replies that have no result line.
+	var last int
+	stable := time.NewTimer(100 * time.Millisecond)
+	defer stable.Stop()
 	for {
-		if w.Capture().Text != "" {
+		text := w.Capture().Text
+		if claudeCaptureHasResult(text) {
 			return
+		}
+		n := len(text)
+		if n > 0 && n == last {
+			select {
+			case <-stable.C:
+				return
+			default:
+			}
+		} else {
+			last = n
+			if !stable.Stop() {
+				select {
+				case <-stable.C:
+				default:
+				}
+			}
+			stable.Reset(100 * time.Millisecond)
 		}
 		select {
 		case <-ctx.Done():
@@ -185,6 +211,16 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+func claudeCaptureHasResult(text string) bool {
+	for line := range strings.Lines(text) {
+		var msg struct{ Type string }
+		if json.Unmarshal([]byte(line), &msg) == nil && msg.Type == "result" {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) error {
@@ -202,9 +238,10 @@ func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) err
 }
 
 // waitTurnProgress returns once system/init has been seen, the turn has
-// settled, the worker has ended, or Capture has grown without an init
-// (a Recorded reply). The last case marks idle so the next Send is not
-// held on a result that will never come.
+// settled, the worker has ended, or Capture has grown with no init in the
+// new bytes (a Recorded reply). Growth that includes subtype init waits for
+// begun instead of markIdle, so trailing instructions frames cannot clear a
+// live turn before Interrupt can cancel it.
 func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, mark int) error {
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
@@ -226,20 +263,12 @@ func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, mark int) error
 			w.markIdle()
 			return nil
 		case <-tick.C:
-			if len(w.Capture().Text) <= mark {
+			text := w.Capture().Text
+			if len(text) <= mark {
 				continue
 			}
-			select {
-			case <-begun:
-				return nil
-			case <-settled:
-				return nil
-			case <-time.After(50 * time.Millisecond):
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-w.done:
-				w.markIdle()
-				return nil
+			if strings.Contains(text[mark:], `"subtype":"init"`) {
+				continue
 			}
 			select {
 			case <-begun:
