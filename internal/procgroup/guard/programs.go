@@ -343,6 +343,10 @@ var WriteExceptions = []WriteException{
 		Why: "Gives a tracked file an execute bit as the mode change a loss must name; nothing runs the file.",
 	},
 	{
+		File: "internal/tasks/kept_setaside.go", Function: "writeNewFile",
+		Why: "Restores a tracked working-tree file from the index during discard set-aside, with the mode the index records; nothing runs the file.",
+	},
+	{
 		File: "internal/vcs/objects_test.go", Function: "TestBlobObjectIsGitsIdentityOfTheEntry",
 		Why: "Gives a committed file an execute bit so its tree entry is an executable's; nothing runs the file.",
 	},

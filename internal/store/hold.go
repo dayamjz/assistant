@@ -25,28 +25,29 @@ import (
 type Hold struct {
 	// Key is the stable identifier of the decision. Registering the same key
 	// again is a no-op.
-	Key string
+	Key string `json:"key"`
 	// RunID names the run the decision belongs to, when it belongs to one.
-	RunID Optional[string]
+	RunID Optional[string] `json:"run_id"`
 	// TaskID names the task the decision belongs to, when it belongs to one.
-	TaskID Optional[string]
+	TaskID Optional[string] `json:"task_id"`
 	// Subject is what the decision is about.
-	Subject string
+	Subject string `json:"subject"`
 	// Detail is what the person needs in order to make it.
-	Detail string
+	Detail string `json:"detail"`
 	// OpenedAt is when the hold was first registered.
-	OpenedAt time.Time
+	OpenedAt time.Time `json:"opened_at"`
 	// Resolution is what was decided. It is unknown while the hold is open,
 	// which is what distinguishes an open hold from one resolved with an empty
 	// answer, a state ResolveHold refuses to create.
-	Resolution Optional[string]
+	Resolution Optional[string] `json:"resolution"`
 	// ResolvedAt is when it was decided, unknown while the hold is open.
-	ResolvedAt Optional[time.Time]
+	ResolvedAt Optional[time.Time] `json:"resolved_at"`
 	// ResolvedBy is who decided, from the closed set Resolver defines. It is
 	// unknown while the hold is open, and unknown for a hold resolved before
 	// the column existed, which is a different fact from a resolution nobody
-	// is recorded for: ResolveHold refuses to create one of those.
-	ResolvedBy Optional[Resolver]
+	// is recorded for: ResolveHold refuses to create one of those. It has no
+	// encoded form, on Resolver's terms, so it does not travel on a dump.
+	ResolvedBy Optional[Resolver] `json:"-"`
 	// ResolutionNote is free text recorded with the resolution about what
 	// was decided, stored redacted. It is unknown while the hold is open,
 	// when no note was given, and for a hold resolved before the column

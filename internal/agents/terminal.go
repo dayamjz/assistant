@@ -296,11 +296,11 @@ type Terminal struct {
 	Socket string
 }
 
-// maxSocketPath is the longest local socket path this package passes to
+// MaxSocketPath is the longest local socket path this package passes to
 // tmux: one less than the 104 bytes macOS gives a socket path, which is also
 // within Linux's 108, so a path is refused here rather than truncated or
 // refused by the server in a message about something else.
-const maxSocketPath = 103
+const MaxSocketPath = 103
 
 // Validate refuses a Terminal that cannot be started as written, wrapping
 // ErrInvalidInvocation and naming the field.
@@ -311,10 +311,10 @@ func (t Terminal) Validate() error {
 	if !filepath.IsAbs(t.Socket) {
 		return &invocationFieldError{field: "Socket", reason: fmt.Sprintf("%q is not an absolute path", t.Socket)}
 	}
-	if len(t.Socket) > maxSocketPath {
+	if len(t.Socket) > MaxSocketPath {
 		return &invocationFieldError{
 			field:  "Socket",
-			reason: fmt.Sprintf("%d bytes exceeds the local socket path limit of %d", len(t.Socket), maxSocketPath),
+			reason: fmt.Sprintf("%d bytes exceeds the local socket path limit of %d", len(t.Socket), MaxSocketPath),
 		}
 	}
 	return nil
@@ -405,6 +405,30 @@ var ErrWorkerEnding = errors.New("agents: the worker is being ended, so it canno
 // handle no longer speaks for whatever runs on its socket.
 var ErrWorkerReleased = errors.New("agents: the worker's handle was released")
 
+// terminalPreflight is what an adapter whose terminal worker needs more of
+// its environment than its pipe worker does implements: the refusal
+// StartInTerminal would answer for that, read without starting anything.
+type terminalPreflight interface{ terminalPreflight() error }
+
+// TerminalStartable reports why r could not start a terminal worker here,
+// read before anything starts, or nil when nothing known stands in the way:
+// a *CapabilityError when r has not declared CapabilityTerminalWorkers, and
+// what the adapter's own start would refuse for its environment, which for
+// the Claude Code adapter is ErrNoCredential when neither of its credential
+// variables is set and ErrNoGitIdentity when no complete git name/email is
+// available to carry into the worker's own HOME. A nil answer is not a
+// promise that a start succeeds; it is what a caller choosing between a
+// terminal and a pipe can know first.
+func TerminalStartable(r Runner) error {
+	if !r.Capabilities().Has(CapabilityTerminalWorkers) {
+		return &CapabilityError{Agent: r.Name(), Capability: CapabilityTerminalWorkers, Path: "the terminal worker"}
+	}
+	if p, ok := r.(terminalPreflight); ok {
+		return p.terminalPreflight()
+	}
+	return nil
+}
+
 // ErrTerminalUnverified is AdoptTerminalWorker's refusal of a worker it
 // could not verify as the one named: the pane's process is gone or was
 // replaced, the server on the socket did not answer or named another pane,
@@ -458,8 +482,9 @@ func OpenTerminalWorker(ctx context.Context, r Runner, t Terminal, spec WorkerSp
 // mechanism, under GrantSubordinate, which only it and OpenSubordinate
 // select. An adapter whose terminal interface was not observed under the
 // grant's permission mode refuses it with ErrTerminalGrantUnobserved; the
-// Claude Code adapter starts one because GrantSubordinate writes the
-// observed acceptEdits mode while still denying editing and git.
+// Claude Code adapter starts one when GrantSubordinate is given a route
+// (acceptEdits while still denying editing and git) and refuses without
+// a route, where those flags are GrantRead's default mode.
 func OpenTerminalSubordinate(ctx context.Context, r Runner, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
 	spec.subordinate = true
 	return OpenTerminalWorker(ctx, r, t, spec)

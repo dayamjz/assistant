@@ -18,14 +18,15 @@ are written into its domain, and it holds `create`, `tasks`, `message`,
 `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`, `acknowledge`,
 `listen` and `supervision` over that domain's tasks alone, with `tasks`
 listing the domain alone and `listen` its own domain's stream. It is refused
-`promote`, `answer`, `create --housekeeping`, both delegation subcommands, `catch-up`, marking the catch-up read,
+`promote`, `answer`, `interrupt`, `create --housekeeping`, both delegation subcommands, `catch-up`, marking the catch-up read,
 the run commands, `sync`, and the service's stop and restart, with code
 `subordinate`; a task outside its domain is refused with `outside-domain`.
 Its grant denies editing and git and allows the `assistant coordinator`
 prefix, which is why `tasks` and `answer` are subcommands here as well as
 the `assistant tasks` and `assistant --task --answer` a first coordinator
 runs. With the Claude Code adapter a subordinate starts under the pipe
-session provider and under `tmux`, through the same grant. With Cursor it
+session provider and under `tmux`, through the same grant; under the
+default `auto` it stays on pipes. With Cursor it
 starts under the same grant; with Codex its start is refused and logged.
 While a subordinate is starting, your own coordinator calls may answer
 `unavailable` for the few moments the start takes; ask again.

@@ -1500,6 +1500,17 @@ var (
 		Consequence: "Only its end is shown, with a line saying where the whole of it is, and credentials were removed before it was kept.",
 		Decision:    "Nothing to decide from it alone.",
 	}
+	// PhraseDumpFollows points at section 9's dump, an evidence document of
+	// the home's records as of one read: every task snapshot the resolver
+	// reads, the task wakes and the kept work entries. It says the dump is a
+	// copy and not the source of truth, and that credentials were removed on
+	// the way out of free-text fields, because a reader who took the file for
+	// live state or for a full scrub would read it wrong.
+	PhraseDumpFollows = Phrase{
+		Outcome:     "A copy of this home's records follows, in the exact terms each was kept in.",
+		Consequence: "It is a snapshot taken after the fact for reading, not the live store, and credentials were removed from text fields on the way out.",
+		Decision:    "Nothing to decide from it alone.",
+	}
 	// PhraseInputsNotApplied is the row for a request whose run-starting
 	// inputs went to no run, because the branch already had one and the
 	// request attached to it. Which inputs they were is the structured
@@ -1563,9 +1574,11 @@ const (
 	// only when configuration names it.
 	CheckNamedOnlyAgents = "named-only agents"
 	// CheckSessionProvider is whether the operator's chosen terminal session
-	// provider can host workers on this machine: the default pipe always
-	// can, and tmux needs both a tmux binary and an agent that declares
-	// terminal_workers.
+	// provider can host workers on this machine: auto, the default, always
+	// can (tmux where it can host the worker, a pipe otherwise), pipe always
+	// can, and an explicit tmux needs a tmux binary and an agent that can
+	// start a terminal worker here (terminal_workers, and for Claude a
+	// credential and a complete git identity).
 	CheckSessionProvider = "session provider"
 	// CheckCodeHost is whether what a run needs to reach the code host is
 	// here: the gh command line for a github.com upstream, and an access token
@@ -1658,7 +1671,7 @@ var phraseByCheck = map[string][2]Phrase{
 			Decision:    "Nothing to do."},
 		{Outcome: "The terminal session provider this home is configured for cannot host workers here.",
 			Consequence: "Every worker launch is refused and fleet work waits without a worker until the provider can.",
-			Decision:    "Install tmux on the service's PATH, or choose an agent that declares terminal workers, or set session_provider back to pipe; " + readDoctor},
+			Decision:    "Install tmux on the service's PATH, choose an agent that can start a terminal worker here (for Claude: a credential and a git name and email), or set session_provider back to pipe; " + readDoctor},
 	},
 	CheckCodeHost: {
 		{Outcome: "What a run needs to reach the code host was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
@@ -2147,7 +2160,7 @@ func TablePhrases() []Phrase {
 			out = append(out, CeilingHoldPhrase(standing))
 		}
 	}
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseDumpFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied,
 		PhraseStandingConsent)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)

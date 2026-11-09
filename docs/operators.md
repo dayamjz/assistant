@@ -506,10 +506,10 @@ delivered under a number and acknowledged by the worker; nothing a message
 says reaches another task or the file. A worker heading the wrong way in the
 middle of a turn can be cut short with `assistant coordinator interrupt ID`
 and then sent a message, rather than stopped and relaunched: it is served
-for a Claude Code worker hosted in tmux (`session_provider: tmux`), which
-reads the turn's end off its screen, and for a Codex worker on a pipe
-(`pipe_interrupt` over app-server `turn/interrupt`), and refused for any
-other worker, with nothing done.
+for a Claude Code worker hosted in tmux (under `session_provider: tmux`, or
+under `auto` when that hosts in tmux), which reads the turn's end off its
+screen, and for a Codex worker on a pipe (`pipe_interrupt` over app-server
+`turn/interrupt`), and refused for any other worker, with nothing done.
 
 ## Keeping a repository's agent context true
 
@@ -1229,11 +1229,13 @@ the one command its grant allows. It is placed by the process it runs in,
 exactly as a worker is, so every task it creates is written into its domain
 and it reaches only that domain's tasks: it holds `create`, `tasks`,
 `message`, `stop`, `peek`, `relaunch`, `relayed`, `wakes`, `await`,
-`acknowledge` and `supervision` over them, its `tasks` listing shows the
-domain alone, and it is refused `promote`, `answer`, `listen`, `delegate`,
-`end-delegation`, marking the catch-up read, starting, rerunning or
-cancelling a run, `sync`, and stopping or restarting the service, with code
-`subordinate`; a task outside its domain is refused with code
+`acknowledge`, `listen` and `supervision` over them, its `tasks` listing
+shows the domain alone and its `listen` its own domain's stream, and it is
+refused `promote`, `answer`, `interrupt`, `create --housekeeping`,
+`catch-up`, `delegate`, `end-delegation`, marking the catch-up read,
+starting, rerunning or cancelling a run, `sync`, and stopping or restarting
+the service, with code `subordinate`; a task outside its domain is refused
+with code
 `outside-domain`. `tasks` and `answer` are coordinator subcommands as well
 as the `assistant tasks` and `assistant --task --answer` a first
 coordinator runs, because the subordinate's grant allows the
@@ -1266,9 +1268,7 @@ assistant --domain DOMAIN --answer retry        # begin its coordinator once mor
 assistant --domain DOMAIN --answer stop         # end the delegation instead
 ```
 
-A subordinate is never handed a wake about a domain, its own included. What
-this build does not do: a subordinate cannot hold `listen`, so it waits
-with `await`.
+A subordinate is never handed a wake about a domain, its own included.
 
 ## Unattended operating posture
 
@@ -1423,20 +1423,34 @@ and parks the run.
 
 ## Watch a worker in a terminal
 
-By default a worker runs on pipes the service holds, which nothing can attach
-to. To host each worker in a terminal you can watch and type into, set the
-provider in your own configuration file, `config.yaml` under the home (by
-default `~/.assistant`), which is a YAML document:
+By default (`session_provider: auto`) each worker runs in a terminal you can
+watch and type into wherever a tmux binary is on the service's PATH and the
+worker's adapter can start one there (today: Claude, which in a terminal needs
+`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in the service's environment,
+and a complete git name and email to carry into the worker's own HOME, where
+on pipes it uses the CLI's own login and the service's git configuration),
+unless the home's path is too long to hold a terminal socket, and on pipes the
+service holds, which nothing can attach to, wherever it cannot.
+`assistant doctor`'s session provider row says which applies here for the
+worker the service would route (the worker role and agent list, a
+`roles.worker` pin included). It answers for the environment doctor runs
+in, so a credential or git identity present only in that shell can disagree
+with a managed service, which gets PATH only and may host on pipes without
+them. To choose for yourself, set the provider in
+your own configuration file, `config.yaml` under the home (by default
+`~/.assistant`), which is a YAML document:
 
 ```yaml
-session_provider: tmux
+session_provider: tmux # or pipe, or auto, the default
 ```
 
-Workers also need an adapter that declares terminal workers (today: Claude).
-A Cursor-only `agent:` pin refuses the launch with a recorded `route-refused`
-reason rather than falling back or widening grants; list Claude after Cursor
-if you want Cursor for runs and Claude for attachable workers. See
-`docs/multi-agent-support.md`.
+`tmux` insists on a terminal: a worker whose adapter does not declare
+terminal workers is refused with a recorded `route-refused` reason rather
+than falling back or widening grants, so a Cursor-only `agent:` pin refuses
+the launch; list Claude after Cursor if you want Cursor for runs and Claude
+for attachable workers. `pipe` never uses tmux. See
+`docs/multi-agent-support.md`. Under `auto` a subordinate coordinator
+(`assistant coordinator delegate`) still runs on pipes.
 
 `session_provider: herdr` and the keys for workers on another machine
 (`remote_hosts`, `placement.local`, `placement.arch` and
@@ -1490,7 +1504,7 @@ the command that attaches you:
 tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
 ```
 
-Under `session_provider: tmux`, a worker outlives a restart of the service.
+A worker in a terminal outlives a restart of the service.
 `assistant service restart` lets it go rather than ending it, once the
 service has stopped answering requests, and the next service holds it again
 as it starts (a restart forced past `stop_grace` before that point ends it
@@ -1531,13 +1545,17 @@ shell of your own, not the worker's server.
 
 Two things it needs. tmux has to be on the service's PATH; without it every
 launch is refused and the task stays dispatched, which the service log says.
-And the resolved agent has to declare terminal workers, which Claude Code
-does. `assistant doctor` checks both when this file chooses tmux, and reports
-the stall by name before a task waits Dispatched. Cursor and Grok do not
-declare terminal workers; naming one under tmux fails that check the same
-way. Under the default (pipes) provider a worker an earlier service started
-is never attached to or read through the new one: a restart ends it and
-relaunches in place. Under tmux, the hold-again path above is what decides.
+And the resolved agent has to be able to start a terminal worker here, which
+for Claude Code means it declares terminal workers, a credential is in the
+service's environment, and a complete git name and email is available to
+carry into the worker's own HOME. `assistant doctor` checks those when this
+file chooses tmux, and reports the stall by name before a task waits
+Dispatched. Cursor and Grok do not declare terminal workers; naming one under
+tmux fails that check the same way. Under `pipe`, and under `auto` when the worker was hosted on a pipe, a
+worker an earlier service started is never attached to or read through the
+new one: a restart ends it and relaunches in place. Under `tmux`, and under
+`auto` when the worker was hosted in tmux, the hold-again path above is what
+decides.
 
 A Claude Code worker under tmux runs the CLI's interactive interface rather
 than its pipe mode, and reaches its conversation without anyone answering

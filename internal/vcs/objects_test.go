@@ -200,6 +200,34 @@ func TestObjectTypeTellsAnAbsentObjectFromOneItCannotRead(t *testing.T) {
 	}
 }
 
+// Blob returns the content of a blob object and refuses a missing object
+// or one that is not a blob.
+func TestBlobReturnsABlobsContent(t *testing.T) {
+	gitEnvironment(t)
+	dir := t.TempDir()
+	rawGit(t, dir, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(dir, "kept.txt"), "blob bytes\n")
+	rawGit(t, dir, "add", "-A")
+	rawGit(t, dir, "commit", "--quiet", "-m", "kept")
+	blob := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD:kept.txt"))
+	commit := strings.TrimSpace(rawGit(t, dir, "rev-parse", "HEAD"))
+	repo, err := vcs.OpenWorktree(ctx(t), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Blob(ctx(t), blob)
+	if err != nil || string(got) != "blob bytes\n" {
+		t.Fatalf("Blob(%s) = %q, %v; want the file's bytes", blob, got, err)
+	}
+	if _, err := repo.Blob(ctx(t), commit); err == nil {
+		t.Fatal("Blob of a commit succeeded; want a refusal")
+	}
+	missing := strings.Repeat("1", len(blob))
+	if _, err := repo.Blob(ctx(t), missing); !errors.Is(err, vcs.ErrObjectNotFound) {
+		t.Fatalf("Blob of a missing object = %v; want ErrObjectNotFound", err)
+	}
+}
+
 // NotHeldBy answers from rev's whole history: of a commit, trees and blobs
 // HEAD's history holds, a tree and a commit only a commit past HEAD holds,
 // a blob nothing holds, annotated tags on both commits and an object the

@@ -85,17 +85,17 @@
 // and a fix round's offer, a row per doctor check and result keyed on the
 // check names declared beside them and the verdict, the service lifecycle, a
 // gate created, reattached and removed, the gate's own rows for a change sent
-// to it, the rows pointing at four of the five evidence documents P13 and
+// to it, the rows pointing at five of the six evidence documents P13 and
 // section 9 name - the detail view, the findings relayed for a decision, the
-// usage view, whose shape is Usage in usage.go, and the log view, whose shape
-// is StageLog in stagelog.go - and the refusal for an answer with no
-// renderer. The fifth evidence document is section 9's db path, whose shape
-// is Database in database.go: it is written alone, so this table holds no
-// pointer row for it. No task row carries an outcome word, because PRD
-// section 6 makes a task's state its own vocabulary and a task with no run
-// has no outcome. The vocabulary test cites P13 for the rows here, and which
-// of internal/cli's renderers speak through them is that package's
-// enumeration.
+// usage view, whose shape is Usage in usage.go, the log view, whose shape
+// is StageLog in stagelog.go, and the dump, whose shape is Dump in dump.go -
+// and the refusal for an answer with no renderer. The sixth evidence document
+// is section 9's db path, whose shape is Database in database.go: it is
+// written alone, so this table holds no pointer row for it. No task row
+// carries an outcome word, because PRD section 6 makes a task's state its own
+// vocabulary and a task with no run has no outcome. The vocabulary test cites
+// P13 for the rows here, and which of internal/cli's renderers speak through
+// them is that package's enumeration.
 //
 // What a row does not promise: it is what a person reads and not the
 // mechanism, so the next decision a row names is the person's and the next

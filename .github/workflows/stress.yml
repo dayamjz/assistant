@@ -59,7 +59,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         run: [1, 2, 3]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/test-env
       - name: Test
         shell: bash

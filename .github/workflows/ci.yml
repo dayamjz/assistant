@@ -40,7 +40,7 @@ jobs:
     steps:
       # fetch-depth 0 so the docs-only step can diff against the pull
       # request base (same need as repeat.yml's plan job).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -209,9 +209,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      # v6 for the toolchain reason .github/actions/test-env gives.
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      # v6 or newer for the toolchain reason .github/actions/test-env gives.
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -276,7 +276,7 @@ jobs:
       issues: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # shell: bash runs with pipefail, so the ledger's exit is the step's.
       # The script starts with the ledger, not set -o pipefail, which the
       # ledger takes for the Test step of a log from before ci-test.sh.

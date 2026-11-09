@@ -19,24 +19,24 @@ import (
 // hand the resolver a run and a log that were never both true.
 type TaskSnapshot struct {
 	// Task is the task record.
-	Task Task
+	Task Task `json:"task"`
 	// Attempts are the task's attempts in sequence order, and empty for a
 	// task never launched. The last one is the attempt whose start is the
 	// attribution cutoff and whose session is the one a terminal probe asks
 	// about.
-	Attempts []TaskAttempt
+	Attempts []TaskAttempt `json:"attempts"`
 	// Runs are the runs attributed to the task, newest first: those of the
 	// task's own repository and branch created at or after its latest attempt
 	// began, plus the run the task names directly, if any. A task with no
 	// attempt is attributed nothing by its branch, so a task queued behind
 	// another on the same branch does not inherit the blocker's runs. A task
 	// with neither a branch nor a named run has none.
-	Runs []Run
+	Runs []Run `json:"runs"`
 	// Holds are the holds, open or resolved, that name the task or one of
 	// Runs, oldest first.
-	Holds []Hold
+	Holds []Hold `json:"holds"`
 	// Events are the task's whole history in append order.
-	Events []TaskEvent
+	Events []TaskEvent `json:"events"`
 	// MergeRecords are the merge records of Runs, in Runs' order, for every
 	// attributed run whose pull request's read ended it; a run with none is
 	// absent. They are read inside the snapshot's own transaction through
@@ -44,21 +44,21 @@ type TaskSnapshot struct {
 	// outside any transaction and a record read there could belong to a run
 	// the snapshot did not see. They are carried for the resolver's terminal
 	// tier, internal/taskstate, which derives Landed from one of them.
-	MergeRecords []MergeRecord
+	MergeRecords []MergeRecord `json:"merge_records"`
 	// NothingToDeliver are the nothing-to-deliver records of Runs, in Runs'
 	// order, for every attributed run that ended with nothing left to
 	// deliver; a run with none is absent. They are read inside the
 	// snapshot's own transaction for MergeRecords' reason and carried for
 	// the same tier, which derives Landed from one of them.
-	NothingToDeliver []NothingToDeliver
+	NothingToDeliver []NothingToDeliver `json:"nothing_to_deliver"`
 	// Cleanup is the task's cleanup record, and unknown while none has been
 	// written. It is carried for the same tier, which derives Complete from
 	// it.
-	Cleanup Optional[TaskCleanup]
+	Cleanup Optional[TaskCleanup] `json:"cleanup"`
 	// LocalLanding is the task's local landing record, and unknown while no
 	// approved fast-forward has delivered it. It is carried for the same
 	// tier, which derives a local task's Landed from it.
-	LocalLanding Optional[LocalLanding]
+	LocalLanding Optional[LocalLanding] `json:"local_landing"`
 	// ReportStoredAt is when the task's report row was written, read from
 	// the task_report row StoreTaskReport writes, and unknown while the task
 	// has no stored report. Only the instant is carried, not the report: the
@@ -67,19 +67,19 @@ type TaskSnapshot struct {
 	// It is the row and never the ReportReadyEventKind entry appended in the
 	// same transaction, so the answer rests on the record and not on a line
 	// of the history (P8).
-	ReportStoredAt Optional[time.Time]
+	ReportStoredAt Optional[time.Time] `json:"report_stored_at"`
 	// Relay is the task's findings relayed record, and unknown while none
 	// has been written. It is carried for internal/taskstate's terminal
 	// tier, which derives an investigation's Complete from it, and it is
 	// the row and never the FindingsRelayedEventKind entry appended beside
 	// it (P8).
-	Relay Optional[TaskRelay]
+	Relay Optional[TaskRelay] `json:"relay"`
 	// Retirement is the task's housekeeping retirement record, and unknown
 	// for a pass not retired and for every task that is not a pass. It is
 	// carried for the readers of whether a pass is open and for the attempt
 	// anchor; internal/taskstate's resolver does not read it, so a retired
 	// pass resolves what its own records give (PRD section 8).
-	Retirement Optional[HousekeepingRetirement]
+	Retirement Optional[HousekeepingRetirement] `json:"retirement"`
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
@@ -177,31 +177,11 @@ func (s *Store) TasksOfRun(ctx context.Context, run Run) ([]Task, error) {
 func (s *Store) TaskSnapshots(ctx context.Context) ([]TaskSnapshot, error) {
 	var out []TaskSnapshot
 	err := s.snapshotTx(ctx, func(q querier) error {
-		rows, err := q.QueryContext(ctx, taskColumns+` FROM task ORDER BY created_at DESC, id DESC`)
+		snaps, err := snapshotsOf(ctx, q)
 		if err != nil {
 			return err
 		}
-		var tasks []Task
-		for rows.Next() {
-			task, err := scanTask(rows)
-			if err != nil {
-				_ = rows.Close()
-				return err
-			}
-			tasks = append(tasks, task)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		_ = rows.Close()
-		for _, task := range tasks {
-			snap, err := snapshotOf(ctx, q, task)
-			if err != nil {
-				return err
-			}
-			out = append(out, snap)
-		}
+		out = snaps
 		return nil
 	})
 	if err != nil {
