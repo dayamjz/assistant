@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -183,6 +184,56 @@ func TestAConfirmedDiscardOfATasksCloneRemovesTheCopy(t *testing.T) {
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Open() ||
 			still.Answer.Or("") != store.KeptDiscard || !still.DiscardedAt.IsKnown() {
 			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard", still, err)
+		}
+	})
+}
+
+// A standing discard claim whose copy is gone before removal is refused and
+// the claim is taken back (no discard directory stands), so land and carry-on
+// are answerable again and completeDiscardsAtOpen does not retry a lasting
+// refusal forever (PRD #discard-removal).
+func TestADiscardClaimIsWithdrawnWhenTheCopyIsGone(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
+			shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		writer, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.ClaimKeptWorkDiscard(ctx, entry.ID, shown.Loss.Digest, shown.Loss.Lacks, store.ResolvedByPerson()); err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(entry.CopyPath); err != nil {
+			t.Fatal(err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var out machine.KeptWorkAnswered
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("confirm with the copy gone = %+v, %v; want refused", out, err)
+		}
+		still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !still.Open() || still.DiscardClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open with no discard claim", still, err)
 		}
 	})
 }

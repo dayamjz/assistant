@@ -85,7 +85,9 @@ type KeptWorkLoss struct {
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`
 	// Digest seals exactly this and nothing else, each file by what it
-	// holds: the value a confirmation names, which this build refuses.
+	// holds: the value a confirmation names. A task's clone is removed
+	// when that digest still seals the copy; a run's worktree
+	// confirmation is still refused (PhraseDiscardRemovalDeferred).
 	Digest string `json:"digest"`
 }
 
@@ -228,7 +230,7 @@ var phraseKeptWorkCarriedOn = Phrase{
 var phraseKeptWorkDiscardShown = Phrase{
 	Outcome:     "Nothing was removed yet: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
 	Consequence: "The copy stays, with everything it holds, until you confirm with that digest.",
-	Decision:    "Repeat the discard with --confirm and the digest below, at a terminal in the foreground and without --json, to remove the copy; or answer land or carry-on instead.",
+	Decision:    "Repeat the discard with --confirm and the digest below, at a terminal in the foreground and without --json, to remove a task's clone; a run's worktree confirmation is still refused until that removal is built; or answer land or carry-on instead.",
 }
 
 // phraseKeptWorkDiscarded is the row a confirmed discard reads as.

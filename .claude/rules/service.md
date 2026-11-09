@@ -99,10 +99,14 @@ paths: ["internal/service/**"]
   claims (`ClaimKeptWorkDiscard`), removes a task's clone through
   `Cleaner.Discard`, records (`RecordKeptWorkDiscard`), clears the discard
   directory, and redispatches (`completeDiscardsAtOpen` resumes a stopped
-  claim). Off-terminal confirmations are `discardOffTerminal`
-  (`PhraseDiscardNeedsTerminal`); a run's worktree confirmation is still
-  `discardDeferred` (`PhraseDiscardRemovalDeferred`) until worktree
-  `Discard` lands. A promotion answers its copy's entry carry on in the
+  claim). A Discard refusal that left no discard directory standing
+  withdraws the claim (`WithdrawKeptWorkDiscard`) so the person can show
+  and confirm again; a directory that still stands keeps the claim for
+  put-back or a past-PONR finish. Off-terminal confirmations are
+  `discardOffTerminal` (`PhraseDiscardNeedsTerminal`); a run's worktree
+  confirmation is still `discardDeferred`
+  (`PhraseDiscardRemovalDeferred`) until worktree `Discard` lands. A
+  promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the
   copy for; `refusalOf` refuses a copy it does not take

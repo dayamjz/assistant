@@ -134,11 +134,12 @@ func (s *Service) completeDiscard(ctx context.Context, entry store.KeptWork) (ma
 // outcome, clears the discard directory, and redispatches.
 func (s *Service) finishDiscardClaim(ctx context.Context, entry store.KeptWork, gatePath, digest string, verified []int64) (machine.KeptWorkAnswered, error) {
 	if err := s.cleaner.Discard(ctx, entry, gatePath, digest); err != nil {
-		// A digest that moved under the claim is withdrawn so the person
-		// can show and confirm again. Any other failure leaves the claim
-		// for completeDiscard (past PONR finish retry, or a fresh Discard
-		// after put-back before PONR).
-		if errors.Is(err, tasks.ErrConfirmMismatch) || errors.Is(err, tasks.ErrLossChanged) {
+		// A pre-PONR refusal puts everything back and clears the discard
+		// directory (PRD #discard-removal): take the claim back so the
+		// person can show and confirm again. A directory that still
+		// stands means put-back failed or the removal is past PONR, so
+		// the claim stays for completeDiscard.
+		if !discardDirectoryStands(s, entry.CopyPath) {
 			if _, werr := s.store.WithdrawKeptWorkDiscard(ctx, entry.ID); werr != nil && !errors.Is(werr, store.ErrKeptWorkNotDiscard) {
 				return machine.KeptWorkAnswered{}, fmt.Errorf("%w (and withdrawing the claim: %w)", err, werr)
 			}
@@ -154,6 +155,18 @@ func (s *Service) finishDiscardClaim(ctx context.Context, entry store.KeptWork, 
 	}
 	s.redispatchAfterRemoval()
 	return machine.KeptWorkAnswered{Entry: done, Effect: machine.KeptWorkDiscarded}, nil
+}
+
+// discardDirectoryStands reports whether the discard directory beside the
+// copy still exists, which means a put-back failed or the removal is past
+// its point of no return and the claim must stay owed.
+func discardDirectoryStands(s *Service, copyPath string) bool {
+	dir, err := s.home.Discarding(copyPath)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
 }
 
 // completeDiscardsAtOpen finishes every discard claim a stopped service left.
