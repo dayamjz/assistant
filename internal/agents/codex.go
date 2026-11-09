@@ -177,8 +177,9 @@ func (r *codexRunner) Name() string { return CodexName }
 // reachable.
 //
 // Worker sessions are declared because Start runs `codex app-server` and
-// speaks the pipe protocol recorded from CLI 0.163.0. That thread is not
-// the fixer session. Terminal workers are not declared.
+// speaks the pipe protocol recorded from CLI 0.163.0, answering the command
+// approvals recorded from CLI 0.166.0. That thread is not the fixer
+// session. Terminal workers are not declared.
 //
 // All four token counts are declared because `codex exec --json` prints
 // them on turn.completed and the reader reads each one: input_tokens,

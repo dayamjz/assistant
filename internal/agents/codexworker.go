@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -23,8 +24,10 @@ import (
 // Close; startup's context does not own its lifetime.
 //
 // Command approvals allow literal git commands and commands beginning with
-// the worker route. The command is the request's command string; a request
-// that does not carry one there is declined. File-change approvals are
+// the worker route, on codexApprovedCommand's terms: the command is read
+// from the request's command string, inside the shell wrapper the CLI
+// names there, and a request that carries none, or asks for anything but
+// a command, is declined. File-change approvals are
 // accepted without this package reading the paths, so the workspace-write
 // sandbox is the CLI's limit on where a write lands. Any other approval is
 // declined, and a server request this client does not understand is
@@ -488,10 +491,16 @@ func (w *codexWorker) answerServer(message codexMessage) {
 	decision := "decline"
 	switch message.Method {
 	case "item/commandExecution/requestApproval", "execCommandApproval":
-		var command struct {
-			Command string `json:"command"`
+		var request struct {
+			Kind    json.RawMessage `json:"kind"`
+			Command string          `json:"command"`
 		}
-		if json.Unmarshal(message.Params, &command) == nil && w.commandAllowed(command.Command) {
+		// kind is absent from a server older than the field, which the
+		// schema reads as a command; writeStdin is input to a process
+		// already running, which no grant here allows, and any other
+		// value, null included, is not a command either.
+		if json.Unmarshal(message.Params, &request) == nil &&
+			(len(request.Kind) == 0 || string(request.Kind) == `"command"`) && w.commandAllowed(request.Command) {
 			decision = "accept"
 		}
 	case "item/fileChange/requestApproval", "applyPatchApproval":
@@ -519,7 +528,16 @@ func (w *codexWorker) reply(id json.RawMessage, body map[string]any) {
 	}
 }
 
+// commandAllowed reports whether an approval's command string runs a
+// command the worker grant allows, read as codexApprovedCommand reads it.
 func (w *codexWorker) commandAllowed(command string) bool {
+	line, ok := codexApprovedCommand(command)
+	return ok && w.grantedLine(line)
+}
+
+// grantedLine reports whether one command line is literal git or begins
+// with the worker route, and carries no shell operator.
+func (w *codexWorker) grantedLine(command string) bool {
 	command = strings.TrimSpace(command)
 	if command == "" || strings.ContainsAny(command, ";&|><`$()\r\n") {
 		return false
@@ -528,6 +546,35 @@ func (w *codexWorker) commandAllowed(command string) bool {
 		return true
 	}
 	return w.route != "" && (command == w.route || strings.HasPrefix(command, w.route+" "))
+}
+
+// codexApprovedCommand returns the command line an approval's command
+// string asks to run, and false when it cannot be read. Codex CLI 0.166.0
+// asked for each shell tool call as the line it runs, /bin/zsh, -lc, and
+// the model's command in single quotes
+// (testdata/codex-app-server-approvals-0.166.0.jsonl), so a string whose
+// first word is a shell is read only in that form: sh, bash or zsh, -lc or
+// -c, and one word wholly in single quotes with no quote inside, whose
+// inside is the command. Only zsh and -lc are recorded; sh, bash and -c are
+// read the same way because the inside is then what the shell runs, and
+// is held to the grant as every command is. Any other shell string, a
+// command that needs a single quote included, is unreadable and declined
+// rather than unquoted here. A string whose first word is no shell is
+// read as the command itself, as before this read existed; no recording
+// shows the CLI asking in that form.
+func codexApprovedCommand(command string) (string, bool) {
+	first, rest, _ := strings.Cut(command, " ")
+	switch path.Base(first) {
+	case "sh", "bash", "zsh":
+	default:
+		return command, true
+	}
+	flag, word, ok := strings.Cut(rest, " ")
+	if !ok || (flag != "-lc" && flag != "-c") || len(word) < 2 || word[0] != '\'' || word[len(word)-1] != '\'' {
+		return "", false
+	}
+	inner := word[1 : len(word)-1]
+	return inner, !strings.Contains(inner, "'")
 }
 
 type codexLines struct {
