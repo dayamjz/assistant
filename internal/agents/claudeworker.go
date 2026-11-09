@@ -169,15 +169,12 @@ func (w *claudePipeWorker) armTurn() {
 func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
-	// Bound so a worker that prints nothing for its instructions (or is
-	// ended under a hurry before any line) cannot hold Start forever.
-	bound := time.NewTimer(5 * time.Second)
-	defer bound.Stop()
-	// Prefer a protocol result so trailing instructions frames finish
-	// before Start returns. A Capture that never shows system/init is a
-	// Recorded reply: wait until it stops growing. Never treat a quiet
-	// gap after init as settled; that would re-open the trailing-frame
-	// race the result wait closes.
+	// Empty-Capture bound only: once system/init has been seen, wait for a
+	// result (or the worker / hurry / ctx) so a slow instructions turn is
+	// still tracked when Start returns. A Capture that never shows init is
+	// a Recorded reply: wait until it stops growing.
+	emptyBound := time.NewTimer(5 * time.Second)
+	defer emptyBound.Stop()
 	var last int
 	stable := time.NewTimer(100 * time.Millisecond)
 	defer stable.Stop()
@@ -186,8 +183,9 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 		if claudeCaptureHasResult(text) {
 			return
 		}
+		sawInit := strings.Contains(text, `"subtype":"init"`)
 		n := len(text)
-		if n > 0 && !strings.Contains(text, `"subtype":"init"`) {
+		if n > 0 && !sawInit {
 			if n == last {
 				select {
 				case <-stable.C:
@@ -205,12 +203,18 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 				stable.Reset(100 * time.Millisecond)
 			}
 		}
+		var boundC <-chan time.Time
+		if !sawInit {
+			boundC = emptyBound.C
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-w.done:
 			return
-		case <-bound.C:
+		case <-w.hurry:
+			return
+		case <-boundC:
 			return
 		case <-tick.C:
 		}
@@ -242,13 +246,10 @@ func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) err
 }
 
 // waitTurnProgress returns once system/init has been seen, the turn has
-// settled, the worker has ended, or Capture has grown with no init in the
-// new bytes (a Recorded reply). Growth that includes subtype init waits for
-// begun instead of markIdle, so trailing instructions frames cannot clear a
-// live turn before Interrupt can cancel it.
-func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, mark int) error {
-	tick := time.NewTicker(5 * time.Millisecond)
-	defer tick.Stop()
+// settled, or the worker has ended. Capture growth alone never marks idle:
+// stderr shares Capture with stdout and a partial line before init would
+// otherwise drop a live turn.
+func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, _ int) error {
 	for {
 		w.mu.Lock()
 		settled, begun := w.settled, w.begun
@@ -266,23 +267,6 @@ func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, mark int) error
 		case <-w.done:
 			w.markIdle()
 			return nil
-		case <-tick.C:
-			text := w.Capture().Text
-			if len(text) <= mark {
-				continue
-			}
-			if strings.Contains(text[mark:], `"subtype":"init"`) {
-				continue
-			}
-			select {
-			case <-begun:
-				return nil
-			case <-settled:
-				return nil
-			default:
-				w.markIdle()
-				return nil
-			}
 		}
 	}
 }
@@ -324,16 +308,14 @@ func (w *claudePipeWorker) observe(line []byte) {
 		}
 	case msg.Type == "result":
 		w.mu.Lock()
-		begun, settled := w.begun, w.settled
+		settled := w.settled
 		w.mu.Unlock()
 		if settled == nil {
 			return
 		}
-		select {
-		case <-begun:
-			w.markIdle()
-		default:
-		}
+		// A result ends the turn even when system/init was never seen
+		// (a Recorded reply). Interrupt still waits on begun first.
+		w.markIdle()
 	}
 }
 
