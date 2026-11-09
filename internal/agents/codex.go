@@ -432,7 +432,8 @@ func (r *codexRunner) arguments(grant Grant, inv Invocation, resume string) []st
 //   - GrantWorker is not a flag on this command line. A pipe worker's
 //     app-server thread is started workspace-write with on-request approval,
 //     and codexworker.go decides each approval. GrantSubordinate starts the
-//     same thread under approvalPolicy untrusted so every command asks,
+//     same thread under approvalPolicy untrusted so plain shell calls ask
+//     (as recorded; escalation and sandbox override are unnamed residuals),
 //     then allows only the route. `codex exec` is review and fix, which are
 //     never GrantWorker or GrantSubordinate.
 //

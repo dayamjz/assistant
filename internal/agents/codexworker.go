@@ -173,9 +173,9 @@ func (w *codexWorker) open(ctx context.Context, dir string) error {
 	if err := w.write(ctx, `{"method":"initialized"}`); err != nil {
 		return err
 	}
-	// GrantSubordinate needs every command to ask: untrusted does, recorded
-	// from CLI 0.166.0; on-request lets the workspace-write sandbox run
-	// without asking, which cannot hold that grant.
+	// GrantSubordinate needs plain shell calls to ask: untrusted does for
+	// those, recorded from CLI 0.166.0; on-request lets the workspace-write
+	// sandbox run without asking, which cannot hold that grant.
 	approval := "on-request"
 	if w.grant == GrantSubordinate {
 		approval = "untrusted"

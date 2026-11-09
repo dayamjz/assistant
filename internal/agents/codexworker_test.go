@@ -248,7 +248,7 @@ func liveGit(t *testing.T, dir string, args ...string) string {
 
 // The Codex adapter starts a subordinate coordinator under GrantSubordinate
 // the same way it starts a worker, with the app-server thread under
-// approvalPolicy untrusted so every command asks before it runs. The
+// approvalPolicy untrusted so plain shell calls ask before they run. The
 // stand-in's Call records that policy: without it, a subordinate started
 // under on-request would still pass every Run exchange, because the
 // stand-in asks either way.

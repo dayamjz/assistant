@@ -39,7 +39,7 @@ func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 // is finished by thread/status/changed idle after the agent message. It
 // requires that order, a workspace-write sandbox, and either on-request
 // approval (a worker) or untrusted (a subordinate, recorded from CLI
-// 0.166.0 as the mode where every command asks before it runs).
+// 0.166.0 as the mode where plain shell calls ask before they run).
 func serveAppServer(control string, args []string) int {
 	bytes, err := os.ReadFile(scriptPath(control))
 	if err != nil {
