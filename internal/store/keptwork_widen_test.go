@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,9 +87,30 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 		encodeTime(nowUTC()), entry.ID); err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
 		t.Fatalf("answer nope after widen = %v; want a CHECK refusal", err)
 	}
+	// Sibling wake and notification seals are dropped for the rename and
+	// must be put back: a rebuild that only restores kept_work's own
+	// triggers still passes the checks above.
+	wakeID := wakes[0].ID
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work_wake SET kind = 'rewritten' WHERE id = ?`, wakeID); err == nil ||
+		!strings.Contains(err.Error(), "kept work wake") {
+		t.Fatalf("rewrite wake kind after widen = %v; want the wake append seal", err)
+	}
+	claimed, err := opened.ClaimKeptWorkNotification(ctx, wakeID)
+	if err != nil {
+		t.Fatalf("claim kept-work notification after widen = %v", err)
+	}
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work_notification SET claimed_at = 'rewritten' WHERE kept_work_wake_id = ?`,
+		claimed.WakeID); err == nil || !strings.Contains(err.Error(), "claimed once") {
+		t.Fatalf("rewrite notification claim after widen = %v; want the claim seal", err)
+	}
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = 'person', answered_at = ? WHERE id = ?`,
 		encodeTime(nowUTC()), entry.ID); err != nil {
 		t.Fatalf("answer remove-anyway after widen = %v; want it admitted", err)
+	}
+	// This link widens the CHECK only: Go still does not recognize the
+	// value, so a typed read of that row fails until a later migration.
+	if _, err := opened.KeptWorkEntry(ctx, entry.ID); !errors.Is(err, ErrUnknownKeptAnswer) {
+		t.Fatalf("read remove-anyway after widen = %v; want ErrUnknownKeptAnswer", err)
 	}
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answered_by = 'other' WHERE id = ?`, entry.ID); err == nil ||
 		!strings.Contains(err.Error(), "answered once") {

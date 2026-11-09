@@ -616,7 +616,12 @@
 // and not only a renamed or resized migration. It is over the exact text, so
 // reformatting a shipped migration is refused the same way rewriting one is:
 // nothing here can tell them apart, and the answer to either is a new
-// migration.
+// migration. One shipped row sits outside that digest: the kept-work answer
+// CHECK widen (migration 73) records an empty statements list because its
+// rebuild lives in Go (widenKeptWorkAnswerCheck), so the digest hashes
+// nothing and an edit to that helper after ship is invisible to
+// ErrSchemaChanged; a new migration is the only way to change that rebuild
+// for already-migrated databases.
 //
 // The row that comparison cannot speak for is one recorded before digests were
 // written. The digest column is nullable and is added to a schema_migration
