@@ -131,7 +131,7 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 	go func() {
 		got, err := w.Interrupt(t.Context())
 		if err != nil || !got {
-			done <- fmt.Errorf("Interrupt: %t, %v", got, err)
+			done <- fmt.Errorf("Interrupt: %t, %w", got, err)
 			return
 		}
 		done <- nil
