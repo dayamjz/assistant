@@ -86,10 +86,11 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // answer as carry on, which closes it"), naming the promoted task as the
 // task carrying them on, in this same transaction; a zero Resolver is
 // ErrNoResolver and nothing is written. A copy one of whose entries holds
-// an answer claimed and not yet carried out (a landing, a carry on or a
-// discard) is refused with ErrKeptWorkCopyOwed, wrapped, and nothing is
-// written: that answer still needs the copy where it stands, and is
-// carried out or withdrawn first.
+// an answer claimed and not yet carried out (a landing, a carry on, a
+// discard or a remove-anyway) is refused with ErrKeptWorkCopyOwed, wrapped,
+// and nothing is written: that answer is carried out or withdrawn first.
+// A land, carry on or discard still needs the copy where it stands; a
+// remove-anyway releases the entry without this package reading the copy.
 //
 // verified is the entries the caller verified the copy for before this
 // write (internal/tasks' Promote asks the kept-copy verification of each).

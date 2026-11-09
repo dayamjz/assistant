@@ -218,7 +218,8 @@
 // open. Its one revision otherwise closes it, made once and only while it
 // is open: a person's answer and its Resolver (a discard among them,
 // written by RecordKeptWorkDiscard once the copy is gone; a remove-anyway,
-// written by RecordKeptWorkRemoveAnyway with the copy still standing), or
+// written by RecordKeptWorkRemoveAnyway as the entry's release, without
+// reading or removing the copy), or
 // the program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof. The program's closure is never a discard;

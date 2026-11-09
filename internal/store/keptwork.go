@@ -221,7 +221,7 @@ type KeptWork struct {
 	// together by ClaimKeptWorkRemoveAnyway on an open entry and withdrawn
 	// by WithdrawKeptWorkRemoveAnyway while unanswered. RemovedAnywayAt is
 	// when the entry was released, written by RecordKeptWorkRemoveAnyway
-	// with the remove-anyway answer; the copy still stands.
+	// with the remove-anyway answer; nothing there reads or removes the copy.
 	RemoveAnywayClaimedAt Optional[time.Time] `json:"remove_anyway_claimed_at"`
 	RemoveAnywayBy        Optional[Resolver]  `json:"-"`
 	RemoveAnywayRefusal   Optional[string]    `json:"remove_anyway_refusal"`
@@ -624,10 +624,11 @@ func (s *Store) OpenKeptWork(ctx context.Context) ([]KeptWork, error) {
 
 // OpenKeptWorkOfCopy returns every open entry recorded at copyPath, neither
 // answered nor closed, oldest first: the copy kept at each state it was
-// kept at. It is the set a carry on or a discard of any one of them closes
-// (MarkKeptWorkCarriedOn, RecordKeptWorkDiscard), so it is the read
-// internal/service makes to hold the copy to every one of them before it
-// claims, moves, adopts or removes the copy, and never the answered entry
+// kept at. It is the set a carry on, a discard or a remove-anyway of any
+// one of them closes (MarkKeptWorkCarriedOn, RecordKeptWorkDiscard,
+// RecordKeptWorkRemoveAnyway), so it is the read internal/service makes to
+// hold the copy to every one of them before it claims, moves, adopts,
+// removes or releases the copy's entries, and never the answered entry
 // alone.
 func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
@@ -1499,8 +1500,9 @@ func (s *Store) WithdrawKeptWorkRemoveAnyway(ctx context.Context, id int64) (Kep
 // once: the entry is answered remove-anyway from its claim, with
 // removed_anyway_at, in one write that also answers every other open entry
 // of the same copy holding no claim of its own, with the same claim (PRD
-// section 6). The copy still stands. verified is those other open entries
-// as OpenKeptWorkOfCopy listed them; one kept since refuses with
+// section 6). Nothing here reads the copy or removes it; the answer is the
+// entry's release. verified is those other open entries as
+// OpenKeptWorkOfCopy listed them; one kept since refuses with
 // ErrKeptWorkUnverified and writes nothing. Refusals:
 // ErrKeptWorkRemovedAnyway, ErrKeptWorkAnswered, ErrKeptWorkClosed,
 // ErrKeptWorkNotRemoveAnyway, ErrNotFound.

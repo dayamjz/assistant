@@ -3087,7 +3087,8 @@ var schema = []migration{
 			// (which stays open) and withdrawn by
 			// WithdrawKeptWorkRemoveAnyway while unanswered. The outcome
 			// is answer remove-anyway with removed_anyway_at, written by
-			// RecordKeptWorkRemoveAnyway with the copy still standing.
+			// RecordKeptWorkRemoveAnyway as the entry's release (nothing
+			// there reads or removes the copy).
 			`ALTER TABLE kept_work ADD COLUMN remove_anyway_claimed_at TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN remove_anyway_by TEXT`,
 			`ALTER TABLE kept_work ADD COLUMN remove_anyway_refusal TEXT`,

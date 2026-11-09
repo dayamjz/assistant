@@ -162,8 +162,8 @@ paths: ["internal/store/**"]
   written whole by `ClaimKeptWorkRemoveAnyway` and withdrawn whole by
   `WithdrawKeptWorkRemoveAnyway` while unanswered; and the answer,
   written only with `removed_anyway_at` by `RecordKeptWorkRemoveAnyway`
-  with the copy still standing, closing every other open entry of the
-  copy the caller verified.
+  as the entry's release (nothing there reads or removes the copy),
+  closing every other open entry of the copy the caller verified.
   `TransitionTaskShape` answers the promoted task's own copy's open
   entries carry-on, naming that task, claim, answer and adoption in one
   write in the flip's transaction, as PRD
