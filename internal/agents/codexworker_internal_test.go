@@ -87,9 +87,8 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 // first and holding turn/completed interrupted until the test releases it
 // would leave a mutation that returns true right after call green against
 // every other interrupt test, because those settle in the same receive
-// burst as the cancel. The barrier is channel order, not a wall-clock bound.
+// burst as the cancel. Not parallel: it swaps waitAfterCodexInterruptCancel.
 func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
-	t.Parallel()
 	stdinR, stdinW := io.Pipe()
 	settled := make(chan struct{})
 	w := &codexWorker{
@@ -113,9 +112,19 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 	reachedWait := make(chan struct{})
 	oldWait := waitAfterCodexInterruptCancel
 	t.Cleanup(func() { waitAfterCodexInterruptCancel = oldWait })
+	// Replacement waits on settled itself so a hook that only signals entry
+	// and returns true cannot pass: Interrupt must still be blocked until
+	// settle is released.
 	waitAfterCodexInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}, endedErr func() error) (bool, error) {
 		close(reachedWait)
-		return oldWait(ctx, settled, ended, endedErr)
+		select {
+		case <-settled:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ended:
+			return false, endedErr()
+		}
 	}
 	go func() {
 		defer stdinR.Close()
@@ -154,6 +163,14 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 		t.Fatal(err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("Interrupt never reached the post-cancel settle wait")
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			err = errors.New("Interrupt returned before settle after reaching the wait")
+		}
+		t.Fatal(err)
+	default:
 	}
 	close(releaseSettle)
 	if err := <-done; err != nil {
