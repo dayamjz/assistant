@@ -55,7 +55,8 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 	return s.confirmDiscard(ctx, req, entry, confirm)
 }
 
-// confirmDiscard claims and removes a task's clone on the confirmed digest.
+// confirmDiscard claims and removes a task's clone or a run's worktree on
+// the confirmed digest.
 func (s *Service) confirmDiscard(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
 	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {

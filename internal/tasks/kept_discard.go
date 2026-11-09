@@ -133,14 +133,14 @@ import (
 //
 // # The removal
 //
-// Cleaner.Discard (kept_discard_run.go) removes a task's clone on a
-// confirmed digest: beginDiscard, setAsideLoss, a clean read, the point of
-// no return rename into the discard directory, and finish. The service
-// discard answer claims and records the outcome around that call.
-// HEAD/ref set-aside, staged paths, and a run's worktree remain later
-// links. A copy kept for its work is also removed by P12 cleanup on a
-// proof (cleanup.go), which is what closes its entry once its work is
-// pushed somewhere safe.
+// Cleaner.Discard (kept_discard_run.go) removes a task's clone or a run's
+// worktree on a confirmed digest: beginDiscard, setAsideLoss, a clean
+// read, the point of no return (clone rename into the discard directory,
+// or worktree remove under the gate), and finish. The service discard
+// answer claims and records the outcome around that call. HEAD/ref
+// set-aside and staged paths remain later links. A copy kept for its work
+// is also removed by P12 cleanup on a proof (cleanup.go), which is what
+// closes its entry once its work is pushed somewhere safe.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {

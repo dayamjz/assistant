@@ -3038,7 +3038,7 @@ left, `--run=RUN` names the run. That is an optional value on the same flag, the
 `--cancel=RUN` takes one, and bare `--run` keeps the meaning above.
 Discard is answered twice: `--answer discard` alone shows exactly what would be
 lost, with a short digest of it, and removes nothing; repeating it with
-`--confirm DIGEST` removes a task's clone only if the copy still holds exactly what that
+`--confirm DIGEST` removes a task's clone or a run's worktree only if the copy still holds exactly what that
 digest names, on section 6's [removing a discarded copy](#discard-removal) terms (decision 31).
 `--confirm DIGEST` is admitted only from a terminal's foreground, as that section says. The
 command line refuses it earlier under `--json` or off a terminal, with the same sentence, and the
@@ -3757,7 +3757,7 @@ Everything here is load-bearing. Removing any one of them removes a promise.
 - **Away mode.** Requires the supervision loop to be trustworthy first.
 - **Evidence publishing to a branch.** Store evidence locally and link it. Publishing is an optimization.
 - **Review evaluation corpus.** A quality tool for when review quality is your bottleneck.
-- **Removing a run's worktree on a confirmed discard (AGE-486).** A task's clone and a run's worktree are removed on confirmation (section 6's [removing a discarded copy](#discard-removal), decision 31). <kbd>proposed</kbd> [Remove anyway](#remove-anyway) remains to build on decision 31's terms.
+- **Remove anyway after a discard refuses the copy (AGE-486).** A task's clone and a run's worktree are removed on confirmation (section 6's [removing a discarded copy](#discard-removal), decision 31). <kbd>proposed</kbd> [Remove anyway](#remove-anyway) remains to build on decision 31's terms.
 - **Decision-model checks.** Extra scrutiny that adds a provider dependency and is never part of what a pass means. The review stage has to work without them first.
 - **Fan-out and fan-in in the graph.** Nothing in phase one needs parallel nodes. Keep the checker rule; skip the feature.
 

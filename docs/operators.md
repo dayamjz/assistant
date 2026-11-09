@@ -679,8 +679,7 @@ entry's copy, whose it was and the commits it holds. The ways past it are
 an answer that closes the entry (land or carry on, below) or the work
 landing: once its commits are on the upstream branch or in the default
 branch, the next service start removes the copy on that proof and closes
-the entry. A task's clone is removed on a confirmed discard; a run's worktree
-confirmation is still refused.
+the entry. A task's clone or a run's worktree is removed on a confirmed discard.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
@@ -828,9 +827,9 @@ first, with a line saying so, and the service decides that from the calling
 process itself, not from the command line. A terminal's foreground is not
 proof of a person, so a program you run there can give one. To let new tasks
 on the entry's branch go ahead, answer land, carry-on, or discard with
-`--confirm` for a task's clone, or commit or remove what is uncommitted,
-untracked or stashed, and push its commits where one of the cleanup proofs
-above finds them. That proof reads only
+`--confirm`, or commit or remove what is uncommitted, untracked or stashed,
+and push its commits where one of the cleanup proofs above finds them. That
+proof reads only
 the commits the copy's HEAD and its branches, tags and stash reach, and
 what git reports uncommitted, untracked (and not ignored) or stashed: a
 file git ignores, a commit or object only a reflog or another reference
@@ -881,8 +880,8 @@ reports the copy refused.
 
 Nothing in the program discards a copy on its own. The preview is open to any
 caller that may answer kept work. A confirmation from a terminal's foreground
-removes a task's clone when the digest still seals the copy; a run's worktree
-confirmation is still refused (docs/prd.md, sections 6 and 9).
+removes a task's clone or a run's worktree when the digest still seals the
+copy (docs/prd.md, sections 6 and 9).
 
 ## Resetting a coordinator's session
 
