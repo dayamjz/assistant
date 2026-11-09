@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -14,9 +15,11 @@ import (
 // refDelete, ponr and finish steps are refused: later removal links that
 // write them must reverse them here before a discard journals them. A
 // move whose original path and aside both stand is ErrAsideStands naming
-// both; if the aside is already gone the move is treated as done (a stop
-// after the rename and before the strike). writeBack: exact content is
-// taken out, a missing path is struck, anything else stays.
+// both; if the aside is gone and the original stands, the move is treated
+// as done (a stop after the rename and before the strike); if both are
+// gone the move is refused, because the restore cannot be verified (P6).
+// writeBack: exact Held bytes are taken out, a missing path is struck,
+// anything else stays.
 //
 // It does not take the discard's claim back: that is the caller's
 // (WithdrawKeptWorkDiscard). It does not remove the discard's directory.
@@ -49,8 +52,9 @@ func putBack(dir string, j discardJournal) error {
 }
 
 // putBackMove puts a moved path back only when nothing stands at From. If
-// the aside is already gone, the move is treated as done so a stop between
-// the rename and the journal strike can resume.
+// the aside is gone and From stands, the move is treated as done so a stop
+// between the rename and the journal strike can resume. If the aside is
+// gone and From is gone too, the restore cannot be verified and is refused.
 func putBackMove(step discardStep) error {
 	if step.From == "" || step.To == "" {
 		return fmt.Errorf("tasks: putBack: a move step names no from or to")
@@ -58,9 +62,13 @@ func putBackMove(step discardStep) error {
 	_, fromErr := os.Lstat(step.From)
 	_, toErr := os.Lstat(step.To)
 	switch {
-	case errors.Is(toErr, fs.ErrNotExist):
-		// Already restored, or the aside never stood: strike.
+	case errors.Is(toErr, fs.ErrNotExist) && fromErr == nil:
+		// Already restored: strike.
 		return nil
+	case errors.Is(toErr, fs.ErrNotExist) && errors.Is(fromErr, fs.ErrNotExist):
+		return fmt.Errorf("tasks: putBack: the set-aside at %s is gone and nothing stands at %s", step.To, step.From)
+	case errors.Is(toErr, fs.ErrNotExist):
+		return fmt.Errorf("tasks: putBack: the original at %s: %w", step.From, fromErr)
 	case toErr != nil:
 		return fmt.Errorf("tasks: putBack: the set-aside at %s: %w", step.To, toErr)
 	case fromErr == nil:
@@ -78,7 +86,8 @@ func putBackMove(step discardStep) error {
 }
 
 // putBackWriteBack takes out a file the discard wrote from the index, on
-// PRD section 6's three states.
+// PRD section 6's three states. Held is compared as bytes, so a journalled
+// write of non-UTF-8 content still matches what stands on disk.
 func putBackWriteBack(step discardStep) error {
 	if step.Path == "" {
 		return fmt.Errorf("tasks: putBack: a writeBack step names no path")
@@ -89,7 +98,7 @@ func putBackWriteBack(step discardStep) error {
 		return nil
 	case err != nil:
 		return err
-	case string(raw) == step.Held:
+	case bytes.Equal(raw, step.Held):
 		if err := os.Remove(step.Path); err != nil {
 			return fmt.Errorf("tasks: taking out the discard's write at %s: %w", step.Path, err)
 		}

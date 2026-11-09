@@ -43,7 +43,8 @@ import (
 // ErrAsideStands refuses a copy beside which something stands at the
 // discard's directory's name that no journal proves this discard's, or a
 // journal not as the discard last wrote it, or a directory where a new
-// discard's would go. Nothing of it is removed; the error names where.
+// discard's would go, or a put-back of a move whose original path already
+// holds something. Nothing of it is removed; the error names where.
 var ErrAsideStands = errors.New("tasks: a discard that did not finish left a directory beside the copy, so the copy is not read until it is dealt with")
 
 // journalName is the journal's file name in a discard's directory.
@@ -75,13 +76,15 @@ const (
 )
 
 // discardStep is one journalled action. Fields other than Kind are filled
-// for the kinds that use them and omitted otherwise.
+// for the kinds that use them and omitted otherwise. Held is the exact
+// bytes a writeBack wrote (JSON as base64), so a non-UTF-8 blob round-trips
+// and putBack can match them byte-for-byte against what stands on disk.
 type discardStep struct {
 	Kind   discardStepKind `json:"kind"`
 	From   string          `json:"from,omitempty"`
 	To     string          `json:"to,omitempty"`
 	Path   string          `json:"path,omitempty"`
-	Held   string          `json:"held,omitempty"`
+	Held   []byte          `json:"held,omitempty"`
 	Ref    string          `json:"ref,omitempty"`
 	Object string          `json:"object,omitempty"`
 }
