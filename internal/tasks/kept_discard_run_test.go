@@ -309,6 +309,72 @@ func TestPastPointOfNoReturnReadsTheCloneNotTheJournalAlone(t *testing.T) {
 	if !past || err != nil {
 		t.Fatalf("finish journalled, both gone = %v, %v; want past", past, err)
 	}
+	// Finish journalled, To gone, impostor at the path: still past (never put back).
+	if err := os.Mkdir(tk.copy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	past, err = pastPointOfNoReturn(tk.copy, last)
+	if !past || err != nil {
+		t.Fatalf("finish journalled with impostor at path = %v, %v; want past", past, err)
+	}
+}
+
+// After finish is journalled, a second Discard with an impostor at the
+// copy path only retries deletion: it must not put set-asides back into
+// the impostor (PRD step 5; review of #860 round 2).
+func TestADiscardAfterFinishDoesNotPutBackIntoAnImpostor(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, shown := keptWithWork(t)
+	ctx := context.Background()
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatal(err)
+	}
+	to := filepath.Join(dir, "clone")
+	aside := filepath.Join(dir, "paths", "scratch.txt")
+	asideBytes, err := os.ReadFile(aside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDiscardStep(dir, &last, discardStep{
+		Kind: discardStepPONR, From: tk.copy, To: to,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameNoReplace(tk.copy, to); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDiscardStep(dir, &last, discardStep{Kind: discardStepFinish}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(to); err != nil {
+		t.Fatal(err)
+	}
+	// Crash before paths/ deletion; impostor at the copy path.
+	if err := os.Mkdir(tk.copy, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(tk.copy, "impostor.txt"), "not the clone\n")
+
+	if err := s.cleaner.Discard(ctx, entry, "", shown.Digest); err != nil {
+		t.Fatalf("Discard after finish with impostor = %v", err)
+	}
+	if _, err := os.Lstat(aside); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("paths/ should be finished-deleted, not put back; aside still stands (%v)", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(tk.copy, "impostor.txt")); err != nil || string(raw) != "not the clone\n" {
+		t.Fatalf("impostor changed or gained put-back bytes: %q, %v (aside was %q)", raw, err, asideBytes)
+	}
+	if _, err := os.Lstat(filepath.Join(tk.copy, "scratch.txt")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal("set-aside was put back into the impostor")
+	}
 }
 
 // An impostor at the copy's path after a successful rename does not make

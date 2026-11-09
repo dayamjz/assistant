@@ -32,10 +32,10 @@ var ErrDiscardStateUnreadable = errors.New("tasks: which side of the discard's p
 // it puts everything back and clears the discard directory so a later
 // confirmation can begin; past that point it never puts back and only
 // finishes deletion. A stop past the point of no return is taken up on the
-// next call by reading the copy's path, never the journal alone. The
-// discard directory remains after a finished removal for the outcome owner
-// to delete. ErrLossChanged is a copy that moved under the discard after
-// the confirmed read.
+// next call by reading where the clone stands (its path and the journalled
+// ponr target), never the journal alone. The discard directory remains
+// after a finished removal for the outcome owner to delete. ErrLossChanged
+// is a copy that moved under the discard after the confirmed read.
 func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, digest string) error {
 	if !entry.TaskID.IsKnown() {
 		return fmt.Errorf("tasks: Discard of a run's worktree is not yet implemented")
@@ -126,11 +126,10 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 }
 
 // pastPointOfNoReturn reports whether the discard is past its point of no
-// return, reading the copy and not the journal alone (PRD): a clone that
-// stands at copyPath has not passed; one that stands at the journalled
-// ponr target (in the discard directory) has. A journalled finish with
-// both gone is a finished removal being retried. Anything else with a
-// ponr step and neither path standing is ErrDiscardStateUnreadable.
+// return from where the clone stands (PRD), not the journal alone: at the
+// journalled ponr target is past; a journalled finish is past even when
+// something stands at copyPath; at copyPath without finish is not; ponr
+// with neither path standing and no finish is ErrDiscardStateUnreadable.
 func pastPointOfNoReturn(copyPath string, j discardJournal) (bool, error) {
 	var to string
 	finished := false
@@ -154,6 +153,11 @@ func pastPointOfNoReturn(copyPath string, j discardJournal) (bool, error) {
 	case !errors.Is(toErr, fs.ErrNotExist):
 		return false, toErr
 	}
+	if finished {
+		// Finish already journalled: past. Retry deletes even when an
+		// impostor stands at the original path or both paths are gone.
+		return true, nil
+	}
 	_, fromErr := os.Lstat(copyPath)
 	switch {
 	case fromErr == nil:
@@ -161,9 +165,6 @@ func pastPointOfNoReturn(copyPath string, j discardJournal) (bool, error) {
 		return false, nil
 	case !errors.Is(fromErr, fs.ErrNotExist):
 		return false, fromErr
-	case finished:
-		// Both gone after a journalled finish: retry the deletes.
-		return true, nil
 	default:
 		// ponr journalled, rename never observed, both paths gone: refuse
 		// rather than finish-delete set-asides or put back into nothing.
