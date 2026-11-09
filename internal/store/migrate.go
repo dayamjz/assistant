@@ -160,7 +160,7 @@ func checkMigrationList(ms []migration) error {
 		if m.name == "" {
 			return fmt.Errorf("%w: migration %d has no name", ErrMigrationsMalformed, m.version)
 		}
-		if len(m.statements) == 0 {
+		if len(m.statements) == 0 && m.name != keptWorkAnswerCheckWidenMigration {
 			return fmt.Errorf("%w: migration %d has no statements", ErrMigrationsMalformed, m.version)
 		}
 	}
@@ -249,6 +249,16 @@ func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]migrationRecord
 // additive check runs inside that transaction against the catalog the
 // statements just produced, so a migration that fails it changes nothing.
 func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Redactor) error {
+	// SQLite refuses PRAGMA foreign_keys inside a transaction, and a CHECK
+	// rebuild must DROP the parent while children still reference it. The
+	// write pool is one connection (openPool single), so toggling here is the
+	// connection the transaction below uses; restore even when widen fails.
+	if m.name == keptWorkAnswerCheckWidenMigration {
+		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("store: disabling foreign keys to widen kept_work: %w", err)
+		}
+		defer func() { _, _ = db.ExecContext(ctx, `PRAGMA foreign_keys = ON`) }()
+	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -261,6 +271,11 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Red
 	}
 	if m.name == holdResolutionSealMigration && redact != nil {
 		if err := redactExistingHoldResolutionNotes(ctx, tx, redact); err != nil {
+			return err
+		}
+	}
+	if m.name == keptWorkAnswerCheckWidenMigration {
+		if err := widenKeptWorkAnswerCheck(ctx, tx); err != nil {
 			return err
 		}
 	}
