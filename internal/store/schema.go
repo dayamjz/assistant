@@ -3063,8 +3063,9 @@ var schema = []migration{
 		// Rebuilds kept_work so answer CHECK admits remove-anyway. The
 		// statements list is empty: applyMigration runs
 		// widenKeptWorkAnswerCheck when the name matches
-		// keptWorkAnswerCheckWidenMigration. Claim/Record for that answer
-		// are a later migration.
+		// keptWorkAnswerCheckWidenMigration. The empty digest cannot see an
+		// edit to that helper after this ships; change the rebuild only with
+		// a new migration. Claim/Record for that answer are a later migration.
 		version:    73,
 		name:       keptWorkAnswerCheckWidenMigration,
 		statements: nil,

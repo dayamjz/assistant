@@ -10,7 +10,8 @@ import (
 // keptWorkAnswerCheckWidenMigration names the migration that rebuilds
 // kept_work so its answer CHECK admits remove-anyway. It is a constant so
 // applyMigration can special-case the rebuild (statements alone cannot
-// ALTER a CHECK), the way holdResolutionSealMigration is.
+// ALTER a CHECK). Unlike holdResolutionSealMigration, this migration's
+// statements list is empty: the rebuild is entirely the Go helper.
 const keptWorkAnswerCheckWidenMigration = "kept work answers admit remove-anyway"
 
 // answerCheckLandCarryDiscard is the CHECK clause migration 51 wrote.
@@ -21,11 +22,11 @@ const answerCheckWithRemoveAnyway = "answer IN ('land', 'carry-on', 'discard', '
 
 // widenKeptWorkAnswerCheck rebuilds kept_work inside tx so its answer CHECK
 // admits remove-anyway, copying every row and recreating every index and
-// trigger that named the table. The caller turns foreign_keys off on the
-// connection before BeginTx (SQLite will not change that pragma inside a
-// transaction); children that reference kept_work keep their ids across the
-// drop. It writes no remove-anyway answer; Claim/Record for that answer are
-// a later migration.
+// trigger on that table. The caller turns foreign_keys off on the write
+// connection before BeginTx so child rows that reference kept_work survive
+// the drop; SQLite will not change that pragma inside a transaction. It
+// writes no remove-anyway answer; Claim/Record for that answer are a later
+// migration.
 func widenKeptWorkAnswerCheck(ctx context.Context, tx *sql.Tx) error {
 	var createSQL string
 	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'kept_work'`).Scan(&createSQL); err != nil {
@@ -48,9 +49,11 @@ func widenKeptWorkAnswerCheck(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	// Triggers whose bodies name kept_work (including wake and notification
-	// seals that SELECT from it) must go before DROP TABLE, or SQLite refuses
-	// the drop with "no such table" while those bodies still stand.
+	// Triggers on kept_work go with DROP TABLE; triggers on other tables
+	// whose bodies name kept_work (wake and notification seals) must be
+	// dropped first too: after the parent is gone, renaming the widened
+	// table into place fails while those bodies still stand. Save every
+	// matching trigger's SQL and put them all back after the rename.
 	triggers, err := schemaObjects(ctx, tx, `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND sql LIKE '%kept_work%'`)
 	if err != nil {
 		return err
@@ -85,6 +88,11 @@ func widenKeptWorkAnswerCheck(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// quoteIdent quotes a SQLite identifier that is already a known schema name.
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
 type schemaObject struct {
 	name, sql string
 }
@@ -107,9 +115,4 @@ func schemaObjects(ctx context.Context, tx *sql.Tx, query string) ([]schemaObjec
 		return nil, fmt.Errorf("store: listing schema objects: %w", err)
 	}
 	return out, nil
-}
-
-// quoteIdent quotes a SQLite identifier that is already a known schema name.
-func quoteIdent(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }

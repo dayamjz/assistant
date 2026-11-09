@@ -76,6 +76,12 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	if err != nil || len(wakes) == 0 || wakes[0].KeptWork != entry.ID {
 		t.Fatalf("after widen wakes = %+v, %v; want the wake naming entry %d (was %+v)", wakes, err, entry.ID, wake)
 	}
+	// Seals on kept_work must stand after the rebuild: DROP TABLE removes
+	// them, and a recreate that was skipped would still pass row/wake checks.
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET holds = '[]' WHERE id = ?`, entry.ID); err == nil ||
+		!strings.Contains(err.Error(), "written once") {
+		t.Fatalf("rewrite holds after widen = %v; want the written-once seal", err)
+	}
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'nope', answered_by = 'person', answered_at = ? WHERE id = ?`,
 		encodeTime(nowUTC()), entry.ID); err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
 		t.Fatalf("answer nope after widen = %v; want a CHECK refusal", err)
@@ -83,6 +89,10 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = 'person', answered_at = ? WHERE id = ?`,
 		encodeTime(nowUTC()), entry.ID); err != nil {
 		t.Fatalf("answer remove-anyway after widen = %v; want it admitted", err)
+	}
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answered_by = 'other' WHERE id = ?`, entry.ID); err == nil ||
+		!strings.Contains(err.Error(), "answered once") {
+		t.Fatalf("rewrite answered_by after widen = %v; want the answered-once seal", err)
 	}
 }
 
