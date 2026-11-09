@@ -177,8 +177,13 @@ func (r *codexRunner) Name() string { return CodexName }
 // reachable.
 //
 // Worker sessions are declared because Start runs `codex app-server` and
-// speaks the pipe protocol recorded from CLI 0.163.0. That thread is not
-// the fixer session. Terminal workers are not declared.
+// speaks the pipe protocol recorded from CLI 0.163.0 for initialize,
+// thread/start, and turn/start. CapabilityPipeInterrupt is separate: it is
+// app-server turn/interrupt as named by CLI 0.166.0's schema. New does not
+// refuse a CLI below that floor, so a 0.163.0 install still resolves with
+// pipe_interrupt advertised and an unknown-method error on interrupt rather
+// than an undeclared-capability refusal. That thread is not the fixer
+// session. Terminal workers are not declared.
 //
 // All four token counts are declared because `codex exec --json` prints
 // them on turn.completed and the reader reads each one: input_tokens,

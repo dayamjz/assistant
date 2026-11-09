@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -80,9 +81,10 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 }
 
 // Interrupt returns only after settled closes. Answering turn/interrupt
-// first and delaying turn/completed interrupted would leave a mutation
-// that returns true right after call green against every other interrupt
-// test, because those settle in the same receive burst as the cancel.
+// first and holding turn/completed interrupted until the test releases it
+// would leave a mutation that returns true right after call green against
+// every other interrupt test, because those settle in the same receive
+// burst as the cancel. The barrier is channel order, not a wall-clock bound.
 func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 	t.Parallel()
 	stdinR, stdinW := io.Pipe()
@@ -105,6 +107,7 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 		thread:  "thread-wait",
 	}
 	answered := make(chan struct{})
+	releaseSettle := make(chan struct{})
 	go func() {
 		defer stdinR.Close()
 		sc := bufio.NewScanner(stdinR)
@@ -118,25 +121,46 @@ func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 			}
 			w.receive([]byte(`{"id":` + string(req.ID) + `,"result":{}}`))
 			close(answered)
-			time.Sleep(75 * time.Millisecond)
+			<-releaseSettle
 			w.receive([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-wait","status":"interrupted"}}}`))
 			return
 		}
 	}()
 
-	start := time.Now()
-	got, err := w.Interrupt(t.Context())
-	elapsed := time.Since(start)
-	if err != nil || !got {
-		t.Fatalf("Interrupt: %t, %v", got, err)
-	}
+	done := make(chan error, 1)
+	go func() {
+		got, err := w.Interrupt(t.Context())
+		if err != nil || !got {
+			done <- fmt.Errorf("Interrupt: %t, %v", got, err)
+			return
+		}
+		done <- nil
+	}()
+
 	select {
 	case <-answered:
-	default:
+	case err := <-done:
+		if err == nil {
+			err = errors.New("Interrupt returned before turn/interrupt was answered")
+		}
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
 		t.Fatal("turn/interrupt was never answered")
 	}
-	if elapsed < 50*time.Millisecond {
-		t.Fatalf("Interrupt returned in %v, before the delayed turn/completed; the post-cancel wait on settled is untested", elapsed)
+	// Positive control: give a cancel-alone return time to lose before
+	// settle is released. The proof itself is channel order (answered
+	// before settle), not that Interrupt took at least N milliseconds.
+	select {
+	case err := <-done:
+		if err == nil {
+			err = errors.New("Interrupt returned on turn/interrupt alone")
+		}
+		t.Fatal(err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseSettle)
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
