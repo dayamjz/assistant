@@ -34,7 +34,7 @@ import (
 // The bare command is the empty name and is covered by the tests below rather
 // than here, because a command with no verb cannot be told from no arguments
 // at all.
-var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "watch", "doctor", "service", "db", "eject"}
+var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "dump", "watch", "doctor", "service", "db", "eject"}
 
 // unspecified are commands this product could plausibly have and that PRD
 // section 9 does not describe. A verb this surface needs and that section does
@@ -1248,7 +1248,7 @@ func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
 // incorrect usage rather than something it acts past: a mistyped subcommand
 // that starts the service and exits 0 is the one answer a driving agent
 // cannot recover from.
-var takesAnArgument = map[string]bool{"runs": true, "tasks": true}
+var takesAnArgument = map[string]bool{"runs": true, "tasks": true, "dump": true}
 
 func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 	t.Parallel()
@@ -1277,8 +1277,8 @@ func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 		t.Errorf("the command with no verb exited %s for an argument it does not take", got.code)
 	}
 
-	// And the two that do take one still take it.
-	for _, name := range []string{"runs", "tasks"} {
+	// And the ones that do take one still take it.
+	for _, name := range []string{"runs", "tasks", "dump"} {
 		if got := run(t, h, subject, name, "abc123"); got.code == machine.ExitUsage {
 			t.Errorf("assistant %s abc123 is refused as incorrect usage:\n%s", name, got.stderr)
 		}

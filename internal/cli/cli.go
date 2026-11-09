@@ -128,6 +128,7 @@ var verbs = []verb{
 	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent or replacing it with --intent; refused when you are on another commit.", rerun},
 	{"sync", "Reconcile your local branch with what the pipeline pushed, or recover work it holds.", syncBranch},
 	{"tasks", "List fleet work with its resolved current state.", listTasks},
+	{"dump", "Every record the resolver reads, as one JSON document, for a person to copy or feed to another tool.", dumpRecords},
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},
 	{"doctor", "Check every dependency, and decisively report whether a run can start at all.", doctor},
 	{"service", "Start, stop, restart, status.", serviceVerb},

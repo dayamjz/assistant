@@ -375,13 +375,13 @@ func Coverage() []Established {
 				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
 				"that prints no Go value; internal/cli's command-line tests drive init, doctor, eject " +
 				"and a push through the gate's hooks the same way. The renderers it enumerates as " +
-				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", write four of the five " +
+				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", write five of the six " +
 				"detailed evidence documents P13 names, the detail view, the relay of a finding that " +
-				"needs a decision, the usage view and the log view, each behind a phrase, and keep " +
+				"needs a decision, the usage view, the log view and the dump, each behind a phrase, and keep " +
 				"exact identifiers and stage names as P13 lets them; " +
 				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
 				"every line beside them, against counterfeits it must reject. The one it enumerates " +
-				"as a value, which is " + strings.Join(p13Value, ", ") + ", writes the fifth, section " +
+				"as a value, which is " + strings.Join(p13Value, ", ") + ", writes the sixth, section " +
 				"9's db path, alone, no pointer before it and no label beside it, because a caller " +
 				"composes that answer into another command line; it keeps the path P13's evidence " +
 				"exception lets it, and internal/cli's own test for the verb cites P13 for writing " +
@@ -438,7 +438,7 @@ var (
 		"kept work answer", "task answer", "catch up", "marked seen", "task created", "task message", "task interrupt", "task stop", "task peek", "task relaunch", "task relay",
 		"task promotion", "wakes", "queued wakes", "wakes acknowledged", "coordinator catch up", "supervision", "domain delegated", "delegation ended",
 		"worker event", "fallback"}
-	p13Evidence  = []string{"details", "findings", "usage", "log"}
+	p13Evidence  = []string{"details", "findings", "usage", "log", "dump"}
 	p13Value     = []string{"database"}
 	p13Remaining []string
 )
