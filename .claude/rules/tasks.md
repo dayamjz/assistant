@@ -101,8 +101,8 @@ paths: ["internal/tasks/**"]
   lost with what it holds, decided from the copy and never from what git
   reports changed, and the indicators; the header names what it does not
   cover), refusing an unestablished entry. `Cleaner.Discard` removes a
-  task's clone on a confirmed digest; the service discard answer calls it
-  for that case. A
+  task's clone or a run's worktree on a confirmed digest; the service
+  discard answer calls it for both. A
   run's record in the gate is taken
   from the gate's own registry (`vcs.WorktreeRecords`, read from the gate
   and held to git's listing) and never by following the copy's `.git`,
