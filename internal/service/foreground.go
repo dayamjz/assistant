@@ -14,8 +14,9 @@ import (
 // task.respond on the local landing's approval hold, which PRD section 6
 // gives the person ("You approve") and which local.go raises, and
 // keptwork.answer given a discard's confirmation, the other answer section
-// 6 gives the person alone (keptdiscard.go, which refuses a confirmation
-// this relation admits as well while its removal is deferred).
+// 6 gives the person alone (keptdiscard.go: a task's clone is removed once
+// this relation admits the confirmation; a run's worktree confirmation is
+// still refused after that admission).
 //
 // # Why this fact
 //

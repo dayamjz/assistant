@@ -24,10 +24,10 @@ type KeptWorkAnswerRequest struct {
 	Answer string `json:"answer"`
 	// Confirm is, with a discard answer, the digest a discard shown
 	// beforehand carried (KeptWorkLoss.Digest): without it a discard shows
-	// what would be lost and removes nothing. With it the answer is refused
-	// and changes nothing (PhraseDiscardRemovalDeferred): removal on a
-	// confirmed discard is deferred to AGE-486 (docs/prd.md, sections 6 and
-	// 9). It is refused with any other answer.
+	// what would be lost and removes nothing. With it, a task's clone is
+	// removed on that confirmation from a terminal's foreground; a run's
+	// worktree confirmation is still refused
+	// (PhraseDiscardRemovalDeferred). It is refused with any other answer.
 	Confirm string `json:"confirm,omitempty"`
 }
 
@@ -85,7 +85,9 @@ type KeptWorkLoss struct {
 	Untracked bool `json:"untracked"`
 	Stash     bool `json:"stash"`
 	// Digest seals exactly this and nothing else, each file by what it
-	// holds: the value a confirmation names, which this build refuses.
+	// holds: the value a confirmation names. A task's clone is removed
+	// when that digest still seals the copy; a run's worktree
+	// confirmation is still refused (PhraseDiscardRemovalDeferred).
 	Digest string `json:"digest"`
 }
 
@@ -178,18 +180,22 @@ const (
 	KeptWorkCarriedOn KeptWorkEffect = "carried-on"
 	// KeptWorkDiscardShown is a discard given without Confirm: Loss says
 	// exactly what would be lost, with its digest, and nothing was recorded
-	// or removed. It is the one effect a discard answer has in this build.
+	// or removed.
 	KeptWorkDiscardShown KeptWorkEffect = "discard-shown"
+	// KeptWorkDiscarded is a discard given with Confirm: the copy was
+	// removed and the entry answered discard.
+	KeptWorkDiscarded KeptWorkEffect = "discarded"
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
 // it stands after the answer, what the answer did, and for a landing the
-// run it started. A land or a carry on records its answer on the entry; a
-// discard shown records nothing, so its entry is as it was, still open
-// (KeptWorkDiscardShown).
+// run it started. A land, carry on or confirmed discard records its answer
+// on the entry; a discard shown records nothing, so its entry is as it
+// was, still open (KeptWorkDiscardShown).
 type KeptWorkAnswered struct {
-	// Entry is the entry as the answer left it: answered for a land or a
-	// carry on, and unchanged and open for a discard shown.
+	// Entry is the entry as the answer left it: answered for a land, a
+	// carry on or a confirmed discard, and unchanged and open for a
+	// discard shown.
 	Entry store.KeptWork `json:"entry"`
 	// Effect is what the answer did.
 	Effect KeptWorkEffect `json:"effect"`
@@ -221,13 +227,17 @@ var phraseKeptWorkCarriedOn = Phrase{
 // prints them: each commit, object and file of KeptWorkLoss on a line of
 // its own after a label, as machine text a person copies exactly, and the
 // digest last, or PhraseKeptWorkLosesNothing when nothing is listed.
-// Removing the copy on a confirmed discard is not in this build
-// (docs/prd.md, sections 6 and 9), so the row says what lets the
-// work that would start where that copy stands go ahead instead.
 var phraseKeptWorkDiscardShown = Phrase{
-	Outcome:     "Nothing was removed: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
-	Consequence: "The copy stays, with everything it holds; removing it on your confirmation is not in this build.",
-	Decision:    "To let new work that would start where that copy stands go ahead, answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything listed below that you want to keep.",
+	Outcome:     "Nothing was removed yet: discarding that local copy would lose what is listed below, and the digest under it seals exactly that list.",
+	Consequence: "The copy stays, with everything it holds, until you confirm with that digest.",
+	Decision:    "Repeat the discard with --confirm and the digest below, at a terminal in the foreground and without --json, to remove a task's clone; a run's worktree confirmation is still refused until that removal is built; or answer land or carry-on instead.",
+}
+
+// phraseKeptWorkDiscarded is the row a confirmed discard reads as.
+var phraseKeptWorkDiscarded = Phrase{
+	Outcome:     "That local copy was removed on your confirmed discard.",
+	Consequence: "What it contained is gone, and new work that would start where it stood is no longer blocked by it.",
+	Decision:    "Nothing further to decide about that copy.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
@@ -239,14 +249,13 @@ var PhraseKeptWorkLosesNothing = Phrase{
 	Decision:    "Nothing to decide about what would be lost.",
 }
 
-// PhraseDiscardRemovalDeferred is the row for a discard given --confirm:
-// removal on a confirmed discard is deferred to AGE-486 (docs/prd.md,
-// sections 6 and 9), so the answer is refused before the copy is read and
-// changes nothing, the copy and its entry as they were.
+// PhraseDiscardRemovalDeferred is the row for a discard confirmation of a
+// run's worktree: removal of a worktree on confirmation is not yet
+// implemented, so the answer is refused and changes nothing.
 var PhraseDiscardRemovalDeferred = Phrase{
-	Outcome:     "Nothing was removed, because removing a local copy on a confirmed discard is not in this build.",
-	Consequence: "The copy stays, with everything it holds, and new work that would start where it stands still waits on it.",
-	Decision:    "Answer land or carry-on instead, or commit or remove what is uncommitted and send the copy's commits somewhere safe yourself; the program then removes the copy once it finds those commits there, and what it does not check goes with it, files git ignores among them, so first copy out anything a discard would show as lost that you want to keep.",
+	Outcome:     "Nothing was removed, because removing a run's worktree on a confirmed discard is not in this build yet.",
+	Consequence: "The copy stays, with everything it contains, and new work that would start where it stands is still blocked by it.",
+	Decision:    "Answer land or carry-on instead, or ask again once a later build removes a worktree on confirmation the way it removes a task's clone.",
 }
 
 // PhraseDiscardNeedsTerminal is the row for a discard confirmation given
@@ -254,12 +263,11 @@ var PhraseDiscardRemovalDeferred = Phrase{
 // off a terminal, where the command line refuses it before the service is
 // asked, and from a peer the service does not place in a terminal's
 // foreground (PRD section 6, "Removing a discarded copy"). The copy and its
-// entry are as they were. Removal on a confirmed discard is still deferred
-// to AGE-486, so the row promises none.
+// entry are as they were.
 var PhraseDiscardNeedsTerminal = Phrase{
 	Outcome:     "Nothing was removed, because a discard is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
 	Consequence: "The copy stays, with everything it holds, and nothing was recorded.",
-	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json; removing the copy on a confirmed discard is not in this build yet, so to let new work go ahead answer land or carry-on instead.",
+	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json.",
 }
 
 // The two carry-on slot refusals below are read by a person after the
@@ -310,12 +318,14 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 		return phraseKeptWorkCarriedOn
 	case KeptWorkDiscardShown:
 		return phraseKeptWorkDiscardShown
+	case KeptWorkDiscarded:
+		return phraseKeptWorkDiscarded
 	}
 	return phraseKeptWorkLanded
 }
 
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
-	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, PhraseKeptWorkLosesNothing,
-		PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
+	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded,
+		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }

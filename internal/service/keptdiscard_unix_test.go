@@ -14,15 +14,11 @@ import (
 )
 
 // A discard's confirmation is admitted by the service only from a peer in
-// the foreground of its controlling terminal, foreground.go's relation,
-// decided from the kernel's lineage and not from the command line (PRD
-// section 6, "Removing a discarded copy"). The preview is served to a peer
-// with no terminal. A confirmation from that peer over the socket itself is
-// refused with the not-at-terminal code and the row saying so, and nothing
-// is recorded and the copy stands. The same confirmation from a process in
-// a terminal's foreground passes the relation and meets the deferral,
-// since removal is not in this build. Without the relation in the service,
-// the detached peer's confirmation is refused as deferred instead.
+// the foreground of its controlling terminal. The preview is served to a
+// peer with no terminal. A confirmation from that peer is refused with
+// not-at-terminal. A run's worktree confirmation from a terminal's
+// foreground still meets the worktree deferral (Discard of a worktree is
+// not yet implemented).
 func TestADiscardIsConfirmedOnlyFromATerminalsForeground(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
