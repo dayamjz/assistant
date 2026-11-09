@@ -69,7 +69,6 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = inc
-	_ = wakeID
 	_, err = older.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = 'person', answered_at = ? WHERE id = ?`,
 		encodeTime(nowUTC()), entryID)
 	if err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
@@ -101,6 +100,21 @@ func TestKeptWorkAnswerCheckAdmitsRemoveAnywayAfterWiden(t *testing.T) {
 	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work SET answer = 'nope', answered_by = 'person', answered_at = ? WHERE id = ?`,
 		encodeTime(nowUTC()), entryID); err == nil || !strings.Contains(strings.ToUpper(err.Error()), "CHECK") {
 		t.Fatalf("answer nope after widen = %v; want a CHECK refusal", err)
+	}
+	// Sibling wake and notification seals are dropped for the rename and
+	// must be put back: a rebuild that only restores kept_work's own
+	// triggers still passes the checks above.
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work_wake SET kind = 'rewritten' WHERE id = ?`, wakeID); err == nil ||
+		!strings.Contains(err.Error(), "kept work wake") {
+		t.Fatalf("rewrite wake kind after widen = %v; want the wake append seal", err)
+	}
+	notif, err := opened.ClaimKeptWorkNotification(ctx, wakeID)
+	if err != nil {
+		t.Fatalf("claim kept-work notification after widen = %v", err)
+	}
+	if _, err := opened.write.ExecContext(ctx, `UPDATE kept_work_notification SET claimed_at = 'rewritten' WHERE kept_work_wake_id = ?`,
+		notif.WakeID); err == nil || !strings.Contains(err.Error(), "claimed once") {
+		t.Fatalf("rewrite notification claim after widen = %v; want the claim seal", err)
 	}
 	// After migration 74 the remove-anyway answer needs its claim columns;
 	// the CHECK itself is what link 1 widened.
