@@ -39,6 +39,13 @@ the file read-only. The command enforces nothing about that and promises
 nothing about the read, and this is a read for debugging: the task reads above
 are what you decide from, never what you find in the file.
 
+`assistant --json dump` writes every record the resolver reads (tasks,
+attempts, holds, runs), plus the task wakes and kept work, as one JSON
+document, redacted on the way out. Given a task identifier it narrows to that
+task. It is read-only and asks the service nothing. Use it when you want a
+copy to diff, attach or feed to another tool. It is a snapshot, not the live
+store: the database stays the source of truth.
+
 ## The watch digest
 
 `assistant --json watch --once` carries a `digest` of that read: counts of

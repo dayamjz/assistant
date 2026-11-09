@@ -111,6 +111,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 | `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
 | `assistant --json status` | Consume structured status and find the repository identifier |
 | `assistant db path` | Print the home's database file, to point a reader of your own at the records; open it read-only (`sqlite3 -readonly "$(assistant db path)"`) |
+| `assistant --json dump` | Write every record the resolver reads, plus task wakes and kept work, as one JSON document (optional task ID); a read-only snapshot, not a substitute for the database |
 
 ## 1. Give each agent a job
 
