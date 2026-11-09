@@ -24,11 +24,12 @@ import (
 // Discarding kept work: PRD section 6's "you name the copy, the program
 // shows exactly what will be lost, and it removes the copy only on that
 // answer". This file is the half of that the copy itself decides: what
-// would be lost, read from the copy and the entry now. The removal on a
-// confirmed discard is deferred to AGE-486 (docs/prd.md, sections 6 and
-// 9): nothing in this build removes a copy on a discard answer, and
-// internal/service refuses the confirmation. Loss is also what a land
-// decides from. Nothing here records or removes anything.
+// would be lost, read from the copy and the entry now. Cleaner.Discard
+// (kept_discard_run.go) removes a task's clone on a confirmed digest
+// through its point of no return; the service answer that calls it, and a
+// run's worktree removal, remain later links, so internal/service still
+// refuses a discard confirmation. Loss is also what a land decides from.
+// Nothing here records a discard's claim or outcome.
 //
 // # What would be lost
 //
@@ -131,18 +132,16 @@ import (
 // one this worktree made on a commit none of them records any more is not
 // shown, nor destroyed, since the gate's stash stands.
 //
-// # The removal is deferred
+// # The removal
 //
-// PRD section 6's removal on a confirmed discard is deferred to AGE-486.
-// The discard directory and journal (beginDiscard, kept_journal.go), the
-// move aside (moveAsRead in kept_state.go), put-back of move/writeBack
-// (kept_putback.go), and set-aside of working-tree loss file paths
-// (setAsideLoss in kept_setaside.go) are on main; no discard answer calls
-// them yet, and nothing in this build removes a copy on a discard answer.
-// HEAD/ref set-aside, staged/repository paths, and Cleaner.Discard's
-// point of no return remain later links. In this build a copy kept for
-// its work is removed only by P12 cleanup on a proof (cleanup.go), which
-// is what closes its entry once its work is pushed somewhere safe.
+// Cleaner.Discard (kept_discard_run.go) removes a task's clone on a
+// confirmed digest: beginDiscard, setAsideLoss, a clean read, the point of
+// no return rename into the discard directory, and finish. HEAD/ref
+// set-aside, staged paths, a run's worktree, and the service answer that
+// claims and records the outcome remain later links; no discard answer
+// calls Discard yet. Until that answer lands, a copy kept for its work is
+// also removed by P12 cleanup on a proof (cleanup.go), which is what
+// closes its entry once its work is pushed somewhere safe.
 
 // Loss is what discarding a kept copy would lose, as read now.
 type Loss struct {
