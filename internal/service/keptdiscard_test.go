@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -26,22 +27,9 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 	return machine.KeptWorkAnswerRequest{Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptDiscard), Confirm: confirm}
 }
 
-// PRD section 6's discard as this build takes it (docs/prd.md, sections 6
-// and 9, the owner's decision of 2026-10-25), through the real socket on a
-// run's kept copy, a worktree of the gate. A discard alone shows exactly
-// what would be lost, the commit the default branch lacks and the digest
-// of the copy's state, naming no path of its working tree, the .git file
-// pointing at the gate among them; it records nothing, the entry reads as
-// it did and is still listed, and the worktree's files, index, references
-// and logs are as they were (its read may add objects it fetches). A
-// confirmation, with the digest shown or with another, is refused with the
-// row saying the removal is not in this build, before the copy is read:
-// the copy, its objects included, and the gate are byte for byte as they
-// were, and the entry, field for field but when it last surfaced, still
-// open and listed, so it still
-// holds the new tasks of its project on its branch (P6, a refused discard keeps the copy and
-// its entry). Before, the confirmation on the digest shown removed the
-// copy and answered the entry.
+// A discard of a run's worktree alone shows what would be lost; a
+// confirmation is still refused (Cleaner.Discard of a worktree is not yet
+// implemented), leaving the copy and entry as they were (P6).
 func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -102,7 +90,7 @@ func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
 		for _, confirm := range []string{shown.Loss.Digest, "not-the-digest"} {
 			_, err := answer(confirm)
 			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), machine.PhraseDiscardRemovalDeferred.String()) {
-				t.Fatalf("a confirmation with %q = %v; want it refused with the row saying removal is not in this build", confirm, err)
+				t.Fatalf("a confirmation with %q = %v; want it refused with the worktree-deferred row", confirm, err)
 			}
 			if now := fileTree(t, entry.CopyPath, nil); now != copyShown {
 				t.Fatalf("the refused confirmation changed the worktree:\n%s\nwant\n%s", now, copyShown)
@@ -160,6 +148,94 @@ func fileTree(t *testing.T, root string, keep func(rel string) bool) string {
 	}
 	slices.Sort(lines)
 	return strings.Join(lines, "\n")
+}
+
+// A confirmed discard of a task's clone removes the copy and answers the
+// entry (PRD section 6; P6/P15). Fail-before: confirmation was refused with
+// PhraseDiscardRemovalDeferred and the copy stood.
+func TestAConfirmedDiscardOfATasksCloneRemovesTheCopy(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
+			shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var done machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil ||
+			done.Effect != machine.KeptWorkDiscarded || done.Entry.Answer.Or("") != store.KeptDiscard {
+			t.Fatalf("the confirmed discard = %+v, %v; want discarded", done, err)
+		}
+		if _, err := os.Stat(entry.CopyPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the copy still stands at %s after confirmation: %v", entry.CopyPath, err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Open() ||
+			still.Answer.Or("") != store.KeptDiscard || !still.DiscardedAt.IsKnown() {
+			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard", still, err)
+		}
+	})
+}
+
+// A standing discard claim whose copy is gone before removal is refused and
+// the claim is taken back (no discard directory stands), so land and carry-on
+// are answerable again and completeDiscardsAtOpen does not retry a lasting
+// refusal forever (PRD #discard-removal).
+func TestADiscardClaimIsWithdrawnWhenTheCopyIsGone(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptDiscard)}
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
+			shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" {
+			t.Fatalf("the discard shown = %+v, %v", shown, err)
+		}
+		writer, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.ClaimKeptWorkDiscard(ctx, entry.ID, shown.Loss.Digest, shown.Loss.Lacks, store.ResolvedByPerson()); err != nil {
+			_ = writer.Close()
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(entry.CopyPath); err != nil {
+			t.Fatal(err)
+		}
+		request.Confirm = shown.Loss.Digest
+		var out machine.KeptWorkAnswered
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("confirm with the copy gone = %+v, %v; want refused", out, err)
+		}
+		still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
+		if err != nil || !still.Open() || still.DiscardClaimed() {
+			t.Fatalf("after the refusal the entry reads %+v, %v; want it open with no discard claim", still, err)
+		}
+	})
 }
 
 // A discard whose basis cannot be established now is refused naming why,
@@ -824,10 +900,9 @@ func hasLostPath(files []machine.KeptWorkLostPath, want machine.KeptWorkLostPath
 // confirmation as without one (the full review of 04c4696): the entry is
 // carried on, so its copy moved and its branch's dispatch is free, and a
 // discard given --confirm is refused naming the first answer and never
-// with the row saying removal is deferred, whose advice to answer land or
-// carry on, and that that branch still waits, would be wrong. Before, the
-// confirmation was refused as deferred before the entry was read as
-// answered.
+// with the worktree-deferred row, whose advice to answer land or carry on,
+// and that that branch still waits, would be wrong. Before, a confirmation
+// was refused as deferred before the entry was read as answered.
 func TestADiscardOfAnAnsweredEntryIsRefusedAsAnsweredWithOrWithoutAConfirmation(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

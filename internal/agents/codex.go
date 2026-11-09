@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
 // CodexName is the name configuration spells this adapter with.
@@ -141,22 +143,71 @@ func (f *codexFactory) Declares() Capabilities { return codexDeclaration }
 
 // New reports whether Codex can be run here, and returns a Runner when it can.
 //
-// What availability means here is exactly one thing: the named executable
-// resolves to a file this process may execute. An installation that resolves
-// and then fails on its first invocation, because it is unauthenticated or of
-// an incompatible version, is not caught here; it surfaces as a failed
-// invocation with the agent's own message.
+// Availability is the named executable resolving to a file this process may
+// execute, and reporting a CLI version at least codexPipeInterruptMinVersion
+// (pipe_interrupt's turn/interrupt surface). An installation that resolves and
+// then fails on its first invocation because it is unauthenticated is not
+// caught here; it surfaces as a failed invocation with the agent's own message.
 func (f *codexFactory) New(ctx context.Context, args []string) (Runner, error) {
-	_ = ctx
 	resolved, err := exec.LookPath(f.settings.bin)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not runnable: %w", f.settings.bin, err)
+	}
+	if err := requireCodexPipeInterruptVersion(ctx, resolved); err != nil {
+		return nil, err
 	}
 	return &codexRunner{
 		settings: f.settings,
 		resolved: resolved,
 		extra:    slices.Clone(args),
 	}, nil
+}
+
+// codexPipeInterruptMinVersion is the lowest Codex CLI that names
+// turn/interrupt the way CapabilityPipeInterrupt declares. Below it, New
+// refuses so pipe_interrupt is not advertised for an install that cannot serve it.
+const codexPipeInterruptMinVersion = "0.166.0"
+
+// ErrCodexVersion is the refusal of a Codex binary below codexPipeInterruptMinVersion.
+var ErrCodexVersion = errors.New("agents: the Codex CLI is older than the pipe_interrupt surface")
+
+// requireCodexPipeInterruptVersion refuses a binary whose --version is below
+// codexPipeInterruptMinVersion, or that does not report a codex-cli version.
+func requireCodexPipeInterruptVersion(ctx context.Context, binary string) error {
+	bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := procgroup.Command(binary, "--version")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := procgroup.Run(bounded, cmd, time.Second); err != nil {
+		return fmt.Errorf("reading the Codex version: %w", err)
+	}
+	fields := strings.Fields(stdout.String())
+	if len(fields) < 2 || fields[0] != "codex-cli" {
+		return fmt.Errorf("%w: reported %q, want codex-cli %s or later", ErrCodexVersion, strings.TrimSpace(stdout.String()), codexPipeInterruptMinVersion)
+	}
+	if codexVersionLess(fields[1], codexPipeInterruptMinVersion) {
+		return fmt.Errorf("%w: reported %s, want %s or later", ErrCodexVersion, fields[1], codexPipeInterruptMinVersion)
+	}
+	return nil
+}
+
+// codexVersionLess reports whether a is a dotted numeric version below b.
+func codexVersionLess(a, b string) bool {
+	ap, bp := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(ap) || i < len(bp); i++ {
+		var ai, bi int
+		if i < len(ap) {
+			ai, _ = strconv.Atoi(ap[i])
+		}
+		if i < len(bp) {
+			bi, _ = strconv.Atoi(bp[i])
+		}
+		if ai != bi {
+			return ai < bi
+		}
+	}
+	return false
 }
 
 // codexRunner runs prompts through one Codex installation.
@@ -177,8 +228,13 @@ func (r *codexRunner) Name() string { return CodexName }
 // reachable.
 //
 // Worker sessions are declared because Start runs `codex app-server` and
-// speaks the pipe protocol recorded from CLI 0.163.0. That thread is not
-// the fixer session. Terminal workers are not declared.
+// speaks the pipe protocol recorded from CLI 0.163.0 for initialize,
+// thread/start, and turn/start, answering the command approvals recorded
+// from CLI 0.166.0. CapabilityPipeInterrupt is app-server turn/interrupt as
+// named by that same 0.166.0 schema; New refuses a CLI below
+// codexPipeInterruptMinVersion so the capability is not advertised for an
+// install that cannot serve it. That thread is not the fixer session.
+// Terminal workers are not declared.
 //
 // All four token counts are declared because `codex exec --json` prints
 // them on turn.completed and the reader reads each one: input_tokens,

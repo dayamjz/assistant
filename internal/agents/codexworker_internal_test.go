@@ -1,12 +1,19 @@
 package agents
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"maps"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // The interrupt fixture is the request and follow-on notifications Codex
@@ -76,6 +83,101 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 	}
 }
 
+// Interrupt returns only after settled closes. Answering turn/interrupt
+// first and holding turn/completed interrupted until the test releases it
+// would leave a mutation that returns true right after call green against
+// every other interrupt test, because those settle in the same receive
+// burst as the cancel. Not parallel: it swaps waitAfterCodexInterruptCancel.
+func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	settled := make(chan struct{})
+	w := &codexWorker{
+		procWorker: &procWorker{
+			stdin:        stdinW,
+			out:          &tailWriter{limit: 1 << 20},
+			availability: &workerAvailability{},
+			done:         make(chan struct{}),
+			slot:         make(chan struct{}, 1),
+			frame:        plainLine,
+			format:       OutputStreamJSON,
+			stdinOpen:    true,
+		},
+		pending: map[uint64]chan codexMessage{},
+		send:    make(chan struct{}, 1),
+		settled: settled,
+		turn:    "turn-wait",
+		thread:  "thread-wait",
+	}
+	releaseSettle := make(chan struct{})
+	reachedWait := make(chan struct{})
+	oldWait := waitAfterCodexInterruptCancel
+	t.Cleanup(func() { waitAfterCodexInterruptCancel = oldWait })
+	// Replacement waits on settled itself so a hook that only signals entry
+	// and returns true cannot pass: Interrupt must still be blocked until
+	// settle is released.
+	waitAfterCodexInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}, endedErr func() error) (bool, error) {
+		close(reachedWait)
+		select {
+		case <-settled:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-ended:
+			return false, endedErr()
+		}
+	}
+	go func() {
+		defer stdinR.Close()
+		sc := bufio.NewScanner(stdinR)
+		for sc.Scan() {
+			var req struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(sc.Bytes(), &req) != nil || req.Method != "turn/interrupt" {
+				continue
+			}
+			w.receive([]byte(`{"id":` + string(req.ID) + `,"result":{}}`))
+			<-releaseSettle
+			w.receive([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-wait","status":"interrupted"}}}`))
+			return
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		got, err := w.Interrupt(t.Context())
+		if err != nil || !got {
+			done <- fmt.Errorf("Interrupt: %t, %w", got, err)
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case <-reachedWait:
+	case err := <-done:
+		if err == nil {
+			err = errors.New("Interrupt returned on turn/interrupt alone")
+		}
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Interrupt never reached the post-cancel settle wait")
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			err = errors.New("Interrupt returned before settle after reaching the wait")
+		}
+		t.Fatal(err)
+	default:
+	}
+	close(releaseSettle)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The lines in testdata are the Codex CLI 0.163.0's app-server frames,
 // recorded from a live stdio session that answered "ready". The home path
 // in those frames is replaced; the method names, the thread id's place,
@@ -127,6 +229,165 @@ func TestRecordedCodexAppServerFramesDriveTheWorker(t *testing.T) {
 	case <-settled:
 	default:
 		t.Fatal("the recorded idle status did not finish the turn")
+	}
+}
+
+// recordedReplies is the standard input of a worker the recorded frames
+// drive: every reply the worker writes, as written.
+type recordedReplies struct {
+	mu    sync.Mutex
+	lines bytes.Buffer
+}
+
+func (r *recordedReplies) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lines.Write(p)
+}
+
+func (r *recordedReplies) Close() error { return nil }
+
+// decisions reads back each reply's decision, by the request id it answers.
+func (r *recordedReplies) decisions(t *testing.T) map[int]string {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := map[int]string{}
+	for _, line := range strings.Split(strings.TrimSpace(r.lines.String()), "\n") {
+		var reply struct {
+			ID     int `json:"id"`
+			Result struct {
+				Decision string `json:"decision"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &reply); err != nil {
+			t.Fatalf("the worker wrote %q, not a reply: %v", line, err)
+		}
+		out[reply.ID] = reply.Result.Decision
+	}
+	return out
+}
+
+// The lines in testdata are the Codex CLI 0.166.0's app-server frames of
+// one turn that asked for three shell commands, recorded from a live stdio
+// session this adapter drove. Each command came to the client as
+// item/commandExecution/requestApproval of kind command whose command
+// string is the shell line the CLI runs, /bin/zsh -lc and the command in
+// single quotes; the adapter declined the echo and accepted the git commit
+// and the git push, and the CLI completed the declined item as declined
+// and ran the accepted two, the push reaching a repository outside the
+// workspace. The paths in those frames are replaced, the initialize
+// result's user agent is cut to the CLI and platform, its home path and
+// the thread's instruction sources are blanked, and notifications the
+// adapter does not read (account, rate-limit, token-usage, MCP-startup and
+// moderation frames) are left out; every other line is the bytes the CLI
+// wrote. Replayed into the worker, the same three requests are answered as
+// they were on the wire, with a worker grant and no route, and the turn
+// settles on the final idle.
+func TestRecordedCodexApprovalsAreAnsweredOnTheWorkerGrant(t *testing.T) {
+	raw, err := os.ReadFile("testdata/codex-app-server-approvals-0.166.0.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replies := &recordedReplies{}
+	settled := make(chan struct{})
+	w := &codexWorker{
+		procWorker: &procWorker{
+			out: &tailWriter{limit: 1 << 20}, availability: &workerAvailability{},
+			stdin: replies, stdinOpen: true, frame: plainLine,
+			done: make(chan struct{}), slot: make(chan struct{}, 1),
+		},
+		settled: settled,
+	}
+	commands := map[int]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var request struct {
+			ID     *int   `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Kind    string `json:"kind"`
+				Command string `json:"command"`
+			} `json:"params"`
+		}
+		if json.Unmarshal([]byte(line), &request) == nil && request.ID != nil && request.Method == "item/commandExecution/requestApproval" {
+			if request.Params.Kind != "command" {
+				t.Fatalf("the recorded approval %d is of kind %q", *request.ID, request.Params.Kind)
+			}
+			commands[*request.ID] = request.Params.Command
+		}
+		w.receive([]byte(line))
+	}
+	want := map[int]string{0: "decline", 1: "accept", 2: "accept"}
+	if got := replies.decisions(t); !maps.Equal(got, want) {
+		t.Fatalf("the recorded approvals %v were answered %v, want %v", commands, got, want)
+	}
+	if !strings.HasPrefix(commands[2], "/bin/zsh -lc 'git push ") {
+		t.Fatalf("the recorded push was asked as %q, not inside the shell line this test is about", commands[2])
+	}
+	select {
+	case <-settled:
+	default:
+		t.Fatal("the recorded idle did not finish the turn")
+	}
+	if !strings.Contains(w.Capture().Text, "PROBE_DONE") {
+		t.Fatalf("the recorded final answer was not captured: %s", w.Capture().Text)
+	}
+}
+
+// codexApprovedCommand reads a shell string only in the form the recording
+// shows: the command inside its single quotes is what the grant is held
+// to, a shell string in any other form is declined whatever it would run,
+// and a string whose first word is no shell is read as the command itself.
+func TestACodexApprovalIsReadInsideItsShellLine(t *testing.T) {
+	w := &codexWorker{route: "/opt/assistant worker"}
+	for _, test := range []struct {
+		command string
+		allowed bool
+	}{
+		{"/bin/zsh -lc 'git push origin HEAD:refs/heads/probe'", true},
+		{"/bin/bash -c 'git status'", true},
+		{"/bin/sh -lc 'git'", true},
+		{"/bin/sh -lc git", false},
+		{"zsh", false},
+		{"/bin/zsh -lc 'git status' ", false},
+		{"git push origin task/one", true},
+		{"/bin/zsh -lc '/opt/assistant worker event done'", true},
+		{"/bin/zsh -lc 'echo declined-probe'", false},
+		{"/bin/zsh -lc 'git status; rm -rf .'", false},
+		{"/bin/zsh -lc 'git commit -m '\"'\"'it'\"'\"''", false},
+		{"/bin/zsh -lc git' push'", false},
+		{"/bin/zsh -l -c 'git status'", false},
+		{"/usr/bin/fish -c 'git status'", false},
+		{"/bin/zsh -lc 'git status' extra", false},
+		{"/bin/zsh -lc ''", false},
+		{"/bin/zsh -lc", false},
+		{"", false},
+	} {
+		if got := w.commandAllowed(test.command); got != test.allowed {
+			t.Errorf("commandAllowed(%q) = %t, want %t", test.command, got, test.allowed)
+		}
+	}
+}
+
+// A command approval of any kind but command is declined whatever command
+// it names: writeStdin is input to a process already running, and null is
+// no kind the schema has. An approval with no kind, a server older than the
+// field, is a command, as the schema's default says.
+func TestACodexApprovalToWriteStdinIsDeclined(t *testing.T) {
+	for kind, want := range map[string]string{`"writeStdin"`: "decline", `"command"`: "accept", "null": "decline", "": "accept"} {
+		replies := &recordedReplies{}
+		w := &codexWorker{procWorker: &procWorker{
+			stdin: replies, stdinOpen: true, frame: plainLine,
+			done: make(chan struct{}), slot: make(chan struct{}, 1),
+		}}
+		field := ""
+		if kind != "" {
+			field = `"kind":` + kind + `,`
+		}
+		w.receive([]byte(`{"method":"item/commandExecution/requestApproval","id":7,"params":{` + field + `"command":"/bin/zsh -lc 'git status'"}}`))
+		if got := replies.decisions(t)[7]; got != want {
+			t.Errorf("an approval of kind %s was answered %q, want %q", kind, got, want)
+		}
 	}
 }
 

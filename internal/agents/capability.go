@@ -46,7 +46,9 @@ const (
 	// mode, and the scripted adapter the tests run against declares it over
 	// plain lines. Cursor declares it over ACP session/prompt messages.
 	// Codex declares it over the app-server protocol recorded from CLI
-	// 0.163.0: initialize, initialized, thread/start, and turn/start.
+	// 0.163.0: initialize, initialized, thread/start, and turn/start, with
+	// the command approvals a worker's git and route run under recorded
+	// from CLI 0.166.0.
 	// The conformance suite holds these declarations to the
 	// mechanism against the stand-in, which is all it can hold them to: the
 	// package documentation states what that does not establish about the
@@ -117,14 +119,16 @@ const (
 	// it. InterruptibleWorker.Interrupt is the mechanism,
 	// InterruptPipeWorker the route this package serves, and a Runner that
 	// carries pipeInterrupter is what Resolve checks a declaration against.
-	// Codex declares it over app-server turn/interrupt; completeTurn settles
-	// TurnStatus interrupted, and the schema fixture plus conformance probe
-	// hold the stand-in to CLI 0.166.0's TurnInterruptParams. Cursor declares
-	// it over ACP session/cancel, held to the stand-in's model of the
-	// documented CancelNotification (stopReason cancelled). Claude Code's
-	// stream-json control_request is the same claim with a proof of its own,
-	// and is not declared until it has a probe. The conformance suite holds
-	// a declaration to the stand-in.
+	// Codex declares it over app-server turn/interrupt (CLI 0.166.0's
+	// TurnInterruptParams). completeTurn recognizes TurnStatus interrupted
+	// when present; that status is held by the schema fixture and the
+	// stand-in, not by a live stdio capture, and idle after the turn ends
+	// remains the settle path the 0.163.0 recording shows. New refuses a
+	// CLI below 0.166.0 so the capability is not advertised there. Cursor
+	// declares it over ACP session/cancel, held to the stand-in's model of
+	// the documented CancelNotification (stopReason cancelled). Other
+	// adapters are not declared until each has a probe of its own. The
+	// conformance suite holds a declaration to the stand-in.
 	CapabilityPipeInterrupt Capability = "pipe_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token

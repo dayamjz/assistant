@@ -144,7 +144,7 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 	vocabtest.Assert(t, line)
 }
 
-// PRD section 9's discard through the command line, as this build takes it
+// PRD section 9's discard through the command line for a run's worktree
 // (docs/prd.md, sections 6 and 9): --answer discard alone answers with what
 // would be lost and the digest, in the structured answer, and reads out as
 // the shown row. Given again with --confirm and that digest under --json,
@@ -154,9 +154,9 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // its streams terminals or not (the review of 1608c5e: a person who
 // redirects standard error is still at the terminal), it reaches the
 // service, which places this test's process in its terminal's foreground,
-// and is refused with the row saying removal is not in this build. Either
-// way the copy and its entry are as they were. The rows are held to the
-// vocabulary.
+// and is refused with the row saying a run's worktree confirmation is still
+// deferred. Either way the copy and its entry are as they were. The rows are
+// held to the vocabulary.
 // --confirm beside any other answer, or with no digest, is incorrect usage
 // before anything is asked.
 func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {

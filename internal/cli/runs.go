@@ -101,7 +101,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"a kept work entry's key, kept-work/N, answers that entry, with --task or --run=RUN naming whose copy it is")
 		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
 			"without it the discard shows what would be lost and removes nothing; with it the answer is accepted only at a terminal, "+
-			"in the foreground and without --json, and is then refused: removal on a confirmed discard is not in this build")
+			"in the foreground and without --json, and removes a task's clone when that digest still seals the copy; "+
+			"a run's worktree confirmation is still refused until that removal is built")
 		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
