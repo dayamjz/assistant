@@ -1563,9 +1563,11 @@ const (
 	// only when configuration names it.
 	CheckNamedOnlyAgents = "named-only agents"
 	// CheckSessionProvider is whether the operator's chosen terminal session
-	// provider can host workers on this machine: the default pipe always
-	// can, and tmux needs both a tmux binary and an agent that declares
-	// terminal_workers.
+	// provider can host workers on this machine: auto, the default, always
+	// can (tmux where it can host the worker, a pipe otherwise), pipe always
+	// can, and an explicit tmux needs a tmux binary and an agent that can
+	// start a terminal worker here (terminal_workers, and for Claude a
+	// credential and a complete git identity).
 	CheckSessionProvider = "session provider"
 	// CheckCodeHost is whether what a run needs to reach the code host is
 	// here: the gh command line for a github.com upstream, and an access token
@@ -1658,7 +1660,7 @@ var phraseByCheck = map[string][2]Phrase{
 			Decision:    "Nothing to do."},
 		{Outcome: "The terminal session provider this home is configured for cannot host workers here.",
 			Consequence: "Every worker launch is refused and fleet work waits without a worker until the provider can.",
-			Decision:    "Install tmux on the service's PATH, or choose an agent that declares terminal workers, or set session_provider back to pipe; " + readDoctor},
+			Decision:    "Install tmux on the service's PATH, choose an agent that can start a terminal worker here (for Claude: a credential and a git name and email), or set session_provider back to pipe; " + readDoctor},
 	},
 	CheckCodeHost: {
 		{Outcome: "What a run needs to reach the code host was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},

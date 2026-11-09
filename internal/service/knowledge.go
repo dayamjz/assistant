@@ -4,13 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
-	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/knowledge"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -181,18 +178,7 @@ func (s *Service) refuseKnowledgeIfLaunchTooLarge(ctx context.Context, d dispatc
 		Model:        model,
 		Effort:       effort,
 	}
-	var term agents.Terminal
-	if s.cfg.SessionProvider == config.SessionProviderTmux {
-		tmux, err := exec.LookPath("tmux")
-		if err != nil {
-			return nil
-		}
-		tmux, err = filepath.Abs(tmux)
-		if err != nil {
-			return nil
-		}
-		term = agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket("0000000000000000")}
-	}
+	term, _ := s.terminalForLaunchCheck(runner)
 	if err := workers.WorkerLaunchRefusal(term, spec); err != nil {
 		if !errors.Is(err, agents.ErrInvalidInvocation) {
 			return fmt.Errorf("service: checking the launch of task %s attempt %d: %w", d.id, d.attempt, err)
