@@ -113,6 +113,10 @@ func serveAppServer(control string, args []string) int {
 				return exitNoStdin
 			}
 			phase = 3
+			call.ApprovalPolicy = m.Params.Approval
+			if record(callsPath(control), call) != nil {
+				return exitNoRecord
+			}
 			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"thread": map[string]any{"id": threadID}}}) != nil {
 				return exitNoOutput
 			}

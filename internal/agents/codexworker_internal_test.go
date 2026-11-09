@@ -256,7 +256,7 @@ func TestRecordedCodexUntrustedApprovalsAreAnsweredOnTheSubordinateGrant(t *test
 }
 
 // A subordinate grant declines every file-change approval and accepts only
-// the route among commands; a worker grant still accepts git and file changes.
+// the route among commands.
 func TestACodexSubordinateGrantDeclinesEditsAndGit(t *testing.T) {
 	replies := &recordedReplies{}
 	w := &codexWorker{

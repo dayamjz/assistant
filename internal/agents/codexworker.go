@@ -36,11 +36,13 @@ import (
 // declared.
 //
 // A subordinate coordinator (GrantSubordinate) starts the same app-server
-// with approvalPolicy untrusted, recorded from CLI 0.166.0: every command
-// reaches this client as item/commandExecution/requestApproval before it
-// runs, so the client can hold the grant. Approvals allow only the route;
-// git and every other command are declined, and file-change approvals are
-// declined so the subordinate edits nothing. read-only alone is not enough:
+// with approvalPolicy untrusted, recorded from CLI 0.166.0 for plain shell
+// calls with no escalation and no sandbox_permissions override: those
+// reach this client as item/commandExecution/requestApproval before they
+// run. Approvals allow only the route; git and every other command are
+// declined. File-change approvals that arrive are declined; whether every
+// write asks under untrusted is not in that recording, so the residual is
+// a write that never reaches this client. read-only alone is not enough:
 // under on-request it still runs sandboxed commands without asking.
 func (r *codexRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
 	if err := spec.Validate(); err != nil {

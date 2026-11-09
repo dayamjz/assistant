@@ -162,9 +162,10 @@ as recorded from Codex CLI 0.166.0), and declines every other command
 approval. It accepts file-change approvals without reading their paths, so
 the CLI's workspace-write sandbox is what limits where a write lands. Any
 other approval is declined. A subordinate coordinator starts the same
-app-server under `approvalPolicy: untrusted` (recorded from CLI 0.166.0),
-so every command reaches the client before it runs; approvals then allow
-only the coordinator route, and file-change approvals are declined.
+app-server under `approvalPolicy: untrusted` (recorded from CLI 0.166.0 for
+plain shell calls with no escalation or sandbox override); approvals then
+allow only the coordinator route, and file-change approvals that arrive are
+declined.
 
 ### Claude roles
 

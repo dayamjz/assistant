@@ -248,9 +248,10 @@ func liveGit(t *testing.T, dir string, args ...string) string {
 
 // The Codex adapter starts a subordinate coordinator under GrantSubordinate
 // the same way it starts a worker, with the app-server thread under
-// approvalPolicy untrusted so every command asks before it runs. A grant
-// it has no translation for is still refused with ErrGrantUnenforced before
-// anything starts.
+// approvalPolicy untrusted so every command asks before it runs. The
+// stand-in's Call records that policy: without it, a subordinate started
+// under on-request would still pass every Run exchange, because the
+// stand-in asks either way.
 func TestCodexStartsASubordinateUnderItsGrant(t *testing.T) {
 	principles.Cite(t, principles.P4)
 	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{}})
@@ -260,8 +261,21 @@ func TestCodexStartsASubordinateUnderItsGrant(t *testing.T) {
 		t.Fatalf("OpenSubordinate on Codex: %v", err)
 	}
 	sub.Close()
-	if calls := agent.Calls(); len(calls) != 1 {
+	calls := agent.Calls()
+	if len(calls) != 1 {
 		t.Fatalf("the subordinate started %d processes, want 1", len(calls))
+	}
+	if calls[0].ApprovalPolicy != "untrusted" {
+		t.Fatalf("the subordinate's thread started under approvalPolicy %q, want untrusted", calls[0].ApprovalPolicy)
+	}
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), spec)
+	if err != nil {
+		t.Fatalf("the control worker: %v", err)
+	}
+	worker.Close()
+	calls = agent.Calls()
+	if len(calls) != 2 || calls[1].ApprovalPolicy != "on-request" {
+		t.Fatalf("the control worker's calls are %+v, want a second under on-request", calls)
 	}
 }
 
