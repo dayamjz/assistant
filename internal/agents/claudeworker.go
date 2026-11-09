@@ -316,6 +316,21 @@ func (w *claudePipeWorker) observe(line []byte) {
 		// A result ends the turn even when system/init was never seen
 		// (a Recorded reply). Interrupt still waits on begun first.
 		w.markIdle()
+	default:
+		// A framed stdout line with begun still open is a Recorded reply
+		// that never emits init. Stderr shares Capture but not this
+		// observer, so it cannot forge the settle.
+		w.mu.Lock()
+		begun, settled := w.begun, w.settled
+		w.mu.Unlock()
+		if settled == nil || begun == nil {
+			return
+		}
+		select {
+		case <-begun:
+		default:
+			w.markIdle()
+		}
 	}
 }
 
