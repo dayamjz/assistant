@@ -640,8 +640,11 @@ func agentPATH(t *testing.T, names ...string) string {
 	if err := os.Symlink(realGit, filepath.Join(bin, "git")); err != nil {
 		t.Fatalf("planting git: %v", err)
 	}
-	script := []byte("#!/bin/sh\nexit 0\n")
 	for _, name := range names {
+		script := []byte("#!/bin/sh\nexit 0\n")
+		if name == "codex" {
+			script = []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex-cli 0.166.0; exit 0; fi\nexit 0\n")
+		}
 		if err := procgroup.WriteProgram(filepath.Join(bin, name), script, 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
