@@ -1,12 +1,15 @@
 package agents
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The interrupt fixture is the request and follow-on notifications Codex
@@ -73,6 +76,67 @@ func TestSchemaCodexTurnInterruptFramesSettleTheWorker(t *testing.T) {
 	}
 	if w.turn != "" {
 		t.Fatalf("after interrupted the worker still names turn %q", w.turn)
+	}
+}
+
+// Interrupt returns only after settled closes. Answering turn/interrupt
+// first and delaying turn/completed interrupted would leave a mutation
+// that returns true right after call green against every other interrupt
+// test, because those settle in the same receive burst as the cancel.
+func TestCodexInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
+	t.Parallel()
+	stdinR, stdinW := io.Pipe()
+	settled := make(chan struct{})
+	w := &codexWorker{
+		procWorker: &procWorker{
+			stdin:        stdinW,
+			out:          &tailWriter{limit: 1 << 20},
+			availability: &workerAvailability{},
+			done:         make(chan struct{}),
+			slot:         make(chan struct{}, 1),
+			frame:        plainLine,
+			format:       OutputStreamJSON,
+			stdinOpen:    true,
+		},
+		pending: map[uint64]chan codexMessage{},
+		send:    make(chan struct{}, 1),
+		settled: settled,
+		turn:    "turn-wait",
+		thread:  "thread-wait",
+	}
+	answered := make(chan struct{})
+	go func() {
+		defer stdinR.Close()
+		sc := bufio.NewScanner(stdinR)
+		for sc.Scan() {
+			var req struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(sc.Bytes(), &req) != nil || req.Method != "turn/interrupt" {
+				continue
+			}
+			w.receive([]byte(`{"id":` + string(req.ID) + `,"result":{}}`))
+			close(answered)
+			time.Sleep(75 * time.Millisecond)
+			w.receive([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-wait","status":"interrupted"}}}`))
+			return
+		}
+	}()
+
+	start := time.Now()
+	got, err := w.Interrupt(t.Context())
+	elapsed := time.Since(start)
+	if err != nil || !got {
+		t.Fatalf("Interrupt: %t, %v", got, err)
+	}
+	select {
+	case <-answered:
+	default:
+		t.Fatal("turn/interrupt was never answered")
+	}
+	if elapsed < 50*time.Millisecond {
+		t.Fatalf("Interrupt returned in %v, before the delayed turn/completed; the post-cancel wait on settled is untested", elapsed)
 	}
 }
 

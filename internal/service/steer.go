@@ -210,8 +210,9 @@ const stopGrace = reapGrace
 var errSteerInFlight = errors.New("service: a dispatch, a launch, a relaunch or a stop of the task is in flight in this service")
 
 // interruptUnverified reports an interrupt the worker answered and whose
-// terminal the probe then did not read Live, so it is not answered as one
-// the worker survived.
+// probe then did not read Live, so it is not answered as one the worker
+// survived. Pipe and terminal interrupts share this refusal: the miss is
+// about liveness after Interrupt returned, not about a terminal session.
 type interruptUnverified struct {
 	Task        string
 	Session     string
