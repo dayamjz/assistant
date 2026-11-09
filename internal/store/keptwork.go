@@ -279,8 +279,9 @@ func (k KeptWork) CarryOnClaimed() bool { return k.Open() && k.CarriedOnTask.IsK
 func (k KeptWork) DiscardClaimed() bool { return k.Open() && k.DiscardClaimedAt.IsKnown() }
 
 // RemoveAnywayClaimed reports whether the entry is open with a
-// remove-anyway claim on it: a release recorded and not yet carried out,
-// which is carried out or withdrawn, and until then holds the entry open.
+// remove-anyway claim on it: a remove-anyway recorded and not yet
+// carried out, which is carried out or withdrawn, and until then holds
+// the entry open.
 func (k KeptWork) RemoveAnywayClaimed() bool { return k.Open() && k.RemoveAnywayClaimedAt.IsKnown() }
 
 // KeptCopy is what a caller states when a copy is kept: whose it is, where
