@@ -1268,7 +1268,7 @@ When the window passes, the worker is ended and its copy is kept. A later promot
 worker in that copy, with the stored report as its starting point. When that copy has a kept-work
 entry, the promotion records the entry's answer as carry on, which closes it.
 
-### <a id="discard-removal"></a>Removing a discarded copy
+### <a id="discard-removal"></a>Removing a discarded copy <kbd>proposed</kbd>
 
 This section is decision 31's confirmed discard (decided 2026-11-08), following the owner's
 decisions of 2026-10-24 and 2026-10-25. A confirmed discard deletes what you were shown and
@@ -1278,7 +1278,9 @@ confirmed. A task's clone passes step 3's clean read and P12's proof and is then
 run's worktree passes step 3's clean read and is then removed by git without force, which refuses
 on its own terms too. Past that point, step 5 names the one force a discard uses. A task's clone
 removal on confirmation is built; a run's worktree removal remains to build, and until it is a
-worktree confirmation is refused as section 6 says.
+worktree confirmation is refused as section 6 says. The heading stays proposed while that
+remainder and [remove anyway](#remove-anyway) are unfinished, as the section 12 table's
+"Partially built" row records.
 
 **The confirmation.** A discard is confirmed with the digest its preview showed (section 9).
 
