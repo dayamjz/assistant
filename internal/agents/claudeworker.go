@@ -61,10 +61,9 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w.procWorker = worker
-	// Wait for the instructions turn to finish printing without arming
-	// settle channels: a late instructions result must not clear the
-	// first Send's arm, and trailing frames must not still be growing
-	// when that arm is set.
+	// Wait for the instructions turn's result without arming settle
+	// channels: a late instructions result must not clear the first
+	// Send's arm.
 	w.waitCapture(ctx)
 	return w, nil
 }
@@ -169,40 +168,18 @@ func (w *claudePipeWorker) armTurn() {
 func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
-	// Empty-Capture bound only: once system/init has been seen, wait for a
-	// result (or the worker / hurry / ctx) so a slow instructions turn is
-	// still tracked when Start returns. A Capture that never shows init is
-	// a Recorded reply: wait until it stops growing.
+	// Once system/init is seen, wait for a protocol result (or done /
+	// hurry / ctx) with no time soft-return. Before init, a 5s bound
+	// covers a worker that prints nothing; Capture quiet without init
+	// is not a settle, because stderr shares Capture with stdout.
 	emptyBound := time.NewTimer(5 * time.Second)
 	defer emptyBound.Stop()
-	var last int
-	stable := time.NewTimer(100 * time.Millisecond)
-	defer stable.Stop()
 	for {
 		text := w.Capture().Text
 		if claudeCaptureHasResult(text) {
 			return
 		}
 		sawInit := strings.Contains(text, `"subtype":"init"`)
-		n := len(text)
-		if n > 0 && !sawInit {
-			if n == last {
-				select {
-				case <-stable.C:
-					return
-				default:
-				}
-			} else {
-				last = n
-				if !stable.Stop() {
-					select {
-					case <-stable.C:
-					default:
-					}
-				}
-				stable.Reset(100 * time.Millisecond)
-			}
-		}
 		var boundC <-chan time.Time
 		if !sawInit {
 			boundC = emptyBound.C
@@ -229,6 +206,20 @@ func claudeCaptureHasResult(text string) bool {
 		}
 	}
 	return false
+}
+
+// claudeRecordedSettleFrame is a stdout frame a Recorded fixture may emit
+// without system/init, and that the checked-in live recording never places
+// before init (active_goal and autocompact_state come first there).
+func claudeRecordedSettleFrame(msg struct{ Type, Subtype string }) bool {
+	switch msg.Type {
+	case "assistant", "user", "brand_new_event":
+		return true
+	case "system":
+		return msg.Subtype == "thinking_tokens"
+	default:
+		return false
+	}
 }
 
 func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) error {
@@ -317,9 +308,12 @@ func (w *claudePipeWorker) observe(line []byte) {
 		// (a Recorded reply). Interrupt still waits on begun first.
 		w.markIdle()
 	default:
-		// A framed stdout line with begun still open is a Recorded reply
-		// that never emits init. Stderr shares Capture but not this
-		// observer, so it cannot forge the settle.
+		// Recorded fixtures may omit init; settle only on frame types the
+		// live recording never emits before system/init, so active_goal
+		// and autocompact_state cannot drop a live turn.
+		if !claudeRecordedSettleFrame(msg) {
+			return
+		}
 		w.mu.Lock()
 		begun, settled := w.begun, w.settled
 		w.mu.Unlock()
