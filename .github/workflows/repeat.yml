@@ -40,7 +40,7 @@ jobs:
       packages: ${{ steps.plan.outputs.packages }}
       leak_check_tests: ${{ steps.plan.outputs.leak_check_tests }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Plan
@@ -61,7 +61,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/test-env
       - name: Repeat the leak check's tests
         if: needs.plan.outputs.leak_check_tests == 'true'
