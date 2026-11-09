@@ -1,0 +1,201 @@
+package agents
+
+import (
+	"encoding/json"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// JevKeyVariable is what the pinned fast-jev-compaction plugin reads as its
+// TypeSafe key. Emptiness only is tested; the value is never recorded.
+const JevKeyVariable = "TYPESAFE_API_KEY"
+
+// JevPluginVersion pins the embedded plugin (jevmod/.claude-plugin/plugin.json).
+const JevPluginVersion = "0.3.0"
+
+// JevMinClaudeVersion is the Claude Code release that added function hooks.
+const JevMinClaudeVersion = "2.1.274"
+
+// JevFunctionHooksEnv opts Claude Code into function hooks via settings.json.
+const JevFunctionHooksEnv = "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS"
+
+// CompactionPath is which compaction a launch was prepared for.
+type CompactionPath string
+
+const (
+	// CompactionJev means the pinned plugin was installed for this launch.
+	CompactionJev CompactionPath = "jev"
+	// CompactionBuiltin means Claude Code's own compaction runs.
+	CompactionBuiltin CompactionPath = "builtin"
+)
+
+// CompactionDecision is the path record InstallJev writes into a config dir.
+type CompactionDecision struct {
+	Path   CompactionPath `json:"path"`
+	Reason string         `json:"reason,omitempty"`
+	Plugin string         `json:"plugin,omitempty"`
+}
+
+const (
+	compactionRecordName = "compaction.json"
+	jevPluginDirName     = "plugins/fast-jev-compaction"
+)
+
+// DecideJev chooses the compaction path. It never refuses a launch: a missed
+// precondition is CompactionBuiltin with a reason.
+func DecideJev(optIn bool, env []string, version string) CompactionDecision {
+	switch {
+	case !optIn:
+		return CompactionDecision{Path: CompactionBuiltin, Reason: "opt-in off"}
+	case lastValue(env, JevKeyVariable) == "":
+		return CompactionDecision{Path: CompactionBuiltin, Reason: "no " + JevKeyVariable + " in the environment"}
+	case version == "":
+		return CompactionDecision{Path: CompactionBuiltin, Reason: "claude version unknown"}
+	case !claudeVersionAtLeast(version, JevMinClaudeVersion):
+		return CompactionDecision{Path: CompactionBuiltin, Reason: "claude " + version + " is older than " + JevMinClaudeVersion}
+	default:
+		return CompactionDecision{Path: CompactionJev, Plugin: JevPluginVersion}
+	}
+}
+
+// InstallJev writes the path record into configDir and, for CompactionJev, the
+// plugin and settings.json. PluginArgs is nil or ["--plugin-dir", abs]. An
+// install I/O failure falls back to builtin with a reason and a nil error:
+// compaction never refuses a launch. configDir must already exist.
+func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []string, error) {
+	if d.Path != CompactionJev {
+		return d, nil, writeCompactionDecision(configDir, d)
+	}
+	pluginDir := filepath.Join(configDir, filepath.FromSlash(jevPluginDirName))
+	fallback := func(reason string) (CompactionDecision, []string, error) {
+		out := CompactionDecision{Path: CompactionBuiltin, Reason: reason}
+		_ = writeCompactionDecision(configDir, out)
+		return out, nil, nil
+	}
+	if err := materializeJevPlugin(pluginDir); err != nil {
+		return fallback("plugin install failed: " + err.Error())
+	}
+	if err := writeJevSettings(configDir); err != nil {
+		_ = os.RemoveAll(pluginDir)
+		return fallback("settings install failed: " + err.Error())
+	}
+	if err := writeCompactionDecision(configDir, d); err != nil {
+		_ = os.RemoveAll(pluginDir)
+		_ = os.Remove(filepath.Join(configDir, "settings.json"))
+		return d, nil, err
+	}
+	abs, err := filepath.Abs(pluginDir)
+	if err != nil {
+		_ = os.RemoveAll(pluginDir)
+		_ = os.Remove(filepath.Join(configDir, "settings.json"))
+		return fallback("plugin path: " + err.Error())
+	}
+	return d, []string{"--plugin-dir", abs}, nil
+}
+
+// ReadCompactionDecision reads the record InstallJev wrote into configDir.
+func ReadCompactionDecision(configDir string) (CompactionDecision, error) {
+	raw, err := os.ReadFile(filepath.Join(configDir, compactionRecordName))
+	if err != nil {
+		return CompactionDecision{}, err
+	}
+	var d CompactionDecision
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return CompactionDecision{}, fmt.Errorf("reading compaction decision: %w", err)
+	}
+	return d, nil
+}
+
+func writeCompactionDecision(configDir string, d CompactionDecision) error {
+	raw, err := json.Marshal(d)
+	if err != nil {
+		return fmt.Errorf("encoding compaction decision: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, compactionRecordName), append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("writing compaction decision: %w", err)
+	}
+	return nil
+}
+
+func writeJevSettings(configDir string) error {
+	raw, err := json.Marshal(map[string]any{"env": map[string]string{JevFunctionHooksEnv: "1"}})
+	if err != nil {
+		return fmt.Errorf("encoding jev settings: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("writing jev settings: %w", err)
+	}
+	return nil
+}
+
+func materializeJevPlugin(dest string) error {
+	if _, err := os.Stat(filepath.Join(dest, "hooks", "fast-jev.ts")); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(dest, 0o700); err != nil {
+		return fmt.Errorf("making plugin directory: %w", err)
+	}
+	const root = "jevmod"
+	return fs.WalkDir(jevPluginFS, root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil || rel == "." {
+			return relErr
+		}
+		target := filepath.Join(dest, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		data, readErr := jevPluginFS.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o600)
+	})
+}
+
+func claudeVersionAtLeast(version, min string) bool {
+	v, m := versionParts(version), versionParts(min)
+	n := len(v)
+	if len(m) > n {
+		n = len(m)
+	}
+	for i := 0; i < n; i++ {
+		var a, b int
+		if i < len(v) {
+			a = v[i]
+		}
+		if i < len(m) {
+			b = m[i]
+		}
+		if a != b {
+			return a > b
+		}
+	}
+	return true
+}
+
+func versionParts(s string) []int {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexAny(s, " \t"); i >= 0 {
+		s = s[:i]
+	}
+	var out []int
+	for _, f := range strings.Split(s, ".") {
+		n, err := strconv.Atoi(f)
+		if err != nil {
+			break
+		}
+		out = append(out, n)
+	}
+	return out
+}

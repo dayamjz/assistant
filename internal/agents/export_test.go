@@ -64,9 +64,10 @@ const ClaudeObservedVersion = claudeObservedVersion
 // test reads the adapter's own answer rather than restating how it is
 // composed.
 var (
-	ClaudeConfigFor = claudeConfigFor
-	ClaudeCacheFor  = claudeCacheFor
-	ClaudeHomeFor   = claudeHomeFor
+	ClaudeConfigFor      = claudeConfigFor
+	ClaudeCacheFor       = claudeCacheFor
+	ClaudeHomeFor        = claudeHomeFor
+	ClaudeVersionAtLeast = claudeVersionAtLeast
 )
 
 // AvailabilityMarker is one row of availabilityMarkers, exported so a test

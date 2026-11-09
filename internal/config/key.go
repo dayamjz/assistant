@@ -78,6 +78,15 @@ const (
 	// KeySessionReuse is "session_reuse": one durable fixer session per run. It
 	// is global-only, so only the operator's own file may set it.
 	KeySessionReuse Key = "session_reuse"
+	// KeyJevCompaction is "jev_compaction": whether long-running Claude Code
+	// workers and the durable fixer may compact with the pinned
+	// fast-jev-compaction plugin. It is global-only and off by default: every
+	// compaction that uses it sends conversation text to TypeSafe, so only the
+	// operator's own file may turn it on. The key is the opt-in alone; the
+	// TypeSafe key stays in the operator's environment as TYPESAFE_API_KEY and
+	// is never a configuration value (P7). docs/prd.md section 10 does not yet
+	// list this row; that gap is a finding for the owner, not closed here.
+	KeyJevCompaction Key = "jev_compaction"
 	// KeyDecisionModel is "decision_model": the mode of the decision-model
 	// checks PRD section 5 describes. It is global-only, so a repository can
 	// turn the checks neither on, off, nor into enforce, in either copy.
@@ -573,6 +582,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.ChecksTimeout = v.(time.Duration) }},
 	{KeySessionReuse, TrustGlobal, DefaultSessionReuse, decodeBool,
 		func(c *Config, v any) { c.SessionReuse = v.(bool) }},
+	{KeyJevCompaction, TrustGlobal, DefaultJevCompaction, decodeBool,
+		func(c *Config, v any) { c.JevCompaction = v.(bool) }},
 	{KeyDecisionModel, TrustGlobal, DefaultDecisionModel, decodeDecisionModel,
 		func(c *Config, v any) { c.DecisionModel = v.(DecisionModel) }},
 	{KeySupervisionBeaconInterval, TrustGlobal, DefaultSupervisionBeaconInterval, decodeSupervisionBeaconInterval,

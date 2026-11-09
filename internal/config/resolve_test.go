@@ -56,6 +56,9 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if !c.SessionReuse {
 		t.Error("SessionReuse defaults to true")
 	}
+	if c.JevCompaction {
+		t.Error("JevCompaction defaults to false")
+	}
 	if c.ChecksTimeout != 168*time.Hour {
 		t.Errorf("ChecksTimeout = %v, want 168h", c.ChecksTimeout)
 	}
@@ -379,6 +382,7 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 	}{
 		{KeyChecksTimeout, `{"checks_timeout": "1h"}`},
 		{KeySessionReuse, `{"session_reuse": false}`},
+		{KeyJevCompaction, `{"jev_compaction": true}`},
 		{KeySupervisionBeaconInterval, `{"supervision_beacon_interval": "30s"}`},
 		{KeyEscalationWindow, `{"escalation_window": "10m"}`},
 		{KeyRecheckWindow, `{"recheck_window": "1h"}`},
@@ -454,7 +458,7 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 // parses in a repository file, from either repository origin.
 func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	globalOnly := map[Key]bool{
-		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
+		KeyChecksTimeout: true, KeySessionReuse: true, KeyJevCompaction: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
 		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true, KeyStallHoldCount: true,
 		KeyRelaunchAttempts: true, KeyStopGrace: true, KeyCommandTimeout: true, KeyGitDeadline: true, KeyGHDeadline: true, KeyPromotionWindow: true, KeyAutonomyMerge: true, KeySessionProvider: true,
 		KeyUsageCeilingWindow: true, KeyUsageCeilingInputTokens: true, KeyUsageCeilingOutputTokens: true,
@@ -489,6 +493,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyAllowPushedCommands:             `{"allow_pushed_commands": true}`,
 		KeyChecksTimeout:                   `{"checks_timeout": "1h"}`,
 		KeySessionReuse:                    `{"session_reuse": false}`,
+		KeyJevCompaction:                   `{"jev_compaction": true}`,
 		KeyDecisionModel:                   `{"decision_model": "off"}`,
 		KeySupervisionBeaconInterval:       `{"supervision_beacon_interval": "30s"}`,
 		KeyEscalationWindow:                `{"escalation_window": "10m"}`,
@@ -554,7 +559,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,stall_hold_count,relaunch_attempts,stop_grace,command_timeout,git_deadline,gh_deadline,promotion_window,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens,remote_hosts,placement.local,remote_disconnect_grace,housekeeping.interval"
+	want := "checks_timeout,session_reuse,jev_compaction,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,stall_hold_count,relaunch_attempts,stop_grace,command_timeout,git_deadline,gh_deadline,promotion_window,autonomy.merge,session_provider,usage_ceiling.window,usage_ceiling.input_tokens,usage_ceiling.output_tokens,usage_ceiling.cache_read_tokens,usage_ceiling.cache_creation_tokens,notify.command,run_usage_budget.output_tokens,remote_hosts,placement.local,remote_disconnect_grace,housekeeping.interval"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}
