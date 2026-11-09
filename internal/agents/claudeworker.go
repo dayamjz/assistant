@@ -103,11 +103,12 @@ func (w *claudePipeWorker) Send(ctx context.Context, text string) error {
 		return err
 	}
 	w.armTurn()
+	mark := len(w.Capture().Text)
 	if err := w.procWorker.Send(ctx, text); err != nil {
 		w.markIdle()
 		return err
 	}
-	return w.waitBegun(ctx)
+	return w.waitTurnProgress(ctx, mark)
 }
 
 // Interrupt ends the turn over control_request subtype interrupt.
@@ -166,6 +167,10 @@ func (w *claudePipeWorker) armTurn() {
 func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
+	// Bound so a worker that prints nothing for its instructions (or is
+	// ended under a hurry before any line) cannot hold Start forever.
+	bound := time.NewTimer(5 * time.Second)
+	defer bound.Stop()
 	for {
 		if w.Capture().Text != "" {
 			return
@@ -174,6 +179,8 @@ func (w *claudePipeWorker) waitCapture(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-w.done:
+			return
+		case <-bound.C:
 			return
 		case <-tick.C:
 		}
@@ -194,24 +201,56 @@ func (w *claudePipeWorker) await(ctx context.Context, settled chan struct{}) err
 	}
 }
 
-func (w *claudePipeWorker) waitBegun(ctx context.Context) error {
-	w.mu.Lock()
-	settled, begun := w.settled, w.begun
-	w.mu.Unlock()
-	if settled == nil {
-		return nil
-	}
-	select {
-	case <-begun:
-		return nil
-	case <-settled:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-w.done:
-		// Bytes were written; a Refuse exchange exits without init.
-		w.markIdle()
-		return nil
+// waitTurnProgress returns once system/init has been seen, the turn has
+// settled, the worker has ended, or Capture has grown without an init
+// (a Recorded reply). The last case marks idle so the next Send is not
+// held on a result that will never come.
+func (w *claudePipeWorker) waitTurnProgress(ctx context.Context, mark int) error {
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		w.mu.Lock()
+		settled, begun := w.settled, w.begun
+		w.mu.Unlock()
+		if settled == nil {
+			return nil
+		}
+		select {
+		case <-begun:
+			return nil
+		case <-settled:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-w.done:
+			w.markIdle()
+			return nil
+		case <-tick.C:
+			if len(w.Capture().Text) <= mark {
+				continue
+			}
+			select {
+			case <-begun:
+				return nil
+			case <-settled:
+				return nil
+			case <-time.After(50 * time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-w.done:
+				w.markIdle()
+				return nil
+			}
+			select {
+			case <-begun:
+				return nil
+			case <-settled:
+				return nil
+			default:
+				w.markIdle()
+				return nil
+			}
+		}
 	}
 }
 
