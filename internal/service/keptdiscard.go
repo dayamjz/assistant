@@ -16,10 +16,9 @@ import (
 // shows exactly what will be lost, and it removes the copy only on that
 // answer". A discard without Confirm shows the loss through
 // internal/tasks' Loss and records nothing. A confirmation from a
-// terminal's foreground claims the entry, removes a task's clone through
-// Cleaner.Discard, records the outcome, clears the discard directory, and
-// redispatches. A run's worktree confirmation is still refused (Discard of
-// a worktree is not yet implemented). remove-anyway is a later answer.
+// terminal's foreground claims the entry, removes a task's clone or a
+// run's worktree through Cleaner.Discard, records the outcome, clears the
+// discard directory, and redispatches. remove-anyway is a later answer.
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
@@ -46,10 +45,6 @@ func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry st
 			return machine.KeptWorkAnswered{}, discardOffTerminal{entry: entry.ID, cause: err}
 		}
 		return machine.KeptWorkAnswered{}, err
-	}
-	if !entry.TaskID.IsKnown() {
-		// Cleaner.Discard of a run's worktree is not yet implemented.
-		return machine.KeptWorkAnswered{}, discardDeferred{entry: entry.ID}
 	}
 	if entry.Open() && entry.DiscardClaimed() {
 		return s.completeDiscard(ctx, entry)
@@ -182,17 +177,6 @@ func (s *Service) completeDiscardsAtOpen(ctx context.Context) {
 		}
 	}
 }
-
-// discardDeferred is the refusal of a discard confirmation for a run's
-// worktree: Cleaner.Discard does not yet remove one. Its text is
-// machine.PhraseDiscardRemovalDeferred.
-type discardDeferred struct{ entry int64 }
-
-func (e discardDeferred) Error() string {
-	return fmt.Sprintf("kept work entry %d was not discarded: %s", e.entry, machine.PhraseDiscardRemovalDeferred)
-}
-
-func (e discardDeferred) Unwrap() error { return ipc.ErrRefused }
 
 // discardOffTerminal is the refusal of a discard confirmation from a peer
 // foreground.go's relation does not place in a terminal's foreground.

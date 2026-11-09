@@ -249,13 +249,14 @@ var PhraseKeptWorkLosesNothing = Phrase{
 	Decision:    "Nothing to decide about what would be lost.",
 }
 
-// PhraseDiscardRemovalDeferred is the row for a discard confirmation of a
-// run's worktree: removal of a worktree on confirmation is not yet
-// implemented, so the answer is refused and changes nothing.
+// PhraseDiscardRemovalDeferred was the row for a discard confirmation of a
+// run's worktree while that removal was deferred. Worktree confirmation
+// removes the copy now; the row remains in the phrase table so a sentence
+// that named it still resolves, and is not offered for new refusals.
 var PhraseDiscardRemovalDeferred = Phrase{
 	Outcome:     "Nothing was removed, because removing a run's worktree on a confirmed discard is not in this build yet.",
 	Consequence: "The copy stays, with everything it contains, and new work that would start where it stands is still blocked by it.",
-	Decision:    "Answer land or carry-on instead, or ask again once a later build removes a worktree on confirmation the way it removes a task's clone.",
+	Decision:    "This refusal is no longer produced: a confirmed discard removes a run's worktree the way it removes a task's clone.",
 }
 
 // PhraseDiscardNeedsTerminal is the row for a discard confirmation given

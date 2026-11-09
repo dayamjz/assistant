@@ -8,7 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"strings"
+
+	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // A confirmed discard of a task's clone removes the clone past its point
@@ -421,5 +425,65 @@ func TestADiscardPastPONRFinishesEvenIfSomethingStandsAtTheCopyPath(t *testing.T
 	j, found, err := s.cleaner.standingDiscard(tk.copy)
 	if err != nil || !found || !journalHasStep(j, discardStepFinish) {
 		t.Fatalf("journal after finish = %+v found %v err %v", j, found, err)
+	}
+}
+
+// A confirmed discard of a run's worktree removes the worktree past its
+// point of no return: the path is gone, the gate no longer lists it, and
+// the discard directory with its finish journal remains for the outcome
+// owner (PRD section 6; P6).
+func TestAConfirmedDiscardRemovesARunsWorktreePastItsPointOfNoReturn(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	const runID = "run-discard-wt"
+	if _, err := s.store.CreateRun(ctx, store.Run{
+		ID: runID, RepositoryID: cleanupRepository, Branch: "topic", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	gateRepo := filepath.Join(t.TempDir(), "gate.git")
+	rawGit(t, filepath.Dir(gateRepo), "clone", "-q", "--bare", s.upstream, gateRepo)
+	copyPath := s.home.Worktree(cleanupRepository, runID)
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, gateRepo, "worktree", "add", "-q", "--detach", copyPath, "main")
+	commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
+	kept, err := s.cleaner.Keep(ctx, Kept{Run: runID, Reason: string(ReasonCopyChanged)})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v; want the run's copy kept", kept, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, kept.Entry, gateRepo)
+	if err != nil {
+		t.Fatalf("Loss: %v", err)
+	}
+
+	err = s.cleaner.Discard(ctx, kept.Entry, gateRepo, shown.Digest)
+	if err != nil {
+		t.Fatalf("Discard = %v; want the worktree removed", err)
+	}
+	if _, err := os.Lstat(copyPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the worktree still stands at %s after Discard: %v", copyPath, err)
+	}
+	dir, err := s.home.Discarding(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, found, err := s.cleaner.standingDiscard(copyPath)
+	if err != nil || !found {
+		t.Fatalf("standingDiscard after Discard = found %v, %v; want the discard directory left for the outcome", found, err)
+	}
+	if !journalHasStep(j, discardStepFinish) {
+		t.Fatalf("journal steps = %+v; want a finish step", j.Steps)
+	}
+	if ents, err := os.ReadDir(filepath.Join(dir, "paths")); err == nil && len(ents) > 0 {
+		t.Fatalf("set-aside paths still stand under the discard directory: %v", ents)
+	}
+	listed := rawGit(t, gateRepo, "worktree", "list", "--porcelain")
+	if strings.Contains(listed, copyPath) {
+		t.Fatalf("gate still lists the removed worktree:\n%s", listed)
 	}
 }

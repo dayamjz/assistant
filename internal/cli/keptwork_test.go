@@ -3,6 +3,8 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // PRD section 6's "your own push is never held by it: a run your push
@@ -234,8 +237,7 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	if _, err := os.Stat(entry.CopyPath); err != nil {
 		t.Fatalf("showing the discard removed the copy: %v", err)
 	}
-	deferred, needsTerminal := machine.PhraseDiscardRemovalDeferred.String(), machine.PhraseDiscardNeedsTerminal.String()
-	vocabtest.Assert(t, deferred)
+	needsTerminal := machine.PhraseDiscardNeedsTerminal.String()
 	vocabtest.Assert(t, needsTerminal)
 	for _, refused := range []struct {
 		how string
@@ -244,8 +246,6 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	}{
 		{"under --json", run(t, h, subject, "--json", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
 		{"off a terminal", offTerminal(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), needsTerminal},
-		{"at a terminal", atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), deferred},
-		{"in a terminal's foreground with its streams redirected", run(t, h, subject, owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest), deferred},
 	} {
 		if said := refused.got.stdout + refused.got.stderr; refused.got.code != machine.ExitFailure || !strings.Contains(said, refused.row) {
 			t.Fatalf("a discard confirmed %s exited %s:\n%s\nwant it refused with the row %q", refused.how, refused.got.code, said, refused.row)
@@ -256,6 +256,16 @@ func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
 	}
 	if still, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || !still.Open() {
 		t.Fatalf("after the refused confirmations the entry reads %+v, %v; want it open", still, err)
+	}
+	confirmed := atTerminal(t, h, subject, "", owner, "--answer", "discard", "--hold", entry.Key(), "--confirm", answered.Loss.Digest)
+	if confirmed.code != machine.ExitOK {
+		t.Fatalf("a discard confirmed at a terminal exited %s:\n%s%s", confirmed.code, confirmed.stdout, confirmed.stderr)
+	}
+	if _, err := os.Stat(entry.CopyPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a confirmed discard left the worktree standing: %v", err)
+	}
+	if still, err := openStore(t, h).KeptWorkEntry(t.Context(), entry.ID); err != nil || still.Answer.Or("") != store.KeptDiscard {
+		t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard", still, err)
 	}
 }
 
