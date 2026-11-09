@@ -81,14 +81,15 @@ func claudeTmuxLaunchSubject(t *testing.T) *launchSubject {
 // A knowledge document within the file bound can still refuse a tmux launch
 // when the composed first turn exceeds the terminal launch bound internal/agents
 // owns. The control is the pipe worker, which is not bounded that way and
-// still launches.
+// still launches. Under auto, the default, the same refusal holds wherever
+// sessionHost would host the worker in tmux (credential and a short home).
 func TestAKnowledgeDocumentTooLongForTerminalLaunchRefusesTheLaunch(t *testing.T) {
 	ctx := t.Context()
 	const large = 20400
 	doc := strings.Repeat("a", large)
 
-	t.Run("tmux_claude_refuses", func(t *testing.T) {
-		sub := claudeTmuxLaunchSubject(t)
+	assertKnowledgeRefused := func(t *testing.T, sub *launchSubject) {
+		t.Helper()
 		curate(t, sub.dispatchSubject, doc, true)
 		d, err := sub.service.dispatchTask(ctx, sub.task)
 		if err != nil {
@@ -110,6 +111,17 @@ func TestAKnowledgeDocumentTooLongForTerminalLaunchRefusesTheLaunch(t *testing.T
 		if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() || attempts[0].KnowledgeCommit.IsKnown() {
 			t.Fatalf("attempts %+v (%v), want one with no session and no knowledge revision", attempts, err)
 		}
+	}
+
+	t.Run("tmux_claude_refuses", func(t *testing.T) {
+		assertKnowledgeRefused(t, claudeTmuxLaunchSubject(t))
+	})
+
+	t.Run("auto_claude_refuses_when_tmux_would_host", func(t *testing.T) {
+		sub := claudeTmuxLaunchSubject(t)
+		sub.service.cfg.SessionProvider = config.SessionProviderAuto
+		sub.service.autoTmux = true
+		assertKnowledgeRefused(t, sub)
 	})
 
 	t.Run("pipe_worker_still_launches", func(t *testing.T) {

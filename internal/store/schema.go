@@ -218,6 +218,11 @@ const keptWorkLandingMigration = "kept work landing run"
 // is a constant.
 const keptWorkCarryOnMigration = "kept work carry-on task"
 
+// keptWorkDiscardMigration names the migration that adds a discard answer's
+// claim and outcome on kept work, for the reason sealCheckpointTableMigration
+// is a constant.
+const keptWorkDiscardMigration = "kept work discard"
+
 // housekeepingMigration names the migration that adds PRD section 6's
 // housekeeping mark on the task row, for the reason
 // sealCheckpointTableMigration is a constant.
@@ -3001,6 +3006,57 @@ var schema = []migration{
 			// it. It is no foreign key: a review stopped during the checks
 			// names a batch it never wrote.
 			`ALTER TABLE decision_answer ADD COLUMN batch TEXT`,
+		},
+	},
+	{
+		version: 72,
+		name:    keptWorkDiscardMigration,
+		statements: []string{
+			// A discard answer, PRD section 6's "remove the copy", as two
+			// facts on keptWorkLandingMigration's shape. The claim is
+			// discard_claimed_at, discard_by, discard_digest and
+			// discard_lacks, written together by ClaimKeptWorkDiscard on
+			// an open entry (which stays open) and withdrawn by
+			// WithdrawKeptWorkDiscard while unanswered. The outcome is
+			// answer discard with discarded_at, written by
+			// RecordKeptWorkDiscard once the copy is gone.
+			`ALTER TABLE kept_work ADD COLUMN discard_claimed_at TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_by TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_digest TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discard_lacks TEXT`,
+			`ALTER TABLE kept_work ADD COLUMN discarded_at TEXT`,
+			`CREATE TRIGGER kept_work_discard_is_claimed_whole
+				BEFORE UPDATE OF discard_claimed_at, discard_by, discard_digest, discard_lacks ON kept_work
+				WHEN (NEW.discard_claimed_at IS NOT OLD.discard_claimed_at OR NEW.discard_by IS NOT OLD.discard_by
+						OR NEW.discard_digest IS NOT OLD.discard_digest OR NEW.discard_lacks IS NOT OLD.discard_lacks)
+					AND NOT (OLD.answer IS NULL AND OLD.closure IS NULL AND (
+						(OLD.discard_claimed_at IS NULL AND OLD.discard_by IS NULL AND OLD.discard_digest IS NULL
+							AND OLD.discard_lacks IS NULL
+							AND NEW.discard_claimed_at IS NOT NULL AND NEW.discard_by IS NOT NULL
+							AND NEW.discard_digest IS NOT NULL AND NEW.discard_lacks IS NOT NULL
+							AND (NEW.answer IS NULL OR (NEW.answer = 'discard' AND NEW.discarded_at IS NOT NULL)))
+						OR (NEW.answer IS NULL
+							AND OLD.discard_claimed_at IS NOT NULL AND OLD.discard_by IS NOT NULL
+							AND OLD.discard_digest IS NOT NULL AND OLD.discard_lacks IS NOT NULL
+							AND NEW.discard_claimed_at IS NULL AND NEW.discard_by IS NULL
+							AND NEW.discard_digest IS NULL AND NEW.discard_lacks IS NULL)))
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry''s discard is claimed whole on an open entry and withdrawn whole while it is unanswered');
+				END`,
+			`CREATE TRIGGER kept_work_discard_answer_is_its_removal
+				BEFORE UPDATE OF answer ON kept_work
+				WHEN NEW.answer = 'discard' AND (NEW.discarded_at IS NULL OR NEW.discard_claimed_at IS NULL
+					OR NEW.discard_digest IS NULL OR NEW.discard_lacks IS NULL)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is answered discard only with the removal of the copy its claim named');
+				END`,
+			`CREATE TRIGGER kept_work_discarded_once
+				BEFORE UPDATE OF discarded_at ON kept_work
+				WHEN OLD.discarded_at IS NOT NULL OR NEW.discarded_at IS NULL OR NEW.discard_claimed_at IS NULL
+					OR NEW.discard_digest IS NULL OR NEW.answer IS NOT 'discard'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a kept work entry is discarded once, with its discard answer, after its discard was claimed');
+				END`,
 		},
 	},
 }

@@ -304,6 +304,27 @@ func (r *Repository) NotHeldBy(ctx context.Context, rev string, objects []string
 	return missing, nil
 }
 
+// Blob is the content of a blob object in the repository. An object the
+// repository does not have is ErrObjectNotFound; one it has that is not a
+// blob, or that could not be read, is an error that does not match it.
+func (r *Repository) Blob(ctx context.Context, object string) ([]byte, error) {
+	if err := checkArg("object", object); err != nil {
+		return nil, err
+	}
+	typ, err := r.ObjectType(ctx, object)
+	if err != nil {
+		return nil, err
+	}
+	if typ != "blob" {
+		return nil, &outputError{op: "blob", detail: object + " is a " + typ + ", not a blob"}
+	}
+	out, err := r.run(ctx, "blob", "cat-file", "blob", object)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ObjectType is the type git records object under: commit, tag, tree or
 // blob. An object the repository does not have is ErrObjectNotFound; one
 // it has but could not read is an error that does not match it, so a

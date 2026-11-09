@@ -34,7 +34,7 @@ import (
 // The bare command is the empty name and is covered by the tests below rather
 // than here, because a command with no verb cannot be told from no arguments
 // at all.
-var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "watch", "doctor", "service", "db", "eject"}
+var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "dump", "watch", "doctor", "service", "db", "eject"}
 
 // unspecified are commands this product could plausibly have and that PRD
 // section 9 does not describe. A verb this surface needs and that section does
@@ -1248,7 +1248,7 @@ func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
 // incorrect usage rather than something it acts past: a mistyped subcommand
 // that starts the service and exits 0 is the one answer a driving agent
 // cannot recover from.
-var takesAnArgument = map[string]bool{"runs": true, "tasks": true}
+var takesAnArgument = map[string]bool{"runs": true, "tasks": true, "dump": true}
 
 func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 	t.Parallel()
@@ -1277,8 +1277,8 @@ func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 		t.Errorf("the command with no verb exited %s for an argument it does not take", got.code)
 	}
 
-	// And the two that do take one still take it.
-	for _, name := range []string{"runs", "tasks"} {
+	// And the ones that do take one still take it.
+	for _, name := range []string{"runs", "tasks", "dump"} {
 		if got := run(t, h, subject, name, "abc123"); got.code == machine.ExitUsage {
 			t.Errorf("assistant %s abc123 is refused as incorrect usage:\n%s", name, got.stderr)
 		}
@@ -1715,9 +1715,12 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 }
 
 // doctor reports the operator's session_provider before a task stalls
-// Dispatched: the default pipe is fine; tmux with a binary and an agent that
-// declares terminal_workers is fine; tmux without the binary, or with an
-// agent that has not declared the capability, is not OK and names the stall.
+// Dispatched: the default, auto, is fine and names tmux where it can host
+// the agent's workers and pipes where it cannot, a Claude Code worker with no
+// credential in the environment among them; tmux with a binary and an agent
+// that can start a terminal worker here is fine; tmux without the binary, or
+// with an agent that cannot start a terminal worker here (for Claude: missing
+// credential or git identity), is not OK and names the stall.
 // It stays serial because PATH is process state.
 func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -1745,14 +1748,45 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	}
 	plant("claude")
 	t.Setenv("PATH", bin)
+	// Isolate git configuration so UserIdentity cannot invent an identity
+	// from the developer's own global config; auto's TerminalStartable gate
+	// needs a complete pair for tmux.
+	emptyGit := filepath.Join(t.TempDir(), "gitconfig")
+	if err := os.WriteFile(emptyGit, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", emptyGit)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	for _, name := range []string{
+		"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL",
+	} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
 
 	h := newHome(t)
 	subject := newSubject(t)
 
 	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found := findCheck(report, machine.CheckSessionProvider)
-	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "pipes") {
-		t.Fatalf("doctor's session provider row with the default is %+v, want OK naming pipes", row)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run on pipes (the default, auto)") ||
+		!strings.Contains(row.Detail, agents.ClaudeKeyVariable) {
+		t.Fatalf("doctor's session provider row with the default, tmux and claude with no credential is %+v, want OK naming pipes and the credential", row)
+	}
+	t.Setenv(agents.ClaudeKeyVariable, "a-key-for-the-row")
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run on pipes (the default, auto)") ||
+		!strings.Contains(row.Detail, "git identity") {
+		t.Fatalf("doctor's session provider row with a credential and no git identity is %+v, want OK naming pipes and the identity", row)
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "doctor-row")
+	t.Setenv("GIT_AUTHOR_EMAIL", "doctor-row@example.invalid")
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run in tmux (the default, auto)") ||
+		!strings.Contains(row.Detail, "this process's environment") {
+		t.Fatalf("doctor's session provider row with the default, tmux, credential and git identity is %+v, want OK naming tmux and the environment caveat", row)
 	}
 
 	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
@@ -1761,10 +1795,22 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found = findCheck(report, machine.CheckSessionProvider)
 	if !found || !row.OK || row.Blocking ||
-		!strings.Contains(row.Detail, "tmux") || !strings.Contains(row.Detail, string(agents.CapabilityTerminalWorkers)) {
-		t.Fatalf("doctor's session provider row with tmux and claude is %+v, want OK naming tmux and %s",
-			row, agents.CapabilityTerminalWorkers)
+		!strings.Contains(row.Detail, "tmux") || !strings.Contains(row.Detail, "can start a terminal worker") {
+		t.Fatalf("doctor's session provider row with tmux, claude, credential and git identity is %+v, want OK naming tmux and a startable worker",
+			row)
 	}
+	for _, name := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"} {
+		t.Setenv(name, "")
+		_ = os.Unsetenv(name)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || row.OK || row.Blocking || !strings.Contains(row.Detail, "stays dispatched") ||
+		!strings.Contains(row.Detail, "git identity") {
+		t.Fatalf("doctor's session provider row with tmux and no git identity is %+v, want not OK naming the dispatched stall and identity", row)
+	}
+	t.Setenv("GIT_AUTHOR_NAME", "doctor-row")
+	t.Setenv("GIT_AUTHOR_EMAIL", "doctor-row@example.invalid")
 
 	// Same file, no tmux on PATH: the row fails closed and names the stall.
 	noTmux := t.TempDir()
@@ -1775,6 +1821,17 @@ func TestDoctorReportsWhetherTmuxWorkersCanLaunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", noTmux)
+	if err := os.WriteFile(h.ConfigFile(), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, machine.CheckSessionProvider)
+	if !found || !row.OK || row.Blocking || !strings.Contains(row.Detail, "workers run on pipes (the default, auto)") {
+		t.Fatalf("doctor's session provider row with the default and no tmux is %+v, want OK naming pipes", row)
+	}
+	if err := os.WriteFile(h.ConfigFile(), []byte("session_provider: tmux\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	row, found = findCheck(report, machine.CheckSessionProvider)
 	if !found || row.OK || row.Blocking || !strings.Contains(row.Detail, "stays dispatched") ||

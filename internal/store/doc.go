@@ -213,14 +213,15 @@
 // reports. The basis is the one thing an open unestablished entry may later
 // have filled in, once, through EstablishKeptWork, and the update trigger
 // holds it to that one direction and to an open row, so an answered or
-// closed row is sealed whole. A land or carry-on claim may be written on
-// an open row and withdrawn whole, which leaves it open. Its one revision
-// otherwise closes it, made once and only while it is open: a person's
-// answer and its Resolver, or the
-// program's KeptRemovedOnProof, which only MarkCleanupRemoved and
+// closed row is sealed whole. A land, carry-on or discard claim may be
+// written on an open row and withdrawn whole, which leaves it open. Its
+// one revision otherwise closes it, made once and only while it is open:
+// a person's answer and its Resolver (a discard among them, written by
+// RecordKeptWorkDiscard once the copy is gone), or the program's
+// KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
-// copy removed on a proof, so the program never closes an entry by
-// discarding it; OpenKeptWork lists neither kind of closed row.
+// copy removed on a proof. The program's closure is never a discard;
+// OpenKeptWork lists neither kind of closed row.
 // MarkKeptWorkSurfaced moves when it last
 // surfaced, only forward. The schema seals all three, and a row is not
 // deleted while it is open or while its owner stands. ForgetRepository and
