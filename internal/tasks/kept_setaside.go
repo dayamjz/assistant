@@ -151,12 +151,27 @@ func gitModeFromMode(mode fs.FileMode) string {
 	return ""
 }
 
+// shownForRestore reports whether path is a LostChanged or LostDeleted
+// the set-aside named, including a file under a LostDeleted directory
+// (loss names the directory once with a trailing slash).
+func shownForRestore(restore map[string]bool, path string) bool {
+	if restore[path] {
+		return true
+	}
+	for shown := range restore {
+		if strings.HasSuffix(shown, "/") && strings.HasPrefix(path, shown) {
+			return true
+		}
+	}
+	return false
+}
+
 // writeBackMissingIndex writes back each stage-0 index blob whose path is
-// in restore (a LostChanged or LostDeleted the set-aside named) and whose
-// working-tree path is missing, journalled first. A missing tracked path
-// not in restore is ErrLossChanged. A path that stands meanwhile is
-// ErrAsideStands. Symlinks and gitlinks are refused: this link writes
-// regular files only.
+// in restore (a LostChanged or LostDeleted the set-aside named, a file
+// under a deleted directory among them) and whose working-tree path is
+// missing, journalled first. A missing tracked path not in restore is
+// ErrLossChanged. A path that stands meanwhile is ErrAsideStands.
+// Symlinks and gitlinks are refused: this link writes regular files only.
 func writeBackMissingIndex(ctx context.Context, copied *vcs.Repository, dir string, last *discardJournal, copyPath string, restore map[string]bool) error {
 	entries, err := copied.IndexEntries(ctx)
 	if err != nil {
@@ -174,7 +189,7 @@ func writeBackMissingIndex(ctx context.Context, copied *vcs.Repository, dir stri
 		case !errors.Is(err, fs.ErrNotExist):
 			return err
 		}
-		if !restore[e.Path] {
+		if !shownForRestore(restore, e.Path) {
 			return fmt.Errorf("%w: %s is missing and was not shown as a changed or deleted path to restore", ErrLossChanged, e.Path)
 		}
 		mode, err := regularIndexMode(e.Mode)

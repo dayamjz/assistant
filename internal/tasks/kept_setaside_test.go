@@ -172,6 +172,52 @@ func TestADiscardSetAsideRefusesAPathThatChangedSinceTheLoss(t *testing.T) {
 	}
 }
 
+// A deleted directory the loss shows once is written back for each of its
+// tracked children still named in the index (PRD section 6).
+func TestADiscardSetAsideWritesBackChildrenOfADeletedDirectory(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, _ := keptWithWork(t)
+	ctx := context.Background()
+	if err := os.Remove(filepath.Join(tk.copy, "scratch.txt")); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(tk.copy, "gone")
+	if err := os.MkdirAll(filepath.Join(gone, "deep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(gone, "a.txt"), "in gone\n")
+	writeFile(t, filepath.Join(gone, "deep", "b.txt"), "deeper\n")
+	rawGit(t, tk.copy, "add", "gone")
+	rawGit(t, tk.copy, "commit", "--quiet", "-m", "add gone")
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	shown, err := s.cleaner.Loss(ctx, entry, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(shown.Files, func(f LostPath) bool { return f.Kind == LostDeleted && f.Path == "gone/" }) {
+		t.Fatalf("Loss.Files = %+v; want gone/ deleted", shown.Files)
+	}
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown); err != nil {
+		t.Fatalf("setAsideLoss = %v", err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(gone, "a.txt")); err != nil || string(raw) != "in gone\n" {
+		t.Fatalf("gone/a.txt after setAside = %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(gone, "deep", "b.txt")); err != nil || string(raw) != "deeper\n" {
+		t.Fatalf("gone/deep/b.txt after setAside = %q, %v", raw, err)
+	}
+}
+
 // A tracked path that goes missing without being shown as changed or
 // deleted refuses write-back (PRD section 6: a deletion nobody was shown).
 func TestADiscardSetAsideRefusesAnUnshownMissingTrackedPath(t *testing.T) {
