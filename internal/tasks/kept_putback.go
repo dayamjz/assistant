@@ -11,9 +11,11 @@ import (
 
 // putBack reverses the journal's move and writeBack steps, newest first,
 // striking each once undone so a stop takes up where it stopped (PRD
-// section 6's refusal put-back, for the kinds this link journals). head,
-// refDelete, ponr and finish steps are refused: later removal links that
-// write them must reverse them here before a discard journals them. A
+// section 6's refusal put-back). head and refDelete are refused until
+// those set-asides land. ponr and finish are refused because they are past
+// the point of no return: Discard finishes deletion instead of putting
+// back, and strikes an unreached ponr (rename never happened) before
+// calling putBack. A
 // move whose original path and aside both stand is ErrAsideStands naming
 // both; if the aside is gone and the original stands, the move is treated
 // as done (a stop after the rename and before the strike); if both are
