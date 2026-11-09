@@ -136,12 +136,14 @@ paths: ["internal/tasks/**"]
   kinds are named on the journal but not reversed until later removal links
   write them.
   `setAsideLoss` (`kept_setaside.go`) moves `LostChanged`/`LostNew` file
-  paths (held to the loss's sealed content) and writes missing stage-0
-  index blobs back as regular files; `LostRepository` stays for the clone
-  move at the point of no return. It refuses `LostStaged`, directory
-  paths, and symlink/gitlink write-backs until later links.
-  `Cleaner.Discard` (PONR/finish) and HEAD/ref set-aside are those later
-  links; no discard answer calls them yet.
+  paths when the one `readCopyState` used for the move still matches the
+  loss seal, and writes back only missing `LostChanged`/`LostDeleted`
+  stage-0 index blobs (an unshown missing tracked path is
+  `ErrLossChanged`); `LostRepository` stays for the clone move at the
+  point of no return. It refuses `LostStaged`, directory paths, and
+  symlink/gitlink write-backs until later links. `Cleaner.Discard`
+  (PONR/finish) and HEAD/ref set-aside are those later links; no discard
+  answer calls them yet.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after

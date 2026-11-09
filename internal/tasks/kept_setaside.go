@@ -15,15 +15,17 @@ import (
 // setAsideLoss sets aside the working-tree paths a Loss shows into the
 // discard's directory, journalled before each step (PRD section 6,
 // "Removing a discarded copy", step 1's path half). LostChanged and
-// LostNew are moved as read; LostDeleted needs no move. Then every
-// stage-0 index path left missing is written back from its blob,
-// journalled with the exact bytes first, never replacing anything that
-// stands. LostRepository paths are left in place: a task's clone removes
-// its repository directory with the clone at the point of no return, and
-// a run's worktree leaves the gate's. LostStaged and HEAD/ref set-aside
-// are refused here until later removal links handle them. A path that
-// changed since the loss was read is ErrLossChanged; putBack undoes what
-// was journalled.
+// LostNew are moved as read; LostDeleted needs no move. Then each
+// LostChanged or LostDeleted path that is missing from the working tree
+// is written back from its stage-0 index blob, journalled with the exact
+// bytes first, never replacing anything that stands. A missing tracked
+// path the loss did not name as changed or deleted is refused
+// (ErrLossChanged): a deletion nobody was shown. LostRepository paths
+// are left in place: a task's clone removes its repository directory with
+// the clone at the point of no return, and a run's worktree leaves the
+// gate's. LostStaged and HEAD/ref set-aside are refused here until later
+// removal links handle them. A path that changed since the loss was read
+// is ErrLossChanged; putBack undoes what was journalled.
 //
 // last must be the journal beginDiscard or standingDiscard last wrote;
 // on success it holds every step this call appended.
@@ -35,6 +37,7 @@ func (c *Cleaner) setAsideLoss(ctx context.Context, dir string, last *discardJou
 	for _, f := range loss.files {
 		heldOf[f.LostPath] = f.held
 	}
+	restore := map[string]bool{}
 	for _, f := range loss.Files {
 		switch f.Kind {
 		case LostRepository:
@@ -42,6 +45,7 @@ func (c *Cleaner) setAsideLoss(ctx context.Context, dir string, last *discardJou
 		case LostStaged:
 			return fmt.Errorf("tasks: setAsideLoss does not yet set aside a staged path (%s)", f.Path)
 		case LostDeleted:
+			restore[f.Path] = true
 			continue
 		case LostChanged, LostNew:
 			held, ok := heldOf[f]
@@ -51,6 +55,9 @@ func (c *Cleaner) setAsideLoss(ctx context.Context, dir string, last *discardJou
 			if err := setAsidePath(dir, last, copyPath, f, held); err != nil {
 				return err
 			}
+			if f.Kind == LostChanged {
+				restore[f.Path] = true
+			}
 		default:
 			return fmt.Errorf("tasks: setAsideLoss: unrecognized loss kind %q", f.Kind)
 		}
@@ -59,11 +66,13 @@ func (c *Cleaner) setAsideLoss(ctx context.Context, dir string, last *discardJou
 	if err != nil {
 		return fmt.Errorf("tasks: opening the kept copy at %s for write-back: %w", copyPath, err)
 	}
-	return writeBackMissingIndex(ctx, copied, dir, last, copyPath)
+	return writeBackMissingIndex(ctx, copied, dir, last, copyPath, restore)
 }
 
 // setAsidePath journals a move of the loss path under copyPath into
-// dir/paths and moves it only when it still holds what the loss sealed.
+// dir/paths and moves it only when the one state read for the move still
+// holds what the loss sealed (so a change between a seal check and the
+// move's before cannot smuggle unconfirmed bytes into the aside).
 func setAsidePath(dir string, last *discardJournal, copyPath string, f LostPath, sealed string) error {
 	if strings.HasSuffix(f.Path, "/") {
 		return fmt.Errorf("tasks: setAsideLoss does not yet set aside a directory path (%s)", f.Path)
@@ -73,11 +82,14 @@ func setAsidePath(dir string, last *discardJournal, copyPath string, f LostPath,
 	}
 	from := filepath.Join(copyPath, filepath.FromSlash(f.Path))
 	to := filepath.Join(dir, "paths", filepath.FromSlash(f.Path))
-	if err := pathHoldsSealed(from, f.Path, sealed); err != nil {
-		return err
-	}
 	before, err := readCopyState(from)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%w: %s is gone from the copy", ErrLossChanged, f.Path)
+		}
+		return err
+	}
+	if err := stateHoldsSealed(before, from, f.Path, sealed); err != nil {
 		return err
 	}
 	step := discardStep{Kind: discardStepMove, From: from, To: to}
@@ -94,41 +106,58 @@ func setAsidePath(dir string, last *discardJournal, copyPath string, f LostPath,
 	return nil
 }
 
-// pathHoldsSealed reports whether path still holds what the loss sealed for
-// rel, on lostPaths' terms for a single regular or link entry.
-func pathHoldsSealed(path, rel, sealed string) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, fs.ErrNotExist) {
+// stateHoldsSealed reports whether the state already read for path still
+// holds what the loss sealed for rel, on lostPaths' terms for a single
+// regular or link entry.
+func stateHoldsSealed(before copyState, path, rel, sealed string) error {
+	entry, ok := before[path]
+	if !ok {
 		return fmt.Errorf("%w: %s is gone from the copy", ErrLossChanged, rel)
 	}
-	if err != nil {
-		return err
-	}
-	var held string
 	switch {
-	case info.Mode()&fs.ModeSymlink != 0:
-		held, err = os.Readlink(path)
-	case info.Mode().IsRegular():
-		held, err = hashFile(path)
+	case entry.mode&fs.ModeSymlink != 0, entry.mode.IsRegular():
 	default:
 		return fmt.Errorf("tasks: setAsideLoss: %s is not a file or link", rel)
 	}
-	if err != nil {
-		return err
-	}
 	d := newDigest()
-	holding(d, rel, info, held)
+	d.record(rel, entryKindFromMode(entry.mode), gitModeFromMode(entry.mode), entry.held)
 	if d.sum() != sealed {
 		return fmt.Errorf("%w: %s is not what the copy held when its loss was read", ErrLossChanged, rel)
 	}
 	return nil
 }
 
-// writeBackMissingIndex writes every stage-0 index blob whose working-tree
-// path is missing, journalled first. A path that stands meanwhile is
+func entryKindFromMode(mode fs.FileMode) string {
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "link"
+	case mode.IsDir():
+		return "dir"
+	case mode.IsRegular():
+		return "file"
+	}
+	return "other"
+}
+
+func gitModeFromMode(mode fs.FileMode) string {
+	switch {
+	case mode&fs.ModeSymlink != 0:
+		return "120000"
+	case mode.IsRegular() && mode&0o100 != 0:
+		return "100755"
+	case mode.IsRegular():
+		return "100644"
+	}
+	return ""
+}
+
+// writeBackMissingIndex writes back each stage-0 index blob whose path is
+// in restore (a LostChanged or LostDeleted the set-aside named) and whose
+// working-tree path is missing, journalled first. A missing tracked path
+// not in restore is ErrLossChanged. A path that stands meanwhile is
 // ErrAsideStands. Symlinks and gitlinks are refused: this link writes
 // regular files only.
-func writeBackMissingIndex(ctx context.Context, copied *vcs.Repository, dir string, last *discardJournal, copyPath string) error {
+func writeBackMissingIndex(ctx context.Context, copied *vcs.Repository, dir string, last *discardJournal, copyPath string, restore map[string]bool) error {
 	entries, err := copied.IndexEntries(ctx)
 	if err != nil {
 		return err
@@ -144,6 +173,9 @@ func writeBackMissingIndex(ctx context.Context, copied *vcs.Repository, dir stri
 			continue
 		case !errors.Is(err, fs.ErrNotExist):
 			return err
+		}
+		if !restore[e.Path] {
+			return fmt.Errorf("%w: %s is missing and was not shown as a changed or deleted path to restore", ErrLossChanged, e.Path)
 		}
 		mode, err := regularIndexMode(e.Mode)
 		if err != nil {

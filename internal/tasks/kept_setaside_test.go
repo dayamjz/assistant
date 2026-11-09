@@ -129,11 +129,23 @@ func TestADiscardSetAsideWritesBackADeletedTrackedPath(t *testing.T) {
 }
 
 // A path that changes after the loss is read refuses set-aside with
-// ErrLossChanged and leaves what was journalled for putBack (P6).
+// ErrLossChanged; an earlier path already moved is left for putBack (P6).
 func TestADiscardSetAsideRefusesAPathThatChangedSinceTheLoss(t *testing.T) {
 	principles.Cite(t, principles.P6)
-	s, tk, _, shown := keptWithWork(t)
+	s, tk, entry, _ := keptWithWork(t)
 	ctx := context.Background()
+	tracked := filepath.Join(tk.copy, "own.txt")
+	if err := os.WriteFile(tracked, []byte("edited in the copy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shown, err := s.cleaner.Loss(ctx, entry, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantOwn, err := os.ReadFile(tracked)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir, err := s.cleaner.beginDiscard(tk.copy)
 	if err != nil {
 		t.Fatal(err)
@@ -148,5 +160,47 @@ func TestADiscardSetAsideRefusesAPathThatChangedSinceTheLoss(t *testing.T) {
 	err = s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown)
 	if !errors.Is(err, ErrLossChanged) {
 		t.Fatalf("setAsideLoss after a change = %v; want ErrLossChanged", err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "paths", "own.txt")); err != nil {
+		t.Fatalf("the earlier changed path was not set aside before the refusal: %v", err)
+	}
+	if err := putBack(dir, last); err != nil {
+		t.Fatalf("putBack after a partial setAside = %v", err)
+	}
+	if raw, err := os.ReadFile(tracked); err != nil || string(raw) != string(wantOwn) {
+		t.Fatalf("after putBack, own.txt = %q, %v; want the edited bytes restored", raw, err)
+	}
+}
+
+// A tracked path that goes missing without being shown as changed or
+// deleted refuses write-back (PRD section 6: a deletion nobody was shown).
+func TestADiscardSetAsideRefusesAnUnshownMissingTrackedPath(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s, tk, entry, _ := keptWithWork(t)
+	ctx := context.Background()
+	if err := os.Remove(filepath.Join(tk.copy, "scratch.txt")); err != nil {
+		t.Fatal(err)
+	}
+	shown, err := s.cleaner.Loss(ctx, entry, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Loss no longer names scratch; own.txt still matches HEAD so it is
+	// not in Files. Delete own.txt after the loss so write-back would see
+	// an unshown missing tracked path.
+	if err := os.Remove(filepath.Join(tk.copy, "own.txt")); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := s.cleaner.beginDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, _, err := s.cleaner.standingDiscard(tk.copy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.cleaner.setAsideLoss(ctx, dir, &last, tk.copy, shown)
+	if !errors.Is(err, ErrLossChanged) {
+		t.Fatalf("setAsideLoss with an unshown missing path = %v; want ErrLossChanged", err)
 	}
 }
