@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -95,16 +97,78 @@ import (
 // shared identity rule as they would for any provider. The service does not
 // fall back to the pipe provider: the operator chose an attachable terminal,
 // and a worker they cannot attach to is not what they chose.
-
+//
+// For auto, the default, it is the tmux provider when r could start a
+// terminal worker here (agents.TerminalStartable: it declares terminal
+// workers and, for the Claude Code adapter, a credential and a complete git
+// identity are available — from the environment or git's configured
+// user.name/user.email — which its pipe worker does not need), a tmux binary
+// resolves and the home's socket path fits the platform's limit, and the
+// pipe provider otherwise, which is the fallback auto names;
+// Options.PipeByDefault makes it the pipe provider without looking. Routing
+// under auto does not require terminal workers (routeWorker), so the adapter
+// decides here and is never refused for lacking them.
 func (s *Service) sessionHost(r agents.Runner) session.Host {
-	if s.cfg.SessionProvider != config.SessionProviderTmux {
-		return session.NewPipe(s.home, r)
+	switch s.cfg.SessionProvider {
+	case config.SessionProviderTmux:
+		tmux, err := tmuxBinary()
+		if err != nil {
+			s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
+		}
+		return session.NewTmux(s.home, r, tmux)
+	case config.SessionProviderAuto:
+		if host, ok := s.autoSessionHost(r); ok {
+			return host
+		}
+	}
+	return session.NewPipe(s.home, r)
+}
+
+// autoSessionHost is sessionHost's auto branch: the tmux provider when a
+// worker of r can be hosted there, else false so the caller builds a pipe.
+// A fallback is logged when r could have used a terminal (it declares
+// terminal workers) but did not: missing credential or git identity, no
+// tmux binary, or a home path too long for the socket. An adapter without
+// terminal workers stays on pipes with no log, which is the ordinary choice
+// under auto; doctor's session-provider row still names which provider auto
+// picks.
+func (s *Service) autoSessionHost(r agents.Runner) (session.Host, bool) {
+	if !s.autoTmux {
+		return nil, false
+	}
+	if err := agents.TerminalStartable(r); err != nil {
+		var missing *agents.CapabilityError
+		if !errors.As(err, &missing) {
+			s.log.Printf("session_provider auto hosts %s on a pipe: %v", r.Name(), err)
+		}
+		return nil, false
 	}
 	tmux, err := tmuxBinary()
 	if err != nil {
-		s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
+		s.log.Printf("session_provider auto hosts %s on a pipe: no tmux binary on PATH (%v)", r.Name(), err)
+		return nil, false
 	}
-	return session.NewTmux(s.home, r, tmux)
+	if !session.TerminalFits(s.home, tmux) {
+		s.log.Printf("session_provider auto hosts %s on a pipe: the home path leaves no room for a terminal socket", r.Name())
+		return nil, false
+	}
+	return session.NewTmux(s.home, r, tmux), true
+}
+
+// driverHost is the provider driverFor builds over the resolved agent, which
+// starts every subordinate coordinator and answers by identity a reference no
+// launch holds: sessionHost's, except that auto is the pipe provider here.
+// auto is the default so that a task's worker can outlive a restart, which a
+// subordinate does not (PRD section 9's domain.delegate relaunches it at
+// restart), so auto keeps subordinates on pipes where the earlier pipe
+// default had them; under session_provider tmux a Claude subordinate still
+// starts in a terminal the same way a worker does. Probes answer on one
+// identity rule under either provider.
+func (s *Service) driverHost(r agents.Runner) session.Host {
+	if s.cfg.SessionProvider == config.SessionProviderAuto {
+		return session.NewPipe(s.home, r)
+	}
+	return s.sessionHost(r)
 }
 
 // tmuxBinary is the absolute path of the tmux binary on this process's PATH.
@@ -117,6 +181,36 @@ func tmuxBinary() (string, error) {
 		return "", err
 	}
 	return tmux, nil
+}
+
+// terminalForLaunchCheck is the terminal a launch of a worker through r would
+// start under, when the session provider hosts that worker in tmux, or empty
+// when it hosts it on a pipe. refuseKnowledgeIfLaunchTooLarge asks
+// WorkerLaunchRefusal with it so the bound matches Create's under auto as
+// under an explicit tmux: the same PATH, TerminalStartable and TerminalFits
+// gates sessionHost uses.
+func (s *Service) terminalForLaunchCheck(r agents.Runner) (agents.Terminal, bool) {
+	var tmux string
+	switch s.cfg.SessionProvider {
+	case config.SessionProviderTmux:
+		var err error
+		tmux, err = tmuxBinary()
+		if err != nil {
+			return agents.Terminal{}, false
+		}
+	case config.SessionProviderAuto:
+		if !s.autoTmux || agents.TerminalStartable(r) != nil {
+			return agents.Terminal{}, false
+		}
+		var err error
+		tmux, err = tmuxBinary()
+		if err != nil || !session.TerminalFits(s.home, tmux) {
+			return agents.Terminal{}, false
+		}
+	default:
+		return agents.Terminal{}, false
+	}
+	return agents.Terminal{Tmux: tmux, Socket: s.home.TerminalSocket(strings.Repeat("0", 16))}, true
 }
 
 // heldTerminals is the Terminals over this service's own session provider,

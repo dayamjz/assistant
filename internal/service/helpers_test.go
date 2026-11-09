@@ -625,6 +625,9 @@ func options(t *testing.T, h *home.Home) service.Options {
 		// home is a test whose restart did not happen, and a bounded wait
 		// would let it pass a little later instead of failing.
 		LockWait: -1,
+		// The workers these tests script are pipe workers; a test whose
+		// subject is the default provider clears this.
+		PipeByDefault: true,
 	}
 }
 

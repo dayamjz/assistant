@@ -46,9 +46,9 @@ func refusalUnhonored(global config.Layer, cfg config.Config) error {
 		return fmt.Errorf("%w: %s is set, and this build places every worker on this machine and by none of these settings yet; remove it from the file", errUnhonored, k)
 	}
 	if cfg.SessionProvider == config.SessionProviderHerdr {
-		return fmt.Errorf("%w: %s is %q, and this build has no %s provider yet; set it to %q or %q",
+		return fmt.Errorf("%w: %s is %q, and this build has no %s provider yet; set it to %q, %q or %q",
 			errUnhonored, config.KeySessionProvider, cfg.SessionProvider, cfg.SessionProvider,
-			config.SessionProviderPipe, config.SessionProviderTmux)
+			config.SessionProviderAuto, config.SessionProviderPipe, config.SessionProviderTmux)
 	}
 	return nil
 }

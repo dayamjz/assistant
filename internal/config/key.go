@@ -287,7 +287,8 @@ const (
 	// KeySessionProvider is "session_provider": which terminal session
 	// provider the service starts a task's worker through, PRD section 8's
 	// session module. Its values are SessionProvider's closed set and its
-	// default is SessionProviderPipe, the reference provider.
+	// default is SessionProviderAuto: tmux where it can host the worker, a
+	// pipe where it cannot.
 	//
 	// It is global-only, and that is a P7 decision rather than a convenience.
 	// The provider decides which program the service runs to start every

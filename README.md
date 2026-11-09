@@ -111,6 +111,7 @@ Validation covers only committed changes pushed to the `assistant` remote; ordin
 | `assistant runs --usage=7d` | Review recorded **validation-stage** agent usage, not all worker turns |
 | `assistant --json status` | Consume structured status and find the repository identifier |
 | `assistant db path` | Print the home's database file, to point a reader of your own at the records; open it read-only (`sqlite3 -readonly "$(assistant db path)"`) |
+| `assistant --json dump` | Write every record the resolver reads, plus task wakes and kept work, as one JSON document (optional task ID); a read-only snapshot, not a substitute for the database |
 
 ## 1. Give each agent a job
 
@@ -171,12 +172,12 @@ With `housekeeping.interval` set, the supervisor also tells the coordinator when
 
 Assistant also records **kept work** when a copy cannot safely be removed. It surfaces that retained state, holds new tasks on that copy's branch until a person answers land or carry on, and does not remove a copy on a discard answer in this build. See [kept work in the operator guide](docs/operators.md#kept-work).
 
-**Where workers run:** The default session provider is `pipe`: the worker is the service's own child, so a restart of the service ends it and it is relaunched in its copy. `session_provider: tmux` hosts each worker in a tmux server of its own when the adapter declares terminal workers, and such a worker outlives `assistant service restart`: the next service picks it up again, with its context and no relaunch. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
+**Where workers run:** By default (`session_provider: auto`) each worker runs in a tmux server of its own wherever tmux is installed, its adapter can host it there (today Claude Code, with `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` in the service's environment and a complete git name and email), and the home's path leaves room for the worker's socket, so you can attach to it and it outlives a restart of the service: `assistant service restart` lets it keep running and the next service picks it up again, with its context and no relaunch. Elsewhere it runs on pipes as the service's own child and is relaunched in its copy after a restart. `session_provider: tmux` or `pipe` chooses one for every worker. `assistant service stop` ends every worker the service holds. The schema also accepts `session_provider: herdr`, `remote_hosts`, `placement.local`, `placement.arch`, and `remote_disconnect_grace`. This build has no herdr provider and does not act on those keys. The service refuses to start when `config.yaml` sets one of them, naming the key. See [Watch a worker in a terminal](docs/operators.md#watch-a-worker-in-a-terminal).
 
 ```mermaid
 flowchart LR
     C["Coordinator"] --> P{"Place worker"}
-    P --> L["This machine\npipe or tmux"]
+    P --> L["This machine\ntmux or pipe"]
     P -. "Refused this build" .-> M["Another machine\nherdr bridge"]
     L --> I["Isolated repository copy"]
     I --> S["Supervision + durable state"]

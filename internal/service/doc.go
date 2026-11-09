@@ -497,11 +497,17 @@
 // attempt runs in. Each launch builds its own session.Host, through
 // terminals.go's sessionHost, over the adapter agents.Route selected for that
 // worker, which may differ from the run agent, and never over the runner
-// containRunner wraps, because the wrapper carries no worker arm: a
-// session.Pipe by default, or a session.Tmux when the operator's file sets
-// config.KeySessionProvider to tmux. driverFor builds one more the same way over the resolved agent, which
-// starts a subordinate coordinator's session and answers a reference no
-// launch of this service holds by identity alone, on terminals.go's terms.
+// containRunner wraps, because the wrapper carries no worker arm: under the
+// default, auto, a session.Tmux where tmux is installed, the adapter can
+// start a terminal worker here (agents.TerminalStartable) and the home's
+// path leaves room for the socket (session.TerminalFits), and a
+// session.Pipe otherwise, and the one config.KeySessionProvider names when
+// the operator's file names one.
+// driverFor builds one more over the resolved agent through driverHost: under
+// auto that is always a session.Pipe (subordinates stay on pipes), and under
+// an explicit provider it is sessionHost's; it starts a subordinate
+// coordinator's session and answers a reference no launch of this service
+// holds by identity alone, on terminals.go's terms.
 // The sessions a launch creates are held per task, one per attempt, beside
 // the tmux workers an earlier service let go across a restart, which
 // recovery holds again (reconcile.go's readoptWorkers); Close ends exactly

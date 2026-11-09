@@ -273,9 +273,12 @@
 //
 // # Where the records are, for a reader that is not this program
 //
-// db in db.go is PRD section 9's verb for a person debugging a home from
-// outside this binary: db path writes the database file of the home the
-// command acted on, so the records can be opened with a reader of their own.
+// dump in dump.go is PRD section 9's dump: every record the resolver reads,
+// plus the task wakes and kept work, as one JSON document, redacted on the
+// way out, from a read-only open that asks the service nothing. db in db.go
+// is PRD section 9's path verb for a person debugging a home from outside
+// this binary: db path writes the database file of the home the command
+// acted on, so the records can be opened with a reader of their own.
 // It is a row of the verb table because that section describes it, and
 // dbActions is the one owner of what it answers; a subcommand that section
 // does not describe is a finding against the specification, as a verb is.
@@ -426,7 +429,7 @@
 // or watcher's word in it. The vocabulary that does that is internal/machine's
 // phrase table, and this package has one owner of which renderers speak
 // through it: the renderings table in render.go, which readOut dispatches
-// through and Renderings reads out. Every row but five is phrased, and
+// through and Renderings reads out. Every row but six is phrased, and
 // every line those rows write is a row of the table or a row beside the
 // person's own word - a branch, a project, a reference a change carried, the
 // repository's default branch - escaped. The stop guard's renderer writes no
@@ -442,23 +445,23 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The five that are not phrased are named in the renderings table. Four of
+// The six that are not phrased are named in the renderings table. Five of
 // them are evidence written behind a phrase: a run's details, the findings
-// holding a decision, the usage view and a stage's log are the detail view,
-// the relay of a finding that needs a decision, the usage view and the log
-// view, which P13 names among its detailed evidence documents and lets keep
-// exact identifiers and stage names. Each of those four carries the
-// phrase-table row that points a person at it, and writeEvidence, which the
-// run renderer reaches the first two through, and writePointed, which
-// readOut reaches the usage view and the log view through, write that row
-// first, so the message pointing at the evidence is phrased like every other
-// line; what a run says about a request it did not apply is a status line and
-// is a row beside the evidence rather than part of it. The fifth is the value
-// row, section 9's db path: it is an evidence document in P13's sense and is
-// written alone, because a pointer would become part of what a caller
-// substitutes; VoiceValue and the section above say so. A plan, which was the
-// last unsettled row, is phrased: internal/custody's classes, refusals and
-// steps each have a row.
+// holding a decision, the usage view, a stage's log and the dump are the
+// detail view, the relay of a finding that needs a decision, the usage view,
+// the log view and the dump, which P13 names among its detailed evidence
+// documents and lets keep exact identifiers and stage names. Each of those
+// five carries the phrase-table row that points a person at it, and
+// writeEvidence, which the run renderer reaches the first two through, and
+// writePointed, which readOut reaches the usage view, the log view and the
+// dump through, write that row first, so the message pointing at the evidence
+// is phrased like every other line; what a run says about a request it did
+// not apply is a status line and is a row beside the evidence rather than
+// part of it. The sixth is the value row, section 9's db path: it is an
+// evidence document in P13's sense and is written alone, because a pointer
+// would become part of what a caller substitutes; VoiceValue and the section
+// above say so. A plan, which was the last unsettled row, is phrased:
+// internal/custody's classes, refusals and steps each have a row.
 //
 // The refusal and usage text written on standard error is outside the table
 // too, and is not held to P13 by any test: a failure's sentence is composed
