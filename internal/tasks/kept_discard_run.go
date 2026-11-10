@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/store"
@@ -165,8 +166,10 @@ func (c *Cleaner) removeWorktreeAtPONR(ctx context.Context, entry store.KeptWork
 		}
 		return refuse(fmt.Errorf("tasks: waiting to remove the worktree at %s: %w", entry.CopyPath, err))
 	}
-	defer func() { _ = lock.Release() }()
-	if err := bare.RemoveWorktree(ctx, entry.CopyPath); err != nil {
+	removeErr := bare.RemoveWorktree(ctx, entry.CopyPath)
+	// Release before finishDiscard, which takes the copies lock again.
+	_ = lock.Release()
+	if removeErr != nil {
 		begun, readErr := c.worktreeRemovalBegunAt(ctx, bare, entry.CopyPath)
 		if readErr != nil {
 			// Leave the journal and discard directory: the claim stays owed.
@@ -174,9 +177,9 @@ func (c *Cleaner) removeWorktreeAtPONR(ctx context.Context, entry store.KeptWork
 		}
 		if !begun {
 			if strikeErr := strikeUnreachedRemovalSteps(dir, last, entry.CopyPath); strikeErr != nil {
-				return fmt.Errorf("tasks: removing the worktree at %s: %w (and striking ponr: %w)", entry.CopyPath, err, strikeErr)
+				return fmt.Errorf("tasks: removing the worktree at %s: %w (and striking ponr: %w)", entry.CopyPath, removeErr, strikeErr)
 			}
-			return refuse(fmt.Errorf("tasks: removing the worktree at %s: %w", entry.CopyPath, err))
+			return refuse(fmt.Errorf("tasks: removing the worktree at %s: %w", entry.CopyPath, removeErr))
 		}
 		return c.finishDiscard(ctx, gatePath, dir, last)
 	}
@@ -241,12 +244,39 @@ func (c *Cleaner) worktreeRemovalBegunAt(ctx context.Context, bare *vcs.Reposito
 	if !hasRecord {
 		return true, nil
 	}
-	if _, err := copyRecord(ctx, bare, copyPath); err != nil {
-		if errors.Is(err, ErrRecordNotTheCopys) {
-			// Structure no longer matches the gate record: removal had begun.
-			return true, nil
-		}
+	// Re-read the linked-worktree shape without copyRecord: that helper
+	// wraps gate/IO failures as ErrRecordNotTheCopys, which here must stay
+	// an owed claim (PRD step 4), not a force-finish.
+	dotGit := filepath.Join(copyPath, ".git")
+	gitInfo, err := os.Lstat(dotGit)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
 		return false, err
+	case !gitInfo.Mode().IsRegular():
+		return true, nil
+	}
+	raw, err := os.ReadFile(dotGit)
+	if err != nil {
+		return false, err
+	}
+	pointer, ok := strings.CutPrefix(strings.TrimSuffix(string(raw), "\n"), "gitdir: ")
+	if !ok || pointer == "" || strings.ContainsAny(pointer, "\n\r\x00") {
+		return true, nil
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(copyPath, pointer)
+	}
+	var record string
+	for _, r := range records {
+		if r.Worktree == worktree {
+			record = r.Record
+			break
+		}
+	}
+	if filepath.Clean(pointer) != record {
+		return true, nil
 	}
 	copied, err := vcs.OpenWorktree(ctx, copyPath, c.git...)
 	if err != nil {
@@ -449,8 +479,23 @@ func (c *Cleaner) finishDiscard(ctx context.Context, gatePath, dir string, last 
 		}
 		defer func() { _ = lock.Release() }()
 		if err := bare.RemoveWorktreeDiscardingChanges(ctx, from); err != nil {
-			// Gate record may already be gone (removal begun by pruning the
-			// record); the path remains are still removed by force.
+			// Only fall back to RemoveAll when the gate record is already
+			// gone: otherwise the path would vanish while the admin record
+			// still stood (PRD step 5 / decision 31).
+			parent, evalErr := filepath.EvalSymlinks(filepath.Dir(from))
+			if evalErr != nil {
+				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and reading its parent: %w)", from, err, evalErr)
+			}
+			worktree := filepath.Join(parent, filepath.Base(from))
+			records, recErr := bare.WorktreeRecords(ctx)
+			if recErr != nil {
+				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and reading gate records: %w)", from, err, recErr)
+			}
+			for _, r := range records {
+				if r.Worktree == worktree {
+					return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (gate record still stands at %s)", from, err, r.Record)
+				}
+			}
 			if rm := os.RemoveAll(from); rm != nil {
 				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and removing remains: %w)", from, err, rm)
 			}

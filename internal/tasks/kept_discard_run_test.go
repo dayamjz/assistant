@@ -6,9 +6,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"testing"
-
 	"strings"
+	"testing"
 
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -522,6 +521,34 @@ func TestWorktreeRemovalBegunReadsPathGateRecordAndTree(t *testing.T) {
 		t.Fatalf("intact worktree begun = %v, %v; want false, nil", begun, err)
 	}
 
+	// Dirty tree with path and record still standing: removal had begun.
+	writeFile(t, filepath.Join(copyPath, "dirt.txt"), "not as step 3 left it\n")
+	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err != nil || !begun {
+		t.Fatalf("dirty worktree begun = %v, %v; want true, nil", begun, err)
+	}
+	if err := os.Remove(filepath.Join(copyPath, "dirt.txt")); err != nil {
+		t.Fatal(err)
+	}
+	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err != nil || begun {
+		t.Fatalf("after cleaning dirt begun = %v, %v; want false, nil", begun, err)
+	}
+
+	// Unreadable .git: claim stays owed (read failure, not begun).
+	dotGit := filepath.Join(copyPath, ".git")
+	if err := os.Chmod(dotGit, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dotGit, 0o644) })
+	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err == nil || begun {
+		t.Fatalf("unreadable .git begun = %v, %v; want false, read error", begun, err)
+	}
+	if err := os.Chmod(dotGit, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	bare, err := openBareForTest(t, gateRepo)
 	if err != nil {
 		t.Fatal(err)
@@ -656,6 +683,64 @@ func TestAStandingWorktreeDiscardFinishesWhenTheGateRecordIsGone(t *testing.T) {
 	j, found, err := s.cleaner.standingDiscard(copyPath)
 	if err != nil || !found || !journalHasStep(j, discardStepFinish) {
 		t.Fatalf("journal after finish = %+v found %v err %v", j, found, err)
+	}
+}
+
+// A standing worktree discard whose path, gate record, and step-3 tree
+// still stand is before PONR: Discard puts set-aside back and clears the
+// discard directory (PRD step 4; P6).
+func TestAStandingWorktreeDiscardPutsBackWhenStillIntact(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	const runID = "run-putback-wt"
+	if _, err := s.store.CreateRun(ctx, store.Run{
+		ID: runID, RepositoryID: cleanupRepository, Branch: "topic", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	gateRepo := filepath.Join(t.TempDir(), "gate.git")
+	rawGit(t, filepath.Dir(gateRepo), "clone", "-q", "--bare", s.upstream, gateRepo)
+	copyPath := s.home.Worktree(cleanupRepository, runID)
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, gateRepo, "worktree", "add", "-q", "--detach", copyPath, "main")
+	commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
+	kept, err := s.cleaner.Keep(ctx, Kept{Run: runID, Reason: string(ReasonCopyChanged)})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v", kept, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, kept.Entry, gateRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := s.cleaner.beginDiscard(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, found, err := s.cleaner.standingDiscard(copyPath)
+	if err != nil || !found {
+		t.Fatalf("standingDiscard after begin = found %v, %v", found, err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, copyPath, shown); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.discardClean(ctx, kept.Entry, gateRepo, shown); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDiscardStep(dir, &last, discardStep{Kind: discardStepPONR, From: copyPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.cleaner.Discard(ctx, kept.Entry, gateRepo, shown.Digest); err != nil {
+		t.Fatalf("Discard with intact standing worktree ponr = %v; want put-back then a fresh attempt", err)
+	}
+	// Put-back cleared the standing directory; a fresh Discard then removes.
+	if _, err := os.Lstat(copyPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("worktree still stands after the resumed Discard finished: %v", err)
 	}
 }
 

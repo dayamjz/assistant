@@ -160,7 +160,7 @@ func TestKeptWorkIsAnsweredLandFromTheCommandLine(t *testing.T) {
 // and removes the worktree on that confirmation. The rows are held to the
 // vocabulary. --confirm beside any other answer, or with no digest, is
 // incorrect usage before anything is asked.
-func TestKeptWorkIsShownAndItsDiscardRefusedFromTheCommandLine(t *testing.T) {
+func TestKeptWorkIsShownAndItsDiscardRemovedFromTheCommandLine(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
