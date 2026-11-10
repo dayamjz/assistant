@@ -14,9 +14,10 @@ import (
 )
 
 // The interrupt fixture is the stream-json control_request, control_response,
-// and interrupted result Claude Code's CLI emits for a pipe cancel. Playing
-// the result through observe settles an armed turn, so the stand-in and
-// adapter cannot drift from that claimed shape with every test still green.
+// and interrupted result this package claims for a pipe cancel. Playing the
+// result through observe settles an armed turn, so the fixture cannot drop
+// those shapes with this test still green. The stand-in's interrupt frames
+// are a separate model in standin/stream.go; this test does not hold them.
 func TestSchemaClaudeStreamInterruptFramesSettleTheWorker(t *testing.T) {
 	raw, err := os.ReadFile("testdata/claude-stream-interrupt-control-request.jsonl")
 	if err != nil {
