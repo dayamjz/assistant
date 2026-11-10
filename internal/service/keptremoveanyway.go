@@ -183,8 +183,9 @@ func (s *Service) refuseRemoveAnywayWhileBusy(entry store.KeptWork) error {
 }
 
 // removeAnywayProbe decides whether remove-anyway is offered, from the
-// copy as it reads now: a discard that can read and remove the copy
-// refuses naming discard; otherwise it returns the discard's refusal.
+// copy as it reads now: a copy whose loss a discard's preview reads is
+// refused naming discard, though that discard may still be refused at its
+// removal (#880); otherwise it returns the discard's refusal.
 func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (refusal string, err error) {
 	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {
@@ -202,7 +203,7 @@ func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (
 	}
 	_, lossErr := s.cleaner.Loss(ctx, entry, gatePath)
 	if lossErr == nil {
-		return "", fmt.Errorf("%w: kept work entry %d was not released: a discard can remove the copy; confirm that discard instead of remove-anyway",
+		return "", fmt.Errorf("%w: kept work entry %d was not released: a discard's preview reads the copy's loss; show and confirm that discard instead of remove-anyway",
 			ipc.ErrRefused, entry.ID)
 	}
 	switch {

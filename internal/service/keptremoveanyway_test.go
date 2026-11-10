@@ -3,6 +3,7 @@ package service_test
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,7 +63,8 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 	})
 }
 
-// A copy a discard can remove is refused for remove-anyway, naming discard.
+// A copy whose loss a discard's preview reads is refused for remove-anyway,
+// naming discard.
 func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -78,7 +80,7 @@ func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
 			Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway),
 		}, &machine.KeptWorkAnswered{})
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard can remove") {
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard's preview reads") {
 			t.Fatalf("remove-anyway of a discardable copy = %v; want refused naming discard", err)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
@@ -88,29 +90,80 @@ func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 }
 
 // A copy that cannot be verified is offered for remove-anyway (decision 31 /
-// section 13), with the refusal alone and no loss list.
+// section 13), with the refusal alone and no loss list, and --force releases
+// its entry without touching what stands at the copy's path. Both ways a
+// clone fails verification are planted: the copy gone, and a copy whose
+// .git is another clone's, not the one its entry recorded.
 func TestARemoveAnywayIsOfferedForAnUnverifiableCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 	principles.Cite(t, principles.P15)
 
-	h := newHome(t)
-	subject := newSubject(t)
-	repository := recordRepository(t, h, subject)
-	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
-	if err := os.RemoveAll(entry.CopyPath); err != nil {
-		t.Fatal(err)
-	}
+	for _, c := range []struct {
+		name  string
+		plant func(t *testing.T, copyPath, workingPath string) (check func(t *testing.T))
+	}{
+		{"the copy is gone", func(t *testing.T, copyPath, _ string) func(t *testing.T) {
+			if err := os.RemoveAll(copyPath); err != nil {
+				t.Fatal(err)
+			}
+			return func(*testing.T) {}
+		}},
+		{"the copy is not the one its entry recorded", func(t *testing.T, copyPath, workingPath string) func(t *testing.T) {
+			other := filepath.Join(t.TempDir(), "other")
+			git(t, workingPath, "clone", "--quiet", workingPath, other)
+			head := git(t, other, "rev-parse", "HEAD")
+			own := filepath.Join(copyPath, ".git")
+			if err := os.Rename(own, own+".own"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join(other, ".git"), own); err != nil {
+				t.Fatal(err)
+			}
+			return func(t *testing.T) {
+				if target, err := os.Readlink(own); err != nil || target != filepath.Join(other, ".git") {
+					t.Errorf("the copy's .git reads %q, %v; want it left linking to the other clone", target, err)
+				}
+				if _, err := os.Stat(own + ".own"); err != nil {
+					t.Errorf("the copy's own repository directory must stay: %v", err)
+				}
+				if got := git(t, other, "rev-parse", "HEAD"); got != head {
+					t.Errorf("the other clone's HEAD became %s, was %s", got, head)
+				}
+			}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHome(t)
+			subject := newSubject(t)
+			repository := recordRepository(t, h, subject)
+			old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+			check := c.plant(t, entry.CopyPath, repository.WorkingPath)
 
-	withService(t, h, func(under serviceUnderTest) {
-		var shown machine.KeptWorkAnswered
-		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-			Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway),
-		}, &shown); err != nil || shown.Effect != machine.KeptWorkRemoveAnywayShown || shown.Refusal == "" || shown.Loss != nil {
-			t.Fatalf("remove-anyway of a gone copy = %+v, %v; want shown with a refusal and no loss list", shown, err)
-		}
-	})
+			withService(t, h, func(under serviceUnderTest) {
+				ctx := t.Context()
+				request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway)}
+				var shown machine.KeptWorkAnswered
+				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
+					shown.Effect != machine.KeptWorkRemoveAnywayShown || shown.Refusal == "" || shown.Loss != nil {
+					t.Fatalf("remove-anyway of an unverifiable copy = %+v, %v; want shown with a refusal and no loss list", shown, err)
+				}
+				request.Force = true
+				var done machine.KeptWorkAnswered
+				if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &done); err != nil ||
+					done.Effect != machine.KeptWorkRemovedAnyway {
+					t.Fatalf("confirmed remove-anyway of an unverifiable copy = %+v, %v; want removed-anyway", done, err)
+				}
+				if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Open() ||
+					still.RemoveAnywayRefusal.Or("") != shown.Refusal {
+					t.Fatalf("after confirmation the entry reads %+v, %v; want it released with the refusal %q", still, err, shown.Refusal)
+				}
+				check(t)
+			})
+		})
+	}
 }
 
 // A Force confirmation whose discard refusal no longer holds takes the
@@ -146,7 +199,7 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 		if err := writer.Close(); err != nil {
 			t.Fatal(err)
 		}
-		// Clear the shallow marker so a discard can remove the copy again
+		// Clear the shallow marker so a discard's preview reads the copy again
 		// (fetch --unshallow of this layout leaves it shallow).
 		if err := os.Remove(entry.CopyPath + "/.git/shallow"); err != nil {
 			t.Fatal(err)
@@ -155,7 +208,7 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 		request.Force = true
 		var out machine.KeptWorkAnswered
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard can remove") {
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard's preview reads") {
 			t.Fatalf("force after the refusal cleared = %+v, %v; want refused naming discard", out, err)
 		}
 		still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
@@ -168,7 +221,7 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 // A remove-anyway claim a stopped service left owed is taken up at the
 // next open (PRD section 6, section 11): finished, keeping the copy, while
 // the discard still refuses; taken back, leaving the entry open, once a
-// discard can remove the copy.
+// discard's preview reads the copy.
 func TestARemoveAnywayClaimOwedAtOpenIsFinishedOrTakenBack(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)

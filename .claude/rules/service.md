@@ -110,8 +110,8 @@ paths: ["internal/service/**"]
   foreground it claims (`ClaimKeptWorkRemoveAnyway`), records the release
   (`RecordKeptWorkRemoveAnyway`) without removing the copy, and redispatches
   (`completeRemoveAnywaysAtOpen` resumes a stopped claim). It is refused
-  when a discard can remove the copy, while a discard claim or set-aside
-  stands, and off-terminal (`removeAnywayOffTerminal`,
+  when a discard's preview reads the copy's loss, while any claim or a
+  discard set-aside stands, and off-terminal (`removeAnywayOffTerminal`,
   `PhraseRemoveAnywayNeedsTerminal`). A
   promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
