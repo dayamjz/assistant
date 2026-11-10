@@ -61,7 +61,8 @@ func writeUsageCeiling(w io.Writer, c machine.UsageCeiling) {
 }
 
 // writeUsageTotals prints one group's totals under its heading: the calls,
-// failures and time on one line, and the token counts on the next.
+// failures and time on one line, the token counts on the next, and the Jev
+// compaction events/chars/requests on a third.
 func writeUsageTotals(w io.Writer, heading string, t machine.UsageTotals) {
 	writef(w, "%s\n", heading)
 	writef(w, "      calls %d, failed %s, took %s\n", t.Calls, failures(t.Failures), t.Duration.Round(time.Millisecond))
