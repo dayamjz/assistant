@@ -31,16 +31,20 @@ place of `--task` for a run's copy.
   terminal, which your tool's commands are not, so never try to give one.
 - `--answer remove-anyway` is for a copy whose discard preview refuses
   (unsupported layout, unverifiable copy, or a loss the upstream or
-  default branch could not establish), read afresh each time. Alone it
-  shows why discard refuses, and nothing of the loss, and records nothing;
-  that preview is open under `--json` and off a terminal. With `--force`
-  from a terminal's foreground, naming the same task or run, it releases
-  the entry and every other open unclaimed entry of that copy, and keeps
-  the copy. The confirmation is refused when the discard preview reads the
-  copy, while a claim or a discard set-aside stands, under `--json`, and
-  from any process not in a terminal's foreground; never try to give the
-  confirmation yourself. A discard refused at its removal puts the copy
-  back and is shown and confirmed again; remove-anyway is refused for it.
+  default branch could not establish), read afresh each time. Alone, when
+  no claim and no discard set-aside stands on the copy, it shows why
+  discard refuses, and nothing of the loss, and records nothing; that
+  preview is open under `--json` and off a terminal. A standing land,
+  carry-on, discard, or remove-anyway claim, a claim on another open
+  entry of the same copy, or a discard set-aside refuses the alone answer
+  too. With `--force` from a terminal's foreground, naming the same task
+  or run, it releases the entry and every other open unclaimed entry of
+  that copy, and keeps the copy. The confirmation is refused when the
+  discard preview reads the copy's loss, while a claim or a discard
+  set-aside stands, under `--json`, and from any process not in a
+  terminal's foreground; never try to give the confirmation yourself. A
+  discard refused at its removal puts the copy back and is shown and
+  confirmed again; remove-anyway is refused for it.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
 land, carry-on, discard with `--confirm`, or remove-anyway with `--force` when
