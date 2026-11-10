@@ -153,8 +153,11 @@ type Exchange struct {
 	// Turn is how long an interactive worker shows the turn this exchange
 	// answers as running, in place of WorkerScript.Turn, which zero leaves
 	// in force; it is how a script makes one message a long turn. A
-	// negative Turn is refused when the Agent is built. Line, stream and
-	// JSON-RPC workers do not read it.
+	// negative Turn is refused when the Agent is built. On an app-server
+	// worker, any Turn greater than zero holds the accepted turn open
+	// until turn/interrupt instead of answering, so a probe can cancel it;
+	// the duration itself is not slept. Line, stream and ACP workers do
+	// not read it.
 	Turn time.Duration `json:"turn,omitempty"`
 	// Progress is a line an interactive worker draws as soon as the turn
 	// this exchange answers begins, as the CLI drew the first words of a

@@ -1,0 +1,4 @@
+{"id":4,"method":"turn/interrupt","params":{"threadId":"01a14d4d-cb48-7a02-be16-3b3737212b9e","turnId":"01a14d4d-cbd4-7262-95c0-856c2dab1db0"}}
+{"id":4,"result":{}}
+{"method":"turn/completed","params":{"threadId":"01a14d4d-cb48-7a02-be16-3b3737212b9e","turn":{"id":"01a14d4d-cbd4-7262-95c0-856c2dab1db0","items":[],"status":"interrupted"}}}
+{"method":"thread/status/changed","params":{"threadId":"01a14d4d-cb48-7a02-be16-3b3737212b9e","status":{"type":"idle"}}}

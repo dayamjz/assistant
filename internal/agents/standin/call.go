@@ -90,9 +90,9 @@ type Call struct {
 	// Slash is every input an interactive worker took as a slash command,
 	// because it began with "/" typed into an empty input, with the "/".
 	Slash []string `json:"slash,omitempty"`
-	// Interrupted is every message whose turn an interactive worker ended
-	// on the Escape key, in order; each is also in Lines, and none was
-	// answered.
+	// Interrupted is every message whose turn ended on an interrupt, in
+	// order; each is also in Lines, and none was answered. An interactive
+	// worker records Escape; an app-server worker records turn/interrupt.
 	Interrupted []string `json:"interrupted,omitempty"`
 	// IdleEscapes counts the Escape keys an interactive worker read with no
 	// turn running, each a key the CLI was observed to take another way:

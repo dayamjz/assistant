@@ -353,16 +353,93 @@ var probes = append([]probe{{
 				refusal.Capability, refusal.Agent, agents.CapabilityTerminalInterrupt, r.Name())
 		}
 	},
+}, {
+	capability: agents.CapabilityPipeInterrupt,
+	declared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.WorkerRunner); !ok {
+			t.Errorf("%s declares %s and is no WorkerRunner, so it has no pipe worker to interrupt",
+				r.Name(), agents.CapabilityPipeInterrupt)
+			return
+		}
+		dir, err := standin.TempDir("pintr")
+		if err != nil {
+			t.Fatalf("making a directory for the worker: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		const instructions = "conformance: a pipe worker is being started"
+		start, cancel := bounded(t.Context())
+		worker, err := agents.OpenWorker(start, r, agents.WorkerSpec{Dir: dir, Instructions: instructions})
+		cancel()
+		if err != nil {
+			t.Errorf("%s declares %s and OpenWorker could not start one: %v", r.Name(), agents.CapabilityPipeInterrupt, err)
+			return
+		}
+		defer worker.Close()
+		send, cancel := bounded(t.Context())
+		err = worker.Send(send, interruptProbeMessage)
+		cancel()
+		if err != nil {
+			t.Errorf("%s's pipe worker refused the long turn: %v", r.Name(), err)
+			return
+		}
+		wait, cancel := bounded(t.Context())
+		interrupted, err := agents.InterruptPipeWorker(wait, r, worker)
+		cancel()
+		if err != nil || !interrupted {
+			t.Errorf("%s declares %s and the interrupt of a running turn answered %t, %v",
+				r.Name(), agents.CapabilityPipeInterrupt, interrupted, err)
+			return
+		}
+		select {
+		case <-worker.Done():
+			t.Errorf("%s's pipe worker ended on the interrupt", r.Name())
+			return
+		default:
+		}
+		idle, cancel := bounded(t.Context())
+		interrupted, err = agents.InterruptPipeWorker(idle, r, worker)
+		cancel()
+		if err != nil || interrupted {
+			t.Errorf("%s's interrupt with no turn running answered %t, %v, want false and no error", r.Name(), interrupted, err)
+			return
+		}
+		const after = "conformance: a message after the interrupt"
+		mark := written(worker)
+		send, cancel = bounded(t.Context())
+		err = worker.Send(send, after)
+		cancel()
+		if err != nil {
+			t.Errorf("%s's interrupted pipe worker refused its next send: %v", r.Name(), err)
+			return
+		}
+		if !reacted(t, worker, mark, written) {
+			t.Errorf("%s's interrupted pipe worker did not read its next send:\n%s", r.Name(), worker.Capture().Text)
+		}
+	},
+	undeclared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		_, err := agents.InterruptPipeWorker(t.Context(), r, nil)
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s has not declared %s and InterruptPipeWorker answered %v, want a *CapabilityError",
+				r.Name(), agents.CapabilityPipeInterrupt, err)
+		}
+		if refusal.Capability != agents.CapabilityPipeInterrupt || refusal.Agent != r.Name() {
+			t.Errorf("the refusal names %q on %q, want %q on %q",
+				refusal.Capability, refusal.Agent, agents.CapabilityPipeInterrupt, r.Name())
+		}
+	},
 }}, countProbes()...)
 
-// interruptProbeMessage is the turn the terminal interrupt probe
-// interrupts, and the landmark interruptProbeExchange, and the installed-CLI
+// interruptProbeMessage is the turn the terminal and pipe interrupt probes
+// interrupt, and the landmark interruptProbeExchange, and the installed-CLI
 // test's local model, answer with a turn longer than the probe waits.
 const interruptProbeMessage = "conformance: a turn long enough to interrupt"
 
-// interruptProbeExchange is the stand-in's long turn for the terminal
-// interrupt probe. Every stand-in the suite runs a terminal adapter over
-// carries it.
+// interruptProbeExchange is the stand-in's long turn for the terminal and
+// pipe interrupt probes. Every stand-in the suite runs a declaring adapter
+// over carries it.
 var interruptProbeExchange = standin.Exchange{Contains: interruptProbeMessage, Reply: "conformance: the long turn ended by itself",
 	Turn: time.Hour, Progress: "conformance: the long turn has begun"}
 
@@ -752,7 +829,9 @@ var overTheWire = map[string]func(t *testing.T) agents.Runner{
 		return standin.NewCursor(t, standin.Script{Steps: []standin.Step{countProbeStep}}).Runner()
 	},
 	agents.CodexName: func(t *testing.T) agents.Runner {
-		return standin.NewCodex(t, standin.Script{Steps: []standin.Step{countProbeStep}}).Runner()
+		return standin.NewCodex(t, standin.Script{Steps: []standin.Step{countProbeStep},
+			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{interruptProbeExchange}}},
+		).Runner()
 	},
 	agents.OpenAIName: func(t *testing.T) agents.Runner { return openaiOverTheWire(t) },
 	agents.GrokName: func(t *testing.T) agents.Runner {
@@ -942,15 +1021,16 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}
 
-	// Verify Codex declares resumable sessions and pipe workers, and not
-	// terminal workers.
+	// Verify Codex declares resumable sessions, pipe workers, and a pipe
+	// interrupt, and not terminal workers.
 	codexFactory := agents.CodexFactory(agents.WithCodexBinary(helperBinary(t)))
 	codex, err := codexFactory.New(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("codex factory failed: %v", err)
 	}
 	codexDeclared := codex.Capabilities()
-	wantCodex := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}, counts...)
+	wantCodex := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityPipeInterrupt}, counts...)
 	if got := codexDeclared.List(); !slices.Equal(got, wantCodex) {
 		t.Errorf("the codex adapter declares %v, want exactly %v", got, wantCodex)
 	}

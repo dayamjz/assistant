@@ -15,9 +15,10 @@ import (
 // NewCodex scripts the production Codex adapter, including its app-server
 // pipe worker. It records decoded turn text, never typed adapter results.
 // The frames it writes are the ones Codex CLI 0.163.0 emitted, kept in
-// internal/agents/testdata/codex-app-server-0.163.0.jsonl, and a command's
-// approval request is the one Codex CLI 0.166.0 emitted, kept in
-// internal/agents/testdata/codex-app-server-approvals-0.166.0.jsonl.
+// internal/agents/testdata/codex-app-server-0.163.0.jsonl; turn/interrupt
+// follows CLI 0.166.0's schema (TurnInterruptParams, TurnStatus interrupted),
+// and a command's approval request is the one Codex CLI 0.166.0 emitted,
+// kept in internal/agents/testdata/codex-app-server-approvals-0.166.0.jsonl.
 func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 	tb.Helper()
 	self, err := os.Executable()
@@ -36,10 +37,13 @@ func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 // serveAppServer models the newline JSON the installed Codex CLI 0.163.0
 // accepted and emitted: initialize, an initialized notification, thread/start,
 // then one turn/start per message. A turn's result is in progress; the turn
-// is finished by thread/status/changed idle after the agent message. It
-// requires that order, a workspace-write sandbox, and either on-request
-// approval (a worker) or untrusted (a subordinate, recorded from CLI
-// 0.166.0 as the mode where plain shell calls ask before they run).
+// is finished by thread/status/changed idle after the agent message. An
+// exchange with Turn set holds that accepted turn open until turn/interrupt,
+// which is CLI 0.166.0's cancel: the interrupt is answered, the turn
+// completes as interrupted, then idle, and Call.Interrupted records the
+// message. It requires that order, a workspace-write sandbox, and either
+// on-request approval (a worker) or untrusted (a subordinate, recorded from
+// CLI 0.166.0 as the mode where plain shell calls ask before they run).
 func serveAppServer(control string, args []string) int {
 	bytes, err := os.ReadFile(scriptPath(control))
 	if err != nil {
@@ -74,6 +78,7 @@ func serveAppServer(control string, args []string) int {
 				Sandbox  string `json:"sandbox"`
 				Approval string `json:"approvalPolicy"`
 				Thread   string `json:"threadId"`
+				Turn     string `json:"turnId"`
 				Input    []struct {
 					Type string `json:"type"`
 					Text string `json:"text"`
@@ -141,16 +146,21 @@ func serveAppServer(control string, args []string) int {
 				}
 				continue
 			}
-			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"turn": map[string]any{"id": "standin-codex-turn", "status": "inProgress"}}}) != nil {
+			turnID := fmt.Sprintf("standin-codex-turn-%d", len(call.Lines))
+			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"turn": map[string]any{"id": turnID, "status": "inProgress"}}}) != nil {
 				return exitNoOutput
 			}
 			reply := "standin: message received"
 			ends := false
+			hold := false
 			var recorded []string
-			for _, exchange := range worker.Exchanges {
+			var matched *Exchange
+			for i := range worker.Exchanges {
+				exchange := &worker.Exchanges[i]
 				if !exchange.answers(text) {
 					continue
 				}
+				matched = exchange
 				if exchange.Run {
 					_, command, _ := strings.Cut(text, exchange.Contains)
 					if !appServerPermission(encoder, scanner, strings.TrimSpace(command)) {
@@ -159,6 +169,7 @@ func serveAppServer(control string, args []string) int {
 					}
 				}
 				ends = exchange.Ends
+				hold = exchange.Turn > 0
 				if len(exchange.Recorded) > 0 {
 					recorded = exchange.Recorded
 					break
@@ -169,6 +180,31 @@ func serveAppServer(control string, args []string) int {
 					return exitNoOutput
 				}
 				break
+			}
+			if hold && matched != nil && recorded == nil {
+				// A Turn holds the accepted turn open until turn/interrupt,
+				// the way a long interactive turn waits for Escape. Reply is
+				// the answer only if the turn is never interrupted.
+				if !appServerAwaitInterrupt(scanner, encoder, threadID, turnID) {
+					return exitNoStdin
+				}
+				call.Interrupted = append(call.Interrupted, text)
+				if record(callsPath(control), call) != nil {
+					return exitNoRecord
+				}
+				if encoder.Encode(map[string]any{
+					"method": "turn/completed",
+					"params": map[string]any{
+						"threadId": threadID,
+						"turn":     map[string]any{"id": turnID, "items": []any{}, "status": "interrupted"},
+					},
+				}) != nil {
+					return exitNoOutput
+				}
+				if encoder.Encode(map[string]any{"method": "thread/status/changed", "params": map[string]any{"threadId": threadID, "status": map[string]string{"type": "idle"}}}) != nil {
+					return exitNoOutput
+				}
+				continue
 			}
 			if recorded != nil {
 				// Recorded frames replace the agent message and the idle,
@@ -181,7 +217,7 @@ func serveAppServer(control string, args []string) int {
 					}
 				}
 			} else {
-				if encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]any{"type": "agentMessage", "text": reply}, "threadId": threadID}}) != nil {
+				if encoder.Encode(map[string]any{"method": "item/completed", "params": map[string]any{"item": map[string]any{"type": "agentMessage", "text": reply}, "threadId": threadID, "turnId": turnID}}) != nil {
 					return exitNoOutput
 				}
 				if encoder.Encode(map[string]any{"method": "thread/status/changed", "params": map[string]any{"threadId": threadID, "status": map[string]string{"type": "idle"}}}) != nil {
@@ -191,6 +227,15 @@ func serveAppServer(control string, args []string) int {
 			if ends {
 				return worker.Exit
 			}
+		case "turn/interrupt":
+			// An interrupt with no turn under way is answered and settles
+			// nothing, matching an idle Escape that presses nothing.
+			if phase != 3 || m.Params.Thread != threadID || m.Params.Turn == "" {
+				return exitNoStdin
+			}
+			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{}}) != nil {
+				return exitNoOutput
+			}
 		default:
 			fmt.Fprintln(os.Stderr, "standin: unsupported app-server method", m.Method)
 			return exitNoStdin
@@ -199,12 +244,35 @@ func serveAppServer(control string, args []string) int {
 	return worker.Exit
 }
 
+// appServerAwaitInterrupt reads the next request and answers it only when it
+// is turn/interrupt for the held turn. The turn/start result was already
+// written; this writes the interrupt's empty result and leaves
+// turn/completed and idle to the caller.
+func appServerAwaitInterrupt(scanner *bufio.Scanner, encoder *json.Encoder, threadID, turnID string) bool {
+	if !scanner.Scan() {
+		return false
+	}
+	var m struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Thread string `json:"threadId"`
+			Turn   string `json:"turnId"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(scanner.Bytes(), &m) != nil || m.Method != "turn/interrupt" || m.Params.Thread != threadID || m.Params.Turn != turnID {
+		return false
+	}
+	return encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{}}) == nil
+}
+
 // appServerPermission models item/commandExecution/requestApproval as Codex
 // CLI 0.166.0 asked it for a shell tool call, recorded in
 // internal/agents/testdata/codex-app-server-approvals-0.166.0.jsonl: kind
 // command, and the command string the shell line that CLI runs, the
-// recorded /bin/zsh with -lc and the command quoted by appServerWord. A Run exchange continues only after the client answers
-// accept, the decision vocabulary of that version's schema.
+// recorded /bin/zsh with -lc and the command quoted by appServerWord. A Run
+// exchange continues only after the client answers accept, the decision
+// vocabulary of that version's schema.
 func appServerPermission(encoder *json.Encoder, scanner *bufio.Scanner, command string) bool {
 	request := map[string]any{
 		"id": 9001, "method": "item/commandExecution/requestApproval",
