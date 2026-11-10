@@ -829,8 +829,9 @@ confirmation is accepted only from a terminal, in the foreground: under
 first, with a line saying so, and the service decides that from the calling
 process itself, not from the command line. A terminal's foreground is not
 proof of a person, so a program you run there can give one. To let new tasks
-on the entry's branch go ahead, answer land, carry-on, or discard with
-`--confirm`, or commit or remove what is uncommitted, untracked or stashed,
+on the entry's branch go ahead, answer land, carry-on, discard with
+`--confirm`, or remove-anyway with `--force` when a discard preview refuses,
+or commit or remove what is uncommitted, untracked or stashed,
 and push its commits where one of the cleanup proofs above finds them. That
 proof reads only
 the commits the copy's HEAD and its branches, tags and stash reach, and
@@ -871,6 +872,17 @@ not established (the upstream could not be read when the copy was kept) is
 refused rather than shown a list that may be wrong; the next cleanup of the
 unchanged copy establishes it.
 
+Remove anyway, `--answer remove-anyway` with the same flags, is for a copy
+whose discard preview refuses (shallow, partial, or unverifiable), read
+afresh each time. Alone it shows why discard refuses, and nothing of the
+loss, and records nothing. With `--force` from a terminal's foreground,
+naming the same task or run, it releases the entry and keeps the copy. It
+is refused when the discard preview reads the copy, while a claim or a
+discard set-aside stands, under `--json`, and from any process not in a
+terminal's foreground. A discard refused only at its removal puts the copy
+back and is shown and confirmed again; remove-anyway is refused for that
+copy in this build (assistant #880).
+
 A promotion of an investigation whose copy has a kept-work entry (its
 worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
@@ -884,7 +896,8 @@ reports the copy refused.
 Nothing in the program discards a copy on its own. The preview is open to any
 caller that may answer kept work. A confirmation from a terminal's foreground
 removes a task's clone or a run's worktree when the digest still seals the
-copy (docs/prd.md, sections 6 and 9).
+copy; remove-anyway with `--force` releases the entry and keeps the copy when
+a discard preview refuses (docs/prd.md, sections 6 and 9).
 
 ## Resetting a coordinator's session
 
