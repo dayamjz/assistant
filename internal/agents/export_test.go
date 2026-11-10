@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"os"
 	"strings"
 )
 
@@ -126,3 +127,13 @@ const HerdrRequiredVersion = herdrRequiredVersion
 // before the send is told, so a test can put the process's end inside that
 // window. It is set between sends, never while one is in flight.
 func InterruptAfterWriteForTest(w Worker, f func(text string)) { w.(*procWorker).afterWrite = f }
+
+// SetSettingsWriteForTest replaces the settings.json writer InstallJev uses.
+// Pass nil to restore os.WriteFile.
+func SetSettingsWriteForTest(f func(path string, data []byte, perm os.FileMode) error) {
+	if f == nil {
+		settingsWrite = os.WriteFile
+		return
+	}
+	settingsWrite = f
+}

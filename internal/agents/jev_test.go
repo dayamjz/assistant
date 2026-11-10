@@ -172,17 +172,23 @@ func TestInstallJevMergesSettings(t *testing.T) {
 	}
 }
 
-func TestInstallJevFallsClosedWhenSettingsUnwritable(t *testing.T) {
+func TestInstallJevFallsClosedWhenSettingsWriteTruncates(t *testing.T) {
 	dir := t.TempDir()
 	prior := []byte(`{"env":{"KEEP_ME":"1","` + agents.JevFunctionHooksEnv + `":"1"},"other":true}` + "\n")
 	settingsPath := filepath.Join(dir, "settings.json")
 	if err := os.WriteFile(settingsPath, prior, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(settingsPath, 0o400); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(settingsPath, 0o600) })
+	// Truncate then fail: the restore arm must put prior bytes back. A hook
+	// that only fails on open would leave the file untouched and make the
+	// restore assertion vacuous.
+	agents.SetSettingsWriteForTest(func(path string, data []byte, perm os.FileMode) error {
+		if err := os.WriteFile(path, []byte("{truncated"), 0o600); err != nil {
+			return err
+		}
+		return os.ErrInvalid
+	})
+	t.Cleanup(func() { agents.SetSettingsWriteForTest(nil) })
 	d := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
 	got, args, err := agents.InstallJev(dir, d)
 	if err != nil {
@@ -202,7 +208,7 @@ func TestInstallJevFallsClosedWhenSettingsUnwritable(t *testing.T) {
 		t.Fatalf("settings.json: %v", err)
 	}
 	if string(raw) != string(prior) {
-		t.Fatalf("settings.json = %s, want prior bytes restored", raw)
+		t.Fatalf("settings.json = %s, want prior bytes restored after truncate", raw)
 	}
 }
 
