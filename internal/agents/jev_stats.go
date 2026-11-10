@@ -11,10 +11,8 @@ import (
 
 // compactionStatsName is the append-only log the pinned plugin writes one
 // CompactionStats line into after a successful Jev compact. Built-in
-// fallbacks write nothing. Residuals: the hook write is best-effort (a
-// missing CLAUDE_CONFIG_DIR or a write error must not refuse compaction),
-// and these rows are not yet columns of the store's agent invocation table
-// (the usage view cannot total them until that lands).
+// fallbacks write nothing. Residual: the hook write is best-effort (a
+// missing CLAUDE_CONFIG_DIR or a write error must not refuse compaction).
 const compactionStatsName = "compaction-stats.jsonl"
 
 // CompactionStats is one successful Jev compact's result.stats, as the

@@ -162,8 +162,6 @@ type Record struct {
 	// Compaction is what compaction did for this invocation: the path
 	// InstallJev prepared and any CompactionStats lines the plugin appended
 	// while it ran. Empty when the launch had no config dir we control.
-	// Residual: not yet a column of the store's agent invocation table, so
-	// runs --usage cannot total it until that migration lands.
 	Compaction CompactionReport
 	// Served is the run and stage the invocation served, copied from
 	// Invocation.Served as it was handed over. Each is an identifier or a
