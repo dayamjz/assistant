@@ -93,6 +93,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"no_ci": true,
 		"checks_timeout": "30m",
 		"session_reuse": false,
+		"jev_compaction": true,
 		"decision_model": "enforce",
 		"supervision_beacon_interval": "30s",
 		"escalation_window": "15m",
@@ -162,8 +163,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	if c.EscalationWindow != 15*time.Minute || c.RecheckWindow != 3*time.Hour || c.StallInspectionCount != 5 || c.StallHoldCount != 4 {
 		t.Errorf("supervision rows = %v, %v, %d, %d", c.EscalationWindow, c.RecheckWindow, c.StallInspectionCount, c.StallHoldCount)
 	}
-	if !c.SuppressProjectInstructions || !c.NoCI || c.SessionReuse || !c.AllowPushedCommands {
-		t.Errorf("flags = %+v", c)
+	if !c.SuppressProjectInstructions || !c.NoCI || c.SessionReuse || !c.JevCompaction || !c.AllowPushedCommands {
+		t.Errorf("flags = suppress=%v no_ci=%v session_reuse=%v jev_compaction=%v allow_pushed=%v",
+			c.SuppressProjectInstructions, c.NoCI, c.SessionReuse, c.JevCompaction, c.AllowPushedCommands)
 	}
 	if c.ChecksTimeout.String() != "30m0s" {
 		t.Errorf("ChecksTimeout = %v", c.ChecksTimeout)
