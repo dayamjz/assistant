@@ -28,9 +28,9 @@ func discardRequest(entry store.KeptWork, confirm string) machine.KeptWorkAnswer
 }
 
 // A discard of a run's worktree alone shows what would be lost; a
-// confirmation is still refused (Cleaner.Discard of a worktree is not yet
-// implemented), leaving the copy and entry as they were (P6).
-func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
+// confirmation with that digest removes the worktree and answers the
+// entry (P6/P15). A wrong digest is refused and leaves the copy standing.
+func TestADiscardIsShownAndItsConfirmationRemovesARunsWorktree(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
@@ -87,20 +87,29 @@ func TestADiscardIsShownAndItsConfirmationRefusedChangingNothing(t *testing.T) {
 		}
 
 		copyShown, gateShown := fileTree(t, entry.CopyPath, nil), fileTree(t, gate, nil)
-		for _, confirm := range []string{shown.Loss.Digest, "not-the-digest"} {
-			_, err := answer(confirm)
-			if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), machine.PhraseDiscardRemovalDeferred.String()) {
-				t.Fatalf("a confirmation with %q = %v; want it refused with the worktree-deferred row", confirm, err)
-			}
-			if now := fileTree(t, entry.CopyPath, nil); now != copyShown {
-				t.Fatalf("the refused confirmation changed the worktree:\n%s\nwant\n%s", now, copyShown)
-			}
-			if now := fileTree(t, gate, nil); now != gateShown {
-				t.Fatalf("the refused confirmation changed the gate:\n%s\nwant\n%s", now, gateShown)
-			}
-			if now, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !same(now, kept) || !now.Open() || !listed() {
-				t.Fatalf("after the refused confirmation the entry reads %+v, %v; want it as it was, open and listed:\n%+v", now, err, kept)
-			}
+		_, err = answer("not-the-digest")
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("a confirmation with the wrong digest = %v; want it refused", err)
+		}
+		if now := fileTree(t, entry.CopyPath, nil); now != copyShown {
+			t.Fatalf("the refused confirmation changed the worktree:\n%s\nwant\n%s", now, copyShown)
+		}
+		if now := fileTree(t, gate, nil); now != gateShown {
+			t.Fatalf("the refused confirmation changed the gate:\n%s\nwant\n%s", now, gateShown)
+		}
+		if now, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !same(now, kept) || !now.Open() || !listed() {
+			t.Fatalf("after the refused confirmation the entry reads %+v, %v; want it as it was, open and listed:\n%+v", now, err, kept)
+		}
+
+		done, err := answer(shown.Loss.Digest)
+		if err != nil || done.Effect != machine.KeptWorkDiscarded || done.Entry.Answer.Or("") != store.KeptDiscard {
+			t.Fatalf("a confirmation with the shown digest = %+v, %v; want the worktree discarded", done, err)
+		}
+		if _, err := os.Lstat(entry.CopyPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("the worktree still stands at %s after confirmation: %v", entry.CopyPath, err)
+		}
+		if now, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || now.Answer.Or("") != store.KeptDiscard || listed() {
+			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard and not listed", now, err)
 		}
 	})
 }
