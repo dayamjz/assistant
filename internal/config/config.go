@@ -60,8 +60,7 @@ type Config struct {
 	// are the mechanism that fall closed to Claude Code's own compaction
 	// and record which path ran. Which launches consult this field, and
 	// that review stays off it (P4), are the caller's rules and are not
-	// enforced here. docs/prd.md section 10 does not yet list this row;
-	// that gap is a finding for the owner, not closed here.
+	// enforced here. PRD section 10 has its row.
 	JevCompaction bool
 	// SupervisionBeaconInterval is how often the supervisor loop rewrites
 	// its liveness beacon. The staleness window and the first-beacon wait
