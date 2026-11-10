@@ -9,6 +9,44 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
+func TestAttachJevScratchFallClosedLeavesNoRemap(t *testing.T) {
+	agent := standin.New(t, standin.Script{},
+		agents.WithJevCompaction(func() bool { return true }),
+		agents.WithBaseEnvironment(append(claudeTerminalEnv(t), agents.JevKeyVariable+"=")),
+	)
+	env := append(claudeTerminalEnv(t), agents.JevKeyVariable+"=")
+	dir, args, cleanup := agents.AttachJevScratchForTest(agent.Runner(), t.TempDir(), env)
+	if dir != "" || args != nil || cleanup != nil {
+		t.Fatalf("fall-closed attach got dir=%q args=%v cleanup=%v, want none", dir, args, cleanup != nil)
+	}
+}
+
+func TestAttachJevScratchRemapsOnlyWhenJevInstalls(t *testing.T) {
+	agents.SetJevVersionForTest(agents.JevMinClaudeVersion)
+	t.Cleanup(func() { agents.SetJevVersionForTest("") })
+	env := append(claudeTerminalEnv(t), agents.JevKeyVariable+"=test-key-not-printed")
+	agent := standin.New(t, standin.Script{},
+		agents.WithJevCompaction(func() bool { return true }),
+		agents.WithBaseEnvironment(env),
+	)
+	workspace := t.TempDir()
+	dir, args, cleanup := agents.AttachJevScratchForTest(agent.Runner(), workspace, env)
+	if cleanup == nil {
+		t.Fatal("expected cleanup for a selected Jev scratch")
+	}
+	defer cleanup()
+	if dir == "" || len(args) != 2 || args[0] != "--plugin-dir" {
+		t.Fatalf("got dir=%q args=%v, want scratch and --plugin-dir", dir, args)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".claude.json")); err != nil {
+		t.Fatalf("scratch was not seeded: %v", err)
+	}
+	got, err := agents.ReadCompactionDecision(dir)
+	if err != nil || got.Path != agents.CompactionJev {
+		t.Fatalf("decision %+v err %v, want jev", got, err)
+	}
+}
+
 // A terminal worker always writes a compaction path record into its config
 // dir. With opt-in off the path is builtin; with opt-in on it is jev when the
 // CLI and key allow, otherwise builtin with a reason. The launch is never refused.

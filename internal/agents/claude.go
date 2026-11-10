@@ -110,8 +110,10 @@ func WithSweep(sw Sweep) ClaudeOption {
 // Claude Code worker or fixer launch. Called at prepare time so a service can
 // build its catalog before loading config. Nil or false leaves built-in
 // compaction and does not remap CLAUDE_CONFIG_DIR. True still falls closed to
-// built-in when a precondition fails; only a selected Jev install remaps a
-// stream-json or fixer launch onto a seeded scratch config directory.
+// built-in when a precondition fails; a stream-json or fixer launch remaps
+// onto a seeded scratch only after InstallJev keeps CompactionJev. A fixer
+// that already opened that scratch keeps it for later rounds so --resume
+// sees the same configuration directory.
 func WithJevCompaction(enabled func() bool) ClaudeOption {
 	return func(s *claudeSettings) { s.jev = enabled }
 }

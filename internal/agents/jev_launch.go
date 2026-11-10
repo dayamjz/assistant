@@ -57,24 +57,13 @@ func (r *claudeRunner) attachJevScratch(workspace string, env []string) (configD
 	return dir, args, remove
 }
 
-// openFixerJevDir returns a seeded scratch config dir when the fixer should
-// install Jev for this round and does not yet hold one. Fall-closed leaves
-// the empty string so invoke does not remap CLAUDE_CONFIG_DIR.
+// openFixerJevDir returns a seeded scratch config dir only when InstallJev
+// keeps CompactionJev, matching attachJevScratch. Fall-closed leaves the
+// empty string so invoke does not remap. The fixer keeps the directory for
+// later rounds (no cleanup); a drop of the fixer is the residual gap
+// newJevConfigDir names.
 func (r *claudeRunner) openFixerJevDir(workspace string, env []string) string {
-	if !r.settings.jevOptIn() {
-		return ""
-	}
-	if DecideJev(true, env, r.claudeVersion()).Path != CompactionJev {
-		return ""
-	}
-	dir, err := newJevConfigDir()
-	if err != nil {
-		return ""
-	}
-	if err := writeClaudeConfigState(workspace, lastValue(env, ClaudeKeyVariable), dir); err != nil {
-		_ = os.RemoveAll(dir)
-		return ""
-	}
+	dir, _, _ := r.attachJevScratch(workspace, env)
 	return dir
 }
 
