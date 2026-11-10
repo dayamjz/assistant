@@ -152,7 +152,7 @@ func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDi
 	case *claudeRunner:
 		return v.attachJevScratch(workspace, env)
 	case *claudePipeDeclaringRunner:
-		return v.claudeRunner.attachJevScratch(workspace, env)
+		return v.attachJevScratch(workspace, env)
 	default:
 		panic(fmt.Sprintf("AttachJevScratchForTest: unexpected runner %T", r))
 	}
