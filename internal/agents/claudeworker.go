@@ -45,15 +45,26 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	env := WorkerEnvironment(r.settings.base, spec.Env)
+	args := r.workerArguments(spec)
+	configDir, pluginArgs, cleanup := r.attachJevScratch(spec.Dir, env)
+	if configDir != "" {
+		env = withEnvValue(env, claudeConfigVariable, configDir)
+		args = append(args, pluginArgs...)
+	}
 	worker, err := startWorker(ctx, ClaudeName, procSpec{
-		bin:    r.resolved,
-		args:   r.workerArguments(spec),
-		dir:    spec.Dir,
-		env:    WorkerEnvironment(r.settings.base, spec.Env),
-		grace:  r.settings.grace,
-		maxOut: r.settings.maxOut,
+		bin:     r.resolved,
+		args:    args,
+		dir:     spec.Dir,
+		env:     env,
+		grace:   r.settings.grace,
+		maxOut:  r.settings.maxOut,
+		cleanup: cleanup,
 	}, spec.Instructions, claudeUserMessage, OutputStreamJSON)
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, err
 	}
 	return worker, nil
