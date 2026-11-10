@@ -174,7 +174,7 @@ func TestInstallJevMergesSettings(t *testing.T) {
 
 func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
 	dir := t.TempDir()
-	prior := []byte(`{"env":{"KEEP_ME":"1"},"other":true}` + "\n")
+	prior := []byte(`{"env":{"KEEP_ME":"1","` + agents.JevFunctionHooksEnv + `":"1"},"other":true}` + "\n")
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), prior, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -209,19 +209,8 @@ func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings.json: %v", err)
 	}
-	var settings map[string]any
-	if err := json.Unmarshal(raw, &settings); err != nil {
-		t.Fatal(err)
-	}
-	if settings["other"] != true {
-		t.Fatalf("settings = %#v, want other kept", settings)
-	}
-	env, _ := settings["env"].(map[string]any)
-	if _, on := env[agents.JevFunctionHooksEnv]; on {
-		t.Fatalf("env = %#v, want %s cleared on fall-closed", env, agents.JevFunctionHooksEnv)
-	}
-	if env["KEEP_ME"] != "1" {
-		t.Fatalf("env = %#v, want KEEP_ME kept", env)
+	if string(raw) != string(prior) {
+		t.Fatalf("settings.json = %s, want prior bytes restored", raw)
 	}
 }
 
