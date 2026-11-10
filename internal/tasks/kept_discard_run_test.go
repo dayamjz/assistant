@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // A confirmed discard of a task's clone removes the clone past its point
@@ -486,4 +487,180 @@ func TestAConfirmedDiscardRemovesARunsWorktreePastItsPointOfNoReturn(t *testing.
 	if strings.Contains(listed, copyPath) {
 		t.Fatalf("gate still lists the removed worktree:\n%s", listed)
 	}
+}
+
+// worktreeRemovalBegun is false while the path, gate record, and step-3
+// tree still stand; true once any of them is gone; and an unreadable
+// re-read is an error (PRD step 4; P6).
+func TestWorktreeRemovalBegunReadsPathGateRecordAndTree(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	const runID = "run-begun-wt"
+	if _, err := s.store.CreateRun(ctx, store.Run{
+		ID: runID, RepositoryID: cleanupRepository, Branch: "topic", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	gateRepo := filepath.Join(t.TempDir(), "gate.git")
+	rawGit(t, filepath.Dir(gateRepo), "clone", "-q", "--bare", s.upstream, gateRepo)
+	copyPath := s.home.Worktree(cleanupRepository, runID)
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, gateRepo, "worktree", "add", "-q", "--detach", copyPath, "main")
+	commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
+	kept, err := s.cleaner.Keep(ctx, Kept{Run: runID, Reason: string(ReasonCopyChanged)})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v", kept, err)
+	}
+
+	begun, err := s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err != nil || begun {
+		t.Fatalf("intact worktree begun = %v, %v; want false, nil", begun, err)
+	}
+
+	bare, err := openBareForTest(t, gateRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record string
+	for _, r := range records {
+		if r.Worktree == copyPath || filepath.Base(r.Worktree) == filepath.Base(copyPath) {
+			record = r.Record
+			break
+		}
+	}
+	if record == "" {
+		// WorktreeRecords may EvalSymlinks the path; match by walking.
+		parent, err := filepath.EvalSymlinks(filepath.Dir(copyPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := filepath.Join(parent, filepath.Base(copyPath))
+		for _, r := range records {
+			if r.Worktree == want {
+				record = r.Record
+				break
+			}
+		}
+	}
+	if record == "" {
+		t.Fatalf("no gate record for %s among %+v", copyPath, records)
+	}
+	if err := os.RemoveAll(record); err != nil {
+		t.Fatal(err)
+	}
+	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err != nil || !begun {
+		t.Fatalf("after gate record removed begun = %v, %v; want true, nil", begun, err)
+	}
+
+	// Path gone (record already gone): still begun.
+	if err := os.RemoveAll(copyPath); err != nil {
+		t.Fatal(err)
+	}
+	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
+	if err != nil || !begun {
+		t.Fatalf("after path removed begun = %v, %v; want true, nil", begun, err)
+	}
+}
+
+// A standing worktree discard whose path still stands but whose gate
+// record is gone is past PONR: finish removes the path by force rather
+// than putting set-aside back (PRD step 4; P6).
+func TestAStandingWorktreeDiscardFinishesWhenTheGateRecordIsGone(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	s := newCleanupSubject(t, forgetest.Script{})
+	ctx := context.Background()
+	const runID = "run-standing-wt"
+	if _, err := s.store.CreateRun(ctx, store.Run{
+		ID: runID, RepositoryID: cleanupRepository, Branch: "topic", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	gateRepo := filepath.Join(t.TempDir(), "gate.git")
+	rawGit(t, filepath.Dir(gateRepo), "clone", "-q", "--bare", s.upstream, gateRepo)
+	copyPath := s.home.Worktree(cleanupRepository, runID)
+	if err := os.MkdirAll(filepath.Dir(copyPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rawGit(t, gateRepo, "worktree", "add", "-q", "--detach", copyPath, "main")
+	commit(t, copyPath, "left.txt", "left by a body\n", "a body's commit")
+	kept, err := s.cleaner.Keep(ctx, Kept{Run: runID, Reason: string(ReasonCopyChanged)})
+	if err != nil || !kept.Recorded {
+		t.Fatalf("Keep = %+v, %v", kept, err)
+	}
+	shown, err := s.cleaner.Loss(ctx, kept.Entry, gateRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := s.cleaner.beginDiscard(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, found, err := s.cleaner.standingDiscard(copyPath)
+	if err != nil || !found {
+		t.Fatalf("standingDiscard after begin = found %v, %v", found, err)
+	}
+	if err := s.cleaner.setAsideLoss(ctx, dir, &last, copyPath, shown); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.cleaner.discardClean(ctx, kept.Entry, gateRepo, shown); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendDiscardStep(dir, &last, discardStep{Kind: discardStepPONR, From: copyPath}); err != nil {
+		t.Fatal(err)
+	}
+	bare, err := openBareForTest(t, gateRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(copyPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(parent, filepath.Base(copyPath))
+	var record string
+	for _, r := range records {
+		if r.Worktree == want {
+			record = r.Record
+			break
+		}
+	}
+	if record == "" {
+		t.Fatalf("no gate record for %s among %+v", want, records)
+	}
+	if err := os.RemoveAll(record); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.cleaner.Discard(ctx, kept.Entry, gateRepo, shown.Digest); err != nil {
+		t.Fatalf("Discard with path standing and record gone = %v; want finish", err)
+	}
+	if _, err := os.Lstat(copyPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("worktree still stands after finish: %v", err)
+	}
+	j, found, err := s.cleaner.standingDiscard(copyPath)
+	if err != nil || !found || !journalHasStep(j, discardStepFinish) {
+		t.Fatalf("journal after finish = %+v found %v err %v", j, found, err)
+	}
+}
+
+// openBareForTest opens gatePath as a bare repository for test helpers.
+func openBareForTest(t *testing.T, gatePath string) (*vcs.Repository, error) {
+	t.Helper()
+	return vcs.OpenBare(context.Background(), gatePath)
 }
