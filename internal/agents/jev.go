@@ -99,30 +99,38 @@ func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []s
 		undoPlugin()
 		return fallback("settings read failed: " + priorErr.Error())
 	}
+	// Best-effort restore of settings.json: WriteFile errors are named in the
+	// fallback reason when they matter, but a restore failure cannot refuse
+	// the launch.
+	restoreSettings := func() string {
+		if hadSettings {
+			if err := os.WriteFile(settingsPath, priorSettings, 0o600); err != nil {
+				return "; settings restore failed: " + err.Error()
+			}
+			return ""
+		}
+		_ = os.Remove(settingsPath)
+		return ""
+	}
 	if err := writeJevSettings(configDir); err != nil {
 		undoPlugin()
-		return fallback("settings install failed: " + err.Error())
+		extra := restoreSettings()
+		return fallback("settings install failed: " + err.Error() + extra)
 	}
 	// After settings are merged, a later failure restores the prior settings
 	// bytes (or removes the file we created) and drops only this plugin, so
 	// Path=builtin is not paired with hooks we added and a pre-existing hooks
 	// key is kept as it was.
-	undo := func() {
+	undo := func() string {
 		undoPlugin()
-		if hadSettings {
-			_ = os.WriteFile(settingsPath, priorSettings, 0o600)
-		} else {
-			_ = os.Remove(settingsPath)
-		}
+		return restoreSettings()
 	}
 	if err := writeCompactionDecision(configDir, d); err != nil {
-		undo()
-		return fallback("record write failed: " + err.Error())
+		return fallback("record write failed: " + err.Error() + undo())
 	}
 	abs, err := filepath.Abs(pluginDir)
 	if err != nil {
-		undo()
-		return fallback("plugin path: " + err.Error())
+		return fallback("plugin path: " + err.Error() + undo())
 	}
 	return d, []string{"--plugin-dir", abs}, nil
 }
