@@ -891,7 +891,9 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		// factories already, so there this history holds only what that
 		// caller's own factories arranged, which invocation.go states.
 		s.catalog = agents.DefaultCatalog(
-			agents.WithCatalogRecorder(invocationRecorder{s}))
+			agents.WithCatalogRecorder(invocationRecorder{s}),
+			agents.WithCatalogJevCompaction(func() bool { return s.cfg.JevCompaction }),
+		)
 	}
 	lookup := o.Environment
 	if lookup == nil {

@@ -220,6 +220,14 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	env = withEnvValue(withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir), "HOME", homeDir)
 
 	args := r.claudeTerminalWorkerArgs(spec, session)
+	pluginArgs, err := r.prepareJevLaunch(configDir, env)
+	if err != nil {
+		remove()
+		return nil, err
+	}
+	// --plugin-dir must sit with the flags before "--"; after it the stand-in
+	// and the CLI treat words as the first message.
+	args = insertBeforeDashDash(args, pluginArgs...)
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
 		bin:     r.resolved,
 		args:    args,
@@ -553,6 +561,24 @@ type claudeSeedKeys struct {
 // and could not finish is removed before it reports why; one standing at
 // configDir already is refused and left as it is.
 func seedClaudeConfig(dir, key, configDir string) error {
+	if err := os.MkdirAll(filepath.Dir(configDir), 0o700); err != nil {
+		return fmt.Errorf("making the terminal worker's configuration directory's parent: %w", err)
+	}
+	if err := os.Mkdir(configDir, 0o700); err != nil {
+		return fmt.Errorf("making the terminal worker's configuration directory: %w", err)
+	}
+	if err := writeClaudeConfigState(dir, key, configDir); err != nil {
+		_ = os.RemoveAll(configDir)
+		return err
+	}
+	return nil
+}
+
+// writeClaudeConfigState writes .claude.json into an existing configDir: onboarded,
+// workspace trust for dir (and its symlink resolution), and key approval when
+// key is non-empty. Used by seedClaudeConfig and by stream-json/fixer scratch
+// dirs so a remapped CLAUDE_CONFIG_DIR is not an empty unseeded tree.
+func writeClaudeConfigState(dir, key, configDir string) error {
 	projects := map[string]claudeSeedProject{dir: {Trusted: true}}
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil && resolved != dir {
 		projects[resolved] = claudeSeedProject{Trusted: true}
@@ -571,17 +597,10 @@ func seedClaudeConfig(dir, key, configDir string) error {
 		Keys:      claudeSeedKeys{Approved: approved, Rejected: []string{}},
 	})
 	if err != nil {
-		return fmt.Errorf("encoding the terminal worker's configuration: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(configDir), 0o700); err != nil {
-		return fmt.Errorf("making the terminal worker's configuration directory's parent: %w", err)
-	}
-	if err := os.Mkdir(configDir, 0o700); err != nil {
-		return fmt.Errorf("making the terminal worker's configuration directory: %w", err)
+		return fmt.Errorf("encoding the Claude configuration: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(configDir, ".claude.json"), encoded, 0o600); err != nil {
-		_ = os.RemoveAll(configDir)
-		return fmt.Errorf("writing the terminal worker's configuration: %w", err)
+		return fmt.Errorf("writing the Claude configuration: %w", err)
 	}
 	return nil
 }

@@ -139,3 +139,13 @@ func SetSettingsWriteForTest(f func(path string, data []byte) error) {
 	}
 	settingsWrite = f
 }
+
+// SetJevVersionForTest replaces the claude --version string DecideJev sees.
+// Pass "" to restore the live probe.
+func SetJevVersionForTest(version string) { jevVersionForTest = version }
+
+// AttachJevScratchForTest exposes attachJevScratch so a test can hold the
+// remap-only-when-Jev gate without starting a worker.
+func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDir string, pluginArgs []string, cleanup func()) {
+	return r.(*claudeRunner).attachJevScratch(workspace, env)
+}

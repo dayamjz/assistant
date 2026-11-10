@@ -66,14 +66,19 @@ func DecideJev(optIn bool, env []string, version string) CompactionDecision {
 // plugin and a function-hooks setting. PluginArgs is nil or ["--plugin-dir", abs].
 // An install I/O failure falls back to builtin with a reason and a nil error:
 // compaction never refuses a launch, and a CompactionJev Path is never returned
-// alongside an error. configDir must already exist.
+// alongside an error. A CompactionBuiltin decision clears this package's prior
+// plugin tree and function-hooks setting so a reused config dir cannot keep
+// hooks while the record says builtin. configDir must already exist.
 func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []string, error) {
 	fallback := func(reason string) (CompactionDecision, []string, error) {
+		// Mid-install callers already undid the plugin and restored prior
+		// settings; clearing again would strip a pre-existing hooks key.
 		out := CompactionDecision{Path: CompactionBuiltin, Reason: reason}
 		_ = writeCompactionDecision(configDir, out)
 		return out, nil, nil
 	}
 	if d.Path != CompactionJev {
+		clearJevInstall(configDir)
 		if err := writeCompactionDecision(configDir, d); err != nil {
 			reason := d.Reason
 			if reason == "" {
@@ -158,6 +163,36 @@ func writeCompactionDecision(configDir string, d CompactionDecision) error {
 		return fmt.Errorf("writing compaction decision: %w", err)
 	}
 	return nil
+}
+
+// clearJevInstall removes the pinned plugin and the function-hooks env key
+// this package may have written. Best-effort: a settings read/write failure
+// still leaves the plugin removed so Path=builtin is not paired with it.
+func clearJevInstall(configDir string) {
+	_ = os.RemoveAll(filepath.Join(configDir, filepath.FromSlash(jevPluginDirName)))
+	settingsPath := filepath.Join(configDir, "settings.json")
+	settings, err := readSettingsJSON(settingsPath)
+	if err != nil {
+		return
+	}
+	env, _ := settings["env"].(map[string]any)
+	if env == nil {
+		return
+	}
+	if _, ok := env[JevFunctionHooksEnv]; !ok {
+		return
+	}
+	delete(env, JevFunctionHooksEnv)
+	if len(env) == 0 {
+		delete(settings, "env")
+	} else {
+		settings["env"] = env
+	}
+	if len(settings) == 0 {
+		_ = os.Remove(settingsPath)
+		return
+	}
+	_ = writeSettingsJSON(settingsPath, settings)
 }
 
 // writeJevSettings merges the function-hooks env into settings.json, keeping
