@@ -1588,6 +1588,7 @@ func (s *Service) recover(ctx context.Context) {
 	s.completeLandingsAtOpen(ctx)
 	s.completeCarryOnsAtOpen(ctx)
 	s.completeDiscardsAtOpen(ctx)
+	s.completeRemoveAnywaysAtOpen(ctx)
 	// PRD section 11's fleet reconciliation, after step 5 and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a

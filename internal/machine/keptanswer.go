@@ -28,6 +28,13 @@ type KeptWorkAnswerRequest struct {
 	// run's worktree is removed on that confirmation from a terminal's
 	// foreground. It is refused with any other answer.
 	Confirm string `json:"confirm,omitempty"`
+	// Force is, with a remove-anyway answer, the stronger confirmation
+	// (PRD section 6): without it remove-anyway shows why a discard
+	// refuses and records nothing; with it, together with the task or run
+	// name that owns the entry, the entry is released and the copy stays,
+	// admitted only from a terminal's foreground. It is refused with any
+	// other answer.
+	Force bool `json:"force,omitempty"`
 }
 
 // KeptWorkLoss is what discarding a kept copy would lose, as the program
@@ -186,17 +193,21 @@ const (
 	// KeptWorkRemoveAnywayShown is remove-anyway's preview: why a discard
 	// refuses, with nothing recorded or released.
 	KeptWorkRemoveAnywayShown KeptWorkEffect = "remove-anyway-shown"
+	// KeptWorkRemovedAnyway is a remove-anyway given with Force: the
+	// entry was released and the copy left standing.
+	KeptWorkRemovedAnyway KeptWorkEffect = "removed-anyway"
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
 // it stands after the answer, what the answer did, and for a landing the
-// run it started. A land, carry on or confirmed discard records its
-// answer on the entry; a discard or remove-anyway shown records nothing,
-// so its entry is as it was, still open.
+// run it started. A land, carry on, confirmed discard or confirmed
+// remove-anyway records its answer on the entry; a discard or
+// remove-anyway shown records nothing, so its entry is as it was, still
+// open.
 type KeptWorkAnswered struct {
 	// Entry is the entry as the answer left it: answered for a land, a
-	// carry on or a confirmed discard, and unchanged and open for a
-	// discard or remove-anyway shown.
+	// carry on, a confirmed discard or a confirmed remove-anyway, and
+	// unchanged and open for a discard or remove-anyway shown.
 	Entry store.KeptWork `json:"entry"`
 	// Effect is what the answer did.
 	Effect KeptWorkEffect `json:"effect"`
@@ -249,7 +260,14 @@ var phraseKeptWorkDiscarded = Phrase{
 var phraseKeptWorkRemoveAnywayShown = Phrase{
 	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, so what it would lose cannot be shown.",
 	Consequence: "The copy stays, with everything it holds, and new work that would start where it stood still waits on it.",
-	Decision:    "Answer land or carry-on if that is what you want; releasing the entry while keeping the copy is not in this build yet.",
+	Decision:    "Repeat the remove-anyway with --force at a terminal in the foreground and without --json, naming the same task or run, to release the entry and keep the copy; or answer land or carry-on when that is what you want instead.",
+}
+
+// phraseKeptWorkRemovedAnyway is the row a confirmed remove-anyway reads as.
+var phraseKeptWorkRemovedAnyway = Phrase{
+	Outcome:     "That local copy's hold was released on your confirmed remove-anyway; the copy itself was left standing.",
+	Consequence: "New work that would start where that copy stood is no longer blocked by it; cleanup may still remove the copy later on a proof.",
+	Decision:    "Nothing further to decide about that hold.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
@@ -281,6 +299,15 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Outcome:     "Nothing was removed, because a discard is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
 	Consequence: "The copy stays, with everything it holds, and nothing was recorded.",
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json.",
+}
+
+// PhraseRemoveAnywayNeedsTerminal is the row for a remove-anyway
+// confirmation given from somewhere other than a terminal's foreground,
+// on PhraseDiscardNeedsTerminal's terms for remove-anyway (PRD section 6).
+var PhraseRemoveAnywayNeedsTerminal = Phrase{
+	Outcome:     "Nothing was released, because a remove-anyway is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
+	Consequence: "The copy stays, with everything it holds, and the entry was not released.",
+	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json, with --force.",
 }
 
 // The two carry-on slot refusals below are read by a person after the
@@ -335,6 +362,8 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 		return phraseKeptWorkDiscarded
 	case KeptWorkRemoveAnywayShown:
 		return phraseKeptWorkRemoveAnywayShown
+	case KeptWorkRemovedAnyway:
+		return phraseKeptWorkRemovedAnyway
 	}
 	return phraseKeptWorkLanded
 }
@@ -342,7 +371,7 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded,
-		phraseKeptWorkRemoveAnywayShown,
-		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal,
+		phraseKeptWorkRemoveAnywayShown, phraseKeptWorkRemovedAnyway,
+		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseRemoveAnywayNeedsTerminal,
 		PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }

@@ -194,16 +194,16 @@ func (e discardOffTerminal) Error() string {
 func (e discardOffTerminal) Unwrap() error { return e.cause }
 
 // refusedLoss is the refusal of a discard whose loss could not be read.
-// For refusals remove-anyway can answer, it names --answer remove-anyway,
-// whose preview is all this build has of it (PRD section 6 / section 9).
+// For refusals remove-anyway can answer, it names --answer remove-anyway
+// (PRD section 6 / section 9).
 func refusedLoss(entry store.KeptWork, err error) error {
 	switch {
 	case errors.Is(err, tasks.ErrLossUnestablished):
 		return fmt.Errorf("%w: kept work entry %d was not shown: %v; the next cleanup of the unchanged copy establishes it, "+
-			"and until then what a discard would lose cannot be shown exactly; --answer remove-anyway shows the refusal, and releasing the entry while keeping the copy is not in this build yet",
+			"and until then what a discard would lose cannot be shown exactly; --answer remove-anyway shows the refusal and can release the entry while keeping the copy",
 			ipc.ErrRefused, entry.ID, err)
 	case errors.Is(err, tasks.ErrCopyGone), errors.Is(err, tasks.ErrRecordNotTheCopys), errors.Is(err, tasks.ErrLayoutUnsupported):
-		return fmt.Errorf("%w: kept work entry %d was not shown: %w; --answer remove-anyway shows the refusal, and releasing the entry while keeping the copy is not in this build yet",
+		return fmt.Errorf("%w: kept work entry %d was not shown: %w; --answer remove-anyway shows the refusal and can release the entry while keeping the copy",
 			ipc.ErrRefused, entry.ID, err)
 	}
 	return err
