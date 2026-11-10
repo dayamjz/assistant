@@ -29,6 +29,13 @@ place of `--task` for a run's copy.
   that digest still seals the copy. A confirmation is the person's alone: it
   is refused under `--json` and from any process not in the foreground of a
   terminal, which your tool's commands are not, so never try to give one.
+- `--answer remove-anyway` is for a copy whose discard preview refuses
+  (shallow, partial or unverifiable), read afresh each time. It shows why
+  discard refuses, and nothing of the loss, and records and releases
+  nothing: its confirmation, which would release the entry and keep the
+  copy, is not in this build. It is refused when a discard can remove the
+  copy, and while a claim or a discard set-aside stands. A discard refused
+  at its removal puts the copy back and is shown and confirmed again.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
 land, carry-on, or discard with `--confirm`, or committing or removing its

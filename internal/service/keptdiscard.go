@@ -18,7 +18,8 @@ import (
 // internal/tasks' Loss and records nothing. A confirmation from a
 // terminal's foreground claims the entry, removes a task's clone or a
 // run's worktree through Cleaner.Discard, records the outcome, clears the
-// discard directory, and redispatches. remove-anyway is a later answer.
+// discard directory, and redispatches. remove-anyway is
+// keptremoveanyway.go.
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {
@@ -193,13 +194,17 @@ func (e discardOffTerminal) Error() string {
 func (e discardOffTerminal) Unwrap() error { return e.cause }
 
 // refusedLoss is the refusal of a discard whose loss could not be read.
+// For refusals remove-anyway can answer, it names --answer remove-anyway,
+// whose preview is all this build has of it (PRD section 6 / section 9).
 func refusedLoss(entry store.KeptWork, err error) error {
 	switch {
 	case errors.Is(err, tasks.ErrLossUnestablished):
 		return fmt.Errorf("%w: kept work entry %d was not shown: %v; the next cleanup of the unchanged copy establishes it, "+
-			"and until then what a discard would lose cannot be shown exactly", ipc.ErrRefused, entry.ID, err)
+			"and until then what a discard would lose cannot be shown exactly; --answer remove-anyway shows the refusal, and releasing the entry while keeping the copy is not in this build yet",
+			ipc.ErrRefused, entry.ID, err)
 	case errors.Is(err, tasks.ErrCopyGone), errors.Is(err, tasks.ErrRecordNotTheCopys), errors.Is(err, tasks.ErrLayoutUnsupported):
-		return fmt.Errorf("%w: kept work entry %d was not shown: %w", ipc.ErrRefused, entry.ID, err)
+		return fmt.Errorf("%w: kept work entry %d was not shown: %w; --answer remove-anyway shows the refusal, and releasing the entry while keeping the copy is not in this build yet",
+			ipc.ErrRefused, entry.ID, err)
 	}
 	return err
 }

@@ -41,12 +41,16 @@ func keptLostFileLabel(kind string) string {
 // readOutKeptWorkAnswer is a person's reading of an answer to kept work:
 // the answer's row, and for a discard shown, exactly what would be lost
 // after it, PRD section 9's "shows exactly what would be lost, with a short
-// digest of it". Each line keptLossLines composes is machine text a person
-// copies exactly, the commits, objects and files of the loss and its
-// digest, after a label; when the loss lists nothing,
+// digest of it", and for a remove-anyway shown, the discard's refusal.
+// Each line keptLossLines composes is machine text a person copies
+// exactly, the commits, objects and files of the loss and its digest,
+// after a label; when the loss lists nothing,
 // machine.PhraseKeptWorkLosesNothing stands before the digest instead.
 func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 	writeln(w, machine.KeptWorkAnsweredPhrase(a))
+	if a.Effect == machine.KeptWorkRemoveAnywayShown && a.Refusal != "" {
+		writeln(w, "Refusal: "+a.Refusal)
+	}
 	if a.Effect != machine.KeptWorkDiscardShown || a.Loss == nil {
 		return
 	}

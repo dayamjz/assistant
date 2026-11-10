@@ -20,7 +20,7 @@ type KeptWorkAnswerRequest struct {
 	Run string `json:"run,omitempty"`
 	// Hold is the entry's key, kept-work/ and its identifier.
 	Hold string `json:"hold"`
-	// Answer is land, carry-on or discard.
+	// Answer is land, carry-on, discard or remove-anyway.
 	Answer string `json:"answer"`
 	// Confirm is, with a discard answer, the digest a discard shown
 	// beforehand carried (KeptWorkLoss.Digest): without it a discard shows
@@ -183,17 +183,20 @@ const (
 	// KeptWorkDiscarded is a discard given with Confirm: the copy was
 	// removed and the entry answered discard.
 	KeptWorkDiscarded KeptWorkEffect = "discarded"
+	// KeptWorkRemoveAnywayShown is remove-anyway's preview: why a discard
+	// refuses, with nothing recorded or released.
+	KeptWorkRemoveAnywayShown KeptWorkEffect = "remove-anyway-shown"
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
 // it stands after the answer, what the answer did, and for a landing the
-// run it started. A land, carry on or confirmed discard records its answer
-// on the entry; a discard shown records nothing, so its entry is as it
-// was, still open (KeptWorkDiscardShown).
+// run it started. A land, carry on or confirmed discard records its
+// answer on the entry; a discard or remove-anyway shown records nothing,
+// so its entry is as it was, still open.
 type KeptWorkAnswered struct {
 	// Entry is the entry as the answer left it: answered for a land, a
 	// carry on or a confirmed discard, and unchanged and open for a
-	// discard shown.
+	// discard or remove-anyway shown.
 	Entry store.KeptWork `json:"entry"`
 	// Effect is what the answer did.
 	Effect KeptWorkEffect `json:"effect"`
@@ -202,8 +205,12 @@ type KeptWorkAnswered struct {
 	// Task is the task a carry on created, empty for every other effect.
 	Task string `json:"task,omitempty"`
 	// Loss is what a discard would lose, for a discard shown, and absent for
-	// every other effect.
+	// every other effect: a discard that refuses returns no loss, so a
+	// remove-anyway shown has none to carry.
 	Loss *KeptWorkLoss `json:"loss,omitempty"`
+	// Refusal is why a discard refuses the copy, for a remove-anyway
+	// shown, and absent for every other effect.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 // phraseKeptWorkLanded is the row a landed answer reads as.
@@ -236,6 +243,13 @@ var phraseKeptWorkDiscarded = Phrase{
 	Outcome:     "That local copy was removed on your confirmed discard.",
 	Consequence: "What it contained is gone, and new work that would start where it stood is no longer blocked by it.",
 	Decision:    "Nothing further to decide about that copy.",
+}
+
+// phraseKeptWorkRemoveAnywayShown is the row a remove-anyway shown reads as.
+var phraseKeptWorkRemoveAnywayShown = Phrase{
+	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, so what it would lose cannot be shown.",
+	Consequence: "The copy stays, with everything it holds, and new work that would start where it stood still waits on it.",
+	Decision:    "Answer land or carry-on if that is what you want; releasing the entry while keeping the copy is not in this build yet.",
 }
 
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
@@ -319,6 +333,8 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 		return phraseKeptWorkDiscardShown
 	case KeptWorkDiscarded:
 		return phraseKeptWorkDiscarded
+	case KeptWorkRemoveAnywayShown:
+		return phraseKeptWorkRemoveAnywayShown
 	}
 	return phraseKeptWorkLanded
 }
@@ -326,5 +342,7 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded,
-		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
+		phraseKeptWorkRemoveAnywayShown,
+		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal,
+		PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }
