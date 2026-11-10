@@ -16,7 +16,9 @@ import (
 // pipe worker. It records decoded turn text, never typed adapter results.
 // The frames it writes are the ones Codex CLI 0.163.0 emitted, kept in
 // internal/agents/testdata/codex-app-server-0.163.0.jsonl; turn/interrupt
-// follows CLI 0.166.0's schema (TurnInterruptParams, TurnStatus interrupted).
+// follows CLI 0.166.0's schema (TurnInterruptParams, TurnStatus interrupted),
+// and a command's approval request is the one Codex CLI 0.166.0 emitted,
+// kept in internal/agents/testdata/codex-app-server-approvals-0.166.0.jsonl.
 func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 	tb.Helper()
 	self, err := os.Executable()
@@ -39,8 +41,9 @@ func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 // exchange with Turn set holds that accepted turn open until turn/interrupt,
 // which is CLI 0.166.0's cancel: the interrupt is answered, the turn
 // completes as interrupted, then idle, and Call.Interrupted records the
-// message. It requires that order, a workspace-write sandbox, and
-// on-request approval.
+// message. It requires that order, a workspace-write sandbox, and either
+// on-request approval (a worker) or untrusted (a subordinate, recorded from
+// CLI 0.166.0 as the mode where plain shell calls ask before they run).
 func serveAppServer(control string, args []string) int {
 	bytes, err := os.ReadFile(scriptPath(control))
 	if err != nil {
@@ -110,10 +113,15 @@ func serveAppServer(control string, args []string) int {
 			}
 			phase = 2
 		case "thread/start":
-			if phase != 2 || m.Params.Cwd == "" || m.Params.Sandbox != "workspace-write" || m.Params.Approval != "on-request" || !caps.Params.Ephemeral {
+			approvalOK := m.Params.Approval == "on-request" || m.Params.Approval == "untrusted"
+			if phase != 2 || m.Params.Cwd == "" || m.Params.Sandbox != "workspace-write" || !approvalOK || !caps.Params.Ephemeral {
 				return exitNoStdin
 			}
 			phase = 3
+			call.ApprovalPolicy = m.Params.Approval
+			if record(callsPath(control), call) != nil {
+				return exitNoRecord
+			}
 			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"thread": map[string]any{"id": threadID}}}) != nil {
 				return exitNoOutput
 			}
@@ -155,7 +163,7 @@ func serveAppServer(control string, args []string) int {
 				matched = exchange
 				if exchange.Run {
 					_, command, _ := strings.Cut(text, exchange.Contains)
-					if !appServerPermission(encoder, scanner, strings.TrimSpace(command), turnID) {
+					if !appServerPermission(encoder, scanner, strings.TrimSpace(command)) {
 						reply = "standin: command permission refused"
 						break
 					}
@@ -258,15 +266,20 @@ func appServerAwaitInterrupt(scanner *bufio.Scanner, encoder *json.Encoder, thre
 	return encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{}}) == nil
 }
 
-// appServerPermission models item/commandExecution/requestApproval, the
-// method Codex CLI 0.163.0's schema names for a turn started with turn/start.
-// The decision vocabulary is that schema's. A Run exchange continues only
-// after the client answers accept.
-func appServerPermission(encoder *json.Encoder, scanner *bufio.Scanner, command, turnID string) bool {
+// appServerPermission models item/commandExecution/requestApproval as Codex
+// CLI 0.166.0 asked it for a shell tool call, recorded in
+// internal/agents/testdata/codex-app-server-approvals-0.166.0.jsonl: kind
+// command, and the command string the shell line that CLI runs, the
+// recorded /bin/zsh with -lc and the command quoted by appServerWord. A Run
+// exchange continues only after the client answers accept, the decision
+// vocabulary of that version's schema.
+func appServerPermission(encoder *json.Encoder, scanner *bufio.Scanner, command string) bool {
 	request := map[string]any{
 		"id": 9001, "method": "item/commandExecution/requestApproval",
 		"params": map[string]any{
-			"command": command, "threadId": "standin-codex-thread", "turnId": turnID,
+			"kind": "command", "command": "/bin/zsh -lc " + appServerWord(command),
+			"commandActions": []any{map[string]string{"type": "unknown", "command": command}},
+			"threadId":       "standin-codex-thread", "turnId": "standin-codex-turn",
 			"itemId": "item", "startedAtMs": 1,
 		},
 	}
@@ -279,4 +292,12 @@ func appServerPermission(encoder *json.Encoder, scanner *bufio.Scanner, command,
 		} `json:"result"`
 	}
 	return json.Unmarshal(scanner.Bytes(), &response) == nil && response.Result.Decision == "accept"
+}
+
+// appServerWord quotes command as one shell word in single quotes, as the
+// recording shows every command it asked for. A single quote inside is
+// written as '"'"', which no recording shows; the adapter declines any
+// word with a quote inside, so that choice reaches no accepted command.
+func appServerWord(command string) string {
+	return "'" + strings.ReplaceAll(command, "'", `'"'"'`) + "'"
 }

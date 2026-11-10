@@ -352,8 +352,9 @@
 //   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
 //     importer, as is os.RemoveAll, so only this package calling either
 //     behind a Removal is convention, and no type stops another package
-//     from removing a copy it never proved. (A person's discard removes
-//     nothing in this build: its removal is deferred to AGE-486.)
+//     from removing a copy it never proved. (A person's confirmed discard
+//     removes a task's clone through Cleaner.Discard; a run's worktree
+//     confirmation is still refused.)
 //   - A caller states the terminal's liveness, and one that states Dead of
 //     a terminal it never probed is indistinguishable from one that did.
 //   - Ignored files are invisible to vcs.Inventory and so to the dirty and

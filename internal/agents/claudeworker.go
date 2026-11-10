@@ -153,10 +153,24 @@ func (w *claudePipeWorker) Interrupt(ctx context.Context) (bool, error) {
 	if err := w.writeFramed(ctx, line.Bytes(), "", false); err != nil {
 		return false, err
 	}
-	if err := w.await(ctx, settled); err != nil {
+	if err := waitAfterClaudeInterruptCancel(ctx, settled, w.done); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// waitAfterClaudeInterruptCancel waits for settled after control_request was
+// written. Tests may replace it to observe that Interrupt reached this wait
+// rather than returning on the cancel alone.
+var waitAfterClaudeInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}) error {
+	select {
+	case <-settled:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ended:
+		return ErrWorkerEnded
+	}
 }
 
 func (w *claudePipeWorker) armTurn() {

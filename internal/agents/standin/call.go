@@ -101,6 +101,12 @@ type Call struct {
 	// a second one at an idle screen opened its rewind menu, and one over
 	// unsent text offered to clear it.
 	IdleEscapes int `json:"idle_escapes,omitempty"`
+	// ApprovalPolicy is the thread/start approvalPolicy a Codex app-server
+	// worker accepted, empty for every other kind of call. A subordinate
+	// must start under untrusted; a worker under on-request. Recording it
+	// is what lets a test lock the GrantSubordinate switch: the stand-in
+	// asks on every Run either way, so approval answers alone do not.
+	ApprovalPolicy string `json:"approval_policy,omitempty"`
 }
 
 // Answered reports whether a step of the script answered this invocation. It

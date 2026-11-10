@@ -510,8 +510,8 @@ for a Claude Code worker hosted in tmux (under `session_provider: tmux`, or
 under `auto` when that hosts in tmux), which reads the turn's end off its
 screen, and for a Claude Code, Codex, or Cursor worker on a pipe
 (`pipe_interrupt` over stream-json `control_request`, app-server
-`turn/interrupt`, or ACP `session/cancel`), and refused for any other
-worker, with nothing done.
+`turn/interrupt` which needs Codex CLI 0.166.0 or later, or ACP
+`session/cancel`), and refused for any other worker, with nothing done.
 
 ## Keeping a repository's agent context true
 
@@ -682,7 +682,8 @@ entry's copy, whose it was and the commits it holds. The ways past it are
 an answer that closes the entry (land or carry on, below) or the work
 landing: once its commits are on the upstream branch or in the default
 branch, the next service start removes the copy on that proof and closes
-the entry. Removal on a discard is not in this build.
+the entry. A task's clone is removed on a confirmed discard; a run's worktree
+confirmation is still refused.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
@@ -820,18 +821,19 @@ file of the copy's repository directory, a hook or its configuration
 among them, that differs from what git writes into every new repository),
 a directory lost whole named once with a trailing slash; whether git
 reports a change, a file or a stash; and a digest of exactly what is
-shown, each file by what it holds. It records and removes nothing.
-Removing the copy on that answer is not in this build: given again with
-`--confirm DIGEST` it is refused, with nothing read or changed, the copy
-and its entry exactly as they were, and new tasks on its branch still
-wait on it. A confirmation is accepted only from a terminal, in the
-foreground: under `--json`, from a script, a background job or an agent's
-tool it is refused first, with a line saying so, and the service decides
-that from the calling process itself, not from the command line. A
-terminal's foreground is not proof of a person, so a program you run there
-can give one; from there it meets the refusal above. To let them go ahead, answer land or carry-on, or commit or
-remove what is uncommitted, untracked or stashed, and push its commits
-where one of the cleanup proofs above finds them. That proof reads only
+shown, each file by what it holds. Without `--confirm` it records and removes
+nothing. Given again with `--confirm DIGEST` from a terminal's foreground, a
+task's clone is removed when that digest still seals the copy; a run's
+worktree confirmation is still refused, with nothing read or changed. A
+confirmation is accepted only from a terminal, in the foreground: under
+`--json`, from a script, a background job or an agent's tool it is refused
+first, with a line saying so, and the service decides that from the calling
+process itself, not from the command line. A terminal's foreground is not
+proof of a person, so a program you run there can give one. To let new tasks
+on the entry's branch go ahead, answer land, carry-on, or discard with
+`--confirm` for a task's clone, or commit or remove what is uncommitted,
+untracked or stashed, and push its commits where one of the cleanup proofs
+above finds them. That proof reads only
 the commits the copy's HEAD and its branches, tags and stash reach, and
 what git reports uncommitted, untracked (and not ignored) or stashed: a
 file git ignores, a commit or object only a reflog or another reference
@@ -880,10 +882,10 @@ of it would be; work lost in the moment between that reading and the
 promotion's write is answered with the write, and the promotion then
 reports the copy refused.
 
-Nothing in the program discards a copy, on its own or on an answer: the
-preview is open to any caller that may answer kept work, and a
-confirmation is refused for everyone in this build. Removal on a confirmed
-discard is deferred (docs/prd.md, sections 6 and 9).
+Nothing in the program discards a copy on its own. The preview is open to any
+caller that may answer kept work. A confirmation from a terminal's foreground
+removes a task's clone when the digest still seals the copy; a run's worktree
+confirmation is still refused (docs/prd.md, sections 6 and 9).
 
 ## Resetting a coordinator's session
 

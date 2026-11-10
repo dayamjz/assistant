@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -165,23 +166,147 @@ func TestInstalledCodexAppServerWorker(t *testing.T) {
 	}
 }
 
-// The Codex adapter refuses a subordinate coordinator before anything
-// starts, with ErrGrantUnenforced, both at the launch-refusal ask and at
-// OpenSubordinate, and the stand-in records no call; the same spec through
-// OpenWorker starts, the control that the refusal is the grant's.
-func TestCodexRefusesASubordinateItCannotHoldToItsGrant(t *testing.T) {
+// TestInstalledCodexWorkerGitRunsUnderItsGrant is the live probe that
+// recorded testdata/codex-app-server-approvals-0.166.0.jsonl, there with
+// an escalated echo first, run against the installed CLI and model: one
+// turn asks for an escalated touch, a git commit and an escalated git push
+// to a bare repository beside the copy, so each comes to the adapter as a
+// command approval. The push reaching the repository is the adapter's
+// accept of git read inside the CLI's shell line, and the touched file not
+// existing is its decline of anything else; a model that runs the touch
+// without asking, which the sandbox would allow, fails it the same way.
+// It skips unless ASSISTANT_CODEX_WORKER_LIVE=1, because it spends a model
+// turn.
+func TestInstalledCodexWorkerGitRunsUnderItsGrant(t *testing.T) {
+	if os.Getenv("ASSISTANT_CODEX_WORKER_LIVE") != "1" {
+		t.Skip("set ASSISTANT_CODEX_WORKER_LIVE=1 to probe the installed CLI and model")
+	}
+	binary, err := exec.LookPath("codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	bare, work := filepath.Join(root, "gate.git"), filepath.Join(root, "work")
+	liveGit(t, root, "init", "--quiet", "--bare", bare)
+	liveGit(t, root, "init", "--quiet", work)
+	for _, setting := range [][]string{{"user.name", "probe"}, {"user.email", "probe@example.invalid"}, {"gc.auto", "0"}, {"maintenance.auto", "false"}} {
+		liveGit(t, work, "config", setting[0], setting[1])
+	}
+	liveGit(t, work, "commit", "--quiet", "--allow-empty", "-m", "probe")
+	marker := filepath.Join(root, "declined-marker")
+	liveGit(t, work, "remote", "add", "origin", bare)
+	runner, err := agents.CodexFactory(agents.WithCodexBinary(binary)).New(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 240*time.Second)
+	defer cancel()
+	instructions := "This is a protocol probe. Use the shell tool for exactly these commands, in this order, each as its own tool call:\n" +
+		"1. touch " + marker + " (with sandbox_permissions set to require_escalated)\n" +
+		"2. git commit --allow-empty -m probe-two (in the normal sandbox, no escalation)\n" +
+		"3. git push origin HEAD:refs/heads/probe (with sandbox_permissions set to require_escalated)\n" +
+		"If a command is declined, do not retry it. If command 2 fails in the sandbox, rerun it once with require_escalated. " +
+		"Run nothing else. When done, reply with exactly PROBE_DONE."
+	worker, err := agents.OpenWorker(ctx, runner, agents.WorkerSpec{Dir: work, Instructions: instructions, Effort: "low"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	for !strings.Contains(worker.Capture().Text, "PROBE_DONE") {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("installed Codex did not finish the probe: %s", worker.Capture().Text)
+		case <-worker.Done():
+			t.Fatalf("installed Codex exited: %s", worker.Capture().Text)
+		case <-tick.C:
+		}
+	}
+	if pushed := liveGit(t, bare, "for-each-ref", "--format=%(refname)"); !strings.Contains(pushed, "refs/heads/probe") {
+		t.Fatalf("the accepted git push did not reach the bare repository: %q\n%s", pushed, worker.Capture().Text)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the touch the grant does not allow ran (%v): %s", err, worker.Capture().Text)
+	}
+}
+
+// liveGit runs git for the live probe's own setup, with automatic
+// maintenance off so no background git outlives the test (#119) and an
+// identity stated, since a runner may have none.
+func liveGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-c", "gc.auto=0", "-c", "maintenance.auto=false",
+		"-c", "user.name=probe", "-c", "user.email=probe@example.invalid"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+// The Codex adapter starts a subordinate coordinator under GrantSubordinate
+// the same way it starts a worker, with the app-server thread under
+// approvalPolicy untrusted so plain shell calls ask before they run. The
+// stand-in's Call records that policy: without it, a subordinate started
+// under on-request would still pass every Run exchange, because the
+// stand-in asks either way.
+func TestCodexStartsASubordinateUnderItsGrant(t *testing.T) {
 	principles.Cite(t, principles.P4)
 	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{}})
 	spec := agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Coordinate the domain.", Route: "echo routed"}
-	if _, err := agents.OpenSubordinate(t.Context(), agent.Runner(), spec); !errors.Is(err, agents.ErrGrantUnenforced) {
-		t.Fatalf("OpenSubordinate on Codex = %v, want ErrGrantUnenforced", err)
+	sub, err := agents.OpenSubordinate(t.Context(), agent.Runner(), spec)
+	if err != nil {
+		t.Fatalf("OpenSubordinate on Codex: %v", err)
 	}
-	if calls := agent.Calls(); len(calls) != 0 {
-		t.Fatalf("the refused subordinate started %d processes", len(calls))
+	sub.Close()
+	calls := agent.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("the subordinate started %d processes, want 1", len(calls))
+	}
+	if calls[0].ApprovalPolicy != "untrusted" {
+		t.Fatalf("the subordinate's thread started under approvalPolicy %q, want untrusted", calls[0].ApprovalPolicy)
 	}
 	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), spec)
 	if err != nil {
 		t.Fatalf("the control worker: %v", err)
 	}
 	worker.Close()
+	calls = agent.Calls()
+	if len(calls) != 2 || calls[1].ApprovalPolicy != "on-request" {
+		t.Fatalf("the control worker's calls are %+v, want a second under on-request", calls)
+	}
+}
+
+// A Codex subordinate accepts only its route and declines git: the stand-in
+// asks each Run exchange as Codex CLI 0.166.0 asked a command approval, and
+// the adapter's GrantSubordinate answers accept only for the route.
+func TestACodexSubordinateHoldsApprovalsToItsGrant(t *testing.T) {
+	route := "echo routed"
+	agent := standin.NewCodex(t, standin.Script{Worker: &standin.WorkerScript{
+		Exchanges: []standin.Exchange{{Contains: "run ", Run: true}},
+	}})
+	sub, err := agents.OpenSubordinate(t.Context(), agent.Runner(), agents.WorkerSpec{
+		Dir: t.TempDir(), Instructions: "Coordinate.", Route: route,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+	for _, test := range []struct{ command, want string }{
+		{"git status", "permission refused"},
+		{route, "routed"},
+	} {
+		if err := sub.Send(t.Context(), "run "+test.command); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(3 * time.Second)
+		for !strings.Contains(sub.Capture().Text, test.want) {
+			if time.Now().After(deadline) {
+				t.Fatalf("after %q the capture never held %q: %s", test.command, test.want, sub.Capture().Text)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
 }

@@ -72,9 +72,11 @@ paths: ["internal/tasks/**"]
   refused for a report or hold its retirement means will never come;
   `kept_test.go` places every reason for both.
 - `kept_discard.go` is the copy's half of PRD section 6's discard as far
-  as this build takes it, the preview (removal on a confirmed discard is
-  still deferred to the rest of AGE-486; the journal and set-aside
-  mechanism landed in #678 and #679), and `Loss` is
+  as this build takes it: the preview (`Loss`) and, in
+  `kept_discard_run.go`, `Cleaner.Discard` for a task's clone through its
+  point of no return (set-aside, clean read, rename, finish). The service
+  discard answer calls `Discard` for a task's clone; a run's worktree
+  removal and HEAD/ref set-aside remain later links. `Loss` is
   also what `internal/service`'s land answer decides from: `Loss`
   reads what removing the copy would lose: the commits that anything the
   removal destroys names reaches (HEAD, a reference, a root reference such
@@ -98,8 +100,10 @@ paths: ["internal/tasks/**"]
   and nothing else (`seal`: HEAD, the commits and objects lost, each path
   lost with what it holds, decided from the copy and never from what git
   reports changed, and the indicators; the header names what it does not
-  cover), refusing an unestablished entry. Nothing in this package
-  removes a copy on a discard answer. A run's record in the gate is taken
+  cover), refusing an unestablished entry. `Cleaner.Discard` removes a
+  task's clone on a confirmed digest; the service discard answer calls it
+  for that case. A
+  run's record in the gate is taken
   from the gate's own registry (`vcs.WorktreeRecords`, read from the gate
   and held to git's listing) and never by following the copy's `.git`,
   the copy refused when its files disagree with it (`copyRecord`). `Loss`
@@ -140,10 +144,12 @@ paths: ["internal/tasks/**"]
   loss seal,   and writes back missing `LostChanged`/`LostDeleted` stage-0 index
   blobs, including children under a `LostDeleted` directory path (an
   unshown missing tracked path is `ErrLossChanged`); `LostRepository`
-  stays for the clone move at the point of no return. It refuses
+  stays for the clone move at the point of no return. It   refuses
   `LostStaged`, directory moves, and symlink/gitlink write-backs until
-  later links. `Cleaner.Discard` (PONR/finish) and HEAD/ref set-aside
-  are those later links; no discard answer calls them yet.
+  later links. `Cleaner.Discard` (`kept_discard_run.go`) takes a task's
+  clone through PONR/finish on top of set-aside; HEAD/ref set-aside and
+  a run's worktree remain later links. The service discard answer calls
+  `Discard` for a task's clone.
   An entry is set aside only as it was read (`moveAsRead` in `kept_state.go`,
   the state its bytes, `ErrLossChanged` otherwise, an entry seen to
   change while read among it, by its `stampOf` stamp read before and after

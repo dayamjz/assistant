@@ -61,9 +61,9 @@ func keptWithWork(t *testing.T) (*cleanupSubject, task, store.KeptWork, Loss) {
 // refused before anything is set aside); a sparse checkout; a linked worktree; and references in a reftable. Each
 // preview refuses with ErrLayoutUnsupported naming why, with the clone and
 // the other clone exactly as they were. The positive control is the same
-// clone in the ordinary layout, which is shown. (The removal a confirmed
-// discard would make is deferred to AGE-486; the layouts were found
-// against it, and a land reads the copy the same way.)
+// clone in the ordinary layout, which is shown. (A confirmed discard of a
+// task's clone removes it through Cleaner.Discard; the layouts were found
+// against that removal, and a land reads the copy the same way.)
 func TestALossRefusesALayoutItDoesNotSupport(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()

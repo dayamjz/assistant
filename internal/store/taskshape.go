@@ -86,10 +86,11 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // answer as carry on, which closes it"), naming the promoted task as the
 // task carrying them on, in this same transaction; a zero Resolver is
 // ErrNoResolver and nothing is written. A copy one of whose entries holds
-// an answer claimed and not yet carried out (a landing, a carry on or a
-// discard) is refused with ErrKeptWorkCopyOwed, wrapped, and nothing is
-// written: that answer still needs the copy where it stands, and is
-// carried out or withdrawn first.
+// an answer claimed and not yet carried out (a landing, a carry on, a
+// discard or a remove-anyway) is refused with ErrKeptWorkCopyOwed, wrapped,
+// and nothing is written: that answer is carried out or withdrawn first.
+// A land, carry on or discard still needs the copy where it stands; a
+// remove-anyway releases the entry without this package reading the copy.
 //
 // verified is the entries the caller verified the copy for before this
 // write (internal/tasks' Promote asks the kept-copy verification of each).
@@ -153,13 +154,14 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
 		// An entry of the copy holding an answer not yet carried out (a
-		// landing, a carry on or a discard claimed) refuses the flip on
-		// the one owed rule every answer is held to (owedOnCopy).
+		// landing, a carry on, a discard or a remove-anyway claimed) refuses
+		// the flip on the one owed rule every answer is held to (owedOnCopy).
 		var claimed int64
 		var what string
 		switch err := tx.QueryRowContext(ctx, `SELECT id, CASE
 				WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task
 				WHEN discard_claimed_at IS NOT NULL THEN 'claimed discard'
+				WHEN remove_anyway_claimed_at IS NOT NULL THEN 'claimed remove anyway'
 				ELSE 'claimed land' END
 			FROM kept_work WHERE task_id = ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, id).Scan(&claimed, &what); {
 		case err == nil:

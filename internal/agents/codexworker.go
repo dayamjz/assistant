@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -22,19 +23,27 @@ import (
 // nothing in this method resumes one. The caller owns the process through
 // Close; startup's context does not own its lifetime.
 //
-// Command approvals allow literal git commands and commands beginning with
-// the worker route. The command is the request's command string; a request
-// that does not carry one there is declined. File-change approvals are
-// accepted without this package reading the paths, so the workspace-write
-// sandbox is the CLI's limit on where a write lands. Any other approval is
-// declined, and a server request this client does not understand is
-// refused. A command the sandbox runs without asking is the CLI's own.
-// Terminal workers are not declared.
+// A worker thread starts workspace-write with on-request approval. Command
+// approvals allow literal git and commands beginning with the worker route,
+// on codexApprovedCommand's terms: the command is read from the request's
+// command string, inside the shell wrapper the CLI names there, and a
+// request that carries none, or asks for anything but a command, is
+// declined. File-change approvals are accepted without this package reading
+// the paths, so the workspace-write sandbox is the CLI's limit on where a
+// write lands. Any other approval is declined, and a server request this
+// client does not understand is refused. A command the sandbox runs without
+// asking is the CLI's own under on-request. Terminal workers are not
+// declared.
 //
-// A subordinate coordinator is refused with ErrGrantUnenforced before
-// anything starts: the commands the workspace-write sandbox runs without
-// asking never reach this client, so it cannot deny git, or every command
-// but the route, as GrantSubordinate states.
+// A subordinate coordinator (GrantSubordinate) starts the same app-server
+// with approvalPolicy untrusted, recorded from CLI 0.166.0 for plain shell
+// calls with no escalation and no sandbox_permissions override: those
+// reach this client as item/commandExecution/requestApproval before they
+// run. Approvals allow only the route; git and every other command are
+// declined. File-change approvals that arrive are declined; whether every
+// write asks under untrusted is not in that recording, so the residual is
+// a write that never reaches this client. read-only alone is not enough:
+// under on-request it still runs sandboxed commands without asking.
 func (r *codexRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
 	if err := spec.Validate(); err != nil {
 		return err
@@ -43,14 +52,17 @@ func (r *codexRunner) WorkerLaunchRefusal(_ Terminal, spec WorkerSpec) error {
 }
 
 // codexGrantRefusal refuses a spec whose grant this adapter cannot hold
-// the agent to, on WorkerLaunchRefusal's terms.
+// the agent to, on WorkerLaunchRefusal's terms. GrantWorker and
+// GrantSubordinate are held through the app-server approval path; any
+// other grant has no translation here.
 func codexGrantRefusal(spec WorkerSpec) error {
-	if spec.Grant() == GrantWorker {
+	switch spec.Grant() {
+	case GrantWorker, GrantSubordinate:
 		return nil
 	}
 	return &invocationFieldError{
 		field:  "grant",
-		reason: fmt.Sprintf("the Codex app-server runs sandboxed commands without asking, so the %s grant cannot be enforced", spec.Grant()),
+		reason: fmt.Sprintf("the Codex app-server has no translation of the %s grant", spec.Grant()),
 		also:   ErrGrantUnenforced,
 	}
 }
@@ -84,7 +96,7 @@ func (r *codexRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error
 		return nil, err
 	}
 	w := &codexWorker{
-		route: spec.Route, model: spec.Model, effort: spec.Effort,
+		route: spec.Route, grant: spec.Grant(), model: spec.Model, effort: spec.Effort,
 		pending: map[uint64]chan codexMessage{}, send: make(chan struct{}, 1),
 	}
 	w.procWorker = &procWorker{
@@ -147,6 +159,7 @@ type codexWorker struct {
 	// exited, before done is closed, so whoever sees done closed reads it.
 	ended         *WorkerError
 	thread, route string
+	grant         Grant
 	model, effort string
 	// turn is the id of the turn a Send last had accepted and that has not
 	// settled, empty when the worker is idle. turn/interrupt names it.
@@ -163,8 +176,15 @@ func (w *codexWorker) open(ctx context.Context, dir string) error {
 	if err := w.write(ctx, `{"method":"initialized"}`); err != nil {
 		return err
 	}
+	// GrantSubordinate needs plain shell calls to ask: untrusted does for
+	// those, recorded from CLI 0.166.0; on-request lets the workspace-write
+	// sandbox run without asking, which cannot hold that grant.
+	approval := "on-request"
+	if w.grant == GrantSubordinate {
+		approval = "untrusted"
+	}
 	params := map[string]any{
-		"cwd": dir, "sandbox": "workspace-write", "approvalPolicy": "on-request", "ephemeral": true,
+		"cwd": dir, "sandbox": "workspace-write", "approvalPolicy": approval, "ephemeral": true,
 	}
 	if w.model != "" {
 		params["model"] = w.model
@@ -325,13 +345,20 @@ func (w *codexWorker) Interrupt(ctx context.Context) (bool, error) {
 	}); err != nil {
 		return false, err
 	}
+	return waitAfterCodexInterruptCancel(ctx, settled, w.done, w.endedError)
+}
+
+// waitAfterCodexInterruptCancel waits for settled after turn/interrupt
+// returned. Tests may replace it to observe that Interrupt reached this wait
+// rather than returning on the cancel RPC alone.
+var waitAfterCodexInterruptCancel = func(ctx context.Context, settled <-chan struct{}, ended <-chan struct{}, endedErr func() error) (bool, error) {
 	select {
 	case <-settled:
 		return true, nil
 	case <-ctx.Done():
 		return false, ctx.Err()
-	case <-w.done:
-		return false, w.endedError()
+	case <-ended:
+		return false, endedErr()
 	}
 }
 
@@ -436,16 +463,18 @@ func (w *codexWorker) receive(line []byte) {
 	}
 }
 
-// completeTurn reads a turn/completed notification. A failed or interrupted
-// status settles the turn here: Codex CLI 0.163.0 was observed to end a
-// failed turn this way after moving the thread to systemError with no idle
-// after it, and CLI 0.166.0's TurnStatus interrupted is the same shape after
-// turn/interrupt, so Interrupt must not depend on a following idle. A
-// completed turn is still settled by its idle, as before, so an idle that
-// follows a turn/completed cannot settle the turn after it. A failure is
-// classified by codexTurnFailure, and only a recognized one is recorded,
-// because a recorded failure is what a worker handoff acts on and an
-// ordinary failed turn is not a reason to change agents.
+// completeTurn reads a turn/completed notification. A failed status settles
+// the turn here: Codex CLI 0.163.0 was observed to end a failed turn this
+// way after moving the thread to systemError with no idle after it.
+// TurnStatus interrupted is also recognized when present (CLI 0.166.0's
+// schema and the stand-in emit it after turn/interrupt; no live stdio
+// capture in this tree shows it), so Interrupt need not depend only on a
+// following idle when that status arrives. A completed turn is still
+// settled by its idle, as before, so an idle that follows a turn/completed
+// cannot settle the turn after it. A failure is classified by
+// codexTurnFailure, and only a recognized one is recorded, because a
+// recorded failure is what a worker handoff acts on and an ordinary failed
+// turn is not a reason to change agents.
 func (w *codexWorker) completeTurn(params json.RawMessage) {
 	var completed struct {
 		Turn struct {
@@ -551,14 +580,24 @@ func (w *codexWorker) answerServer(message codexMessage) {
 	decision := "decline"
 	switch message.Method {
 	case "item/commandExecution/requestApproval", "execCommandApproval":
-		var command struct {
-			Command string `json:"command"`
+		var request struct {
+			Kind    json.RawMessage `json:"kind"`
+			Command string          `json:"command"`
 		}
-		if json.Unmarshal(message.Params, &command) == nil && w.commandAllowed(command.Command) {
+		// kind is absent from a server older than the field, which the
+		// schema reads as a command; writeStdin is input to a process
+		// already running, which no grant here allows, and any other
+		// value, null included, is not a command either.
+		if json.Unmarshal(message.Params, &request) == nil &&
+			(len(request.Kind) == 0 || string(request.Kind) == `"command"`) && w.commandAllowed(request.Command) {
 			decision = "accept"
 		}
 	case "item/fileChange/requestApproval", "applyPatchApproval":
-		decision = "accept"
+		// A worker may edit under the workspace-write sandbox; a
+		// subordinate edits nothing.
+		if w.grant != GrantSubordinate {
+			decision = "accept"
+		}
 	default:
 		if !strings.Contains(message.Method, "Approval") && !strings.Contains(message.Method, "requestApproval") {
 			w.reply(message.ID, map[string]any{"error": map[string]any{"code": -32601, "message": "client does not support this request"}})
@@ -582,15 +621,54 @@ func (w *codexWorker) reply(id json.RawMessage, body map[string]any) {
 	}
 }
 
+// commandAllowed reports whether an approval's command string runs a
+// command the worker grant allows, read as codexApprovedCommand reads it.
 func (w *codexWorker) commandAllowed(command string) bool {
+	line, ok := codexApprovedCommand(command)
+	return ok && w.grantedLine(line)
+}
+
+// grantedLine reports whether one command line is allowed under the
+// worker's grant: literal git or the route for GrantWorker, and only the
+// route for GrantSubordinate, with no shell operator either way.
+func (w *codexWorker) grantedLine(command string) bool {
 	command = strings.TrimSpace(command)
 	if command == "" || strings.ContainsAny(command, ";&|><`$()\r\n") {
 		return false
 	}
-	if command == "git" || strings.HasPrefix(command, "git ") {
+	if w.grant != GrantSubordinate && (command == "git" || strings.HasPrefix(command, "git ")) {
 		return true
 	}
 	return w.route != "" && (command == w.route || strings.HasPrefix(command, w.route+" "))
+}
+
+// codexApprovedCommand returns the command line an approval's command
+// string asks to run, and false when it cannot be read. Codex CLI 0.166.0
+// asked for each shell tool call as the line it runs, /bin/zsh, -lc, and
+// the model's command in single quotes
+// (testdata/codex-app-server-approvals-0.166.0.jsonl), so a string whose
+// first word is a shell is read only in that form: sh, bash or zsh, -lc or
+// -c, and one word wholly in single quotes with no quote inside, whose
+// inside is the command. Only zsh and -lc are recorded; sh, bash and -c are
+// read the same way because the inside is then what the shell runs, and
+// is held to the grant as every command is. Any other shell string, a
+// command that needs a single quote included, is unreadable and declined
+// rather than unquoted here. A string whose first word is no shell is
+// read as the command itself, as before this read existed; no recording
+// shows the CLI asking in that form.
+func codexApprovedCommand(command string) (string, bool) {
+	first, rest, _ := strings.Cut(command, " ")
+	switch path.Base(first) {
+	case "sh", "bash", "zsh":
+	default:
+		return command, true
+	}
+	flag, word, ok := strings.Cut(rest, " ")
+	if !ok || (flag != "-lc" && flag != "-c") || len(word) < 2 || word[0] != '\'' || word[len(word)-1] != '\'' {
+		return "", false
+	}
+	inner := word[1 : len(word)-1]
+	return inner, !strings.Contains(inner, "'")
 }
 
 type codexLines struct {
