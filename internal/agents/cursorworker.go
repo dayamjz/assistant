@@ -228,23 +228,34 @@ func (w *acpWorker) Interrupt(ctx context.Context) (bool, error) {
 	if err := w.write(ctx, string(encoded)); err != nil {
 		return false, err
 	}
+	reply, err := waitAfterCursorInterruptCancel(ctx, w.turn, w.done)
+	if err != nil {
+		return false, err
+	}
+	w.turn = nil
+	if reply.Error != nil {
+		return false, w.failure(reply.Error.Message)
+	}
+	var result struct {
+		Stop string `json:"stopReason"`
+	}
+	if json.Unmarshal(reply.Result, &result) != nil || result.Stop != "cancelled" {
+		return false, fmt.Errorf("agents: Cursor ACP interrupt answered stopReason %q, want cancelled", result.Stop)
+	}
+	return true, nil
+}
+
+// waitAfterCursorInterruptCancel waits for the session/prompt result after
+// session/cancel was written. Tests may replace it to observe that Interrupt
+// reached this wait rather than returning on the cancel notification alone.
+var waitAfterCursorInterruptCancel = func(ctx context.Context, turn <-chan acpMessage, ended <-chan struct{}) (acpMessage, error) {
 	select {
-	case reply := <-w.turn:
-		w.turn = nil
-		if reply.Error != nil {
-			return false, w.failure(reply.Error.Message)
-		}
-		var result struct {
-			Stop string `json:"stopReason"`
-		}
-		if json.Unmarshal(reply.Result, &result) != nil || result.Stop != "cancelled" {
-			return false, fmt.Errorf("agents: Cursor ACP interrupt answered stopReason %q, want cancelled", result.Stop)
-		}
-		return true, nil
+	case reply := <-turn:
+		return reply, nil
 	case <-ctx.Done():
-		return false, ctx.Err()
-	case <-w.done:
-		return false, ErrWorkerEnded
+		return acpMessage{}, ctx.Err()
+	case <-ended:
+		return acpMessage{}, ErrWorkerEnded
 	}
 }
 
