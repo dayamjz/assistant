@@ -105,14 +105,11 @@ paths: ["internal/service/**"]
   put-back or a past-PONR finish. Off-terminal confirmations are
   `discardOffTerminal` (`PhraseDiscardNeedsTerminal`); a run's worktree
   confirmation removes a run's worktree through `Cleaner.Discard` the same
-  way it removes a task's clone. Remove-anyway (`keptremoveanyway.go`) shows
-  why a discard refuses without Force; with Force from a terminal's
-  foreground it claims (`ClaimKeptWorkRemoveAnyway`), records the release
-  (`RecordKeptWorkRemoveAnyway`) without removing the copy, and redispatches
-  (`completeRemoveAnywaysAtOpen` resumes a stopped claim). It is refused
-  when a discard can remove the copy, while a discard claim or set-aside
-  stands, and off-terminal (`removeAnywayOffTerminal`,
-  `PhraseRemoveAnywayNeedsTerminal`). A
+  way it removes a task's clone. Remove-anyway (`keptremoveanyway.go`) is
+  its preview alone in this build: it shows why a discard refuses, read
+  afresh from the copy, and records and releases nothing. It is refused
+  when a discard can remove the copy, and while a land, carry-on or discard
+  claim or a discard set-aside stands. A
   promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the

@@ -30,23 +30,20 @@ place of `--task` for a run's copy.
   is refused under `--json` and from any process not in the foreground of a
   terminal, which your tool's commands are not, so never try to give one.
 - `--answer remove-anyway` is for a copy whose discard preview refuses
-  (shallow, partial or unverifiable), read afresh each time. Alone it shows
-  why discard refuses, and nothing of the loss, and records nothing. A
-  discard refused at its removal puts the copy back and is shown and
-  confirmed again; remove-anyway is refused for it. With `--force` from a terminal's foreground, naming the same task
-  or run, it releases the entry and keeps the copy. It is refused when a
-  discard can remove the copy, while a claim or a discard set-aside stands,
-  under `--json`, and from any process not in a terminal's foreground; never
-  try to give the confirmation yourself.
+  (shallow, partial or unverifiable), read afresh each time. It shows why
+  discard refuses, and nothing of the loss, and records and releases
+  nothing: its confirmation, which would release the entry and keep the
+  copy, is not in this build. It is refused when a discard can remove the
+  copy, and while a claim or a discard set-aside stands. A discard refused
+  at its removal puts the copy back and is shown and confirmed again.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
-land, carry-on, discard with `--confirm`, or remove-anyway with `--force` when
-a discard refuses, or committing or removing its uncommitted work and pushing
-its commits, after which the program removes the copy on that proof when it
-next looks at it, which is not immediate, and with it, unchecked, files git
-ignores, commits only a reflog reaches and the copy's hooks, which the discard
-preview lists, so they should copy out what they want first; removing it by
-hand leaves the entry open.
+land, carry-on, or discard with `--confirm`, or committing or removing its
+uncommitted work and pushing its commits, after which the program removes the
+copy on that proof when it next looks at it, which is not immediate, and with
+it, unchecked, files git ignores, commits only a reflog reaches and the
+copy's hooks, which the discard preview lists, so they should copy out what
+they want first; removing it by hand leaves the entry open.
 Promoting an investigation whose copy has an entry answers that entry carry
 on by itself.
 

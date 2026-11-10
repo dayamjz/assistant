@@ -85,7 +85,6 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		hold         string
 		runFlag      runTarget
 		confirm      string
-		force        bool
 		domain       string
 		consent      bool
 	)
@@ -103,9 +102,6 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&confirm, "confirm", "", "with --answer discard and --hold kept-work/N: the digest a discard shown beforehand carried; "+
 			"without it the discard shows what would be lost and removes nothing; with it the answer is accepted only at a terminal, "+
 			"in the foreground and without --json, and removes a task's clone or a run's worktree when that digest still seals the copy")
-		set.BoolVar(&force, "force", false, "with --answer remove-anyway and --hold kept-work/N: confirm releasing the entry while keeping the copy; "+
-			"without it remove-anyway shows why a discard refuses and records nothing; with it the answer is accepted only at a terminal, "+
-			"in the foreground and without --json, naming the same task or run")
 		set.Var(&runFlag, "run", "with --task --answer: answer the task's current run even while "+
 			"the task still has holds of its own open; written --run=RUN with --answer and --hold kept-work/N, the run whose kept copy is answered")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
@@ -147,12 +143,11 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	targetRun := runFlag.on && !runFlag.named
 	running := flagWasSet(in.flags, "run") && !runFlag.named
 	domained := flagWasSet(in.flags, "domain")
-	if _, kept := store.ParseKeptWorkKey(hold); kept || runFlag.named || flagWasSet(in.flags, "confirm") || flagWasSet(in.flags, "force") {
+	if _, kept := store.ParseKeptWorkKey(hold); kept || runFlag.named || flagWasSet(in.flags, "confirm") {
 		return in.keptWorkAnswer(ctx, keptWorkFlags{
 			answered: answered, answer: answer, hold: hold, kept: kept, task: task, tasked: tasked,
 			run: runFlag, runSet: flagWasSet(in.flags, "run"), fixing: fixing, others: in.flagsBeside(),
 			confirm: confirm, confirmSet: flagWasSet(in.flags, "confirm"),
-			force: force, forceSet: flagWasSet(in.flags, "force"),
 		})
 	}
 	switch {
@@ -889,9 +884,6 @@ type keptWorkFlags struct {
 	// confirm is --confirm, read with --answer discard alone.
 	confirm    string
 	confirmSet bool
-	// force is --force, read with --answer remove-anyway alone.
-	force    bool
-	forceSet bool
 	// others names every other flag that was given, which an answer to kept
 	// work reads none of.
 	others []string
@@ -905,8 +897,6 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	switch {
 	case !f.kept && f.confirmSet:
 		return nil, usagef("--confirm takes the digest a discard of kept work was shown, and is read only with --answer discard and --hold kept-work/N")
-	case !f.kept && f.forceSet:
-		return nil, usagef("--force confirms a remove-anyway of kept work, and is read only with --answer remove-anyway and --hold kept-work/N")
 	case !f.kept:
 		return nil, usagef("--run=RUN names the run whose kept copy is answered, and is read only with --hold kept-work/N and --answer")
 	case !f.answered:
@@ -926,31 +916,24 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 		return nil, usagef("--confirm is read with --answer discard alone, and was given with --answer %s", f.answer)
 	case f.confirmSet && strings.TrimSpace(f.confirm) == "":
 		return nil, usagef("--confirm was given no digest; it takes the one a discard shown beforehand carried")
-	case f.forceSet && f.answer != string(store.KeptRemoveAnyway):
-		return nil, usagef("--force is read with --answer remove-anyway alone, and was given with --answer %s", f.answer)
-	case f.confirmSet && f.forceSet:
-		return nil, usagef("--confirm and --force cannot be given together")
 	case len(f.others) > 0:
-		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, --confirm with discard, and --force with remove-anyway, and not --%s", f.others[0])
+		return nil, usagef("an answer to kept work reads --answer, --hold, --task or --run=RUN, and --confirm with discard, and not --%s", f.others[0])
 	}
-	// A discard or remove-anyway is confirmed only at a terminal, in the
-	// foreground, PRD section 6: a confirmation under --json or off a
-	// terminal is refused here, before the service is asked, with the row
-	// that says so. "Off a terminal" is Environment.OffTerminal, the
+	// A discard is confirmed only at a terminal, in the foreground, PRD
+	// section 6's "Removing a discarded copy": a confirmation under --json
+	// or off a terminal is refused here, before the service is asked, with
+	// the row that says so. "Off a terminal" is Environment.OffTerminal, the
 	// service's own predicate read of this process, and never whether its
 	// streams are terminals. This is the early refusal, not the mechanism:
 	// internal/service decides it from the peer's lineage either way
-	// (keptdiscard.go, keptremoveanyway.go, foreground.go).
+	// (keptdiscard.go, foreground.go).
 	if f.confirmSet && (in.json || in.env.OffTerminal) {
 		return nil, discardNeedsTerminal{}
-	}
-	if f.forceSet && (in.json || in.env.OffTerminal) {
-		return nil, removeAnywayNeedsTerminal{}
 	}
 	in.progressf("answering kept work %s with %q", f.hold, f.answer)
 	var answered machine.KeptWorkAnswered
 	err := in.callService(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
-		Task: f.task, Run: f.run.run, Hold: f.hold, Answer: f.answer, Confirm: f.confirm, Force: f.force,
+		Task: f.task, Run: f.run.run, Hold: f.hold, Answer: f.answer, Confirm: f.confirm,
 	}, &answered)
 	return answered, err
 }
@@ -963,23 +946,14 @@ type discardNeedsTerminal struct{}
 // Error is the row, which says all there is.
 func (discardNeedsTerminal) Error() string { return machine.PhraseDiscardNeedsTerminal.String() }
 
-// removeAnywayNeedsTerminal is the command line's refusal of a
-// remove-anyway confirmation given under --json or off a terminal.
-type removeAnywayNeedsTerminal struct{}
-
-// Error is the row, which says all there is.
-func (removeAnywayNeedsTerminal) Error() string {
-	return machine.PhraseRemoveAnywayNeedsTerminal.String()
-}
-
 // flagsBeside names the flags given to the command with no verb other than
-// those an answer to kept work reads and the two every command takes, in
+// the four an answer to kept work reads and the two every command takes, in
 // the order the flag package visits them.
 func (in *invocation) flagsBeside() []string {
 	var out []string
 	in.flags.Visit(func(f *flag.Flag) {
 		switch f.Name {
-		case "answer", "hold", "task", "run", "confirm", "force", jsonFlagName, homeFlagName:
+		case "answer", "hold", "task", "run", "confirm", jsonFlagName, homeFlagName:
 		default:
 			out = append(out, f.Name)
 		}
