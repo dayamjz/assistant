@@ -166,4 +166,3 @@ func TestClaudeInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
