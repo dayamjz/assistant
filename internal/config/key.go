@@ -84,8 +84,7 @@ const (
 	// compaction that uses it sends conversation text to TypeSafe, so only the
 	// operator's own file may turn it on. The key is the opt-in alone; the
 	// TypeSafe key stays in the operator's environment as TYPESAFE_API_KEY and
-	// is never a configuration value (P7). docs/prd.md section 10 does not yet
-	// list this row; that gap is a finding for the owner, not closed here.
+	// is never a configuration value (P7). PRD section 10 has its row.
 	KeyJevCompaction Key = "jev_compaction"
 	// KeyDecisionModel is "decision_model": the mode of the decision-model
 	// checks PRD section 5 describes. It is global-only, so a repository can
