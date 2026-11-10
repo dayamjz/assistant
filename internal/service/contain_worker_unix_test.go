@@ -48,6 +48,10 @@ func TestAWorkerIsNotContainedAndTheWrapperOffersNoWorker(t *testing.T) {
 		t.Fatal("the wrapper declares worker sessions and carries no worker, which is the disagreement " +
 			"agents.Resolve refuses an adapter for")
 	}
+	if wrapped.Capabilities().Has(agents.CapabilityPipeInterrupt) {
+		t.Fatal("the wrapper declares pipe interrupt and carries no pipeInterrupter, which is the disagreement " +
+			"agents.Resolve refuses an adapter for")
+	}
 	if !wrapped.Capabilities().Has(agents.CapabilityResumableSessions) {
 		t.Fatal("the wrapper dropped the session declaration along with the worker one")
 	}

@@ -117,7 +117,7 @@ const (
 	// CapabilityPipeInterrupt is an adapter whose pipe workers can have a
 	// running turn ended while the agent goes on, with the end read off the
 	// protocol rather than a screen. That reading is the proof PRD section
-	// 12 asks of a pipe interrupt before it is offered, and section 6's
+	// 6 asks of a pipe interrupt before it is offered, and section 6's
 	// steering offers it under the pipe provider once an adapter declares
 	// it. InterruptibleWorker.Interrupt is the mechanism,
 	// InterruptPipeWorker the route this package serves, and a Runner that
@@ -129,9 +129,11 @@ const (
 	// remains the settle path the 0.163.0 recording shows. New refuses a
 	// CLI below 0.166.0 so the capability is not advertised there. Cursor
 	// declares it over ACP session/cancel, held to the stand-in's model of
-	// the documented CancelNotification (stopReason cancelled). Other
-	// adapters are not declared until each has a probe of its own. The
-	// conformance suite holds a declaration to the stand-in.
+	// the documented CancelNotification (stopReason cancelled). Claude Code
+	// declares it over stream-json control_request subtype interrupt, held
+	// to the stand-in's interrupt model. Other adapters are not declared
+	// until each has a probe of its own. The conformance suite holds a
+	// declaration to the stand-in.
 	CapabilityPipeInterrupt Capability = "pipe_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token

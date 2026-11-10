@@ -40,7 +40,7 @@ func TestTheClaudeWorkerIsToldExactlyWhatItIsSent(t *testing.T) {
 	if err := worker.Send(t.Context(), sent); err != nil {
 		t.Fatalf("sending: %v", err)
 	}
-	result := waitForResult(t, worker)
+	result := waitForResult(t, worker, "the second message was read")
 	if result != "the second message was read" {
 		t.Errorf("the worker's result line carries %q, want the scripted reply", result)
 	}
@@ -122,7 +122,7 @@ func workerRoleReachesTheCommandLine(t *testing.T, doc, wantModel string) {
 		t.Fatalf("starting the worker: %v", err)
 	}
 	defer worker.Close()
-	if got := waitForResult(t, worker); got != "started" {
+	if got := waitForResult(t, worker, "started"); got != "started" {
 		t.Fatalf("the worker answered %q, want the scripted reply", got)
 	}
 	worker.Close()
@@ -149,7 +149,7 @@ func workerRoleReachesTheCommandLine(t *testing.T, doc, wantModel string) {
 // the output, handed over as bytes, so this decodes it the way a reader of
 // the CLI's stream-json output would and not through anything the adapter
 // parsed.
-func waitForResult(t *testing.T, worker agents.Worker) string {
+func waitForResult(t *testing.T, worker agents.Worker, want string) string {
 	t.Helper()
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
@@ -159,7 +159,7 @@ func waitForResult(t *testing.T, worker agents.Worker) string {
 				Type   string `json:"type"`
 				Result string `json:"result"`
 			}
-			if json.Unmarshal([]byte(line), &decoded) == nil && decoded.Type == "result" {
+			if json.Unmarshal([]byte(line), &decoded) == nil && decoded.Type == "result" && decoded.Result == want {
 				return decoded.Result
 			}
 		}

@@ -1174,10 +1174,13 @@ type TaskStopped struct {
 }
 
 // TaskInterrupted is the answer to task.interrupt: the attempt whose
-// worker was asked to end its turn and whether a turn was running. It is
-// answered only once the worker's screen read ready after the key, or read
-// ready before it so that no key was pressed, and its terminal then probed
-// Live; an interrupt short of either is a refusal.
+// worker was asked to end its turn and whether a turn was running. Under
+// tmux it is answered only once the worker's screen read ready after the
+// key, or read ready before it so that no key was pressed, and its
+// terminal then probed Live. Under pipe it is answered once the adapter's
+// protocol cancel has settled the turn (or reported none running) and the
+// worker then probed Live. An interrupt short of either path's proof is a
+// refusal.
 type TaskInterrupted struct {
 	// Task is the task whose worker was interrupted.
 	Task string `json:"task"`
@@ -1185,9 +1188,12 @@ type TaskInterrupted struct {
 	Attempt int64 `json:"attempt"`
 	// Session is that attempt's session reference.
 	Session string `json:"session"`
-	// Interrupted is true when a turn was running and the key was pressed
-	// and the turn read ended after it, and false when no turn was running
-	// and nothing was pressed.
+	// Interrupted is true when a turn was running, the provider's cancel
+	// was written (tmux key or pipe protocol), and the turn then settled
+	// as ended; under pipe that settle can be the turn finishing itself
+	// rather than the cancel (Claude any result; Codex any idle), except
+	// Cursor which requires stopReason cancelled. False when no turn was
+	// running and nothing was cancelled.
 	Interrupted bool `json:"interrupted"`
 }
 

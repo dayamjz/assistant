@@ -177,12 +177,12 @@ func (f *claudeFactory) New(ctx context.Context, args []string) (Runner, error) 
 	if err != nil {
 		return nil, fmt.Errorf("%s is not runnable: %w", f.settings.bin, err)
 	}
-	return &claudeRunner{
+	return &claudePipeDeclaringRunner{claudeRunner: &claudeRunner{
 		name:     ClaudeName,
 		settings: f.settings,
 		resolved: resolved,
 		extra:    slices.Clone(args),
-	}, nil
+	}}, nil
 }
 
 // claudeRunner runs prompts through one Claude Code installation.
@@ -241,8 +241,14 @@ func (r *claudeRunner) Capabilities() Capabilities { return claudeDeclaration }
 
 // claudeDeclaration is what Capabilities and the factory's Declares both return.
 var claudeDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers,
-	CapabilityTerminalInterrupt, CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
+	CapabilityTerminalInterrupt, CapabilityPipeInterrupt, CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
 	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
+
+// claudePipeDeclaringRunner adds pipeInterrupter without giving it to the
+// scripted adapter that embeds *claudeRunner.
+type claudePipeDeclaringRunner struct{ *claudeRunner }
+
+func (*claudePipeDeclaringRunner) pipeInterrupt() {}
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces

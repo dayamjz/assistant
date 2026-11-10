@@ -347,7 +347,7 @@ type procWorker struct {
 // the adapter puts one send on the wire, the instructions among them, and
 // agent is the adapter's name, which a recorded availability failure names.
 func startWorker(ctx context.Context, agent string, spec procSpec, instructions string, frame func(string) ([]byte, error),
-	format OutputFormat) (*procWorker, error) {
+	format OutputFormat, onLine func([]byte)) (*procWorker, error) {
 	// A send that cannot be framed is refused before any process exists, so
 	// a worker is never started over instructions it could not be given.
 	if _, err := frame(instructions); err != nil {
@@ -365,7 +365,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 	// reports is the order the writes reached it.
 	availability := &workerAvailability{agent: agent}
 	if format == OutputStreamJSON {
-		cmd.Stdout = &availabilityStream{out: out, state: availability, limit: spec.maxOut}
+		cmd.Stdout = &availabilityStream{out: out, state: availability, limit: spec.maxOut, onLine: onLine}
 	} else {
 		cmd.Stdout = out
 	}
@@ -420,6 +420,16 @@ func (w *procWorker) Send(ctx context.Context, text string) error {
 // write is still in flight it returns ctx's error and leaves the write
 // pending, on the terms Worker.Send states; the next write drains it first.
 func (w *procWorker) write(ctx context.Context, text string) error {
+	framed, err := w.frame(text)
+	if err != nil {
+		return err
+	}
+	return w.writeFramed(ctx, framed, text, true)
+}
+
+// writeFramed puts framed bytes on standard input under the send slot.
+// Empty label skips afterWrite; clear is clearOnWrite for user sends.
+func (w *procWorker) writeFramed(ctx context.Context, framed []byte, label string, clear bool) error {
 	select {
 	case w.slot <- struct{}{}:
 	case <-w.done:
@@ -449,18 +459,14 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 	if !open {
 		return ErrWorkerEnded
 	}
-	framed, err := w.frame(text)
-	if err != nil {
-		return err
-	}
-	if w.clearOnWrite && w.availability != nil {
+	if clear && w.clearOnWrite && w.availability != nil {
 		w.availability.set(FailureNone)
 	}
 	written := make(chan error, 1)
 	go func() {
 		_, err := w.stdin.Write(framed)
-		if w.afterWrite != nil {
-			w.afterWrite(text)
+		if w.afterWrite != nil && label != "" {
+			w.afterWrite(label)
 		}
 		written <- err
 	}()

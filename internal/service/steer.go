@@ -173,13 +173,16 @@ import (
 //     the reply under interruptBound and is refused when it does not begin,
 //     so a turn that thinks or waits longer than that before drawing
 //     anything cannot be interrupted.
-//   - Under pipe, the cancel fires once the adapter has a turn id; there is
-//     no reply-begun gate. For Codex, an idle that settles after the cancel
-//     answers interrupted true even when that idle is the turn finishing
-//     itself rather than the cancel (Interrupt waits on settled, which
-//     markIdle closes for any idle). Cursor requires stopReason cancelled
-//     and refuses another stop reason, so a self-finished turn cannot
-//     answer interrupted true there.
+//   - Under pipe, Codex and Cursor cancel once the adapter has a turn or
+//     session id, with no reply-begun gate. Claude waits for system/init
+//     before control_request (CLI #98713). For Codex, an idle that settles
+//     after the cancel answers interrupted true even when that idle is the
+//     turn finishing itself rather than the cancel (Interrupt waits on
+//     settled, which markIdle closes for any idle). Claude is the same for
+//     any stream-json result that closes settled after control_request, with
+//     no interrupt-shaped subtype check. Cursor requires stopReason
+//     cancelled and refuses another stop reason, so a self-finished turn
+//     cannot answer interrupted true there.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 

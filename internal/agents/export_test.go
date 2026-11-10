@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -147,7 +148,14 @@ func SetJevVersionForTest(version string) { jevVersionForTest = version }
 // AttachJevScratchForTest exposes attachJevScratch so a test can hold the
 // remap-only-when-Jev gate without starting a worker.
 func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDir string, pluginArgs []string, cleanup func()) {
-	return r.(*claudeRunner).attachJevScratch(workspace, env)
+	switch v := r.(type) {
+	case *claudeRunner:
+		return v.attachJevScratch(workspace, env)
+	case *claudePipeDeclaringRunner:
+		return v.attachJevScratch(workspace, env)
+	default:
+		panic(fmt.Sprintf("AttachJevScratchForTest: unexpected runner %T", r))
+	}
 }
 
 // FixerJevDirForTest returns the scratch CLAUDE_CONFIG_DIR a Claude fixer

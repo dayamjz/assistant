@@ -85,15 +85,18 @@ func (l streamLine) text() (string, error) {
 //   - A line that is not JSON ends the worker with exitStreamParse and a note
 //     on standard error, so a worker sent anything but a framed message stops
 //     being driveable.
-//   - A JSON line whose type is not "user" is passed over, with a note on
+//   - A control_request subtype interrupt is answered with control_response
+//     success. Any other non-user JSON line is passed over with a note on
 //     standard error, and recorded nowhere.
 //   - A user message is recorded as its text, in Call.Lines, and answered by
 //     the first exchange whose Contains the text holds, with three
 //     stream-json lines on standard output: a system init, an assistant
 //     message carrying the reply as a text block, and a successful result
 //     carrying the reply. An exchange with Recorded lines prints those
-//     instead, as they are. A message no exchange answers draws a note on
-//     standard error and nothing on standard output.
+//     instead. Turn greater than zero holds after system/init until
+//     control_request interrupt, then control_response and a result of
+//     subtype error_during_execution (Call.Interrupted). Unmatched messages
+//     note on standard error and still write a successful result.
 //
 // It exits when its input closes, or after a reply whose exchange says Ends.
 // A script with a Greeting is refused, because a line printed before any
@@ -129,16 +132,20 @@ func serveStreamWorker(control string, args []string) int {
 	session := "standin-worker-" + strconv.Itoa(seq)
 
 	scanner := bufio.NewScanner(os.Stdin)
-	// A framed message is its text escaped, which can be several times the
-	// text's own size, so the bound is a multiple of the largest text the
-	// adapter accepts rather than that text's own limit.
 	scanner.Buffer(make([]byte, 0, 64<<10), 8*agents.MaxPromptBytes)
+	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
 		raw := scanner.Bytes()
 		var line streamLine
 		if err := json.Unmarshal(raw, &line); err != nil {
 			fmt.Fprintf(os.Stderr, "standin: error parsing streaming input line (%d bytes): %v\n", len(raw), err)
 			return exitStreamParse
+		}
+		if line.Type == "control_request" {
+			if !streamAnswerInterrupt(encoder, raw) {
+				return exitNoOutput
+			}
+			continue
 		}
 		if line.Type != "user" {
 			fmt.Fprintf(os.Stderr, "standin: passing over a streaming input line of type %q\n", line.Type)
@@ -164,6 +171,25 @@ func serveStreamWorker(control string, args []string) int {
 				fmt.Fprintln(os.Stderr, "standin: "+err.Error())
 				return exitNoOutput
 			}
+			if exchange.Turn > 0 && len(exchange.Recorded) == 0 {
+				if encoder.Encode(map[string]any{"type": "system", "subtype": "init", "session_id": session, "cwd": dir}) != nil ||
+					!scanner.Scan() || !streamAnswerInterrupt(encoder, scanner.Bytes()) {
+					return exitNoStdin
+				}
+				call.Interrupted = append(call.Interrupted, text)
+				if record(callsPath(control), call) != nil ||
+					encoder.Encode(map[string]any{
+						"type": "result", "subtype": "error_during_execution", "is_error": true,
+						"result": "[Request interrupted by user]", "session_id": session,
+					}) != nil {
+					return exitNoOutput
+				}
+				answered = true
+				if exchange.Ends {
+					return worker.Exit
+				}
+				break
+			}
 			if len(exchange.Recorded) > 0 {
 				_, err = fmt.Fprintln(os.Stdout, reply)
 			} else {
@@ -181,6 +207,10 @@ func serveStreamWorker(control string, args []string) int {
 		}
 		if !answered {
 			fmt.Fprintf(os.Stderr, "standin: no exchange of the script answers this message: %s\n", shorten(text))
+			if err := writeTurn(session, dir, "standin: message received"); err != nil {
+				fmt.Fprintln(os.Stderr, "standin: writing a reply: "+err.Error())
+				return exitNoOutput
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -188,6 +218,23 @@ func serveStreamWorker(control string, args []string) int {
 		return exitNoStdin
 	}
 	return worker.Exit
+}
+
+func streamAnswerInterrupt(encoder *json.Encoder, raw []byte) bool {
+	var req struct {
+		Type      string `json:"type"`
+		RequestID string `json:"request_id"`
+		Request   struct {
+			Subtype string `json:"subtype"`
+		} `json:"request"`
+	}
+	if json.Unmarshal(raw, &req) != nil || req.Type != "control_request" || req.Request.Subtype != "interrupt" || req.RequestID == "" {
+		return false
+	}
+	return encoder.Encode(map[string]any{
+		"type":     "control_response",
+		"response": map[string]any{"subtype": "success", "request_id": req.RequestID, "response": map[string]any{}},
+	}) == nil
 }
 
 // writeTurn prints one answered turn as the three stream-json lines

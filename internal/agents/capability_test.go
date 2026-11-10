@@ -819,8 +819,15 @@ func TestEveryShippedAdapterConformsToItsDeclaration(t *testing.T) {
 // command lines apart.
 var overTheWire = map[string]func(t *testing.T) agents.Runner{
 	agents.ClaudeName: func(t *testing.T) agents.Runner {
+		// Instruction exchanges settle the OpenWorker and OpenTerminalWorker
+		// first messages so a later Send waiting on the prior turn's result
+		// (Claude's pipe interrupt serialization) is not held forever.
 		return standin.New(t, standin.Script{Steps: []standin.Step{countProbeStep},
-			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{interruptProbeExchange}}},
+			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{
+				{Contains: "conformance: a pipe worker is being started", Reply: "conformance: pipe worker ready"},
+				{Contains: "conformance: a terminal worker is being started", Reply: "conformance: terminal worker ready"},
+				interruptProbeExchange,
+			}}},
 			agents.WithTerminationGrace(300*time.Millisecond),
 			agents.WithBaseEnvironment(withStandinKey(withOperatorGitIdentity(os.Environ()))),
 		).Runner()
@@ -995,7 +1002,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	claudeDeclared := claude.Capabilities()
 	counts := agents.CountCapabilities()
 	wantClaude := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
-		agents.CapabilityTerminalWorkers, agents.CapabilityTerminalInterrupt}, counts...)
+		agents.CapabilityTerminalWorkers, agents.CapabilityTerminalInterrupt, agents.CapabilityPipeInterrupt}, counts...)
 	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
 		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}
