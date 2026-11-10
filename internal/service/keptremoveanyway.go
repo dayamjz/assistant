@@ -21,10 +21,10 @@ import (
 // (removeAnywayProbe); nothing reads a refusal a confirmed discard met
 // earlier, since a pre-PONR refusal takes its claim back and leaves
 // nothing on the entry. So a copy whose preview reads but whose removal
-// keeps being refused is refused here naming the discard, and neither
-// answer releases it (#880). Nothing of the loss is shown either: Loss
-// returns its refusal and no loss, even where it read the copy before
-// refusing (#880).
+// keeps being refused is refused here naming only that the preview reads
+// (not that a discard can remove it), and neither answer releases it
+// (#880). Nothing of the loss is shown either: Loss returns its refusal
+// and no loss, even where it read the copy before refusing (#880).
 
 // removeAnywayKeptWork is the remove-anyway answer.
 func (s *Service) removeAnywayKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, force bool) (machine.KeptWorkAnswered, error) {
@@ -198,8 +198,9 @@ func (s *Service) refuseRemoveAnywayWhileBusy(ctx context.Context, entry store.K
 
 // removeAnywayProbe decides whether remove-anyway is offered, from the
 // copy as it reads now: a copy whose loss a discard's preview reads is
-// refused naming discard, though that discard may still be refused at its
-// removal (#880); otherwise it returns the discard's refusal.
+// refused naming only that read, since whether a discard can remove the
+// copy is not known until confirmation and may still refuse (#880);
+// otherwise it returns the discard's refusal.
 func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (refusal string, err error) {
 	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {
@@ -217,7 +218,7 @@ func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (
 	}
 	_, lossErr := s.cleaner.Loss(ctx, entry, gatePath)
 	if lossErr == nil {
-		return "", fmt.Errorf("%w: kept work entry %d was not released: a discard's preview reads the copy's loss; show and confirm that discard instead of remove-anyway",
+		return "", fmt.Errorf("%w: kept work entry %d was not released: a discard's preview reads the copy's loss; whether a discard can remove the copy is not known yet; show that discard to see the loss",
 			ipc.ErrRefused, entry.ID)
 	}
 	switch {
