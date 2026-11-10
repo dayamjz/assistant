@@ -67,6 +67,45 @@ func TestInvocationRecorderFeedsTheStoreHistory(t *testing.T) {
 	if got.CacheReadTokens.IsKnown() || got.CacheCreationTokens.IsKnown() || got.Turns.IsKnown() {
 		t.Errorf("counts the agent never reported landed as known: %+v", got)
 	}
+	if got.CompactionPath.IsKnown() || got.CompactionEvents.IsKnown() {
+		t.Errorf("an empty compaction report landed as known: %+v", got)
+	}
+
+	rec.RecordInvocation(agents.Record{
+		Purpose: agents.PurposeFix,
+		Agent:   "claude",
+		Session: agents.SessionOpened,
+		Started: started.Add(time.Minute),
+		Compaction: agents.CompactionReport{
+			Path: agents.CompactionJev,
+			Events: []agents.CompactionStats{{
+				Path: agents.CompactionJev, CharsBefore: 1000, CharsAfter: 400, Requests: 2,
+			}},
+		},
+	})
+	rows, err = st.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations after compaction: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("history holds %d rows, want 2", len(rows))
+	}
+	got = rows[1]
+	if p, ok := got.CompactionPath.Get(); !ok || p != string(agents.CompactionJev) {
+		t.Errorf("compaction path = (%q, %v)", p, ok)
+	}
+	if n, ok := got.CompactionEvents.Get(); !ok || n != 1 {
+		t.Errorf("compaction events = (%d, %v)", n, ok)
+	}
+	if n, ok := got.CompactionCharsBefore.Get(); !ok || n != 1000 {
+		t.Errorf("chars before = (%d, %v)", n, ok)
+	}
+	if n, ok := got.CompactionCharsAfter.Get(); !ok || n != 400 {
+		t.Errorf("chars after = (%d, %v)", n, ok)
+	}
+	if n, ok := got.CompactionRequests.Get(); !ok || n != 2 {
+		t.Errorf("requests = (%d, %v)", n, ok)
+	}
 }
 
 // A recorder can be handed a record before the service's store is open, and

@@ -149,3 +149,13 @@ func SetJevVersionForTest(version string) { jevVersionForTest = version }
 func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDir string, pluginArgs []string, cleanup func()) {
 	return r.(*claudeRunner).attachJevScratch(workspace, env)
 }
+
+// FixerJevDirForTest returns the scratch CLAUDE_CONFIG_DIR a Claude fixer
+// opened for Jev, empty until the first Apply that selected the plugin.
+func FixerJevDirForTest(f Fixer) string {
+	cf, ok := f.(*claudeFixer)
+	if !ok {
+		return ""
+	}
+	return cf.jevDir
+}
