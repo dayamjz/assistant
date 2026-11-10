@@ -439,9 +439,9 @@ func (c *Cleaner) discardClean(ctx context.Context, entry store.KeptWork, gatePa
 }
 
 // finishDiscard is step 5 past the point of no return: journal finish if
-// needed, delete the moved clone or force-remove a worktree that still
-// stands, and clear the set-aside tree. The discard directory itself stays
-// for the outcome owner. Never putBack.
+// needed, delete the moved clone or force-remove a worktree's remains and
+// any gate record of it, and clear the set-aside tree. The discard
+// directory itself stays for the outcome owner. Never putBack.
 func (c *Cleaner) finishDiscard(ctx context.Context, gatePath, dir string, last *discardJournal) error {
 	if last == nil {
 		return fmt.Errorf("tasks: finishDiscard with no journal")
@@ -465,28 +465,49 @@ func (c *Cleaner) finishDiscard(ctx context.Context, gatePath, dir string, last 
 		if err := os.RemoveAll(movedTo); err != nil {
 			return fmt.Errorf("tasks: removing the discarded clone at %s: %w", movedTo, err)
 		}
-	} else if pathStands(from) {
-		if gatePath == "" {
-			return fmt.Errorf("tasks: finishing a worktree discard at %s needs the gate path", from)
+	} else {
+		if err := c.finishWorktreeRemoval(ctx, gatePath, from); err != nil {
+			return err
 		}
-		bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
-		if err != nil {
-			return fmt.Errorf("tasks: opening the gate at %s to finish the worktree discard: %w", gatePath, err)
-		}
-		lock, err := gate.LockCopies(ctx, bare.Path())
-		if err != nil {
-			return fmt.Errorf("tasks: waiting to finish removing the worktree at %s: %w", from, err)
-		}
-		defer func() { _ = lock.Release() }()
+	}
+	paths := filepath.Join(dir, "paths")
+	if err := os.RemoveAll(paths); err != nil {
+		return fmt.Errorf("tasks: removing the discard's set-aside paths at %s: %w", paths, err)
+	}
+	return nil
+}
+
+// finishWorktreeRemoval is step 5 for a run's worktree: force-remove what
+// still stands at from, and clear any gate admin record of it (PRD step 5 /
+// decision 31). When the path is already gone, the record is pruned. When
+// force-remove fails while the record still stands, the path is left and
+// the error is returned so the claim stays owed — RemoveAll must not take
+// the path while the record would remain.
+func (c *Cleaner) finishWorktreeRemoval(ctx context.Context, gatePath, from string) error {
+	if gatePath == "" {
+		return fmt.Errorf("tasks: finishing a worktree discard at %s needs the gate path", from)
+	}
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+	if err != nil {
+		return fmt.Errorf("tasks: opening the gate at %s to finish the worktree discard: %w", gatePath, err)
+	}
+	lock, err := gate.LockCopies(ctx, bare.Path())
+	if err != nil {
+		return fmt.Errorf("tasks: waiting to finish removing the worktree at %s: %w", from, err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	parent, err := filepath.EvalSymlinks(filepath.Dir(from))
+	if err != nil {
+		return fmt.Errorf("tasks: finishing the worktree discard at %s: reading its parent: %w", from, err)
+	}
+	worktree := filepath.Join(parent, filepath.Base(from))
+
+	if pathStands(from) {
 		if err := bare.RemoveWorktreeDiscardingChanges(ctx, from); err != nil {
 			// Only fall back to RemoveAll when the gate record is already
 			// gone: otherwise the path would vanish while the admin record
 			// still stood (PRD step 5 / decision 31).
-			parent, evalErr := filepath.EvalSymlinks(filepath.Dir(from))
-			if evalErr != nil {
-				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and reading its parent: %w)", from, err, evalErr)
-			}
-			worktree := filepath.Join(parent, filepath.Base(from))
 			records, recErr := bare.WorktreeRecords(ctx)
 			if recErr != nil {
 				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and reading gate records: %w)", from, err, recErr)
@@ -500,10 +521,35 @@ func (c *Cleaner) finishDiscard(ctx context.Context, gatePath, dir string, last 
 				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and removing remains: %w)", from, err, rm)
 			}
 		}
+		return nil
 	}
-	paths := filepath.Join(dir, "paths")
-	if err := os.RemoveAll(paths); err != nil {
-		return fmt.Errorf("tasks: removing the discard's set-aside paths at %s: %w", paths, err)
+
+	// Path already gone: still clear an orphan gate record.
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("tasks: reading gate records after the worktree at %s was removed: %w", from, err)
+	}
+	hasRecord := false
+	for _, r := range records {
+		if r.Worktree == worktree {
+			hasRecord = true
+			break
+		}
+	}
+	if !hasRecord {
+		return nil
+	}
+	if err := bare.PruneWorktrees(ctx); err != nil {
+		return fmt.Errorf("tasks: pruning the gate record for the removed worktree at %s: %w", from, err)
+	}
+	records, err = bare.WorktreeRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("tasks: reading gate records after pruning the worktree at %s: %w", from, err)
+	}
+	for _, r := range records {
+		if r.Worktree == worktree {
+			return fmt.Errorf("tasks: gate record for the removed worktree at %s still stands at %s after prune", from, r.Record)
+		}
 	}
 	return nil
 }
