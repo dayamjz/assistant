@@ -104,8 +104,8 @@ paths: ["internal/service/**"]
   and confirm again; a directory that still stands keeps the claim for
   put-back or a past-PONR finish. Off-terminal confirmations are
   `discardOffTerminal` (`PhraseDiscardNeedsTerminal`); a run's worktree
-  confirmation is still `discardDeferred`
-  (`PhraseDiscardRemovalDeferred`) until worktree `Discard` lands. A
+  confirmation removes a run's worktree through `Cleaner.Discard` the same
+  way it removes a task's clone. A
   promotion answers its copy's entry carry on in the
   flip, which is `store.TransitionTaskShape`'s write with the resolver
   `promoteTask` passes, only for entries `tasks.Queue.Promote` verified the
