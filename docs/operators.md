@@ -679,10 +679,11 @@ stays open.
 `assistant eject --confirm` is refused while the repository has an open
 kept-work entry, before the gate is touched, and the refusal names each
 entry's copy, whose it was and the commits it holds. The ways past it are
-an answer that closes the entry (land or carry on, below) or the work
-landing: once its commits are on the upstream branch or in the default
-branch, the next service start removes the copy on that proof and closes
-the entry. A task's clone or a run's worktree is removed on a confirmed discard.
+an answer that closes the entry (land, carry on, discard with `--confirm`,
+or remove-anyway with `--force`, below) or the work landing: once its
+commits are on the upstream branch or in the default branch, the next
+service start removes the copy on that proof and closes the entry. A
+task's clone or a run's worktree is removed on a confirmed discard.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
