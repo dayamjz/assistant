@@ -35,14 +35,18 @@ place of `--task` for a run's copy.
   no claim and no discard set-aside stands on the copy, it shows why
   discard refuses, and nothing of the loss, and records nothing; that
   preview is open under `--json` and off a terminal. A standing land,
-  carry-on, discard, or remove-anyway claim, a claim on another open
-  entry of the same copy, or a discard set-aside refuses the alone answer
-  too. With `--force` from a terminal's foreground, naming the same task
-  or run, it releases the entry and every other open unclaimed entry of
-  that copy, and keeps the copy. The confirmation is refused when the
-  discard preview reads the copy's loss, while a claim or a discard
-  set-aside stands, under `--json`, and from any process not in a
-  terminal's foreground; never try to give the confirmation yourself. A
+  carry-on, or discard claim on the entry, a claim on another open entry
+  of the same copy, or a discard set-aside refuses the alone answer; a
+  standing remove-anyway claim on the entry refuses the alone answer and
+  names `--force` to finish it. With `--force` from a terminal's
+  foreground, naming the same task or run, it releases the entry and
+  every other open unclaimed entry of that copy, and keeps the copy; a
+  standing remove-anyway claim on this entry is finished that way, not
+  refused. The confirmation is refused when the discard preview reads the
+  copy's loss, while a land, carry-on, or discard claim stands on the
+  entry, while any claim stands on another open entry of the copy, while
+  a discard set-aside stands, under `--json`, and from any process not in
+  a terminal's foreground; never try to give the confirmation yourself. A
   discard refused at its removal puts the copy back and is shown and
   confirmed again; remove-anyway is refused for it.
 
