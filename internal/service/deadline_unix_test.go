@@ -18,13 +18,11 @@ import (
 	"github.com/dayamjz/assistant/internal/service"
 )
 
-// The operator's git_deadline reaches the service that Open builds: with the
-// key set to its floor in the operator's file, cfg.GitDeadline is that floor
-// and not the ten-minute default. The hang that proves the bound ends a
-// wedged git cannot wait the floor in the suite; that is
-// TestTheOperatorsGitDeadlineEndsAGitThatNeverExits.
+// The operator's git_deadline reaches cfg.GitDeadline: with the key set to
+// its floor in the operator's file, the service Open builds holds that floor
+// and not the ten-minute default. This is load reachability only; the hang
+// that ends a wedged git is TestTheServicesGitDeadlineEndsAGitThatNeverExits.
 func TestTheOperatorsGitDeadlineIsLoadedFromTheOperatorFile(t *testing.T) {
-	principles.Cite(t, principles.P15)
 	h := newHome(t)
 	writeOperatorConfig(t, h.ConfigFile(), "git_deadline: "+config.MinGitDeadline.String()+"\n")
 	withService(t, h, func(running serviceUnderTest) {
@@ -34,15 +32,15 @@ func TestTheOperatorsGitDeadlineIsLoadedFromTheOperatorFile(t *testing.T) {
 	})
 }
 
-// PRD section 8's process model and P15 for git, end to end: with the
-// service's git_deadline set short of the ten-minute default (the product's
-// floor is one minute and cannot be waited here; WithGitDeadlineForTest sets
-// the same cfg field a loaded operator file would), a status request whose
-// read of the working copy meets a git that never exits answers once that
-// deadline passes, and the git is ended with its group. The request carries
-// no deadline of its own, so the bound that ends it is the one the service
-// built its handle with.
-func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
+// PRD section 8's process model and P15 for git: with cfg.GitDeadline set
+// short of the ten-minute default through WithGitDeadlineForTest (the
+// product's floor is one minute; the suite sets a short value on the same
+// field a loaded operator file would set, rather than waiting that floor), a
+// status request whose read of the working copy meets a git that never exits
+// answers once that deadline passes, and the git is ended with its group.
+// The request carries no deadline of its own, so the bound that ends it is
+// the one the service built its handle with.
+func TestTheServicesGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	const configured = 2 * time.Second
 	h := newHome(t)
@@ -65,10 +63,10 @@ func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 		}, &status)
 		elapsed := time.Since(start)
 		if err != nil {
-			t.Fatalf("status after %s: %v; the operator's %s did not bound the git it waited on", elapsed, err, configured)
+			t.Fatalf("status after %s: %v; the service's %s git deadline did not bound the git it waited on", elapsed, err, configured)
 		}
 		if elapsed < configured {
-			t.Errorf("status answered after %s, before the operator's %s", elapsed, configured)
+			t.Errorf("status answered after %s, before the service's %s git deadline", elapsed, configured)
 		}
 		if status.Branch == nil || !strings.Contains(status.Branch.Detail, context.DeadlineExceeded.Error()) {
 			t.Errorf("status reported the branch as %+v; want the read refused at its deadline", status.Branch)
@@ -82,18 +80,18 @@ func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 }
 
 // The same bound reaches the git a gate's hook makes the service run: with
-// the service's git_deadline set short of the ten-minute default (on
-// TestTheOperatorsGitDeadlineEndsAGitThatNeverExits' terms), an admission
-// whose resolution of the gate's working copy meets a git that never exits
-// is refused once that deadline passes, and the git is ended with its group.
-// The working copy is resolved through internal/gate, which opens it with the
-// options the service hands it; a gate that opened it with its own defaults
-// would leave a hook's push waiting on a bound the operator did not set. The
-// refusal's wording is the gate's: its ownership rule reads a working copy it
-// could not open as holding nothing, so the refusal says the gate is unbound
-// rather than naming the deadline, and this asserts the refusal and its time,
-// not its words.
-func TestTheOperatorsGitDeadlineReachesTheGitAGateAdmissionRuns(t *testing.T) {
+// cfg.GitDeadline set short of the ten-minute default through
+// WithGitDeadlineForTest (on TestTheServicesGitDeadlineEndsAGitThatNeverExits'
+// terms), an admission whose resolution of the gate's working copy meets a
+// git that never exits is refused once that deadline passes, and the git is
+// ended with its group. The working copy is resolved through internal/gate,
+// which opens it with the options the service hands it; a gate that opened
+// it with its own defaults would leave a hook's push waiting on a bound the
+// service did not set. The refusal's wording is the gate's: its ownership
+// rule reads a working copy it could not open as holding nothing, so the
+// refusal says the gate is unbound rather than naming the deadline, and this
+// asserts the refusal and its time, not its words.
+func TestTheServicesGitDeadlineReachesTheGitAGateAdmissionRuns(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	requiresIdentifiedPeer(t)
 	const configured = 2 * time.Second
@@ -128,13 +126,13 @@ func TestTheOperatorsGitDeadlineReachesTheGitAGateAdmissionRuns(t *testing.T) {
 		}, &admission)
 		elapsed := time.Since(start)
 		if ctx.Err() != nil {
-			t.Fatalf("the admission had not answered after %s; the operator's %s did not bound the git it waited on", elapsed, configured)
+			t.Fatalf("the admission had not answered after %s; the service's %s git deadline did not bound the git it waited on", elapsed, configured)
 		}
 		if err == nil {
 			t.Fatalf("the admission was granted (%+v) with every git wedged; want it refused", admission)
 		}
 		if elapsed < configured {
-			t.Errorf("the admission answered after %s, before the operator's %s", elapsed, configured)
+			t.Errorf("the admission answered after %s, before the service's %s git deadline", elapsed, configured)
 		}
 	})
 	pids := recorded()

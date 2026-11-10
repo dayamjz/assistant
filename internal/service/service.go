@@ -255,14 +255,16 @@ type Options struct {
 	cleanupAskSpacing time.Duration
 	// gitDeadlineForTest replaces cfg.GitDeadline after the operator's
 	// file is resolved, which export_test.go's WithGitDeadlineForTest sets
-	// and the product never does; zero leaves the resolved value. The
-	// product's floor is one minute, and a hang that waited it would burn
-	// the repeat budget; a test that proves the bound ends a wedged git
-	// sets a short value here instead.
+	// and the product never does; zero leaves the resolved value. It is the
+	// same field a loaded operator file would set, not a path through the
+	// YAML decoder (which refuses values below the one-minute floor). A
+	// test that proves the bound ends a wedged git sets a short value here
+	// so the suite does not wait that floor.
 	gitDeadlineForTest time.Duration
 	// ghDeadlineForTest replaces cfg.GHDeadline after the operator's file
-	// is resolved, on gitDeadlineForTest's terms; export_test.go's
-	// WithGHDeadlineForTest sets it and the product never does.
+	// is resolved, on gitDeadlineForTest's terms for the ten-second floor;
+	// export_test.go's WithGHDeadlineForTest sets it and the product never
+	// does.
 	ghDeadlineForTest time.Duration
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's

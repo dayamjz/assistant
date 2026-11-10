@@ -122,29 +122,29 @@ func WithCleanupAskSpacingForTest(o Options, d time.Duration) Options {
 }
 
 // WithGitDeadlineForTest returns o with cfg.GitDeadline replaced by d after
-// the operator's file is resolved, for this package's external tests that
-// prove a wedged git ends at the service's bound without waiting the
-// product's one-minute floor.
+// the operator's file is resolved, for tests that prove a wedged git ends at
+// the service's bound without waiting the product's one-minute floor. It
+// sets the same field a loaded operator file would; it is not a path through
+// the YAML decoder, which refuses values below that floor.
 func WithGitDeadlineForTest(o Options, d time.Duration) Options {
 	o.gitDeadlineForTest = d
 	return o
 }
 
 // WithGHDeadlineForTest returns o with cfg.GHDeadline replaced by d after
-// the operator's file is resolved, for this package's external tests that
-// prove a wedged gh ends at the service's bound without waiting the
-// product's ten-second floor.
+// the operator's file is resolved, on WithGitDeadlineForTest's terms for gh
+// and the product's ten-second floor.
 func WithGHDeadlineForTest(o Options, d time.Duration) Options {
 	o.ghDeadlineForTest = d
 	return o
 }
 
 // GitDeadline is the git invocation deadline this service opened with, for
-// this package's external tests that check the operator's file reached it.
+// tests that check a resolved operator file reached cfg.GitDeadline.
 func (s *Service) GitDeadline() time.Duration { return s.cfg.GitDeadline }
 
 // GHDeadline is the gh invocation deadline this service opened with, for
-// this package's external tests that check the operator's file reached it.
+// tests that check a resolved operator file reached cfg.GHDeadline.
 func (s *Service) GHDeadline() time.Duration { return s.cfg.GHDeadline }
 
 // LandedCleanupAsks is landedAsks, the most times the cleanup decision is
