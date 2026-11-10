@@ -84,10 +84,11 @@ const (
 	// command and to anything else not there.
 	MethodTaskRespond Method = "task.respond"
 	// MethodKeptWorkAnswer answers a kept work entry, PRD section 9's hold
-	// answer given an entry's key: land, carry-on or discard, for the entry
-	// a task's or a run's copy left. Who answered is derived from this
-	// surface by Request.HoldResolver and never read from the request. It
-	// is refused for a task's worker, on MethodTaskRespond's terms.
+	// answer given an entry's key: land, carry-on, discard or remove-anyway,
+	// for the entry a task's or a run's copy left. Who answered is derived
+	// from this surface by Request.HoldResolver and never read from the
+	// request. It is refused for a task's worker, on MethodTaskRespond's
+	// terms.
 	MethodKeptWorkAnswer Method = "keptwork.answer"
 	// MethodTaskCreate records a new task through internal/tasks' intake,
 	// PRD section 9's coordinator-only service method for creating one. It

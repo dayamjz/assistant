@@ -259,7 +259,7 @@ var phraseKeptWorkDiscarded = Phrase{
 
 // phraseKeptWorkRemoveAnywayShown is the row a remove-anyway shown reads as.
 var phraseKeptWorkRemoveAnywayShown = Phrase{
-	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, and what of the loss could be read follows it, marked incomplete where it could not.",
+	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, and what of the loss could be read follows it as Incomplete.",
 	Consequence: "The copy stays, with everything it holds, and new work that would start where it stood still waits on it.",
 	Decision:    "Repeat the remove-anyway with --force at a terminal in the foreground and without --json, naming the same task or run, to release the entry and keep the copy; or answer land or carry-on if a discard can remove it instead.",
 }

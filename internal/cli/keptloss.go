@@ -53,6 +53,7 @@ func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 			writeln(w, "Refusal: "+a.Refusal)
 		}
 		if a.Loss != nil {
+			writeln(w, "Incomplete: what of the loss could be read follows; what could not is named in the refusal.")
 			for _, line := range keptLossLines(*a.Loss) {
 				writeln(w, line)
 			}

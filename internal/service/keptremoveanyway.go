@@ -164,11 +164,18 @@ func (s *Service) completeRemoveAnywaysAtOpen(ctx context.Context) {
 	}
 }
 
-// refuseRemoveAnywayWhileBusy refuses while a discard claim or a discard
-// set-aside stands beside the copy (PRD section 6). A standing
-// remove-anyway claim is completed on Force, not refused here.
+// refuseRemoveAnywayWhileBusy refuses while any claim or a discard
+// set-aside stands on the copy (PRD section 6). A standing remove-anyway
+// claim is completed on Force, not refused here.
 func (s *Service) refuseRemoveAnywayWhileBusy(entry store.KeptWork) error {
-	if entry.DiscardClaimed() {
+	switch {
+	case entry.LandingClaimed():
+		return fmt.Errorf("%w: kept work entry %d was not released: a land claim stands on it",
+			ipc.ErrRefused, entry.ID)
+	case entry.CarryOnClaimed():
+		return fmt.Errorf("%w: kept work entry %d was not released: a carry-on claim stands on it",
+			ipc.ErrRefused, entry.ID)
+	case entry.DiscardClaimed():
 		return fmt.Errorf("%w: kept work entry %d was not released: a discard claim stands on it; finish or withdraw that discard first",
 			ipc.ErrRefused, entry.ID)
 	}
