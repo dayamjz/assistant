@@ -37,6 +37,7 @@ suppress_project_instructions: true
 no_ci: true
 checks_timeout: 30m
 session_reuse: false
+jev_compaction: true
 decision_model: enforce
 supervision_beacon_interval: 30s
 escalation_window: 15m
@@ -100,6 +101,7 @@ const wholeSchemaJSON = `{
 	"no_ci": true,
 	"checks_timeout": "30m",
 	"session_reuse": false,
+	"jev_compaction": true,
 	"decision_model": "enforce",
 	"supervision_beacon_interval": "30s",
 	"escalation_window": "15m",

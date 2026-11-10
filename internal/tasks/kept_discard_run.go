@@ -200,8 +200,10 @@ func worktreePONR(j discardJournal) bool {
 // worktreeRemovalBegun reports whether a run's worktree discard is past its
 // point of no return after git's non-force remove refused or stopped, on
 // PRD step 4's re-read: the path, the gate's worktree record, and the
-// step-3 tree. gatePath is required; a read failure is returned as err so
-// the claim stays owed.
+// linked-worktree shape. Dirt or untracked files with those still intact
+// are not past PONR (git refuses non-force remove for that reason).
+// gatePath is required; a read failure is returned as err so the claim
+// stays owed.
 func (c *Cleaner) worktreeRemovalBegun(ctx context.Context, gatePath, copyPath string) (bool, error) {
 	if gatePath == "" {
 		return false, fmt.Errorf("tasks: reading a worktree discard's point of no return needs the gate path")
@@ -278,18 +280,9 @@ func (c *Cleaner) worktreeRemovalBegunAt(ctx context.Context, bare *vcs.Reposito
 	if filepath.Clean(pointer) != record {
 		return true, nil
 	}
-	copied, err := vcs.OpenWorktree(ctx, copyPath, c.git...)
-	if err != nil {
-		return false, err
-	}
-	inv, err := copied.Inventory(ctx)
-	if err != nil {
-		return false, err
-	}
-	if inv.Dirty || inv.Untracked {
-		// Tree no longer as step 3 left it: removal had begun.
-		return true, nil
-	}
+	// Path, gate record, and linked-worktree shape still stand: removal has
+	// not begun. Dirt or untracked files alone are why git's non-force
+	// remove refuses (PRD §6 step 4 / §13); that is put-back, not finish.
 	return false, nil
 }
 

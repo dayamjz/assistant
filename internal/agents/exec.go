@@ -36,6 +36,8 @@ type procSpec struct {
 	// and the function it returns is called after the tree has been
 	// terminated. Nil means nobody is watching.
 	started func(pgid int) (ended func())
+	// cleanup runs once after the process tree has ended. Nil means none.
+	cleanup func()
 }
 
 // procResult is what running a process produced. It reports what happened
