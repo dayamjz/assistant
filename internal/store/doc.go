@@ -213,12 +213,14 @@
 // reports. The basis is the one thing an open unestablished entry may later
 // have filled in, once, through EstablishKeptWork, and the update trigger
 // holds it to that one direction and to an open row, so an answered or
-// closed row is sealed whole. A land, carry-on or discard claim may be
-// written on an open row and withdrawn whole, which leaves it open. Its
-// one revision otherwise closes it, made once and only while it is open:
-// a person's answer and its Resolver (a discard among them, written by
-// RecordKeptWorkDiscard once the copy is gone), or the program's
-// KeptRemovedOnProof, which only MarkCleanupRemoved and
+// closed row is sealed whole. A land, carry-on, discard or remove-anyway
+// claim may be written on an open row and withdrawn whole, which leaves it
+// open. Its one revision otherwise closes it, made once and only while it
+// is open: a person's answer and its Resolver (a discard among them,
+// written by RecordKeptWorkDiscard once the copy is gone; a remove-anyway,
+// written by RecordKeptWorkRemoveAnyway as the entry's release, without
+// reading or removing the copy), or
+// the program's KeptRemovedOnProof, which only MarkCleanupRemoved and
 // MarkRunCleanupRemoved write, in the transaction that marks the owner's
 // copy removed on a proof. The program's closure is never a discard;
 // OpenKeptWork lists neither kind of closed row.
@@ -616,7 +618,12 @@
 // and not only a renamed or resized migration. It is over the exact text, so
 // reformatting a shipped migration is refused the same way rewriting one is:
 // nothing here can tell them apart, and the answer to either is a new
-// migration.
+// migration. One shipped row sits outside that digest: the kept-work answer
+// CHECK widen (migration 73) records an empty statements list because its
+// rebuild lives in Go (widenKeptWorkAnswerCheck), so the digest hashes
+// nothing and an edit to that helper after ship is invisible to
+// ErrSchemaChanged; a new migration is the only way to change that rebuild
+// for already-migrated databases.
 //
 // The row that comparison cannot speak for is one recorded before digests were
 // written. The digest column is nullable and is added to a schema_migration

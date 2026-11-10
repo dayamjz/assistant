@@ -160,7 +160,12 @@ func checkMigrationList(ms []migration) error {
 		if m.name == "" {
 			return fmt.Errorf("%w: migration %d has no name", ErrMigrationsMalformed, m.version)
 		}
-		if len(m.statements) == 0 {
+		// keptWorkAnswerCheckWidenMigration is statements-empty on purpose:
+		// the rebuild lives in Go. statementsDigest then hashes nothing, so
+		// ErrSchemaChanged cannot see an edit to widenKeptWorkAnswerCheck
+		// after this migration has shipped; a new migration is the only
+		// way to change that rebuild for already-migrated databases.
+		if len(m.statements) == 0 && m.name != keptWorkAnswerCheckWidenMigration {
 			return fmt.Errorf("%w: migration %d has no statements", ErrMigrationsMalformed, m.version)
 		}
 	}
@@ -249,6 +254,24 @@ func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]migrationRecord
 // additive check runs inside that transaction against the catalog the
 // statements just produced, so a migration that fails it changes nothing.
 func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Redactor) error {
+	// SQLite refuses PRAGMA foreign_keys inside a transaction, and a CHECK
+	// rebuild must DROP the parent while children still reference it. The
+	// write pool is one connection (openPool single), so toggling here is the
+	// connection the transaction below uses. Restore is checked before a
+	// successful return: Open must not keep a write connection with FKs off.
+	fkOff := false
+	if m.name == keptWorkAnswerCheckWidenMigration {
+		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+			return fmt.Errorf("store: disabling foreign keys to widen kept_work: %w", err)
+		}
+		fkOff = true
+	}
+	defer func() {
+		if !fkOff {
+			return
+		}
+		_, _ = db.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	}()
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -261,6 +284,11 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Red
 	}
 	if m.name == holdResolutionSealMigration && redact != nil {
 		if err := redactExistingHoldResolutionNotes(ctx, tx, redact); err != nil {
+			return err
+		}
+	}
+	if m.name == keptWorkAnswerCheckWidenMigration {
+		if err := widenKeptWorkAnswerCheck(ctx, tx); err != nil {
 			return err
 		}
 	}
@@ -282,7 +310,23 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration, redact vcs.Red
 	); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if fkOff {
+		if _, err := db.ExecContext(ctx, `PRAGMA foreign_keys = ON`); err != nil {
+			return fmt.Errorf("store: restoring foreign keys after widening kept_work: %w", err)
+		}
+		var on string
+		if err := db.QueryRowContext(ctx, `PRAGMA foreign_keys`).Scan(&on); err != nil {
+			return fmt.Errorf("store: reading foreign_keys after widening kept_work: %w", err)
+		}
+		if on != "1" {
+			return fmt.Errorf("store: foreign keys still off after widening kept_work")
+		}
+		fkOff = false // defer's best-effort restore is no longer needed
+	}
+	return nil
 }
 
 // columnFacts reads every table's columns from the database's own catalog.
