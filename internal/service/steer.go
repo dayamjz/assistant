@@ -121,22 +121,25 @@ import (
 // running and keeps the worker, through the session provider's Interrupt
 // on the session this service holds for that attempt, bounded by
 // interruptBound, and answers only once that Interrupt read the turn ended
-// and the terminal probe then answered Live. What reads the turn ended is
-// internal/agents' agents.InterruptTerminalWorker: the key is pressed once
-// on a screen that reads a turn running that has begun its reply, with an
-// empty input, and the screen reads ready again after it; a screen that reads ready before it is
-// answered as no turn running, with nothing pressed. Only the tmux provider
-// can type a key, so the answer is refused, typed and with nothing pressed,
-// for a worker whose adapter has not declared
-// agents.CapabilityTerminalInterrupt (*agents.CapabilityError), for one on
-// the pipe provider (session.ErrNotInterruptible), for one this service
-// does not hold, and for a screen that never read either state within the
-// bound. A key typed and no ready screen read after it within the bound is
-// refused too, saying the key was typed, as is a worker the probe does not
-// read Live afterwards (*interruptUnverified). Each refusal names stop, then
-// relaunch with a note, as the path left. Nothing is recorded: an interrupt
-// opens no hold and writes no record, so what proves it is its answer and
-// the service's log line.
+// and the terminal probe then answered Live. Under tmux, what reads the
+// turn ended is agents.InterruptTerminalWorker: the key is pressed once on
+// a screen that reads a turn running that has begun its reply, with an
+// empty input, and the screen reads ready again after it; a screen that
+// reads ready before it is answered as no turn running, with nothing
+// pressed. Under pipe, it is agents.InterruptPipeWorker: the adapter's
+// protocol cancel, with the turn's end read off the protocol. The answer
+// is refused for a worker whose adapter has not declared the capability
+// that provider needs (*agents.CapabilityError naming
+// CapabilityTerminalInterrupt or CapabilityPipeInterrupt), and for one
+// this service does not hold. Under tmux, a screen that never read either
+// state within the bound is refused, and a key typed with no ready screen
+// after it within the bound is refused saying the key was typed. Under
+// pipe, a cancel whose settle the adapter never observes within the bound
+// is refused on that miss. A worker the probe does not read Live afterwards
+// is *interruptUnverified under either provider. Each refusal names stop,
+// then relaunch with a note, as the path left. Nothing is recorded: an
+// interrupt opens no hold and writes no record, so what proves it is its
+// answer and the service's log line.
 //
 // # Residual gaps
 //
@@ -160,16 +163,21 @@ import (
 //     the worker to have does not reach it through a note either.
 //   - No method reads a message record back; the record travels in
 //     task.message's answer, and an unacknowledged one surfaces as a wake.
-//   - An interrupt's proof is that a turn ended between the reading and the
-//     ready screen after the key, which the turn itself may have done in
-//     that window; the key then reaches an idle interface, once, which the
-//     CLI was observed to ignore. A key a person pressed in that window too
-//     is a second one, which the CLI was observed to answer with a menu,
-//     and the interrupt is then refused unread.
-//   - A turn that has not begun its reply is not interrupted: the
-//     interrupt waits for the reply under interruptBound and is refused
-//     when it does not begin, so a turn that thinks or waits longer than
-//     that before drawing anything cannot be interrupted.
+//   - Under tmux, an interrupt's proof is that a turn ended between the
+//     reading and the ready screen after the key, which the turn itself may
+//     have done in that window; the key then reaches an idle interface,
+//     once, which the CLI was observed to ignore. A key a person pressed in
+//     that window too is a second one, which the CLI was observed to answer
+//     with a menu, and the interrupt is then refused unread. A turn that
+//     has not begun its reply is not interrupted: the interrupt waits for
+//     the reply under interruptBound and is refused when it does not begin,
+//     so a turn that thinks or waits longer than that before drawing
+//     anything cannot be interrupted.
+//   - Under pipe, the cancel fires once the adapter has a turn id; there is
+//     no reply-begun gate. An idle or completed notification that arrives
+//     for a turn that finished itself after the cancel can answer
+//     interrupted true the same way the tmux key can reach an already-idle
+//     screen.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 
@@ -178,13 +186,15 @@ import (
 // it longer than this. Chosen, not measured.
 const messageSendBound = 10 * time.Second
 
-// interruptBound bounds an interrupt's Interrupt: the wait for a screen it
-// may press its key on and the wait for the ready screen after it. Chosen
-// over what Claude Code 2.1.308 was observed to take: ready within half a
-// second of the key, and, after a pasted message such as every message this
-// service sends, about four seconds with a notice in place of its footer,
-// which reads as no interface drawn, once before the turn reads running and
-// once more when the key puts the message back in the input.
+// interruptBound bounds an interrupt's Interrupt: under tmux, the wait for a
+// screen it may press its key on and the wait for the ready screen after
+// it; under pipe, the wait for the protocol to settle the turn after the
+// cancel. Chosen over what Claude Code 2.1.308 was observed to take on
+// tmux: ready within half a second of the key, and, after a pasted message
+// such as every message this service sends, about four seconds with a
+// notice in place of its footer, which reads as no interface drawn, once
+// before the turn reads running and once more when the key puts the
+// message back in the input.
 const interruptBound = 30 * time.Second
 
 // stopProbeBound bounds the probe that proves a stop. It is
@@ -202,8 +212,9 @@ const stopGrace = reapGrace
 var errSteerInFlight = errors.New("service: a dispatch, a launch, a relaunch or a stop of the task is in flight in this service")
 
 // interruptUnverified reports an interrupt the worker answered and whose
-// terminal the probe then did not read Live, so it is not answered as one
-// the worker survived.
+// probe then did not read Live, so it is not answered as one the worker
+// survived. Pipe and terminal interrupts share this refusal: the miss is
+// about liveness after Interrupt returned, not about a terminal session.
 type interruptUnverified struct {
 	Task        string
 	Session     string

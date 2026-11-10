@@ -37,11 +37,13 @@ var ErrNotAttachable = errors.New("session: this session's worker has no termina
 // held again. Nothing is ended or held.
 var ErrNotDurable = errors.New("session: this provider's workers do not outlive the handle holding them")
 
-// ErrNotInterruptible is the answer of Interrupt on a provider whose
-// workers have no terminal to type an interrupt into, which every session
-// Pipe holds is: no adapter in this build declares an interrupt over a
-// pipe. Nothing is read or sent.
-var ErrNotInterruptible = errors.New("session: this provider's workers have no terminal to interrupt a turn in")
+// ErrNotInterruptible is Interrupt's answer when a held session's worker
+// has no interrupt path this provider can take: a tmux session whose
+// handle is not a terminal worker. A pipe session whose adapter has not
+// declared agents.CapabilityPipeInterrupt is refused with that package's
+// *CapabilityError instead, so undeclared stays that package's typed
+// refusal. Nothing is read or sent.
+var ErrNotInterruptible = errors.New("session: this provider's workers have no interrupt path for this session")
 
 // Host is a Provider as the service that launches through it holds one: the
 // five operations, the worker group set the provider produces, and the two
@@ -96,13 +98,14 @@ type Host interface {
 	// workers cannot outlive their handle.
 	Readopt(ctx context.Context, ref string) (*Session, error)
 	// Interrupt ends the turn a held worker is running and keeps the
-	// worker, answering whether a turn was running, on
-	// agents.InterruptTerminalWorker's terms through the adapter the
-	// provider was built over: a *agents.CapabilityError for an adapter
-	// that has not declared agents.CapabilityTerminalInterrupt. It is
-	// ErrNotHeld for a session this provider does not hold, and, with the
-	// session held, ErrNotInterruptible on a provider whose workers have
-	// no terminal.
+	// worker, answering whether a turn was running. Under Tmux it is
+	// agents.InterruptTerminalWorker, refused with a *CapabilityError for
+	// an adapter that has not declared CapabilityTerminalInterrupt, and
+	// ErrNotInterruptible when the held handle is not a terminal worker.
+	// Under Pipe it is agents.InterruptPipeWorker, refused with a
+	// *CapabilityError for an adapter that has not declared
+	// CapabilityPipeInterrupt. It is ErrNotHeld for a session this
+	// provider does not hold.
 	Interrupt(ctx context.Context, s *Session) (bool, error)
 }
 

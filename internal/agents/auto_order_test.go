@@ -19,7 +19,13 @@ func plantOnPath(t *testing.T, names ...string) {
 	}
 	dir := t.TempDir()
 	for _, name := range names {
-		if err := procgroup.WriteProgram(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		script := []byte("#!/bin/sh\nexit 0\n")
+		if name == agents.CodexName {
+			// New refuses Codex below the pipe_interrupt floor; planted
+			// binaries must answer --version like CLI 0.166.0.
+			script = []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex-cli 0.166.0; exit 0; fi\nexit 0\n")
+		}
+		if err := procgroup.WriteProgram(filepath.Join(dir, name), script, 0o755); err != nil {
 			t.Fatalf("planting %s: %v", name, err)
 		}
 	}
