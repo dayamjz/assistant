@@ -30,7 +30,9 @@ func NewCursor(tb testing.TB, script Script, opts ...agents.CursorOption) *Agent
 }
 
 // serveACP models the documented newline JSON-RPC protocol: initialize,
-// authenticate, create a session, then prompts. It requires the handshake in
+// authenticate, create a session, then prompts. An exchange with Turn set
+// holds the prompt open until session/cancel, which answers stopReason
+// cancelled and records Call.Interrupted. It requires the handshake in
 // that order; a client that merely writes messages cannot pass conformance.
 func serveACP(control string, args []string) int {
 	bytes, err := os.ReadFile(scriptPath(control))
@@ -56,6 +58,7 @@ func serveACP(control string, args []string) int {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Buffer(make([]byte, 4096), 8*agents.MaxPromptBytes)
 	phase := 0
+	const sessionID = "standin-acp-session"
 	for scanner.Scan() {
 		var m struct {
 			ID     json.RawMessage `json:"id"`
@@ -91,9 +94,9 @@ func serveACP(control string, args []string) int {
 				return exitNoStdin
 			}
 			phase = 3
-			result = map[string]string{"sessionId": "standin-acp-session"}
+			result = map[string]string{"sessionId": sessionID}
 		case "session/prompt":
-			if phase != 3 || m.Params.Session != "standin-acp-session" {
+			if phase != 3 || m.Params.Session != sessionID {
 				return exitNoStdin
 			}
 			text := ""
@@ -115,24 +118,40 @@ func serveACP(control string, args []string) int {
 			}
 			reply := "standin: message received"
 			ends := false
+			hold := false
 			for _, exchange := range worker.Exchanges {
-				if exchange.answers(text) {
-					if exchange.Run {
-						_, command, _ := strings.Cut(text, exchange.Contains)
-						if !acpPermission(encoder, scanner, strings.TrimSpace(command)) {
-							reply = "standin: command permission refused"
-							break
-						}
-					}
-					reply, err = exchange.answer(text)
-					if err != nil {
-						return exitNoOutput
-					}
-					ends = exchange.Ends
-					break
+				if !exchange.answers(text) {
+					continue
 				}
+				if exchange.Run {
+					_, command, _ := strings.Cut(text, exchange.Contains)
+					if !acpPermission(encoder, scanner, strings.TrimSpace(command)) {
+						reply = "standin: command permission refused"
+						break
+					}
+				}
+				reply, err = exchange.answer(text)
+				if err != nil {
+					return exitNoOutput
+				}
+				ends = exchange.Ends
+				hold = exchange.Turn > 0
+				break
 			}
-			if encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": "standin-acp-session", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": reply}}}}) != nil {
+			if hold {
+				if !acpAwaitCancel(scanner, sessionID) {
+					return exitNoStdin
+				}
+				call.Interrupted = append(call.Interrupted, text)
+				if record(callsPath(control), call) != nil {
+					return exitNoRecord
+				}
+				if encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]string{"stopReason": "cancelled"}}) != nil {
+					return exitNoOutput
+				}
+				continue
+			}
+			if encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "session/update", "params": map[string]any{"sessionId": sessionID, "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]string{"type": "text", "text": reply}}}}) != nil {
 				return exitNoOutput
 			}
 			result = map[string]string{"stopReason": "end_turn"}
@@ -140,6 +159,12 @@ func serveACP(control string, args []string) int {
 				_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result})
 				return worker.Exit
 			}
+		case "session/cancel":
+			// Idle cancel: notification with no response, nothing settled.
+			if phase != 3 || m.Params.Session != sessionID || len(m.ID) != 0 {
+				return exitNoStdin
+			}
+			continue
 		default:
 			fmt.Fprintln(os.Stderr, "standin: unsupported ACP method", m.Method)
 			return exitNoStdin
@@ -149,6 +174,23 @@ func serveACP(control string, args []string) int {
 		}
 	}
 	return worker.Exit
+}
+
+// acpAwaitCancel reads the next stdin line and accepts only a session/cancel
+// notification for the held session.
+func acpAwaitCancel(scanner *bufio.Scanner, sessionID string) bool {
+	if !scanner.Scan() {
+		return false
+	}
+	var m struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Session string `json:"sessionId"`
+		} `json:"params"`
+	}
+	return json.Unmarshal(scanner.Bytes(), &m) == nil && m.Method == "session/cancel" &&
+		m.Params.Session == sessionID && len(m.ID) == 0
 }
 
 // ACP permission requests use the documented tool-call input and allow-once
