@@ -31,13 +31,14 @@ place of `--task` for a run's copy.
   terminal, which your tool's commands are not, so never try to give one.
 - `--answer remove-anyway` is for a copy whose discard preview refuses
   (shallow, partial or unverifiable), read afresh each time. Alone it shows
-  why discard refuses, and nothing of the loss, and records nothing. A
-  discard refused at its removal puts the copy back and is shown and
-  confirmed again; remove-anyway is refused for it. With `--force` from a terminal's foreground, naming the same task
-  or run, it releases the entry and keeps the copy. It is refused when a
-  discard can remove the copy, while a claim or a discard set-aside stands,
-  under `--json`, and from any process not in a terminal's foreground; never
-  try to give the confirmation yourself.
+  why discard refuses, and nothing of the loss, and records nothing. With
+  `--force` from a terminal's foreground, naming the same task or run, it
+  releases the entry and keeps the copy. It is refused when a discard can
+  remove the copy, while a claim or a discard set-aside stands, under
+  `--json`, and from any process not in a terminal's foreground; never try
+  to give the confirmation yourself. A discard refused at its removal puts
+  the copy back and is shown and confirmed again; remove-anyway is refused
+  for it.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
 land, carry-on, discard with `--confirm`, or remove-anyway with `--force` when
