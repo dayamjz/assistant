@@ -172,6 +172,40 @@ func TestInstallJevMergesSettings(t *testing.T) {
 	}
 }
 
+func TestInstallJevFallsClosedWhenSettingsUnwritable(t *testing.T) {
+	dir := t.TempDir()
+	prior := []byte(`{"env":{"KEEP_ME":"1","` + agents.JevFunctionHooksEnv + `":"1"},"other":true}` + "\n")
+	settingsPath := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(settingsPath, prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(settingsPath, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(settingsPath, 0o600) })
+	d := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
+	got, args, err := agents.InstallJev(dir, d)
+	if err != nil {
+		t.Fatalf("InstallJev returned error %v, want nil (fall closed)", err)
+	}
+	if got.Path != agents.CompactionBuiltin || args != nil {
+		t.Fatalf("got %+v args %v, want builtin with no plugin args", got, args)
+	}
+	if !strings.Contains(got.Reason, "settings install failed") {
+		t.Fatalf("reason %q, want settings install failed", got.Reason)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plugins", "fast-jev-compaction")); !os.IsNotExist(err) {
+		t.Fatalf("jev plugin tree left after settings failure: %v", err)
+	}
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("settings.json: %v", err)
+	}
+	if string(raw) != string(prior) {
+		t.Fatalf("settings.json = %s, want prior bytes restored", raw)
+	}
+}
+
 func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
 	dir := t.TempDir()
 	prior := []byte(`{"env":{"KEEP_ME":"1","` + agents.JevFunctionHooksEnv + `":"1"},"other":true}` + "\n")

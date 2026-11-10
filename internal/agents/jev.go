@@ -99,9 +99,8 @@ func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []s
 		undoPlugin()
 		return fallback("settings read failed: " + priorErr.Error())
 	}
-	// Best-effort restore of settings.json: WriteFile errors are named in the
-	// fallback reason when they matter, but a restore failure cannot refuse
-	// the launch.
+	// Best-effort restore of settings.json: restore failures are named in the
+	// fallback reason, but cannot refuse the launch.
 	restoreSettings := func() string {
 		if hadSettings {
 			if err := os.WriteFile(settingsPath, priorSettings, 0o600); err != nil {
@@ -109,7 +108,9 @@ func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []s
 			}
 			return ""
 		}
-		_ = os.Remove(settingsPath)
+		if err := os.Remove(settingsPath); err != nil && !os.IsNotExist(err) {
+			return "; settings remove failed: " + err.Error()
+		}
 		return ""
 	}
 	if err := writeJevSettings(configDir); err != nil {
