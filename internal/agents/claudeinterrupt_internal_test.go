@@ -26,7 +26,7 @@ func TestSchemaClaudeStreamInterruptFramesSettleTheWorker(t *testing.T) {
 	w.armTurn()
 	settled := w.settled
 	close(w.begun) // interrupt waits on init; fixture starts after it
-	var sawRequest, sawResult bool
+	var sawRequest, sawResponse, sawResult bool
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		var msg struct {
 			Type      string `json:"type"`
@@ -34,7 +34,13 @@ func TestSchemaClaudeStreamInterruptFramesSettleTheWorker(t *testing.T) {
 			Request   struct {
 				Subtype string `json:"subtype"`
 			} `json:"request"`
-			Result string `json:"result"`
+			Response struct {
+				Subtype   string `json:"subtype"`
+				RequestID string `json:"request_id"`
+			} `json:"response"`
+			Subtype string `json:"subtype"`
+			IsError bool   `json:"is_error"`
+			Result  string `json:"result"`
 		}
 		if json.Unmarshal([]byte(line), &msg) != nil {
 			t.Fatalf("fixture line does not decode: %s", line)
@@ -45,16 +51,21 @@ func TestSchemaClaudeStreamInterruptFramesSettleTheWorker(t *testing.T) {
 				t.Fatalf("control_request is %s, want subtype interrupt with request_id", line)
 			}
 			sawRequest = true
+		case "control_response":
+			if msg.Response.Subtype != "success" || msg.Response.RequestID == "" {
+				t.Fatalf("control_response is %s, want subtype success with request_id", line)
+			}
+			sawResponse = true
 		case "result":
-			if msg.Result == "" {
-				t.Fatalf("result line has empty result: %s", line)
+			if msg.Subtype == "" || !msg.IsError || msg.Result == "" {
+				t.Fatalf("result is %s, want interrupt subtype, is_error true, and result text", line)
 			}
 			sawResult = true
 			w.observe([]byte(line))
 		}
 	}
-	if !sawRequest || !sawResult {
-		t.Fatalf("fixture missing control_request (%t) or result (%t)", sawRequest, sawResult)
+	if !sawRequest || !sawResponse || !sawResult {
+		t.Fatalf("fixture missing control_request (%t), control_response (%t), or interrupted result (%t)", sawRequest, sawResponse, sawResult)
 	}
 	select {
 	case <-settled:

@@ -1188,8 +1188,11 @@ type TaskInterrupted struct {
 	Attempt int64 `json:"attempt"`
 	// Session is that attempt's session reference.
 	Session string `json:"session"`
-	// Interrupted is true when a turn was running and the provider's cancel
-	// ended it (tmux key or pipe protocol), and false when no turn was
+	// Interrupted is true when a turn was running, the provider's cancel
+	// was written (tmux key or pipe protocol), and the turn then settled
+	// as ended; under pipe that settle can be the turn finishing itself
+	// rather than the cancel (Claude any result; Codex any idle), except
+	// Cursor which requires stopReason cancelled. False when no turn was
 	// running and nothing was cancelled.
 	Interrupted bool `json:"interrupted"`
 }

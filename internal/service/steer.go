@@ -178,9 +178,11 @@ import (
 //     before control_request (CLI #98713). For Codex, an idle that settles
 //     after the cancel answers interrupted true even when that idle is the
 //     turn finishing itself rather than the cancel (Interrupt waits on
-//     settled, which markIdle closes for any idle). Cursor requires
-//     stopReason cancelled and refuses another stop reason, so a
-//     self-finished turn cannot answer interrupted true there.
+//     settled, which markIdle closes for any idle). Claude is the same for
+//     any stream-json result that closes settled after control_request, with
+//     no interrupt-shaped subtype check. Cursor requires stopReason
+//     cancelled and refuses another stop reason, so a self-finished turn
+//     cannot answer interrupted true there.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 

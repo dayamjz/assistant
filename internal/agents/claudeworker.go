@@ -61,9 +61,11 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		return nil, err
 	}
 	w.procWorker = worker
-	// Wait for the instructions turn's result without arming settle
-	// channels: a late instructions result must not clear the first
-	// Send's arm.
+	// Wait for the instructions turn without arming settle channels.
+	// waitCapture returns on a result, or after 5s with no system/init
+	// (a silent worker). That soft return is a residual gap: a late
+	// instructions result after the first Send arms can still markIdle
+	// that arm, because observe has no generation token.
 	w.waitCapture(ctx)
 	return w, nil
 }
