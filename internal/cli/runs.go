@@ -890,9 +890,9 @@ type keptWorkFlags struct {
 }
 
 // keptWorkAnswer answers a kept work entry, PRD section 9's hold answer
-// given --hold kept-work/N: --answer is land, carry-on or discard, and
-// exactly one of --task and --run=RUN names whose copy the entry is. Every
-// other flag is refused rather than ignored.
+// given --hold kept-work/N: --answer is land, carry-on, discard or
+// remove-anyway, and exactly one of --task and --run=RUN names whose copy
+// the entry is. Every other flag is refused rather than ignored.
 func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any, error) {
 	switch {
 	case !f.kept && f.confirmSet:
@@ -900,7 +900,7 @@ func (in *invocation) keptWorkAnswer(ctx context.Context, f keptWorkFlags) (any,
 	case !f.kept:
 		return nil, usagef("--run=RUN names the run whose kept copy is answered, and is read only with --hold kept-work/N and --answer")
 	case !f.answered:
-		return nil, usagef("--hold %s names a kept work entry, and it is read only with --answer land, carry-on or discard", f.hold)
+		return nil, usagef("--hold %s names a kept work entry, and it is read only with --answer land, carry-on, discard or remove-anyway", f.hold)
 	case f.tasked && f.run.named:
 		return nil, usagef("--task and --run=RUN both name whose copy the kept work is; pass one")
 	case !f.tasked && !f.run.named:

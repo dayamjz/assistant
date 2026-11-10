@@ -14,7 +14,9 @@ import (
 // keptLossLines' order with the digest last; a loss naming nothing reads
 // out the row saying so before the digest, so the row's "listed below" is
 // never followed by nothing; a file of a kind no label names is still
-// printed, under its kind; and every other answer prints its row alone.
+// printed, under its kind; a remove-anyway shown prints its row and the
+// refusal, and no loss even when one is given; and every other answer
+// prints its row alone.
 func TestADiscardShownReadsOutExactlyWhatWouldBeLost(t *testing.T) {
 	t.Parallel()
 	shown := machine.KeptWorkAnswered{Effect: machine.KeptWorkDiscardShown, Loss: &machine.KeptWorkLoss{
@@ -36,6 +38,19 @@ func TestADiscardShownReadsOutExactlyWhatWouldBeLost(t *testing.T) {
 			[]string{row, machine.PhraseKeptWorkLosesNothing.String(), "Digest: ffffffffffff"}},
 		{"a landing", machine.KeptWorkAnswered{Effect: machine.KeptWorkLanded, Run: "r"},
 			[]string{machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkLanded}).String()}},
+		{"remove-anyway with a loss it never shows", machine.KeptWorkAnswered{
+			Effect: machine.KeptWorkRemoveAnywayShown, Refusal: "discard refused: shallow",
+			Loss: &machine.KeptWorkLoss{Lacks: []string{"c1"}, Digest: "ffffffffffff"},
+		}, []string{
+			machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkRemoveAnywayShown}).String(),
+			"Refusal: discard refused: shallow",
+		}},
+		{"remove-anyway refusal alone", machine.KeptWorkAnswered{
+			Effect: machine.KeptWorkRemoveAnywayShown, Refusal: "discard refused: copy gone",
+		}, []string{
+			machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkRemoveAnywayShown}).String(),
+			"Refusal: discard refused: copy gone",
+		}},
 	} {
 		var out bytes.Buffer
 		if err := readOut(&out, tc.answer); err != nil {

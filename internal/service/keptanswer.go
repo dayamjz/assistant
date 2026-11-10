@@ -13,15 +13,16 @@ import (
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
-// Answering kept work: PRD section 6's three answers, given on section 9's
-// hold answer with --hold naming the entry's key (store.KeptWork.Key), and
+// Answering kept work: PRD section 6's answers, given on section 9's hold
+// answer with --hold naming the entry's key (store.KeptWork.Key), and
 // recorded once on the kept work row, the one owner of the answer. No hold
 // row is written for an entry and no task state changes because of one,
 // which is the owner's decision on #411: the hold answer is the surface,
 // and the kept work record is the record.
 //
-// This build takes all three answers. Land is below, carrying on is
-// keptcarryon.go's and discarding is keptdiscard.go's.
+// This build takes land, carry-on and discard, and remove-anyway's
+// preview. Land is below, carrying on is keptcarryon.go's, discarding is
+// keptdiscard.go's, and remove-anyway is keptremoveanyway.go's.
 //
 // # Land
 //
@@ -163,8 +164,10 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
 		return s.discardKeptWork(ctx, req, entry, r.Confirm)
+	case store.KeptRemoveAnyway:
+		return s.removeAnywayKeptWork(ctx, entry)
 	default:
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on and discard",
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on, discard and remove-anyway",
 			ipc.ErrInvalidRequest, r.Answer)
 	}
 }
