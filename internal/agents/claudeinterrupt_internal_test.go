@@ -167,4 +167,3 @@ func TestClaudeInterruptWaitsForSettledAfterCancelReturns(t *testing.T) {
 	}
 }
 
-// ci kick
