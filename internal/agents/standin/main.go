@@ -78,6 +78,13 @@ const (
 func Main() {
 	noteMain()
 	args := os.Args[1:]
+	// Codex New reads --version before it builds a Runner (pipe_interrupt's
+	// floor). When this binary stands in for Codex it answers the same way
+	// CLI 0.166.0 does so that floor holds in tests.
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println("codex-cli 0.166.0")
+		os.Exit(0)
+	}
 	if owner, ok := flagValue(args, sweepFlag); ok {
 		dir, _ := flagValue(args, sweepDirFlag)
 		os.Exit(sweep(owner, dir))
