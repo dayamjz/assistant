@@ -41,8 +41,9 @@ func NewCodex(tb testing.TB, script Script, opts ...agents.CodexOption) *Agent {
 // exchange with Turn set holds that accepted turn open until turn/interrupt,
 // which is CLI 0.166.0's cancel: the interrupt is answered, the turn
 // completes as interrupted, then idle, and Call.Interrupted records the
-// message. It requires that order, a workspace-write sandbox, and
-// on-request approval.
+// message. It requires that order, a workspace-write sandbox, and either
+// on-request approval (a worker) or untrusted (a subordinate, recorded from
+// CLI 0.166.0 as the mode where plain shell calls ask before they run).
 func serveAppServer(control string, args []string) int {
 	bytes, err := os.ReadFile(scriptPath(control))
 	if err != nil {
@@ -112,10 +113,15 @@ func serveAppServer(control string, args []string) int {
 			}
 			phase = 2
 		case "thread/start":
-			if phase != 2 || m.Params.Cwd == "" || m.Params.Sandbox != "workspace-write" || m.Params.Approval != "on-request" || !caps.Params.Ephemeral {
+			approvalOK := m.Params.Approval == "on-request" || m.Params.Approval == "untrusted"
+			if phase != 2 || m.Params.Cwd == "" || m.Params.Sandbox != "workspace-write" || !approvalOK || !caps.Params.Ephemeral {
 				return exitNoStdin
 			}
 			phase = 3
+			call.ApprovalPolicy = m.Params.Approval
+			if record(callsPath(control), call) != nil {
+				return exitNoRecord
+			}
 			if encoder.Encode(map[string]any{"id": m.ID, "result": map[string]any{"thread": map[string]any{"id": threadID}}}) != nil {
 				return exitNoOutput
 			}

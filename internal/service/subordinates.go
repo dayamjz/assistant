@@ -144,8 +144,9 @@ import (
 //     subordinate starts the same way a worker does; under auto, the
 //     default, driverHost still starts it on a pipe (terminals.go). The
 //     Cursor adapter holds the grant in its permission handler; the Codex
-//     adapter cannot and refuses the start (agents.ErrGrantUnenforced),
-//     logged.
+//     adapter starts a pipe subordinate under approvalPolicy untrusted and
+//     holds every approval to the grant (route only, no edits). A tmux
+//     Codex pin is still refused: Codex declares no terminal workers.
 //   - While a subordinate is starting, every peer placement reads as
 //     neither is refused unavailable, the first coordinator's own requests
 //     included, for as long as the start takes. gate.admit places a push

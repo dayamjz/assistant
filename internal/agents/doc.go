@@ -472,8 +472,10 @@
 // with, and every other command approval is declined. A file-change approval
 // is accepted without its paths being read, so the workspace-write sandbox
 // limits where a write lands; any other approval is declined. A sandbox that
-// runs a command without asking is the CLI's own, and this package does not
-// widen it.
+// runs a command without asking is the CLI's own under on-request, and this
+// package does not widen it. A subordinate coordinator starts the thread under
+// approvalPolicy untrusted so plain shell calls ask (as recorded), then
+// allows only the route and declines file-change approvals that arrive.
 //
 // Explicit role fallback recognizes a bounded set of agent error signatures.
 // Unknown quota wording therefore fails rather than guessing. It never uses
