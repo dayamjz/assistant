@@ -63,9 +63,10 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 	})
 }
 
-// A copy whose loss a discard's preview reads is refused for remove-anyway,
-// naming discard.
-func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
+// A copy whose loss a discard's preview reads is refused for remove-anyway.
+// The refusal names only what is known (the preview read), not that a
+// discard can remove the copy, and points at showing that discard (P15).
+func TestARemoveAnywayIsRefusedWhenADiscardsPreviewReadsTheCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P15)
@@ -81,10 +82,79 @@ func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 			Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway),
 		}, &machine.KeptWorkAnswered{})
 		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard's preview reads") {
-			t.Fatalf("remove-anyway of a discardable copy = %v; want refused naming discard", err)
+			t.Fatalf("remove-anyway of a copy whose preview reads = %v; want refused naming the preview", err)
+		}
+		got := err.Error()
+		if strings.Contains(got, "confirm that discard") || strings.Contains(got, "show and confirm") ||
+			strings.Contains(got, "a discard can remove the copy;") {
+			t.Fatalf("remove-anyway refusal = %q; want it not to promise a discard can remove or to confirm it", got)
+		}
+		if !strings.Contains(got, "not known yet") || !strings.Contains(got, "show that discard") {
+			t.Fatalf("remove-anyway refusal = %q; want it to say removal is not known yet and name showing the discard", got)
 		}
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
 			t.Fatalf("after the refuse the entry reads %+v, %v; want it open", still, err)
+		}
+	})
+}
+
+// Fail-before: when a discard's preview reads but confirmation cannot remove
+// the copy (a locked worktree), remove-anyway still refused by saying to
+// "confirm that discard", which puts the copy back and leaves no release
+// answer. After: the refusal says only that the preview reads and that
+// whether a discard can remove is not known yet, and names showing the
+// discard (P6/P15; the sticky removal case is #880).
+func TestARemoveAnywayRefusalDoesNotPromiseADiscardCanRemoveWhenConfirmFails(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	recordRepository(t, h, subject)
+	entry := keptEntryOf(t, h, subject)
+	gate := git(t, entry.CopyPath, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	// Lock before any Loss: the admin record is sealed into the digest, so
+	// confirmation fails at git's remove rather than as a digest mismatch.
+	git(t, gate, "worktree", "lock", entry.CopyPath)
+
+	withService(t, h, func(under serviceUnderTest) {
+		ctx := t.Context()
+		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Run: entry.RunID.Or(""), Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway),
+		}, &machine.KeptWorkAnswered{})
+		if !errors.Is(err, ipc.ErrRefused) {
+			t.Fatalf("remove-anyway of a locked worktree = %v; want refused", err)
+		}
+		got := err.Error()
+		if strings.Contains(got, "confirm that discard") || strings.Contains(got, "show and confirm") ||
+			strings.Contains(got, "a discard can remove the copy;") {
+			t.Fatalf("remove-anyway refusal = %q; want it not to promise a discard can remove or to confirm it", got)
+		}
+		if !strings.Contains(got, "discard's preview reads") || !strings.Contains(got, "not known yet") ||
+			!strings.Contains(got, "show that discard") {
+			t.Fatalf("remove-anyway refusal = %q; want the preview read, that removal is not known yet, and show that discard", got)
+		}
+
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, ""), &shown); err != nil ||
+			shown.Effect != machine.KeptWorkDiscardShown || shown.Loss == nil || shown.Loss.Digest == "" {
+			t.Fatalf("showing the discard = %+v, %v; want the loss with a digest", shown, err)
+		}
+		var out machine.KeptWorkAnswered
+		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &out)
+		if err == nil {
+			t.Fatal("confirming the discard of a locked worktree succeeded; want the remove refused and put-back")
+		}
+		if !errors.Is(err, ipc.ErrRefused) && !strings.Contains(err.Error(), "removing the worktree") {
+			t.Fatalf("confirming the discard = %v; want a refused removal", err)
+		}
+		if _, err := os.Stat(entry.CopyPath); err != nil {
+			t.Fatalf("after the refused confirm the copy must stand: %v", err)
+		}
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
+			t.Fatalf("after the refused confirm the entry reads %+v, %v; want it open", still, err)
 		}
 	})
 }
@@ -208,8 +278,9 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 		request.Force = true
 		var out machine.KeptWorkAnswered
 		err = under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &out)
-		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard's preview reads") {
-			t.Fatalf("force after the refusal cleared = %+v, %v; want refused naming discard", out, err)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), "discard's preview reads") ||
+			strings.Contains(err.Error(), "confirm that discard") {
+			t.Fatalf("force after the refusal cleared = %+v, %v; want refused naming the preview, not confirming discard", out, err)
 		}
 		still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID)
 		if err != nil || !still.Open() || still.RemoveAnywayClaimed() {
