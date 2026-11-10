@@ -187,6 +187,78 @@ func (w *acpWorker) failure(message string) error {
 	return failure
 }
 
+// Interrupt ends the turn the worker is running over session/cancel, on
+// InterruptibleWorker.Interrupt's terms. The notification shape is ACP's
+// CancelNotification (sessionId only, no response); the turn's end is the
+// session/prompt result with stopReason cancelled. An interrupt with no
+// turn under way sends nothing.
+func (w *acpWorker) Interrupt(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	select {
+	case w.send <- struct{}{}:
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-w.done:
+		return false, ErrWorkerEnded
+	}
+	defer func() { <-w.send }()
+	if w.turn == nil {
+		return false, nil
+	}
+	// A response already waiting means the turn ended on its own; drain it
+	// the way the next Send would, and press nothing.
+	select {
+	case reply := <-w.turn:
+		w.turn = nil
+		if reply.Error != nil {
+			return false, w.failure(reply.Error.Message)
+		}
+		return false, nil
+	default:
+	}
+	encoded, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "method": "session/cancel",
+		"params": map[string]string{"sessionId": w.session},
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := w.write(ctx, string(encoded)); err != nil {
+		return false, err
+	}
+	reply, err := waitAfterCursorInterruptCancel(ctx, w.turn, w.done)
+	if err != nil {
+		return false, err
+	}
+	w.turn = nil
+	if reply.Error != nil {
+		return false, w.failure(reply.Error.Message)
+	}
+	var result struct {
+		Stop string `json:"stopReason"`
+	}
+	if json.Unmarshal(reply.Result, &result) != nil || result.Stop != "cancelled" {
+		return false, fmt.Errorf("agents: Cursor ACP interrupt answered stopReason %q, want cancelled", result.Stop)
+	}
+	return true, nil
+}
+
+// waitAfterCursorInterruptCancel waits for the session/prompt result after
+// session/cancel was written. Tests may replace it to observe that Interrupt
+// reached this wait rather than returning on the cancel notification alone.
+var waitAfterCursorInterruptCancel = func(ctx context.Context, turn <-chan acpMessage, ended <-chan struct{}) (acpMessage, error) {
+	select {
+	case reply := <-turn:
+		return reply, nil
+	case <-ctx.Done():
+		return acpMessage{}, ctx.Err()
+	case <-ended:
+		return acpMessage{}, ErrWorkerEnded
+	}
+}
+
 // Send queues one prompt, preserving its turn even if the caller stops waiting for the write.
 func (w *acpWorker) Send(ctx context.Context, text string) error {
 	if err := ctx.Err(); err != nil {

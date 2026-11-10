@@ -174,10 +174,12 @@ import (
 //     so a turn that thinks or waits longer than that before drawing
 //     anything cannot be interrupted.
 //   - Under pipe, the cancel fires once the adapter has a turn id; there is
-//     no reply-begun gate. An idle or completed notification that arrives
-//     for a turn that finished itself after the cancel can answer
-//     interrupted true the same way the tmux key can reach an already-idle
-//     screen.
+//     no reply-begun gate. For Codex, an idle that settles after the cancel
+//     answers interrupted true even when that idle is the turn finishing
+//     itself rather than the cancel (Interrupt waits on settled, which
+//     markIdle closes for any idle). Cursor requires stopReason cancelled
+//     and refuses another stop reason, so a self-finished turn cannot
+//     answer interrupted true there.
 //   - An interrupt is not recorded, so after a restart nothing says one
 //     happened but the log.
 
