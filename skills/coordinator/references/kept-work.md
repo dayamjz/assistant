@@ -29,14 +29,23 @@ place of `--task` for a run's copy.
   that digest still seals the copy. A confirmation is the person's alone: it
   is refused under `--json` and from any process not in the foreground of a
   terminal, which your tool's commands are not, so never try to give one.
+- `--answer remove-anyway` is for a copy a discard refuses (shallow, partial,
+  unverifiable, or a removal that would lose more than was shown). Alone it
+  shows why discard refuses and what of the loss could be read, and records
+  nothing. With `--force` from a terminal's foreground, naming the same task
+  or run, it releases the entry and keeps the copy. It is refused when a
+  discard can remove the copy, while a claim or a discard set-aside stands,
+  under `--json`, and from any process not in a terminal's foreground; never
+  try to give the confirmation yourself.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
-land, carry-on, or discard with `--confirm`, or committing or removing its
-uncommitted work and pushing its commits, after which the program removes the
-copy on that proof when it next looks at it, which is not immediate, and with
-it, unchecked, files git ignores, commits only a reflog reaches and the
-copy's hooks, which the discard preview lists, so they should copy out what
-they want first; removing it by hand leaves the entry open.
+land, carry-on, discard with `--confirm`, or remove-anyway with `--force` when
+a discard refuses, or committing or removing its uncommitted work and pushing
+its commits, after which the program removes the copy on that proof when it
+next looks at it, which is not immediate, and with it, unchecked, files git
+ignores, commits only a reflog reaches and the copy's hooks, which the discard
+preview lists, so they should copy out what they want first; removing it by
+hand leaves the entry open.
 Promoting an investigation whose copy has an entry answers that entry carry
 on by itself.
 

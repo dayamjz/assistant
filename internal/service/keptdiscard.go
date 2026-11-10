@@ -18,7 +18,8 @@ import (
 // internal/tasks' Loss and records nothing. A confirmation from a
 // terminal's foreground claims the entry, removes a task's clone or a
 // run's worktree through Cleaner.Discard, records the outcome, clears the
-// discard directory, and redispatches. remove-anyway is a later answer.
+// discard directory, and redispatches. remove-anyway is
+// keptremoveanyway.go.
 
 // discardKeptWork is the discard answer, on this file's terms.
 func (s *Service) discardKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, confirm string) (machine.KeptWorkAnswered, error) {

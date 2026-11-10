@@ -20,7 +20,7 @@ type KeptWorkAnswerRequest struct {
 	Run string `json:"run,omitempty"`
 	// Hold is the entry's key, kept-work/ and its identifier.
 	Hold string `json:"hold"`
-	// Answer is land, carry-on or discard.
+	// Answer is land, carry-on, discard or remove-anyway.
 	Answer string `json:"answer"`
 	// Confirm is, with a discard answer, the digest a discard shown
 	// beforehand carried (KeptWorkLoss.Digest): without it a discard shows
@@ -28,6 +28,13 @@ type KeptWorkAnswerRequest struct {
 	// run's worktree is removed on that confirmation from a terminal's
 	// foreground. It is refused with any other answer.
 	Confirm string `json:"confirm,omitempty"`
+	// Force is, with a remove-anyway answer, the stronger confirmation
+	// (PRD section 6): without it remove-anyway shows why a discard
+	// refuses and records nothing; with it, together with the task or run
+	// name that owns the entry, the entry is released and the copy stays,
+	// admitted only from a terminal's foreground. It is refused with any
+	// other answer.
+	Force bool `json:"force,omitempty"`
 }
 
 // KeptWorkLoss is what discarding a kept copy would lose, as the program
@@ -183,17 +190,25 @@ const (
 	// KeptWorkDiscarded is a discard given with Confirm: the copy was
 	// removed and the entry answered discard.
 	KeptWorkDiscarded KeptWorkEffect = "discarded"
+	// KeptWorkRemoveAnywayShown is a remove-anyway given without Force:
+	// why a discard refuses and what of the loss could be read, with
+	// nothing recorded or released.
+	KeptWorkRemoveAnywayShown KeptWorkEffect = "remove-anyway-shown"
+	// KeptWorkRemovedAnyway is a remove-anyway given with Force: the
+	// entry was released and the copy left standing.
+	KeptWorkRemovedAnyway KeptWorkEffect = "removed-anyway"
 )
 
 // KeptWorkAnswered is the answer to a KeptWorkAnswerRequest: the entry as
 // it stands after the answer, what the answer did, and for a landing the
-// run it started. A land, carry on or confirmed discard records its answer
-// on the entry; a discard shown records nothing, so its entry is as it
-// was, still open (KeptWorkDiscardShown).
+// run it started. A land, carry on, confirmed discard or confirmed
+// remove-anyway records its answer on the entry; a discard or
+// remove-anyway shown records nothing, so its entry is as it was, still
+// open.
 type KeptWorkAnswered struct {
 	// Entry is the entry as the answer left it: answered for a land, a
-	// carry on or a confirmed discard, and unchanged and open for a
-	// discard shown.
+	// carry on, a confirmed discard or a confirmed remove-anyway, and
+	// unchanged and open for a discard or remove-anyway shown.
 	Entry store.KeptWork `json:"entry"`
 	// Effect is what the answer did.
 	Effect KeptWorkEffect `json:"effect"`
@@ -201,9 +216,13 @@ type KeptWorkAnswered struct {
 	Run string `json:"run,omitempty"`
 	// Task is the task a carry on created, empty for every other effect.
 	Task string `json:"task,omitempty"`
-	// Loss is what a discard would lose, for a discard shown, and absent for
-	// every other effect.
+	// Loss is what a discard would lose, for a discard shown, and for a
+	// remove-anyway shown what of the loss could be read (possibly
+	// incomplete), absent for every other effect.
 	Loss *KeptWorkLoss `json:"loss,omitempty"`
+	// Refusal is why a discard refuses the copy, for a remove-anyway
+	// shown, and absent for every other effect.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 // phraseKeptWorkLanded is the row a landed answer reads as.
@@ -238,6 +257,20 @@ var phraseKeptWorkDiscarded = Phrase{
 	Decision:    "Nothing further to decide about that copy.",
 }
 
+// phraseKeptWorkRemoveAnywayShown is the row a remove-anyway shown reads as.
+var phraseKeptWorkRemoveAnywayShown = Phrase{
+	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, and what of the loss could be read follows it, marked incomplete where it could not.",
+	Consequence: "The copy stays, with everything it holds, and new work that would start where it stood still waits on it.",
+	Decision:    "Repeat the remove-anyway with --force at a terminal in the foreground and without --json, naming the same task or run, to release the entry and keep the copy; or answer land or carry-on if a discard can remove it instead.",
+}
+
+// phraseKeptWorkRemovedAnyway is the row a confirmed remove-anyway reads as.
+var phraseKeptWorkRemovedAnyway = Phrase{
+	Outcome:     "That local copy's hold was released on your confirmed remove-anyway; the copy itself was left standing.",
+	Consequence: "New work that would start where that copy stood is no longer blocked by it; cleanup may still remove the copy later on a proof.",
+	Decision:    "Nothing further to decide about that hold.",
+}
+
 // PhraseKeptWorkLosesNothing is the row a discard shown prints in place
 // of a list when KeptWorkLoss names no commit, object or file, before the
 // digest, which still seals that empty list.
@@ -267,6 +300,15 @@ var PhraseDiscardNeedsTerminal = Phrase{
 	Outcome:     "Nothing was removed, because a discard is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
 	Consequence: "The copy stays, with everything it holds, and nothing was recorded.",
 	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json.",
+}
+
+// PhraseRemoveAnywayNeedsTerminal is the row for a remove-anyway
+// confirmation given from somewhere other than a terminal's foreground,
+// on PhraseDiscardNeedsTerminal's terms for remove-anyway (PRD section 6).
+var PhraseRemoveAnywayNeedsTerminal = Phrase{
+	Outcome:     "Nothing was released, because a remove-anyway is confirmed only at a terminal, in the foreground, and this was asked from somewhere else.",
+	Consequence: "The copy stays, with everything it holds, and the entry was not released.",
+	Decision:    "Give a confirmation yourself at a terminal, in the foreground and without --json, with --force.",
 }
 
 // The two carry-on slot refusals below are read by a person after the
@@ -319,6 +361,10 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 		return phraseKeptWorkDiscardShown
 	case KeptWorkDiscarded:
 		return phraseKeptWorkDiscarded
+	case KeptWorkRemoveAnywayShown:
+		return phraseKeptWorkRemoveAnywayShown
+	case KeptWorkRemovedAnyway:
+		return phraseKeptWorkRemovedAnyway
 	}
 	return phraseKeptWorkLanded
 }
@@ -326,5 +372,7 @@ func KeptWorkAnsweredPhrase(a KeptWorkAnswered) Phrase {
 // keptAnswerRows is this file's rows for TablePhrases.
 func keptAnswerRows() []Phrase {
 	return []Phrase{phraseKeptWorkLanded, phraseKeptWorkCarriedOn, phraseKeptWorkDiscardShown, phraseKeptWorkDiscarded,
-		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
+		phraseKeptWorkRemoveAnywayShown, phraseKeptWorkRemovedAnyway,
+		PhraseKeptWorkLosesNothing, PhraseDiscardRemovalDeferred, PhraseDiscardNeedsTerminal, PhraseRemoveAnywayNeedsTerminal,
+		PhraseCarryOnSlotBusy, PhraseCarryOnAlreadyStarted}
 }

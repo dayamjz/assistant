@@ -156,6 +156,14 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: a confirmation is read with the discard answer alone, and was given with %q",
 			ipc.ErrInvalidRequest, r.Answer)
 	}
+	if r.Force && store.KeptAnswer(r.Answer) != store.KeptRemoveAnyway {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: --force is read with the remove-anyway answer alone, and was given with %q",
+			ipc.ErrInvalidRequest, r.Answer)
+	}
+	if r.Confirm != "" && r.Force {
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: a discard confirmation and a remove-anyway --force cannot be given together",
+			ipc.ErrInvalidRequest)
+	}
 	switch store.KeptAnswer(r.Answer) {
 	case store.KeptLand:
 		return s.landKeptWork(ctx, req, entry)
@@ -163,8 +171,10 @@ func (s *Service) answerKeptWork(ctx context.Context, req ipc.Request, r machine
 		return s.carryOnKeptWork(ctx, req, entry)
 	case store.KeptDiscard:
 		return s.discardKeptWork(ctx, req, entry, r.Confirm)
+	case store.KeptRemoveAnyway:
+		return s.removeAnywayKeptWork(ctx, req, entry, r.Force)
 	default:
-		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on and discard",
+		return machine.KeptWorkAnswered{}, fmt.Errorf("%w: %q is not an answer to kept work; the answers are land, carry-on, discard and remove-anyway",
 			ipc.ErrInvalidRequest, r.Answer)
 	}
 }
