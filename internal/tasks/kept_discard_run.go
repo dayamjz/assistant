@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -24,24 +26,18 @@ var ErrConfirmMismatch = errors.New("tasks: the confirmed digest is not what dis
 var ErrDiscardStateUnreadable = errors.New("tasks: which side of the discard's point of no return the copy is on cannot be read")
 
 // Discard removes the entry's copy when digest is exactly what Loss seals
-// for it now (PRD section 6's "Removing a discarded copy" for a task's
-// clone): verify, re-read the loss, set working-tree loss aside, clean-read,
-// move the clone at the point of no return, and delete what remains. It
-// does not record the discard's claim or outcome. A run's worktree is
-// refused until a later link. On any refusal before the point of no return
-// it puts everything back and clears the discard directory so a later
-// confirmation can begin; past that point it never puts back and only
-// finishes deletion. A stop is taken up on the next call from where the
-// clone stands and from the journal: the journalled ponr target standing
-// is past; a journalled finish is past even when that target is gone (an
-// impostor at the copy path included); the copy still at its path without
-// finish is not. The discard directory remains after a finished removal
-// for the outcome owner to delete. ErrLossChanged is a copy that moved
-// under the discard after the confirmed read.
+// for it now (PRD section 6's "Removing a discarded copy"): verify, re-read
+// the loss, set working-tree loss aside, clean-read, then either move a
+// task's clone or remove a run's worktree at the point of no return, and
+// delete what remains. It does not record the discard's claim or outcome.
+// On any refusal before the point of no return it puts everything back and
+// clears the discard directory so a later confirmation can begin; past that
+// point it never puts back and only finishes deletion (a worktree's remains
+// by force). A stop is taken up on the next call from where the copy stands
+// and from the journal. The discard directory remains after a finished
+// removal for the outcome owner to delete. ErrLossChanged is a copy that
+// moved under the discard after the confirmed read.
 func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, digest string) error {
-	if !entry.TaskID.IsKnown() {
-		return fmt.Errorf("tasks: Discard of a run's worktree is not yet implemented")
-	}
 	dir, err := c.home.Discarding(entry.CopyPath)
 	if err != nil {
 		return err
@@ -55,8 +51,18 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 		if err != nil {
 			return err
 		}
+		// A run's worktree PONR is also the gate record and the step-3
+		// tree (PRD step 4): path alone can still stand after a partial
+		// remove, and an unreadable re-read leaves the claim owed.
+		if !past && worktreePONR(j) {
+			begun, readErr := c.worktreeRemovalBegun(ctx, gatePath, entry.CopyPath)
+			if readErr != nil {
+				return fmt.Errorf("%w: %w", ErrDiscardStateUnreadable, readErr)
+			}
+			past = begun
+		}
 		if past {
-			return c.finishDiscard(dir, &j)
+			return c.finishDiscard(ctx, gatePath, dir, &j)
 		}
 		if err := strikeUnreachedRemovalSteps(dir, &j, entry.CopyPath); err != nil {
 			return err
@@ -110,6 +116,10 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 		return refuse(err)
 	}
 
+	if !entry.TaskID.IsKnown() {
+		return c.removeWorktreeAtPONR(ctx, entry, gatePath, dir, &last, refuse)
+	}
+
 	to := filepath.Join(dir, "clone")
 	ponr := discardStep{Kind: discardStepPONR, From: entry.CopyPath, To: to}
 	if err := appendDiscardStep(dir, &last, ponr); err != nil {
@@ -124,27 +134,209 @@ func (c *Cleaner) Discard(ctx context.Context, entry store.KeptWork, gatePath, d
 		return refuse(moveErr)
 	}
 	// Past the point of no return: never putBack.
-	return c.finishDiscard(dir, &last)
+	return c.finishDiscard(ctx, gatePath, dir, &last)
+}
+
+// removeWorktreeAtPONR journals ponr and removes the run's worktree through
+// the non-force RemoveWorktree under the gate's copies lock. When git
+// refuses, the worktree is read again (PRD step 4): path, gate record, and
+// the step-3 tree. All still as step 3 left them is a refusal before PONR
+// (strike and put back). Anything already gone is past PONR and finish
+// removes remains by force. A reading that fails leaves the claim owed
+// (no put-back, no finish).
+func (c *Cleaner) removeWorktreeAtPONR(ctx context.Context, entry store.KeptWork, gatePath, dir string, last *discardJournal, refuse func(error) error) error {
+	if gatePath == "" {
+		return refuse(fmt.Errorf("tasks: Discard of a run's worktree needs the gate path"))
+	}
+	ponr := discardStep{Kind: discardStepPONR, From: entry.CopyPath}
+	if err := appendDiscardStep(dir, last, ponr); err != nil {
+		return refuse(err)
+	}
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+	if err != nil {
+		if strikeErr := strikeUnreachedRemovalSteps(dir, last, entry.CopyPath); strikeErr != nil {
+			return refuse(fmt.Errorf("tasks: opening the gate at %s: %w (and striking ponr: %w)", gatePath, err, strikeErr))
+		}
+		return refuse(fmt.Errorf("tasks: opening the gate at %s: %w", gatePath, err))
+	}
+	lock, err := gate.LockCopies(ctx, bare.Path())
+	if err != nil {
+		if strikeErr := strikeUnreachedRemovalSteps(dir, last, entry.CopyPath); strikeErr != nil {
+			return refuse(fmt.Errorf("tasks: waiting to remove the worktree at %s: %w (and striking ponr: %w)", entry.CopyPath, err, strikeErr))
+		}
+		return refuse(fmt.Errorf("tasks: waiting to remove the worktree at %s: %w", entry.CopyPath, err))
+	}
+	removeErr := bare.RemoveWorktree(ctx, entry.CopyPath)
+	// Release before finishDiscard, which takes the copies lock again.
+	_ = lock.Release()
+	if removeErr != nil {
+		begun, readErr := c.worktreeRemovalBegunAt(ctx, bare, entry.CopyPath)
+		if readErr != nil {
+			// Leave the journal and discard directory: the claim stays owed.
+			return fmt.Errorf("%w: after refusing to remove the worktree at %s: %w", ErrDiscardStateUnreadable, entry.CopyPath, readErr)
+		}
+		if !begun {
+			if strikeErr := strikeUnreachedRemovalSteps(dir, last, entry.CopyPath); strikeErr != nil {
+				return fmt.Errorf("tasks: removing the worktree at %s: %w (and striking ponr: %w)", entry.CopyPath, removeErr, strikeErr)
+			}
+			return refuse(fmt.Errorf("tasks: removing the worktree at %s: %w", entry.CopyPath, removeErr))
+		}
+		return c.finishDiscard(ctx, gatePath, dir, last)
+	}
+	return c.finishDiscard(ctx, gatePath, dir, last)
+}
+
+// worktreePONR reports whether j's ponr step is a run's worktree removal
+// (empty To), not a clone rename.
+func worktreePONR(j discardJournal) bool {
+	for _, s := range j.Steps {
+		if s.Kind == discardStepPONR {
+			return s.To == ""
+		}
+	}
+	return false
+}
+
+// worktreeRemovalBegun reports whether a run's worktree discard is past its
+// point of no return after git's non-force remove refused or stopped, on
+// PRD step 4's re-read: the path, the gate's worktree record, and the
+// step-3 tree. gatePath is required; a read failure is returned as err so
+// the claim stays owed.
+func (c *Cleaner) worktreeRemovalBegun(ctx context.Context, gatePath, copyPath string) (bool, error) {
+	if gatePath == "" {
+		return false, fmt.Errorf("tasks: reading a worktree discard's point of no return needs the gate path")
+	}
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+	if err != nil {
+		return false, err
+	}
+	return c.worktreeRemovalBegunAt(ctx, bare, copyPath)
+}
+
+// worktreeRemovalBegunAt is worktreeRemovalBegun with the gate already open.
+func (c *Cleaner) worktreeRemovalBegunAt(ctx context.Context, bare *vcs.Repository, copyPath string) (bool, error) {
+	info, err := os.Lstat(copyPath)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, err
+	case !info.IsDir():
+		// Path no longer a worktree directory: removal had begun.
+		return true, nil
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(copyPath))
+	if err != nil {
+		return false, err
+	}
+	worktree := filepath.Join(parent, filepath.Base(copyPath))
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		return false, err
+	}
+	hasRecord := false
+	for _, r := range records {
+		if r.Worktree == worktree {
+			hasRecord = true
+			break
+		}
+	}
+	if !hasRecord {
+		return true, nil
+	}
+	// Re-read the linked-worktree shape without copyRecord: that helper
+	// wraps gate/IO failures as ErrRecordNotTheCopys, which here must stay
+	// an owed claim (PRD step 4), not a force-finish.
+	dotGit := filepath.Join(copyPath, ".git")
+	gitInfo, err := os.Lstat(dotGit)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	case err != nil:
+		return false, err
+	case !gitInfo.Mode().IsRegular():
+		return true, nil
+	}
+	raw, err := os.ReadFile(dotGit)
+	if err != nil {
+		return false, err
+	}
+	pointer, ok := strings.CutPrefix(strings.TrimSuffix(string(raw), "\n"), "gitdir: ")
+	if !ok || pointer == "" || strings.ContainsAny(pointer, "\n\r\x00") {
+		return true, nil
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(copyPath, pointer)
+	}
+	var record string
+	for _, r := range records {
+		if r.Worktree == worktree {
+			record = r.Record
+			break
+		}
+	}
+	if filepath.Clean(pointer) != record {
+		return true, nil
+	}
+	copied, err := vcs.OpenWorktree(ctx, copyPath, c.git...)
+	if err != nil {
+		return false, err
+	}
+	inv, err := copied.Inventory(ctx)
+	if err != nil {
+		return false, err
+	}
+	if inv.Dirty || inv.Untracked {
+		// Tree no longer as step 3 left it: removal had begun.
+		return true, nil
+	}
+	return false, nil
+}
+
+// pathStands reports whether path names something that exists.
+func pathStands(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
 
 // pastPointOfNoReturn reports whether the discard is past its point of no
-// return from where the clone stands (PRD), not the journal alone: at the
-// journalled ponr target is past; a journalled finish is past even when
-// something stands at copyPath; at copyPath without finish is not; ponr
-// with neither path standing and no finish is ErrDiscardStateUnreadable.
+// return from where the copy stands (PRD), not the journal alone. A task
+// clone: at the journalled ponr target is past; a journalled finish is past
+// even when something stands at copyPath; at copyPath without finish is
+// not; ponr with neither path standing and no finish is
+// ErrDiscardStateUnreadable. A run's worktree (ponr with empty To):
+// finished or the path gone is past; the path still standing is not past
+// on the path alone — Discard also asks worktreeRemovalBegun for the gate
+// record and step-3 tree before treating a standing path as before PONR.
 func pastPointOfNoReturn(copyPath string, j discardJournal) (bool, error) {
 	var to string
+	ponr := false
 	finished := false
 	for _, s := range j.Steps {
 		switch s.Kind {
 		case discardStepPONR:
+			ponr = true
 			to = s.To
 		case discardStepFinish:
 			finished = true
 		}
 	}
-	if to == "" {
+	if !ponr {
 		return false, nil
+	}
+	if to == "" {
+		if finished {
+			return true, nil
+		}
+		_, fromErr := os.Lstat(copyPath)
+		switch {
+		case fromErr == nil:
+			return false, nil
+		case !errors.Is(fromErr, fs.ErrNotExist):
+			return false, fromErr
+		default:
+			return true, nil
+		}
 	}
 	_, toErr := os.Lstat(to)
 	switch {
@@ -247,19 +439,21 @@ func (c *Cleaner) discardClean(ctx context.Context, entry store.KeptWork, gatePa
 }
 
 // finishDiscard is step 5 past the point of no return: journal finish if
-// needed, delete the moved clone and the set-aside tree. The discard
+// needed, delete the moved clone or force-remove a worktree's remains and
+// any gate record of it, and clear the set-aside tree. The discard
 // directory itself stays for the outcome owner. Never putBack.
-func (c *Cleaner) finishDiscard(dir string, last *discardJournal) error {
+func (c *Cleaner) finishDiscard(ctx context.Context, gatePath, dir string, last *discardJournal) error {
 	if last == nil {
 		return fmt.Errorf("tasks: finishDiscard with no journal")
 	}
-	var movedTo string
+	var movedTo, from string
 	for _, s := range last.Steps {
 		if s.Kind == discardStepPONR {
 			movedTo = s.To
+			from = s.From
 		}
 	}
-	if movedTo == "" {
+	if from == "" && movedTo == "" {
 		return fmt.Errorf("tasks: finishDiscard with no ponr step in the journal")
 	}
 	if !journalHasStep(*last, discardStepFinish) {
@@ -267,12 +461,95 @@ func (c *Cleaner) finishDiscard(dir string, last *discardJournal) error {
 			return err
 		}
 	}
-	if err := os.RemoveAll(movedTo); err != nil {
-		return fmt.Errorf("tasks: removing the discarded clone at %s: %w", movedTo, err)
+	if movedTo != "" {
+		if err := os.RemoveAll(movedTo); err != nil {
+			return fmt.Errorf("tasks: removing the discarded clone at %s: %w", movedTo, err)
+		}
+	} else {
+		if err := c.finishWorktreeRemoval(ctx, gatePath, from); err != nil {
+			return err
+		}
 	}
 	paths := filepath.Join(dir, "paths")
 	if err := os.RemoveAll(paths); err != nil {
 		return fmt.Errorf("tasks: removing the discard's set-aside paths at %s: %w", paths, err)
+	}
+	return nil
+}
+
+// finishWorktreeRemoval is step 5 for a run's worktree: force-remove what
+// still stands at from, and clear any gate admin record of it (PRD step 5 /
+// decision 31). When the path is already gone, the record is pruned. When
+// force-remove fails while the record still stands, the path is left and
+// the error is returned so the claim stays owed — RemoveAll must not take
+// the path while the record would remain.
+func (c *Cleaner) finishWorktreeRemoval(ctx context.Context, gatePath, from string) error {
+	if gatePath == "" {
+		return fmt.Errorf("tasks: finishing a worktree discard at %s needs the gate path", from)
+	}
+	bare, err := vcs.OpenBare(ctx, gatePath, c.git...)
+	if err != nil {
+		return fmt.Errorf("tasks: opening the gate at %s to finish the worktree discard: %w", gatePath, err)
+	}
+	lock, err := gate.LockCopies(ctx, bare.Path())
+	if err != nil {
+		return fmt.Errorf("tasks: waiting to finish removing the worktree at %s: %w", from, err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	parent, err := filepath.EvalSymlinks(filepath.Dir(from))
+	if err != nil {
+		return fmt.Errorf("tasks: finishing the worktree discard at %s: reading its parent: %w", from, err)
+	}
+	worktree := filepath.Join(parent, filepath.Base(from))
+
+	if pathStands(from) {
+		if err := bare.RemoveWorktreeDiscardingChanges(ctx, from); err != nil {
+			// Only fall back to RemoveAll when the gate record is already
+			// gone: otherwise the path would vanish while the admin record
+			// still stood (PRD step 5 / decision 31).
+			records, recErr := bare.WorktreeRecords(ctx)
+			if recErr != nil {
+				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and reading gate records: %w)", from, err, recErr)
+			}
+			for _, r := range records {
+				if r.Worktree == worktree {
+					return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (gate record still stands at %s)", from, err, r.Record)
+				}
+			}
+			if rm := os.RemoveAll(from); rm != nil {
+				return fmt.Errorf("tasks: force-removing the worktree at %s past its point of no return: %w (and removing remains: %w)", from, err, rm)
+			}
+		}
+		return nil
+	}
+
+	// Path already gone: still clear an orphan gate record.
+	records, err := bare.WorktreeRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("tasks: reading gate records after the worktree at %s was removed: %w", from, err)
+	}
+	hasRecord := false
+	for _, r := range records {
+		if r.Worktree == worktree {
+			hasRecord = true
+			break
+		}
+	}
+	if !hasRecord {
+		return nil
+	}
+	if err := bare.PruneWorktrees(ctx); err != nil {
+		return fmt.Errorf("tasks: pruning the gate record for the removed worktree at %s: %w", from, err)
+	}
+	records, err = bare.WorktreeRecords(ctx)
+	if err != nil {
+		return fmt.Errorf("tasks: reading gate records after pruning the worktree at %s: %w", from, err)
+	}
+	for _, r := range records {
+		if r.Worktree == worktree {
+			return fmt.Errorf("tasks: gate record for the removed worktree at %s still stands at %s after prune", from, r.Record)
+		}
 	}
 	return nil
 }
