@@ -679,10 +679,11 @@ stays open.
 `assistant eject --confirm` is refused while the repository has an open
 kept-work entry, before the gate is touched, and the refusal names each
 entry's copy, whose it was and the commits it holds. The ways past it are
-an answer that closes the entry (land or carry on, below) or the work
-landing: once its commits are on the upstream branch or in the default
-branch, the next service start removes the copy on that proof and closes
-the entry. A task's clone or a run's worktree is removed on a confirmed discard.
+an answer that closes the entry (land, carry on, discard with `--confirm`,
+or remove-anyway with `--force`, below) or the work landing: once its
+commits are on the upstream branch or in the default branch, the next
+service start removes the copy on that proof and closes the entry. A
+task's clone or a run's worktree is removed on a confirmed discard.
 
 Eject is also refused, before the gate is touched, while a `kept-work` wake
 about one of the repository's entries is still unacknowledged, even once
@@ -829,8 +830,9 @@ confirmation is accepted only from a terminal, in the foreground: under
 first, with a line saying so, and the service decides that from the calling
 process itself, not from the command line. A terminal's foreground is not
 proof of a person, so a program you run there can give one. To let new tasks
-on the entry's branch go ahead, answer land, carry-on, or discard with
-`--confirm`, or commit or remove what is uncommitted, untracked or stashed,
+on the entry's branch go ahead, answer land, carry-on, discard with
+`--confirm`, or remove-anyway with `--force` when a discard preview refuses,
+or commit or remove what is uncommitted, untracked or stashed,
 and push its commits where one of the cleanup proofs above finds them. That
 proof reads only
 the commits the copy's HEAD and its branches, tags and stash reach, and
@@ -871,6 +873,29 @@ not established (the upstream could not be read when the copy was kept) is
 refused rather than shown a list that may be wrong; the next cleanup of the
 unchanged copy establishes it.
 
+Remove anyway, `--answer remove-anyway` with the same flags, is for a copy
+whose discard preview refuses: a layout this build cannot read for loss
+(shallow, partial, grafts, replace refs, symlinks, linked worktrees,
+reftable, sparse checkout, `core.worktree`, and the other unsupported
+layouts), an unverifiable copy, or a loss the upstream or default branch
+could not establish, each read afresh. Alone, when no claim and no discard
+set-aside stands on the copy, it shows why discard refuses, and nothing of
+the loss, and records nothing; that preview is open under `--json` and off
+a terminal. A standing land, carry-on, or discard claim on the entry, a
+claim on another open entry of the same copy, or a discard set-aside
+refuses the alone answer; a standing remove-anyway claim on the entry
+refuses the alone answer and names `--force` to finish it. With `--force`
+from a terminal's foreground, naming the same task or run, it releases the
+entry and every other open unclaimed entry of that copy, and keeps the
+copy; a standing remove-anyway claim on this entry is finished that way,
+not refused. The confirmation is refused when the discard preview reads
+the copy's loss, while a land, carry-on, or discard claim stands on the
+entry, while any claim stands on another open entry of the copy, while a
+discard set-aside stands, under `--json`, and from any process not in a
+terminal's foreground. A discard refused only at its removal puts the copy
+back and is shown and confirmed again; remove-anyway is refused for that
+copy in this build (assistant #880).
+
 A promotion of an investigation whose copy has a kept-work entry (its
 worker ended with its copy kept) answers that entry carry on itself, in the
 promotion's own write, since the promoted worker continues in that copy;
@@ -884,7 +909,9 @@ reports the copy refused.
 Nothing in the program discards a copy on its own. The preview is open to any
 caller that may answer kept work. A confirmation from a terminal's foreground
 removes a task's clone or a run's worktree when the digest still seals the
-copy (docs/prd.md, sections 6 and 9).
+copy; remove-anyway with `--force` releases every open unclaimed entry of
+that copy and keeps the copy when a discard preview refuses (docs/prd.md,
+sections 6 and 9).
 
 ## Resetting a coordinator's session
 
