@@ -61,6 +61,9 @@ func TestAFixerApplyHarvestsCompactionStatsIntoTheRecord(t *testing.T) {
 	if dir == "" {
 		t.Fatal("fixer opened no Jev config dir")
 	}
+	// Residual product gap: the fixer does not remove jevDir when dropped.
+	// The test must, or leak-check fails the package (CI).
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	line := `{"path":"jev","messagesBefore":8,"messagesAfter":5,"charsBefore":900,"charsAfter":300,"calls":2,"kept":1,"resultsDropped":1,"callsDropped":0,"pinned":6,"stateTokens":50,"stateStage":"fit","requests":1,"ms":9}` + "\n"
 	if err := os.WriteFile(filepath.Join(dir, "compaction-stats.jsonl"), []byte(line), 0o600); err != nil {
 		t.Fatal(err)
