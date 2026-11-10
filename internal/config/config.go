@@ -53,13 +53,15 @@ type Config struct {
 	// fresh regardless, per P4, which is the reviewing caller's rule and not
 	// enforced by this field.
 	SessionReuse bool
-	// JevCompaction asks long-running Claude Code workers and the durable
-	// fixer to compact with the pinned fast-jev-compaction plugin when the
-	// operator's environment holds TYPESAFE_API_KEY and the installed CLI
-	// supports function hooks. Off by default. Review sessions never use it
-	// (P4). A launch that cannot run the plugin falls back to Claude Code's
-	// own compaction and records which path ran; the run is never refused
-	// for this, because compaction is an optimization.
+	// JevCompaction is the global opt-in for the pinned fast-jev-compaction
+	// plugin. Off by default: every compaction that uses it sends
+	// conversation text to TypeSafe, so only the operator's own file may
+	// turn it on. The field is the opt-in alone; DecideJev and InstallJev
+	// are the mechanism that fall closed to Claude Code's own compaction
+	// and record which path ran. Which launches consult this field, and
+	// that review stays off it (P4), are the caller's rules and are not
+	// enforced here. docs/prd.md section 10 does not yet list this row;
+	// that gap is a finding for the owner, not closed here.
 	JevCompaction bool
 	// SupervisionBeaconInterval is how often the supervisor loop rewrites
 	// its liveness beacon. The staleness window and the first-beacon wait

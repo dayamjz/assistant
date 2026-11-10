@@ -63,35 +63,45 @@ func DecideJev(optIn bool, env []string, version string) CompactionDecision {
 }
 
 // InstallJev writes the path record into configDir and, for CompactionJev, the
-// plugin and settings.json. PluginArgs is nil or ["--plugin-dir", abs]. An
-// install I/O failure falls back to builtin with a reason and a nil error:
-// compaction never refuses a launch. configDir must already exist.
+// plugin and a function-hooks setting. PluginArgs is nil or ["--plugin-dir", abs].
+// An install I/O failure falls back to builtin with a reason and a nil error:
+// compaction never refuses a launch, and a CompactionJev Path is never returned
+// alongside an error. configDir must already exist.
 func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []string, error) {
-	if d.Path != CompactionJev {
-		return d, nil, writeCompactionDecision(configDir, d)
-	}
-	pluginDir := filepath.Join(configDir, filepath.FromSlash(jevPluginDirName))
 	fallback := func(reason string) (CompactionDecision, []string, error) {
 		out := CompactionDecision{Path: CompactionBuiltin, Reason: reason}
 		_ = writeCompactionDecision(configDir, out)
 		return out, nil, nil
 	}
+	if d.Path != CompactionJev {
+		if err := writeCompactionDecision(configDir, d); err != nil {
+			reason := d.Reason
+			if reason == "" {
+				reason = "record write failed: " + err.Error()
+			} else {
+				reason = reason + "; record write failed: " + err.Error()
+			}
+			return CompactionDecision{Path: CompactionBuiltin, Reason: reason}, nil, nil
+		}
+		return d, nil, nil
+	}
+	pluginDir := filepath.Join(configDir, filepath.FromSlash(jevPluginDirName))
+	removePlugin := func() { _ = os.RemoveAll(filepath.Join(configDir, "plugins")) }
 	if err := materializeJevPlugin(pluginDir); err != nil {
+		removePlugin()
 		return fallback("plugin install failed: " + err.Error())
 	}
 	if err := writeJevSettings(configDir); err != nil {
-		_ = os.RemoveAll(pluginDir)
+		removePlugin()
 		return fallback("settings install failed: " + err.Error())
 	}
 	if err := writeCompactionDecision(configDir, d); err != nil {
-		_ = os.RemoveAll(pluginDir)
-		_ = os.Remove(filepath.Join(configDir, "settings.json"))
-		return d, nil, err
+		removePlugin()
+		return fallback("record write failed: " + err.Error())
 	}
 	abs, err := filepath.Abs(pluginDir)
 	if err != nil {
-		_ = os.RemoveAll(pluginDir)
-		_ = os.Remove(filepath.Join(configDir, "settings.json"))
+		removePlugin()
 		return fallback("plugin path: " + err.Error())
 	}
 	return d, []string{"--plugin-dir", abs}, nil
@@ -121,20 +131,39 @@ func writeCompactionDecision(configDir string, d CompactionDecision) error {
 	return nil
 }
 
+// writeJevSettings merges the function-hooks env into settings.json, keeping
+// any other keys already present in the config dir.
 func writeJevSettings(configDir string) error {
-	raw, err := json.Marshal(map[string]any{"env": map[string]string{JevFunctionHooksEnv: "1"}})
+	path := filepath.Join(configDir, "settings.json")
+	settings := map[string]any{}
+	if raw, err := os.ReadFile(path); err == nil {
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			return fmt.Errorf("reading jev settings: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("reading jev settings: %w", err)
+	}
+	env, _ := settings["env"].(map[string]any)
+	if env == nil {
+		env = map[string]any{}
+	}
+	env[JevFunctionHooksEnv] = "1"
+	settings["env"] = env
+	raw, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("encoding jev settings: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "settings.json"), append(raw, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("writing jev settings: %w", err)
 	}
 	return nil
 }
 
+// materializeJevPlugin replaces dest with a fresh copy of the embedded plugin
+// so a partial tree or an older pin cannot survive under a new record.
 func materializeJevPlugin(dest string) error {
-	if _, err := os.Stat(filepath.Join(dest, "hooks", "fast-jev.ts")); err == nil {
-		return nil
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("clearing plugin directory: %w", err)
 	}
 	if err := os.MkdirAll(dest, 0o700); err != nil {
 		return fmt.Errorf("making plugin directory: %w", err)
