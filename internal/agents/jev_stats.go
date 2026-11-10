@@ -64,7 +64,7 @@ func HarvestCompactionStats(configDir string, after int64) ([]CompactionStats, i
 		}
 		return nil, after, fmt.Errorf("reading compaction stats: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
 		return nil, after, fmt.Errorf("stating compaction stats: %w", err)
