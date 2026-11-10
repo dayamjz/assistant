@@ -129,10 +129,12 @@ const HerdrRequiredVersion = herdrRequiredVersion
 func InterruptAfterWriteForTest(w Worker, f func(text string)) { w.(*procWorker).afterWrite = f }
 
 // SetSettingsWriteForTest replaces the settings.json writer InstallJev uses.
-// Pass nil to restore os.WriteFile.
-func SetSettingsWriteForTest(f func(path string, data []byte, perm os.FileMode) error) {
+// Pass nil to restore the production writer (0o600).
+func SetSettingsWriteForTest(f func(path string, data []byte) error) {
 	if f == nil {
-		settingsWrite = os.WriteFile
+		settingsWrite = func(path string, data []byte) error {
+			return os.WriteFile(path, data, 0o600)
+		}
 		return
 	}
 	settingsWrite = f

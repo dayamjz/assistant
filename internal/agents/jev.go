@@ -192,10 +192,12 @@ func readSettingsJSON(path string) (map[string]any, error) {
 	return settings, nil
 }
 
-// settingsWrite is os.WriteFile in production. Tests replace it to truncate
-// then fail so restoreSettings has a positive control.
-var settingsWrite = func(path string, data []byte, perm os.FileMode) error {
-	return os.WriteFile(path, data, perm)
+// settingsWrite writes settings.json at 0o600 in production. Tests replace
+// it to truncate then fail so restoreSettings has a positive control. The
+// mode stays a constant here: a mode handed through a parameter is what
+// internal/procgroup/guard treats as a program write.
+var settingsWrite = func(path string, data []byte) error {
+	return os.WriteFile(path, data, 0o600)
 }
 
 func writeSettingsJSON(path string, settings map[string]any) error {
@@ -203,7 +205,7 @@ func writeSettingsJSON(path string, settings map[string]any) error {
 	if err != nil {
 		return fmt.Errorf("encoding jev settings: %w", err)
 	}
-	if err := settingsWrite(path, append(raw, '\n'), 0o600); err != nil {
+	if err := settingsWrite(path, append(raw, '\n')); err != nil {
 		return fmt.Errorf("writing jev settings: %w", err)
 	}
 	return nil

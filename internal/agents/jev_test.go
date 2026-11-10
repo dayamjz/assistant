@@ -182,7 +182,7 @@ func TestInstallJevFallsClosedWhenSettingsWriteTruncates(t *testing.T) {
 	// Truncate then fail: the restore arm must put prior bytes back. A hook
 	// that only fails on open would leave the file untouched and make the
 	// restore assertion vacuous.
-	agents.SetSettingsWriteForTest(func(path string, data []byte, perm os.FileMode) error {
+	agents.SetSettingsWriteForTest(func(path string, data []byte) error {
 		if err := os.WriteFile(path, []byte("{truncated"), 0o600); err != nil {
 			return err
 		}
