@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -17,21 +18,38 @@ import (
 	"github.com/dayamjz/assistant/internal/service"
 )
 
-// PRD section 8's process model and P15 for git, end to end: with
-// git_deadline set to its floor in the operator's file, a status request
-// whose read of the working copy meets a git that never exits answers once
-// that deadline passes, not at the ten-minute default, and the git is ended
-// with its group. The request carries no deadline of its own, so the bound
-// that ends it is the one the service built its handle with.
+// The operator's git_deadline reaches the service that Open builds: with the
+// key set to its floor in the operator's file, cfg.GitDeadline is that floor
+// and not the ten-minute default. The hang that proves the bound ends a
+// wedged git cannot wait the floor in the suite; that is
+// TestTheOperatorsGitDeadlineEndsAGitThatNeverExits.
+func TestTheOperatorsGitDeadlineIsLoadedFromTheOperatorFile(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	h := newHome(t)
+	writeOperatorConfig(t, h.ConfigFile(), "git_deadline: "+config.MinGitDeadline.String()+"\n")
+	withService(t, h, func(running serviceUnderTest) {
+		if got := running.service.GitDeadline(); got != config.MinGitDeadline {
+			t.Errorf("GitDeadline = %v, want the operator's floor %v (default is %v)", got, config.MinGitDeadline, config.DefaultGitDeadline)
+		}
+	})
+}
+
+// PRD section 8's process model and P15 for git, end to end: with the
+// service's git_deadline set short of the ten-minute default (the product's
+// floor is one minute and cannot be waited here; WithGitDeadlineForTest sets
+// the same cfg field a loaded operator file would), a status request whose
+// read of the working copy meets a git that never exits answers once that
+// deadline passes, and the git is ended with its group. The request carries
+// no deadline of its own, so the bound that ends it is the one the service
+// built its handle with.
 func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 	principles.Cite(t, principles.P15)
-	const configured = time.Minute
+	const configured = 2 * time.Second
 	h := newHome(t)
-	writeOperatorConfig(t, h.ConfigFile(), "git_deadline: "+configured.String()+"\n")
 	marker := filepath.Join(t.TempDir(), "hang")
 	recorded := service.HangOnPathForTest(t, "git", marker)
 	working := t.TempDir()
-	withService(t, h, func(running serviceUnderTest) {
+	withServiceOptions(t, service.WithGitDeadlineForTest(options(t, h), configured), func(running serviceUnderTest) {
 		if err := os.WriteFile(marker, nil, 0o600); err != nil {
 			t.Fatalf("arming the stand-in: %v", err)
 		}
@@ -64,9 +82,10 @@ func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 }
 
 // The same bound reaches the git a gate's hook makes the service run: with
-// git_deadline set to its floor, an admission whose resolution of the gate's
-// working copy meets a git that never exits is refused once that deadline
-// passes, not at the ten-minute default, and the git is ended with its group.
+// the service's git_deadline set short of the ten-minute default (on
+// TestTheOperatorsGitDeadlineEndsAGitThatNeverExits' terms), an admission
+// whose resolution of the gate's working copy meets a git that never exits
+// is refused once that deadline passes, and the git is ended with its group.
 // The working copy is resolved through internal/gate, which opens it with the
 // options the service hands it; a gate that opened it with its own defaults
 // would leave a hook's push waiting on a bound the operator did not set. The
@@ -77,7 +96,7 @@ func TestTheOperatorsGitDeadlineEndsAGitThatNeverExits(t *testing.T) {
 func TestTheOperatorsGitDeadlineReachesTheGitAGateAdmissionRuns(t *testing.T) {
 	principles.Cite(t, principles.P15)
 	requiresIdentifiedPeer(t)
-	const configured = time.Minute
+	const configured = 2 * time.Second
 	h := newHome(t)
 	subject := newSubject(t)
 	recordRepository(t, h, subject)
@@ -91,10 +110,9 @@ func TestTheOperatorsGitDeadlineReachesTheGitAGateAdmissionRuns(t *testing.T) {
 		return binding.GateID
 	}()
 	head := git(t, subject, "rev-parse", "HEAD")
-	writeOperatorConfig(t, h.ConfigFile(), "git_deadline: "+configured.String()+"\n")
 	marker := filepath.Join(t.TempDir(), "hang")
 	recorded := service.HangOnPathForTest(t, "git", marker)
-	withService(t, h, func(running serviceUnderTest) {
+	withServiceOptions(t, service.WithGitDeadlineForTest(options(t, h), configured), func(running serviceUnderTest) {
 		if err := os.WriteFile(marker, nil, 0o600); err != nil {
 			t.Fatalf("arming the stand-in: %v", err)
 		}

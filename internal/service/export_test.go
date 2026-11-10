@@ -121,6 +121,32 @@ func WithCleanupAskSpacingForTest(o Options, d time.Duration) Options {
 	return o
 }
 
+// WithGitDeadlineForTest returns o with cfg.GitDeadline replaced by d after
+// the operator's file is resolved, for this package's external tests that
+// prove a wedged git ends at the service's bound without waiting the
+// product's one-minute floor.
+func WithGitDeadlineForTest(o Options, d time.Duration) Options {
+	o.gitDeadlineForTest = d
+	return o
+}
+
+// WithGHDeadlineForTest returns o with cfg.GHDeadline replaced by d after
+// the operator's file is resolved, for this package's external tests that
+// prove a wedged gh ends at the service's bound without waiting the
+// product's ten-second floor.
+func WithGHDeadlineForTest(o Options, d time.Duration) Options {
+	o.ghDeadlineForTest = d
+	return o
+}
+
+// GitDeadline is the git invocation deadline this service opened with, for
+// this package's external tests that check the operator's file reached it.
+func (s *Service) GitDeadline() time.Duration { return s.cfg.GitDeadline }
+
+// GHDeadline is the gh invocation deadline this service opened with, for
+// this package's external tests that check the operator's file reached it.
+func (s *Service) GHDeadline() time.Duration { return s.cfg.GHDeadline }
+
 // LandedCleanupAsks is landedAsks, the most times the cleanup decision is
 // asked for one landed task under one Dead terminal in a service's life, for
 // this package's external tests to count against.

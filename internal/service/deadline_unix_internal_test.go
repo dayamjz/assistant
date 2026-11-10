@@ -16,6 +16,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -132,18 +133,33 @@ func openWithOperatorFile(t *testing.T, document string) *Service {
 	return running
 }
 
+// The operator's gh_deadline reaches the service that Open builds: with the
+// key set to its floor in the operator's file, cfg.GHDeadline is that floor
+// and not the two-minute default. The hang that proves the bound ends a
+// wedged gh cannot wait the floor in the suite; that is
+// TestTheOperatorsGHDeadlineEndsAGHThatNeverExits.
+func TestTheOperatorsGHDeadlineIsLoadedFromTheOperatorFile(t *testing.T) {
+	principles.Cite(t, principles.P15)
+	running := openWithOperatorFile(t, "gh_deadline: "+config.MinGHDeadline.String()+"\n")
+	if got := running.cfg.GHDeadline; got != config.MinGHDeadline {
+		t.Errorf("GHDeadline = %v, want the operator's floor %v (default is %v)", got, config.MinGHDeadline, config.DefaultGHDeadline)
+	}
+}
+
 // PRD section 8's process model and P15 for gh, through the code host the
-// service builds: with gh_deadline set to its floor in the operator's file, a
+// service builds: with the service's gh_deadline set short of the two-minute
+// default (the product's floor is ten seconds and cannot be waited here;
+// ghDeadlineForTest sets the same cfg field a loaded operator file would), a
 // gh that never exits, read under a context with no deadline of its own, is
-// ended with its group at that deadline and not at the two-minute default.
-// The read is the one a run's checks stage and the merge read make, on the
-// host every run of the service opens its provider through.
+// ended with its group at that deadline. The read is the one a run's checks
+// stage and the merge read make, on the host every run of the service opens
+// its provider through.
 func TestTheOperatorsGHDeadlineEndsAGHThatNeverExits(t *testing.T) {
 	principles.Cite(t, principles.P15)
-	const configured = 10 * time.Second
+	const configured = 2 * time.Second
 	marker := filepath.Join(t.TempDir(), "hang")
 	recorded := hangOnPath(t, "gh", marker)
-	running := openWithOperatorFile(t, "gh_deadline: "+configured.String()+"\n")
+	running := openWithGHDeadlineForTest(t, configured)
 	provider, err := running.forge.Open("owner/name")
 	if err != nil {
 		t.Fatalf("opening a provider on the service's code host: %v", err)
@@ -178,4 +194,39 @@ func TestTheOperatorsGHDeadlineEndsAGHThatNeverExits(t *testing.T) {
 		t.Fatalf("the stand-in recorded %d waiting invocations, want the one read", len(pids))
 	}
 	requireEnded(t, pids)
+}
+
+// openWithGHDeadlineForTest opens a service over a fresh home with
+// cfg.GHDeadline replaced by d after the operator's file is resolved, for
+// the hang that proves the bound without waiting the product's floor.
+func openWithGHDeadlineForTest(t *testing.T, d time.Duration) *Service {
+	t.Helper()
+	root, err := standin.TempDir("h")
+	if err != nil {
+		t.Fatalf("making a home root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	h, err := home.Open(root)
+	if err != nil {
+		t.Fatalf("opening the home: %v", err)
+	}
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatalf("reading this build's identity: %v", err)
+	}
+	runner := standin.New(t, standin.Script{}).Runner()
+	running, err := Open(t.Context(), Options{
+		Home:              h,
+		NewStages:         func(stages.StageDeps) pipeline.Stages { return pipeline.ConstantStages("unused") },
+		NewFixer:          stages.Fix,
+		Build:             build,
+		Catalog:           agents.NewCatalog(fixedRunner{runner: runner}, cursorFactory{runner: runner}),
+		LockWait:          -1,
+		ghDeadlineForTest: d,
+	})
+	if err != nil {
+		t.Fatalf("opening the service: %v", err)
+	}
+	t.Cleanup(func() { _ = running.Close() })
+	return running
 }
