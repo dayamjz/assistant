@@ -15,7 +15,11 @@ import (
 )
 
 // KeptAnswer is one of PRD section 6's three answers to kept work. The set
-// is closed and the table's check holds it too.
+// is closed in this package: Recognized and every typed writer admit only
+// KeptAnswers. The table's CHECK may already admit a fourth value a later
+// migration will recognize; a row that carries it is unreadable through
+// KeptWorkEntry until then (ErrUnknownKeptAnswer), so the widen alone does
+// not claim the CHECK holds this set.
 type KeptAnswer string
 
 // The answers, in the PRD's order.
