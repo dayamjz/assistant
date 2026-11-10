@@ -205,7 +205,8 @@ type KeptWorkAnswered struct {
 	// Task is the task a carry on created, empty for every other effect.
 	Task string `json:"task,omitempty"`
 	// Loss is what a discard would lose, for a discard shown, and absent for
-	// every other effect: a remove-anyway shown reads none of the loss.
+	// every other effect: a discard that refuses returns no loss, so a
+	// remove-anyway shown has none to carry.
 	Loss *KeptWorkLoss `json:"loss,omitempty"`
 	// Refusal is why a discard refuses the copy, for a remove-anyway
 	// shown, and absent for every other effect.

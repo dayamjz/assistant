@@ -1420,8 +1420,9 @@ while its preview reads.
   can remove it is refused, naming the discard. It is refused while a claim stands on the copy,
   or while what a discard set aside stands beside it.
 - **Shown, then confirmed with `--force` and the task's name.** `--answer remove-anyway` alone
-  shows why a discard refuses. It shows nothing of the loss, since a discard that refuses has
-  read none of it; showing what of it can be read is a residual gap (#880). It removes nothing,
+  shows why a discard refuses. It shows nothing of the loss, since a discard that refuses
+  returns its refusal and no loss, even where it read the copy before refusing; showing what of
+  it can be read is a residual gap (#880). It removes nothing,
   releases nothing and records nothing. Repeating
   it with `--force` and the task's name typed out is admitted only as a discard's confirmation
   is, from a terminal's foreground. A name that does not match, or a copy that no longer reads
@@ -3779,8 +3780,8 @@ last column says. Section 14's decision rows record each decision once it is mad
 | Feature | Decision it waits on | What this build does |
 | --- | --- | --- |
 | [The fix ladder](#fix-ladder) | AGE-491, decision 30 | Not built. No fix round changes its session, effort or model by a rung, so section 5's bounds alone limit the rounds, and every `fix_ladder` key is refused as an unrecognized key. |
-| [Removing a discarded copy](#discard-removal) | AGE-486, decision 31 | Built for clone and worktree removal on confirmation, and for [remove anyway](#remove-anyway)'s preview: `--answer remove-anyway` shows the discard's refusal and records and releases nothing. <kbd>proposed</kbd> Remove anyway's `--force` confirmation remains. A discard refused at its removal records nothing for remove anyway to read, and the preview shows nothing of the loss (#880). |
-| [Remove anyway](#remove-anyway) | AGE-486, decision 31 | Not built. Decision 31 settled it as releasing the entry and keeping the copy, behind `--force` and the task's name, also for an unverifiable copy; a kept-work entry is answered land, carry-on or discard and nothing else until it ships. |
+| [Removing a discarded copy](#discard-removal) | AGE-486, decision 31 | Built for clone and worktree removal on confirmation. A discard refused at its removal records nothing on the entry once its claim is taken back (#880). <kbd>proposed</kbd> [Remove anyway](#remove-anyway)'s confirmation remains, as its own row says. |
+| [Remove anyway](#remove-anyway) | AGE-486, decision 31 | Its preview is built: `--answer remove-anyway` shows a discard's refusal and nothing of the loss (#880), and records and releases nothing; a discard that cannot read the loss names it. Its confirmation is not built. Decision 31 settled it as releasing the entry and keeping the copy, behind `--force` and the task's name, also for an unverifiable copy; until it ships no answer releases a kept-work entry while keeping the copy. |
 | [Housekeeping](#housekeeping) | AGE-484, decision 26 | Built and gated on the decision. `housekeeping.interval` defaults to zero, so no due check runs and no housekeeping wake or retirement hold is raised; a pass exists only where a coordinator creates one with the housekeeping mark, and the one-open-pass rule and the run's scope ask then hold as written. |
 | [Learning what converges](#round-records) | AGE-491, decision 30 | Not built. No round record or evaluation case is written, `evaluation.harvest` is refused as an unrecognized key, and the agent invocation record holds stage calls alone, never a worker's turns. |
 | [Work in small slices](#slices) | AGE-493, decision 32 | Not built. Nothing measures a change before its review or raises a split hold, a stack is not recorded, and every `slice_budget` key is refused as an unrecognized key. |

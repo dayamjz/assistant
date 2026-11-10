@@ -39,7 +39,7 @@ func TestARemoveAnywayPreviewShowsAShallowKeptCopysRefusal(t *testing.T) {
 			t.Fatalf("remove-anyway shown = %+v, %v; want remove-anyway-shown with the discard's refusal", shown, err)
 		}
 		if shown.Loss != nil {
-			t.Fatalf("shown loss = %+v; want none, since a discard that refuses reads none of it", shown.Loss)
+			t.Fatalf("shown loss = %+v; want none, since a discard that refuses returns no loss", shown.Loss)
 		}
 		if _, err := os.Stat(entry.CopyPath); err != nil {
 			t.Fatalf("the preview must keep the copy standing: %v", err)
