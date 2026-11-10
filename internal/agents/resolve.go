@@ -77,6 +77,7 @@ type CatalogOption func(*catalogSettings)
 
 type catalogSettings struct {
 	recorder Recorder
+	jev      func() bool
 }
 
 // WithCatalogRecorder gives every adapter DefaultCatalog builds r as its
@@ -85,6 +86,12 @@ type catalogSettings struct {
 // contract; this option only delivers it to all four adapters.
 func WithCatalogRecorder(r Recorder) CatalogOption {
 	return func(s *catalogSettings) { s.recorder = r }
+}
+
+// WithCatalogJevCompaction gives the Claude adapter DefaultCatalog builds the
+// Jev compaction opt-in lookup. Other adapters ignore it.
+func WithCatalogJevCompaction(enabled func() bool) CatalogOption {
+	return func(s *catalogSettings) { s.jev = enabled }
 }
 
 // DefaultCatalog returns the adapters this build ships, in the order "auto"
@@ -118,6 +125,9 @@ func DefaultCatalog(opts ...CatalogOption) *Catalog {
 		codex = append(codex, WithCodexRecorder(s.recorder))
 		openai = append(openai, WithOpenAIRecorder(s.recorder))
 		grok = append(grok, WithGrokRecorder(s.recorder))
+	}
+	if s.jev != nil {
+		claude = append(claude, WithJevCompaction(s.jev))
 	}
 	return NewCatalog(
 		ClaudeFactory(claude...),

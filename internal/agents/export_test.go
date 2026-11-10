@@ -2,6 +2,8 @@ package agents
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
 )
 
@@ -64,9 +66,10 @@ const ClaudeObservedVersion = claudeObservedVersion
 // test reads the adapter's own answer rather than restating how it is
 // composed.
 var (
-	ClaudeConfigFor = claudeConfigFor
-	ClaudeCacheFor  = claudeCacheFor
-	ClaudeHomeFor   = claudeHomeFor
+	ClaudeConfigFor      = claudeConfigFor
+	ClaudeCacheFor       = claudeCacheFor
+	ClaudeHomeFor        = claudeHomeFor
+	ClaudeVersionAtLeast = claudeVersionAtLeast
 )
 
 // AvailabilityMarker is one row of availabilityMarkers, exported so a test
@@ -125,3 +128,32 @@ const HerdrRequiredVersion = herdrRequiredVersion
 // before the send is told, so a test can put the process's end inside that
 // window. It is set between sends, never while one is in flight.
 func InterruptAfterWriteForTest(w Worker, f func(text string)) { w.(*procWorker).afterWrite = f }
+
+// SetSettingsWriteForTest replaces the settings.json writer InstallJev uses.
+// Pass nil to restore the production writer (0o600).
+func SetSettingsWriteForTest(f func(path string, data []byte) error) {
+	if f == nil {
+		settingsWrite = func(path string, data []byte) error {
+			return os.WriteFile(path, data, 0o600)
+		}
+		return
+	}
+	settingsWrite = f
+}
+
+// SetJevVersionForTest replaces the claude --version string DecideJev sees.
+// Pass "" to restore the live probe.
+func SetJevVersionForTest(version string) { jevVersionForTest = version }
+
+// AttachJevScratchForTest exposes attachJevScratch so a test can hold the
+// remap-only-when-Jev gate without starting a worker.
+func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDir string, pluginArgs []string, cleanup func()) {
+	switch v := r.(type) {
+	case *claudeRunner:
+		return v.attachJevScratch(workspace, env)
+	case *claudePipeDeclaringRunner:
+		return v.claudeRunner.attachJevScratch(workspace, env)
+	default:
+		panic(fmt.Sprintf("AttachJevScratchForTest: unexpected runner %T", r))
+	}
+}

@@ -488,9 +488,10 @@ func TestAConfirmedDiscardRemovesARunsWorktreePastItsPointOfNoReturn(t *testing.
 	}
 }
 
-// worktreeRemovalBegun is false while the path, gate record, and step-3
-// tree still stand; true once any of them is gone; and an unreadable
-// re-read is an error (PRD step 4; P6).
+// worktreeRemovalBegun is false while the path, gate record, and linked
+// worktree shape still stand (dirt included: that is put-back, not finish);
+// true once any of them is gone; and an unreadable re-read is an error
+// (PRD step 4; P6).
 func TestWorktreeRemovalBegunReadsPathGateRecordAndTree(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	s := newCleanupSubject(t, forgetest.Script{})
@@ -521,18 +522,15 @@ func TestWorktreeRemovalBegunReadsPathGateRecordAndTree(t *testing.T) {
 		t.Fatalf("intact worktree begun = %v, %v; want false, nil", begun, err)
 	}
 
-	// Dirty tree with path and record still standing: removal had begun.
+	// Dirty tree with path and record still standing: not past PONR (git
+	// refuses non-force remove for dirt; Discard must put back, §13).
 	writeFile(t, filepath.Join(copyPath, "dirt.txt"), "not as step 3 left it\n")
 	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
-	if err != nil || !begun {
-		t.Fatalf("dirty worktree begun = %v, %v; want true, nil", begun, err)
+	if err != nil || begun {
+		t.Fatalf("dirty worktree begun = %v, %v; want false, nil", begun, err)
 	}
 	if err := os.Remove(filepath.Join(copyPath, "dirt.txt")); err != nil {
 		t.Fatal(err)
-	}
-	begun, err = s.cleaner.worktreeRemovalBegun(ctx, gateRepo, copyPath)
-	if err != nil || begun {
-		t.Fatalf("after cleaning dirt begun = %v, %v; want false, nil", begun, err)
 	}
 
 	// Unreadable .git: claim stays owed (read failure, not begun).
