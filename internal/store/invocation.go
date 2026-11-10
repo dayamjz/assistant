@@ -88,6 +88,19 @@ type AgentInvocation struct {
 	// Stage is the name of the pipeline stage the invocation served, unknown
 	// when it served none or the row predates the column.
 	Stage Optional[string]
+	// CompactionPath is which compaction path the launch prepared (jev or
+	// builtin), unknown when the row predates the column or the call had no
+	// compaction report.
+	CompactionPath Optional[string]
+	// CompactionEvents is how many successful Jev compact stats lines the
+	// invocation harvested, unknown on the same terms as CompactionPath.
+	CompactionEvents Optional[int64]
+	// CompactionCharsBefore and CompactionCharsAfter sum the plugin's
+	// charsBefore/charsAfter over those events.
+	CompactionCharsBefore Optional[int64]
+	CompactionCharsAfter  Optional[int64]
+	// CompactionRequests sums the plugin's requests over those events.
+	CompactionRequests Optional[int64]
 }
 
 // AppendAgentInvocation appends one invocation to the history and returns the
@@ -121,13 +134,16 @@ func (s *Store) AppendAgentInvocation(ctx context.Context, inv AgentInvocation) 
 			INSERT INTO agent_invocation (
 				purpose, agent, model, session_use, started, duration_ns, failure,
 				input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-				run, stage, role, provider, model_type, version, effort, context_window)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				run, stage, role, provider, model_type, version, effort, context_window,
+				compaction_path, compaction_events, compaction_chars_before, compaction_chars_after, compaction_requests)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			inv.Purpose, inv.Agent, inv.Model, inv.SessionUse,
 			encodeTime(inv.Started), int64(inv.Duration), inv.Failure,
 			inv.InputTokens, inv.OutputTokens, inv.CacheReadTokens,
 			inv.CacheCreationTokens, inv.Turns, inv.Run, inv.Stage,
-			inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort, inv.ContextWindow)
+			inv.Role, inv.Provider, inv.Type, inv.Version, inv.Effort, inv.ContextWindow,
+			inv.CompactionPath, inv.CompactionEvents, inv.CompactionCharsBefore,
+			inv.CompactionCharsAfter, inv.CompactionRequests)
 		if err != nil {
 			return err
 		}
@@ -176,7 +192,8 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT seq, purpose, agent, model, session_use, started, duration_ns, failure,
 			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
-			run, stage, role, provider, model_type, version, effort, context_window
+			run, stage, role, provider, model_type, version, effort, context_window,
+			compaction_path, compaction_events, compaction_chars_before, compaction_chars_after, compaction_requests
 		FROM agent_invocation `+where+` ORDER BY seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading agent invocations: %w", err)
@@ -192,7 +209,9 @@ func (s *Store) agentInvocations(ctx context.Context, where string, args []any) 
 			&inv.SessionUse, &started, &durationNS, &inv.Failure,
 			&inv.InputTokens, &inv.OutputTokens, &inv.CacheReadTokens,
 			&inv.CacheCreationTokens, &inv.Turns, &inv.Run, &inv.Stage,
-			&inv.Role, &inv.Provider, &inv.Type, &inv.Version, &inv.Effort, &inv.ContextWindow); err != nil {
+			&inv.Role, &inv.Provider, &inv.Type, &inv.Version, &inv.Effort, &inv.ContextWindow,
+			&inv.CompactionPath, &inv.CompactionEvents, &inv.CompactionCharsBefore,
+			&inv.CompactionCharsAfter, &inv.CompactionRequests); err != nil {
 			return nil, fmt.Errorf("store: reading agent invocations: %w", err)
 		}
 		if inv.Started, err = decodeTime(started); err != nil {

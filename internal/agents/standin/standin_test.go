@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -275,7 +276,7 @@ func TestAdapterReadsBackEveryStatedField(t *testing.T) {
 	if result.Record.Usage != usage {
 		t.Errorf("recorded usage is %+v, want %+v", result.Record.Usage, usage)
 	}
-	if len(spy.records) != 1 || spy.records[0] != result.Record {
+	if len(spy.records) != 1 || !reflect.DeepEqual(spy.records[0], result.Record) {
 		t.Errorf("the recorder was given %v, want the one record this invocation produced", spy.records)
 	}
 	// The session the envelope states reaches the adapter too, and a Fixer is

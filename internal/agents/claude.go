@@ -257,7 +257,7 @@ func (r *claudeRunner) Run(ctx context.Context, purpose Purpose, inv Invocation)
 	if !purpose.Recognized() {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnrecognizedPurpose, string(purpose))
 	}
-	res, _, err := r.invoke(ctx, purpose, inv, session{}, "")
+	res, _, err := r.invoke(ctx, purpose, inv, session{}, "", nil)
 	return res, err
 }
 
@@ -302,6 +302,9 @@ type claudeFixer struct {
 	// jevDir is the scratch CLAUDE_CONFIG_DIR across fixer rounds. Residual
 	// gap: not removed when the fixer is dropped.
 	jevDir string
+	// jevStatsAt is the byte offset into compaction-stats.jsonl already
+	// harvested into a prior round's Record.Compaction.
+	jevStatsAt int64
 }
 
 // Apply runs one fix round in this session, opening it on the first round and
@@ -314,7 +317,7 @@ func (f *claudeFixer) Apply(ctx context.Context, inv Invocation) (Result, error)
 	if f.jevDir == "" {
 		f.jevDir = f.runner.openFixerJevDir(inv.Dir, environment(f.runner.settings.base, inv.Env))
 	}
-	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true}, f.jevDir)
+	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true}, f.jevDir, &f.jevStatsAt)
 	if reference != "" {
 		f.reference = reference
 	}
@@ -386,7 +389,7 @@ func (s session) use() SessionUse {
 // it, so the Fixer can carry it to the next round. That happens whatever the
 // invocation then produced: one place decides what a round did with its
 // session, and both the record and the Fixer read that one decision.
-func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session, jevDir string) (Result, string, error) {
+func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session, jevDir string, jevStatsAt *int64) (Result, string, error) {
 	// A session-carrying invocation is the memory P4 keeps a review out of, so
 	// it is put to ValidateForFixer, which is Validate plus the refusal of a
 	// review shape there.
@@ -467,6 +470,9 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		started: inv.Started,
 	})
 	r.sweep(ctx, inv.Dir)
+	if jevDir != "" {
+		record.Compaction = compactionReportFor(jevDir, jevStatsAt)
+	}
 
 	// The envelope is read before anything is classified, so an agent that
 	// reported what it spent has that recorded whichever way the invocation

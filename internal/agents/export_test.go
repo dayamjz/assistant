@@ -157,3 +157,13 @@ func AttachJevScratchForTest(r Runner, workspace string, env []string) (configDi
 		panic(fmt.Sprintf("AttachJevScratchForTest: unexpected runner %T", r))
 	}
 }
+
+// FixerJevDirForTest returns the scratch CLAUDE_CONFIG_DIR a Claude fixer
+// opened for Jev, empty until the first Apply that selected the plugin.
+func FixerJevDirForTest(f Fixer) string {
+	cf, ok := f.(*claudeFixer)
+	if !ok {
+		return ""
+	}
+	return cf.jevDir
+}

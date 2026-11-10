@@ -212,3 +212,47 @@ func TestRunsUsageRefusesWhatItCannotRead(t *testing.T) {
 		t.Fatalf("assistant runs --usage=90m exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 }
+
+// Compaction stats on an invocation row are totals in runs --usage (link c of #719).
+func TestRunsUsageTotalsCompactionStats(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+	records := openStore(t, h)
+	t.Cleanup(func() { _ = records.Close() })
+	now := time.Now().UTC()
+	if _, err := records.AppendAgentInvocation(t.Context(), store.AgentInvocation{
+		Purpose: "fix", Agent: "claude", SessionUse: "opened", Started: now.Add(-time.Hour),
+		Duration: time.Second, Run: store.Known("compact-run"), Stage: store.Known("review"),
+		CompactionPath: store.Known("jev"), CompactionEvents: store.Known[int64](1),
+		CompactionCharsBefore: store.Known[int64](2000), CompactionCharsAfter: store.Known[int64](800),
+		CompactionRequests: store.Known[int64](1),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got := run(t, h, subject, "--json", "runs", "--usage=1d")
+	if got.code != machine.ExitOK {
+		t.Fatalf("runs --usage exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	var usage machine.Usage
+	if err := json.Unmarshal([]byte(got.stdout), &usage); err != nil {
+		t.Fatalf("decode: %v\n%s", err, got.stdout)
+	}
+	if n, ok := usage.Total.CompactionCharsBefore.Total.Get(); !ok || n != 2000 {
+		t.Fatalf("chars before %+v, want 2000 recorded through runs --usage", usage.Total.CompactionCharsBefore)
+	}
+	if n, ok := usage.Total.CompactionCharsAfter.Total.Get(); !ok || n != 800 {
+		t.Fatalf("chars after %+v, want 800", usage.Total.CompactionCharsAfter)
+	}
+	if !strings.Contains(got.stdout, `"jev-compaction-stats"`) {
+		t.Fatalf("Covers missing jev-compaction-stats:\n%s", got.stdout)
+	}
+	human := run(t, h, subject, "runs", "--usage=1d")
+	if human.code != machine.ExitOK {
+		t.Fatalf("human runs --usage exited %s:\n%s%s", human.code, human.stdout, human.stderr)
+	}
+	if !strings.Contains(human.stdout, "jev compaction events") || !strings.Contains(human.stdout, "2000") {
+		t.Fatalf("human usage omitted compaction totals:\n%s", human.stdout)
+	}
+}
