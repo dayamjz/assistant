@@ -256,6 +256,22 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+/** Appends result.stats as one JSONL line; never throws to the compact path. */
+async function appendCompactionStats(
+  configDir: string | undefined,
+  result: CompactResult,
+): Promise<void> {
+  if (!configDir) return;
+  try {
+    const { appendFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const event = { path: 'jev', ...result.stats };
+    await appendFile(join(configDir, 'compaction-stats.jsonl'), `${JSON.stringify(event)}\n`);
+  } catch {
+    // Leave the compact result alone; the Go side treats a missing log as none.
+  }
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
@@ -275,6 +291,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
         );
         return next(event);
       }
+      // Best-effort path record for assistant: one JSON line per successful
+      // Jev compact under CLAUDE_CONFIG_DIR/compaction-stats.jsonl. A write
+      // failure must not refuse the compact (compaction is an optimization).
+      await appendCompactionStats(await $.env.get('CLAUDE_CONFIG_DIR'), result);
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,

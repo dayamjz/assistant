@@ -15,7 +15,7 @@ import (
 const JevKeyVariable = "TYPESAFE_API_KEY"
 
 // JevPluginVersion pins the embedded plugin (jevmod/.claude-plugin/plugin.json).
-const JevPluginVersion = "0.3.0"
+const JevPluginVersion = "0.3.1"
 
 // JevMinClaudeVersion is the Claude Code release that added function hooks.
 const JevMinClaudeVersion = "2.1.274"
