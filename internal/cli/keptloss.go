@@ -55,6 +55,11 @@ func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 		if a.Loss != nil {
 			writeln(w, "Incomplete: what of the loss could be read follows; what could not is named in the refusal.")
 			for _, line := range keptLossLines(*a.Loss) {
+				// A remove-anyway partial has no discard digest; omit the
+				// empty Digest: line so Incomplete does not invent one.
+				if a.Loss.Digest == "" && strings.HasPrefix(line, keptLostDigestLabel) {
+					continue
+				}
 				writeln(w, line)
 			}
 		}

@@ -82,3 +82,29 @@ func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 		}
 	})
 }
+
+// A copy that cannot be verified is offered for remove-anyway (decision 31 /
+// section 13), with the refusal alone and no Incomplete loss list.
+func TestARemoveAnywayIsOfferedForAnUnverifiableCopy(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P15)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	old, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+	if err := os.RemoveAll(entry.CopyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	withService(t, h, func(under serviceUnderTest) {
+		var shown machine.KeptWorkAnswered
+		if err := under.client.Call(t.Context(), ipc.MethodKeptWorkAnswer, machine.KeptWorkAnswerRequest{
+			Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway),
+		}, &shown); err != nil || shown.Effect != machine.KeptWorkRemoveAnywayShown || shown.Refusal == "" || shown.Loss != nil {
+			t.Fatalf("remove-anyway of a gone copy = %+v, %v; want shown with a refusal and no loss list", shown, err)
+		}
+	})
+}

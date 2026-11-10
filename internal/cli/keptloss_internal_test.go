@@ -14,7 +14,9 @@ import (
 // keptLossLines' order with the digest last; a loss naming nothing reads
 // out the row saying so before the digest, so the row's "listed below" is
 // never followed by nothing; a file of a kind no label names is still
-// printed, under its kind; and every other answer prints its row alone.
+// printed, under its kind; a remove-anyway shown prints the refusal and
+// Incomplete holds without an empty Digest line; and every other answer
+// prints its row alone.
 func TestADiscardShownReadsOutExactlyWhatWouldBeLost(t *testing.T) {
 	t.Parallel()
 	shown := machine.KeptWorkAnswered{Effect: machine.KeptWorkDiscardShown, Loss: &machine.KeptWorkLoss{
@@ -36,6 +38,21 @@ func TestADiscardShownReadsOutExactlyWhatWouldBeLost(t *testing.T) {
 			[]string{row, machine.PhraseKeptWorkLosesNothing.String(), "Digest: ffffffffffff"}},
 		{"a landing", machine.KeptWorkAnswered{Effect: machine.KeptWorkLanded, Run: "r"},
 			[]string{machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkLanded}).String()}},
+		{"remove-anyway incomplete without a digest", machine.KeptWorkAnswered{
+			Effect: machine.KeptWorkRemoveAnywayShown, Refusal: "discard refused: shallow",
+			Loss: &machine.KeptWorkLoss{Lacks: []string{"c1", "c2"}},
+		}, []string{
+			machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkRemoveAnywayShown}).String(),
+			"Refusal: discard refused: shallow",
+			"Incomplete: what of the loss could be read follows; what could not is named in the refusal.",
+			"Commit: c1", "Commit: c2",
+		}},
+		{"remove-anyway refusal alone", machine.KeptWorkAnswered{
+			Effect: machine.KeptWorkRemoveAnywayShown, Refusal: "discard refused: copy gone",
+		}, []string{
+			machine.KeptWorkAnsweredPhrase(machine.KeptWorkAnswered{Effect: machine.KeptWorkRemoveAnywayShown}).String(),
+			"Refusal: discard refused: copy gone",
+		}},
 	} {
 		var out bytes.Buffer
 		if err := readOut(&out, tc.answer); err != nil {
