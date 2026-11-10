@@ -4,21 +4,22 @@ package service_test
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // A discard's confirmation is admitted by the service only from a peer in
 // the foreground of its controlling terminal. The preview is served to a
 // peer with no terminal. A confirmation from that peer is refused with
-// not-at-terminal. A run's worktree confirmation from a terminal's
-// foreground still meets the worktree deferral (Discard of a worktree is
-// not yet implemented).
+// not-at-terminal. A confirmation from a terminal's foreground removes a
+// run's worktree.
 func TestADiscardIsConfirmedOnlyFromATerminalsForeground(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -51,20 +52,16 @@ func TestADiscardIsConfirmedOnlyFromATerminalsForeground(t *testing.T) {
 			t.Fatalf("the refused confirmation changed the copy:\n%s\nwant\n%s", now, copyBefore)
 		}
 
-		_, code = callAtTerminal(t, under, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest))
-		if code != ipc.CodeRefused {
-			t.Fatalf("a confirmation from the foreground of a terminal answered %q, want it refused as deferred (%q)", code, ipc.CodeRefused)
-		}
 		var out machine.KeptWorkAnswered
 		err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, discardRequest(entry, shown.Loss.Digest), &out)
-		if err == nil || !strings.Contains(err.Error(), machine.PhraseDiscardRemovalDeferred.String()) {
-			t.Fatalf("a confirmation from the test's own terminal = %v; want the deferred row", err)
+		if err != nil || out.Effect != machine.KeptWorkDiscarded || out.Entry.Answer.Or("") != store.KeptDiscard {
+			t.Fatalf("a confirmation from the test's own terminal = %+v, %v; want the worktree discarded", out, err)
 		}
-		if _, err := os.Stat(entry.CopyPath); err != nil {
-			t.Fatalf("a refused confirmation removed the copy: %v", err)
+		if _, err := os.Stat(entry.CopyPath); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("a confirmed discard left the worktree standing: %v", err)
 		}
-		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() {
-			t.Fatalf("after the refused confirmations the entry reads %+v, %v; want it open", still, err)
+		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Answer.Or("") != store.KeptDiscard {
+			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered discard", still, err)
 		}
 	})
 }
