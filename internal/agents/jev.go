@@ -92,15 +92,28 @@ func InstallJev(configDir string, d CompactionDecision) (CompactionDecision, []s
 		undoPlugin()
 		return fallback("plugin install failed: " + err.Error())
 	}
+	settingsPath := filepath.Join(configDir, "settings.json")
+	priorSettings, priorErr := os.ReadFile(settingsPath)
+	hadSettings := priorErr == nil
+	if priorErr != nil && !os.IsNotExist(priorErr) {
+		undoPlugin()
+		return fallback("settings read failed: " + priorErr.Error())
+	}
 	if err := writeJevSettings(configDir); err != nil {
 		undoPlugin()
 		return fallback("settings install failed: " + err.Error())
 	}
-	// After settings are merged, a later failure must drop both the plugin and
-	// the function-hooks env key so Path=builtin is not paired with hooks on.
+	// After settings are merged, a later failure restores the prior settings
+	// bytes (or removes the file we created) and drops only this plugin, so
+	// Path=builtin is not paired with hooks we added and a pre-existing hooks
+	// key is kept as it was.
 	undo := func() {
 		undoPlugin()
-		clearJevFunctionHooks(configDir)
+		if hadSettings {
+			_ = os.WriteFile(settingsPath, priorSettings, 0o600)
+		} else {
+			_ = os.Remove(settingsPath)
+		}
 	}
 	if err := writeCompactionDecision(configDir, d); err != nil {
 		undo()
@@ -153,31 +166,6 @@ func writeJevSettings(configDir string) error {
 	env[JevFunctionHooksEnv] = "1"
 	settings["env"] = env
 	return writeSettingsJSON(path, settings)
-}
-
-// clearJevFunctionHooks removes the function-hooks env key InstallJev added,
-// leaving every other settings entry in place. Best-effort on a fall-closed path.
-func clearJevFunctionHooks(configDir string) {
-	path := filepath.Join(configDir, "settings.json")
-	settings, err := readSettingsJSON(path)
-	if err != nil {
-		return
-	}
-	env, _ := settings["env"].(map[string]any)
-	if env == nil {
-		return
-	}
-	delete(env, JevFunctionHooksEnv)
-	if len(env) == 0 {
-		delete(settings, "env")
-	} else {
-		settings["env"] = env
-	}
-	if len(settings) == 0 {
-		_ = os.Remove(path)
-		return
-	}
-	_ = writeSettingsJSON(path, settings)
 }
 
 func readSettingsJSON(path string) (map[string]any, error) {
