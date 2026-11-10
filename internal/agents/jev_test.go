@@ -174,6 +174,17 @@ func TestInstallJevMergesSettings(t *testing.T) {
 
 func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
 	dir := t.TempDir()
+	prior := []byte(`{"env":{"KEEP_ME":"1"},"other":true}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(dir, "plugins", "other-plugin", "marker")
+	if err := os.MkdirAll(filepath.Dir(sibling), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Mkdir(filepath.Join(dir, "compaction.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +199,29 @@ func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
 	if !strings.Contains(got.Reason, "record write failed") {
 		t.Fatalf("reason %q, want record write failed", got.Reason)
 	}
-	if got.Path == agents.CompactionJev {
-		t.Fatal("returned Path=jev after a failed record write")
+	if _, err := os.Stat(filepath.Join(dir, "plugins", "fast-jev-compaction")); !os.IsNotExist(err) {
+		t.Fatalf("jev plugin tree left after record failure: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "plugins")); !os.IsNotExist(err) {
-		t.Fatalf("plugin tree left after record failure: %v", err)
+	if raw, err := os.ReadFile(sibling); err != nil || string(raw) != "keep" {
+		t.Fatalf("sibling plugin marker = %q err %v, want keep", raw, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("settings.json: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["other"] != true {
+		t.Fatalf("settings = %#v, want other kept", settings)
+	}
+	env, _ := settings["env"].(map[string]any)
+	if _, on := env[agents.JevFunctionHooksEnv]; on {
+		t.Fatalf("env = %#v, want %s cleared on fall-closed", env, agents.JevFunctionHooksEnv)
+	}
+	if env["KEEP_ME"] != "1" {
+		t.Fatalf("env = %#v, want KEEP_ME kept", env)
 	}
 }
 
