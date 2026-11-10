@@ -58,7 +58,7 @@ func (s *Service) removeAnywayKeptWork(ctx context.Context, req ipc.Request, ent
 
 // showRemoveAnyway reports why a discard refuses, recording nothing.
 func (s *Service) showRemoveAnyway(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
-	if err := s.refuseRemoveAnywayWhileBusy(entry); err != nil {
+	if err := s.refuseRemoveAnywayWhileBusy(ctx, entry); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
 	refusal, err := s.removeAnywayProbe(ctx, entry)
@@ -71,7 +71,7 @@ func (s *Service) showRemoveAnyway(ctx context.Context, entry store.KeptWork) (m
 // confirmRemoveAnyway claims and releases the entry on a Force
 // confirmation, keeping the copy.
 func (s *Service) confirmRemoveAnyway(ctx context.Context, req ipc.Request, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
-	if err := s.refuseRemoveAnywayWhileBusy(entry); err != nil {
+	if err := s.refuseRemoveAnywayWhileBusy(ctx, entry); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
 	refusal, err := s.removeAnywayProbe(ctx, entry)
@@ -130,8 +130,12 @@ func (s *Service) completeRemoveAnyway(ctx context.Context, entry store.KeptWork
 // finishRemoveAnywayClaim records the release and redispatches. The copy
 // is not touched.
 func (s *Service) finishRemoveAnywayClaim(ctx context.Context, entry store.KeptWork, verified []int64) (machine.KeptWorkAnswered, error) {
-	// Re-probe: a refusal that no longer holds takes the claim back.
+	// Re-probe: only a refusal that no longer holds takes the claim back;
+	// any other failure leaves it owed.
 	if _, err := s.removeAnywayProbe(ctx, entry); err != nil {
+		if !errors.Is(err, ipc.ErrRefused) {
+			return machine.KeptWorkAnswered{}, err
+		}
 		if _, werr := s.store.WithdrawKeptWorkRemoveAnyway(ctx, entry.ID); werr != nil && !errors.Is(werr, store.ErrKeptWorkNotRemoveAnyway) {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("%w (and withdrawing the claim: %w)", err, werr)
 		}
@@ -160,10 +164,10 @@ func (s *Service) completeRemoveAnywaysAtOpen(ctx context.Context) {
 	}
 }
 
-// refuseRemoveAnywayWhileBusy refuses while any claim or a discard
-// set-aside stands on the copy (PRD section 6). A standing remove-anyway
-// claim is completed on Force, not refused here.
-func (s *Service) refuseRemoveAnywayWhileBusy(entry store.KeptWork) error {
+// refuseRemoveAnywayWhileBusy refuses while a land, carry-on or discard
+// claim stands on the entry, any claim on another open entry of its copy,
+// or a discard set-aside beside the copy (PRD section 6).
+func (s *Service) refuseRemoveAnywayWhileBusy(ctx context.Context, entry store.KeptWork) error {
 	switch {
 	case entry.LandingClaimed():
 		return fmt.Errorf("%w: kept work entry %d was not released: a land claim stands on it",
@@ -174,6 +178,16 @@ func (s *Service) refuseRemoveAnywayWhileBusy(entry store.KeptWork) error {
 	case entry.DiscardClaimed():
 		return fmt.Errorf("%w: kept work entry %d was not released: a discard claim stands on it; finish or withdraw that discard first",
 			ipc.ErrRefused, entry.ID)
+	}
+	ofCopy, err := s.store.OpenKeptWorkOfCopy(ctx, entry.CopyPath)
+	if err != nil {
+		return err
+	}
+	for _, k := range ofCopy {
+		if k.ID != entry.ID && (k.LandingClaimed() || k.CarryOnClaimed() || k.DiscardClaimed() || k.RemoveAnywayClaimed()) {
+			return fmt.Errorf("%w: kept work entry %d was not released: a claim stands on kept work entry %d of its copy",
+				ipc.ErrRefused, entry.ID, k.ID)
+		}
 	}
 	if discardDirectoryStands(s, entry.CopyPath) {
 		return fmt.Errorf("%w: kept work entry %d was not released: a discard set aside still stands beside the copy",

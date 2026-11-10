@@ -37,8 +37,8 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 		request := machine.KeptWorkAnswerRequest{Task: old, Hold: entry.Key(), Answer: string(store.KeptRemoveAnyway)}
 		var shown machine.KeptWorkAnswered
 		if err := under.client.Call(ctx, ipc.MethodKeptWorkAnswer, request, &shown); err != nil ||
-			shown.Effect != machine.KeptWorkRemoveAnywayShown || shown.Refusal == "" {
-			t.Fatalf("remove-anyway shown = %+v, %v; want remove-anyway-shown with a refusal", shown, err)
+			shown.Effect != machine.KeptWorkRemoveAnywayShown || !strings.HasPrefix(shown.Refusal, "discard refused: ") {
+			t.Fatalf("remove-anyway shown = %+v, %v; want remove-anyway-shown with the discard's refusal", shown, err)
 		}
 		if shown.Loss != nil {
 			t.Fatalf("shown loss = %+v; want none, since a discard that refuses returns no loss", shown.Loss)

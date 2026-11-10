@@ -33,8 +33,8 @@ place of `--task` for a run's copy.
   (shallow, partial or unverifiable), read afresh each time. Alone it shows
   why discard refuses, and nothing of the loss, and records nothing. With
   `--force` from a terminal's foreground, naming the same task or run, it
-  releases the entry and keeps the copy. It is refused when a discard can
-  remove the copy, while a claim or a discard set-aside stands, under
+  releases the entry and keeps the copy. It is refused when the discard
+  preview reads the copy, while a claim or a discard set-aside stands, under
   `--json`, and from any process not in a terminal's foreground; never try
   to give the confirmation yourself. A discard refused at its removal puts
   the copy back and is shown and confirmed again; remove-anyway is refused
@@ -42,7 +42,7 @@ place of `--task` for a run's copy.
 
 To let the new tasks on the entry's branch go ahead, tell the person their answers are
 land, carry-on, discard with `--confirm`, or remove-anyway with `--force` when
-a discard refuses, or committing or removing its uncommitted work and pushing
+a discard preview refuses, or committing or removing its uncommitted work and pushing
 its commits, after which the program removes the copy on that proof when it
 next looks at it, which is not immediate, and with it, unchecked, files git
 ignores, commits only a reflog reaches and the copy's hooks, which the discard
