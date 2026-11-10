@@ -190,8 +190,8 @@ const (
 	// KeptWorkDiscarded is a discard given with Confirm: the copy was
 	// removed and the entry answered discard.
 	KeptWorkDiscarded KeptWorkEffect = "discarded"
-	// KeptWorkRemoveAnywayShown is a remove-anyway given without Force:
-	// why a discard refuses, with nothing recorded or released.
+	// KeptWorkRemoveAnywayShown is remove-anyway's preview: why a discard
+	// refuses, with nothing recorded or released.
 	KeptWorkRemoveAnywayShown KeptWorkEffect = "remove-anyway-shown"
 	// KeptWorkRemovedAnyway is a remove-anyway given with Force: the
 	// entry was released and the copy left standing.

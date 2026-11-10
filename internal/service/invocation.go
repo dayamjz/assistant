@@ -49,27 +49,33 @@ func (r invocationRecorder) RecordInvocation(rec agents.Record) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	path, events, before, after, requests := compactionColumns(rec.Compaction)
 	_, err := st.AppendAgentInvocation(ctx, store.AgentInvocation{
-		Purpose:             string(rec.Purpose),
-		Agent:               rec.Agent,
-		Model:               rec.Model,
-		SessionUse:          string(rec.Session),
-		Started:             rec.Started,
-		Duration:            rec.Duration,
-		Failure:             string(rec.Failure),
-		InputTokens:         optionalCount(rec.Usage.InputTokens),
-		OutputTokens:        optionalCount(rec.Usage.OutputTokens),
-		CacheReadTokens:     optionalCount(rec.Usage.CacheReadTokens),
-		CacheCreationTokens: optionalCount(rec.Usage.CacheCreationTokens),
-		Turns:               optionalCount(rec.Usage.Turns),
-		Run:                 optionalName(rec.Served.Run),
-		Stage:               optionalName(rec.Served.Stage),
-		Role:                store.Known(rec.Role),
-		Provider:            store.Known(rec.Provider),
-		Type:                store.Known(rec.Type),
-		Version:             store.Known(rec.Version),
-		Effort:              store.Known(rec.Effort),
-		ContextWindow:       store.Known(rec.ContextWindow),
+		Purpose:               string(rec.Purpose),
+		Agent:                 rec.Agent,
+		Model:                 rec.Model,
+		SessionUse:            string(rec.Session),
+		Started:               rec.Started,
+		Duration:              rec.Duration,
+		Failure:               string(rec.Failure),
+		InputTokens:           optionalCount(rec.Usage.InputTokens),
+		OutputTokens:          optionalCount(rec.Usage.OutputTokens),
+		CacheReadTokens:       optionalCount(rec.Usage.CacheReadTokens),
+		CacheCreationTokens:   optionalCount(rec.Usage.CacheCreationTokens),
+		Turns:                 optionalCount(rec.Usage.Turns),
+		Run:                   optionalName(rec.Served.Run),
+		Stage:                 optionalName(rec.Served.Stage),
+		Role:                  store.Known(rec.Role),
+		Provider:              store.Known(rec.Provider),
+		Type:                  store.Known(rec.Type),
+		Version:               store.Known(rec.Version),
+		Effort:                store.Known(rec.Effort),
+		ContextWindow:         store.Known(rec.ContextWindow),
+		CompactionPath:        path,
+		CompactionEvents:      events,
+		CompactionCharsBefore: before,
+		CompactionCharsAfter:  after,
+		CompactionRequests:    requests,
 	})
 	if err != nil && r.s.log != nil {
 		r.s.log.Printf("dropping an agent invocation record: %v", err)
@@ -96,4 +102,21 @@ func optionalName(name string) store.Optional[string] {
 		return store.Unknown[string]()
 	}
 	return store.Known(name)
+}
+
+// compactionColumns carries Record.Compaction into the store columns. An
+// empty report stays unknown (row as before the column). A prepared path
+// with no events is known zeros for the sums.
+func compactionColumns(rep agents.CompactionReport) (path store.Optional[string], events, before, after, requests store.Optional[int64]) {
+	if rep.Path == "" && len(rep.Events) == 0 {
+		return store.Unknown[string](), store.Unknown[int64](), store.Unknown[int64](), store.Unknown[int64](), store.Unknown[int64]()
+	}
+	var e, b, a, r int64
+	for _, ev := range rep.Events {
+		e++
+		b += int64(ev.CharsBefore)
+		a += int64(ev.CharsAfter)
+		r += int64(ev.Requests)
+	}
+	return store.Known(string(rep.Path)), store.Known(e), store.Known(b), store.Known(a), store.Known(r)
 }

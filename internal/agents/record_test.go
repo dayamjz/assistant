@@ -36,7 +36,10 @@ func TestARecordHasNoFieldContentCouldBeWrittenInto(t *testing.T) {
 		"Duration":      reflect.TypeFor[time.Duration](),
 		"Failure":       reflect.TypeFor[agents.Failure](),
 		"Usage":         reflect.TypeFor[agents.Usage](),
-		"Served":        reflect.TypeFor[agents.Served](),
+		// Compaction is #719's harvest of Jev result.stats beside the
+		// invocation row; PRD §8 does not list it yet (raised, not closed).
+		"Compaction": reflect.TypeFor[agents.CompactionReport](),
+		"Served":     reflect.TypeFor[agents.Served](),
 	}
 	typ := reflect.TypeFor[agents.Record]()
 	seen := make(map[string]struct{}, typ.NumField())

@@ -159,6 +159,12 @@ type Record struct {
 	Failure Failure
 	// Usage is what the agent reported it cost.
 	Usage Usage
+	// Compaction is what compaction did for this invocation: the path
+	// InstallJev prepared and any CompactionStats lines harvested while it
+	// ran. The zero value means no config dir we control, or the harvest
+	// failed (store columns stay unreported). A prepared quiet round sets
+	// Path with an empty Events slice.
+	Compaction CompactionReport
 	// Served is the run and stage the invocation served, copied from
 	// Invocation.Served as it was handed over. Each is an identifier or a
 	// name, never content.
