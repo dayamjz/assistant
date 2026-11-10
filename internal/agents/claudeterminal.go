@@ -220,6 +220,12 @@ func (r *claudeRunner) StartInTerminal(ctx context.Context, t Terminal, spec Wor
 	env = withEnvValue(withEnvValue(withEnvValue(env, claudeConfigVariable, configDir), cacheHomeVariable, cacheDir), "HOME", homeDir)
 
 	args := r.claudeTerminalWorkerArgs(spec, session)
+	pluginArgs, err := r.prepareJevLaunch(configDir, env)
+	if err != nil {
+		remove()
+		return nil, err
+	}
+	args = append(args, pluginArgs...)
 	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
 		bin:     r.resolved,
 		args:    args,

@@ -42,6 +42,8 @@ type claudeSettings struct {
 	maxOut   int64
 	recorder Recorder
 	sweep    Sweep
+	// jev is the opt-in lookup InstallJev consults at each launch. Nil means off.
+	jev func() bool
 }
 
 // WithBinary names the executable to run. The default is "claude", resolved
@@ -103,6 +105,15 @@ func WithRecorder(r Recorder) ClaudeOption {
 func WithSweep(sw Sweep) ClaudeOption {
 	return func(s *claudeSettings) { s.sweep = sw }
 }
+
+// WithJevCompaction supplies the opt-in lookup consulted before a long-running
+// Claude Code worker or fixer launch. Called at prepare time so a service can
+// build its catalog before loading config. Nil or false leaves built-in compaction.
+func WithJevCompaction(enabled func() bool) ClaudeOption {
+	return func(s *claudeSettings) { s.jev = enabled }
+}
+
+func (s claudeSettings) jevOptIn() bool { return s.jev != nil && s.jev() }
 
 func newClaudeSettings(opts []ClaudeOption) claudeSettings {
 	s := claudeSettings{
@@ -235,7 +246,7 @@ func (r *claudeRunner) Run(ctx context.Context, purpose Purpose, inv Invocation)
 	if !purpose.Recognized() {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnrecognizedPurpose, string(purpose))
 	}
-	res, _, err := r.invoke(ctx, purpose, inv, session{})
+	res, _, err := r.invoke(ctx, purpose, inv, session{}, "")
 	return res, err
 }
 
@@ -277,6 +288,9 @@ type claudeFixer struct {
 
 	mu        sync.Mutex
 	reference string
+	// jevDir is the scratch CLAUDE_CONFIG_DIR across fixer rounds. Residual
+	// gap: not removed when the fixer is dropped.
+	jevDir string
 }
 
 // Apply runs one fix round in this session, opening it on the first round and
@@ -286,7 +300,12 @@ type claudeFixer struct {
 func (f *claudeFixer) Apply(ctx context.Context, inv Invocation) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true})
+	if f.runner.settings.jevOptIn() && f.jevDir == "" {
+		if dir, err := newJevConfigDir(); err == nil {
+			f.jevDir = dir
+		}
+	}
+	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true}, f.jevDir)
 	if reference != "" {
 		f.reference = reference
 	}
@@ -358,7 +377,7 @@ func (s session) use() SessionUse {
 // it, so the Fixer can carry it to the next round. That happens whatever the
 // invocation then produced: one place decides what a round did with its
 // session, and both the record and the Fixer read that one decision.
-func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session) (Result, string, error) {
+func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session, jevDir string) (Result, string, error) {
 	// A session-carrying invocation is the memory P4 keeps a review out of, so
 	// it is put to ValidateForFixer, which is Validate plus the refusal of a
 	// review shape there.
@@ -414,12 +433,23 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		}
 	}
 
+	env := environment(r.settings.base, inv.Env)
+	args := r.arguments(GrantFor(purpose), inv, s.resume)
+	// Review invocations pass an empty jevDir: Jev is for the fixer and workers only (P4).
+	if jevDir != "" {
+		pluginArgs, err := r.prepareJevLaunch(jevDir, env)
+		if err != nil {
+			return fail(nil, FailureUnavailable, err, err.Error())
+		}
+		env = withEnvValue(env, claudeConfigVariable, jevDir)
+		args = append(args, pluginArgs...)
+	}
 	proc := runProcess(ctx, procSpec{
 		bin:     r.resolved,
-		args:    r.arguments(GrantFor(purpose), inv, s.resume),
+		args:    args,
 		stdin:   inv.Prompt,
 		dir:     inv.Dir,
-		env:     environment(r.settings.base, inv.Env),
+		env:     env,
 		grace:   r.settings.grace,
 		maxOut:  r.settings.maxOut,
 		started: inv.Started,

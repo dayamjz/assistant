@@ -333,6 +333,8 @@ type procWorker struct {
 	// and set only by this package's tests, which use it to put the
 	// process's end inside that window.
 	afterWrite func(text string)
+	// cleanup runs once after Close has ended the tree. Nil means none.
+	cleanup func()
 }
 
 // startWorker starts one process as a worker, delivers instructions on its
@@ -387,6 +389,7 @@ func startWorker(ctx context.Context, agent string, spec procSpec, instructions 
 		frame:        frame,
 		format:       format,
 		stdinOpen:    true,
+		cleanup:      spec.cleanup,
 	}
 	go func() {
 		defer close(w.done)
@@ -560,12 +563,15 @@ func (w *procWorker) Close() {
 		w.stdinMu.Unlock()
 		select {
 		case <-w.done:
-			return
 		default:
+			terminateTree(w.cmd.Process, w.grace, true, w.done, w.hurry)
 		}
-		terminateTree(w.cmd.Process, w.grace, true, w.done, w.hurry)
 	})
 	<-w.done
+	if w.cleanup != nil {
+		w.cleanup()
+		w.cleanup = nil
+	}
 }
 
 // tailWriter keeps the most recent limit bytes written to it and counts what

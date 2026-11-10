@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"slices"
 	"unicode/utf8"
 )
@@ -45,15 +47,36 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
+	env := WorkerEnvironment(r.settings.base, spec.Env)
+	args := r.workerArguments(spec)
+	var cleanup func()
+	if r.settings.jevOptIn() {
+		configDir, err := newJevConfigDir()
+		if err != nil {
+			return nil, fmt.Errorf("making the stream-json worker's jev configuration directory: %w", err)
+		}
+		cleanup = func() { _ = os.RemoveAll(configDir) }
+		pluginArgs, err := r.prepareJevLaunch(configDir, env)
+		if err != nil {
+			cleanup()
+			return nil, err
+		}
+		env = withEnvValue(env, claudeConfigVariable, configDir)
+		args = append(args, pluginArgs...)
+	}
 	worker, err := startWorker(ctx, ClaudeName, procSpec{
-		bin:    r.resolved,
-		args:   r.workerArguments(spec),
-		dir:    spec.Dir,
-		env:    WorkerEnvironment(r.settings.base, spec.Env),
-		grace:  r.settings.grace,
-		maxOut: r.settings.maxOut,
+		bin:     r.resolved,
+		args:    args,
+		dir:     spec.Dir,
+		env:     env,
+		grace:   r.settings.grace,
+		maxOut:  r.settings.maxOut,
+		cleanup: cleanup,
 	}, spec.Instructions, claudeUserMessage, OutputStreamJSON)
 	if err != nil {
+		if cleanup != nil {
+			cleanup()
+		}
 		return nil, err
 	}
 	return worker, nil
