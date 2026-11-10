@@ -26,8 +26,9 @@ prefix, which is why `tasks` and `answer` are subcommands here as well as
 the `assistant tasks` and `assistant --task --answer` a first coordinator
 runs. With the Claude Code adapter a subordinate starts under the pipe
 session provider and under `tmux`, through the same grant; under the
-default `auto` it stays on pipes. With Cursor it
-starts under the same grant; with Codex its start is refused and logged.
+default `auto` it stays on pipes. With Cursor or Codex it
+starts under the same grant (Codex on pipes only; a tmux Codex pin is
+still refused, with no terminal workers).
 While a subordinate is starting, your own coordinator calls may answer
 `unavailable` for the few moments the start takes; ask again.
 
