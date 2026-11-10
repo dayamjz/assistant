@@ -15,9 +15,9 @@ import (
 // missing CLAUDE_CONFIG_DIR or a write error must not refuse compaction).
 const compactionStatsName = "compaction-stats.jsonl"
 
-// CompactionStats is one successful Jev compact's result.stats, as the
-// pinned plugin records them. Field names match the plugin's CompactResult.stats
-// JSON so a line round-trips without a second schema.
+// CompactionStats is one successful Jev compact's stats line. The numeric
+// fields match the plugin's CompactResult.stats JSON; Path is added by the
+// hook (or defaulted to CompactionJev on read) and is not part of stats.
 type CompactionStats struct {
 	Path           CompactionPath `json:"path,omitempty"`
 	MessagesBefore int            `json:"messagesBefore"`
@@ -36,9 +36,11 @@ type CompactionStats struct {
 }
 
 // CompactionReport is what one invocation observed about compaction: the
-// path InstallJev prepared, and every CompactionStats line the plugin
-// appended during that invocation. Empty when the launch had no config dir
-// we control, or when nothing compacted.
+// path InstallJev prepared (when the harvest succeeded), and every
+// CompactionStats line appended during that invocation. The zero value means
+// no config dir we control, or the harvest could not be read (store columns
+// stay unreported). A prepared path with no new events still sets Path and
+// has an empty Events slice — that is not the zero value.
 type CompactionReport struct {
 	Path   CompactionPath    `json:"path,omitempty"`
 	Reason string            `json:"reason,omitempty"`
@@ -90,7 +92,9 @@ func HarvestCompactionStats(configDir string, after int64) ([]CompactionStats, i
 		}
 		var ev CompactionStats
 		if err := json.Unmarshal(line, &ev); err != nil {
-			return events, after, fmt.Errorf("decoding compaction stats: %w", err)
+			// Skip a corrupt line rather than stalling the offset and
+			// turning later good lines into known zeros in usage.
+			continue
 		}
 		if ev.Path == "" {
 			ev.Path = CompactionJev
@@ -98,31 +102,31 @@ func HarvestCompactionStats(configDir string, after int64) ([]CompactionStats, i
 		events = append(events, ev)
 	}
 	if err := sc.Err(); err != nil {
-		return events, after, fmt.Errorf("scanning compaction stats: %w", err)
+		return nil, after, fmt.Errorf("scanning compaction stats: %w", err)
 	}
 	return events, size, nil
 }
 
 // compactionReportFor fills CompactionReport from the path record and any
 // stats lines written since after. at, when non-nil, advances to the new end
-// offset so a later round does not re-count the same lines.
+// offset so a later round does not re-count the same lines. An I/O failure
+// leaves the zero report (store columns stay unreported) and does not move at.
 func compactionReportFor(configDir string, at *int64) CompactionReport {
-	rep := CompactionReport{}
-	if d, err := ReadCompactionDecision(configDir); err == nil {
-		rep.Path = d.Path
-		rep.Reason = d.Reason
-	}
 	after := int64(0)
 	if at != nil {
 		after = *at
 	}
 	events, next, err := HarvestCompactionStats(configDir, after)
 	if err != nil {
-		return rep
+		return CompactionReport{}
 	}
-	rep.Events = events
 	if at != nil {
 		*at = next
+	}
+	rep := CompactionReport{Events: events}
+	if d, err := ReadCompactionDecision(configDir); err == nil {
+		rep.Path = d.Path
+		rep.Reason = d.Reason
 	}
 	return rep
 }

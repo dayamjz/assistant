@@ -248,4 +248,11 @@ func TestRunsUsageTotalsCompactionStats(t *testing.T) {
 	if !strings.Contains(got.stdout, `"jev-compaction-stats"`) {
 		t.Fatalf("Covers missing jev-compaction-stats:\n%s", got.stdout)
 	}
+	human := run(t, h, subject, "runs", "--usage=1d")
+	if human.code != machine.ExitOK {
+		t.Fatalf("human runs --usage exited %s:\n%s%s", human.code, human.stdout, human.stderr)
+	}
+	if !strings.Contains(human.stdout, "jev compaction events") || !strings.Contains(human.stdout, "2000") {
+		t.Fatalf("human usage omitted compaction totals:\n%s", human.stdout)
+	}
 }

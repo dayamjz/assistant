@@ -71,6 +71,10 @@ func writeUsageTotals(w io.Writer, heading string, t machine.UsageTotals) {
 	writef(w, "      input %s, output %s, cache read %s, cache written %s\n",
 		usageCount(t.InputTokens), usageCount(t.OutputTokens),
 		usageCount(t.CacheReadTokens), usageCount(t.CacheCreationTokens))
+	writef(w, "      jev compaction events %s, chars %s→%s, requests %s\n",
+		usageCount(t.CompactionEvents),
+		usageCount(t.CompactionCharsBefore), usageCount(t.CompactionCharsAfter),
+		usageCount(t.CompactionRequests))
 }
 
 // failures prints the failed calls by category, in category order, or none.
