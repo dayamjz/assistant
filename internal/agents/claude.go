@@ -439,8 +439,9 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	env := environment(r.settings.base, inv.Env)
 	args := r.arguments(GrantFor(purpose), inv, s.resume)
 	// Review invocations pass an empty jevDir: Jev is for the fixer and workers only (P4).
-	// A non-empty jevDir is a seeded scratch created only after DecideJev selected
-	// the plugin; each round re-runs InstallJev so a later fall-closed clears it.
+	// A non-empty jevDir is a seeded scratch openFixerJevDir kept only after InstallJev
+	// returned CompactionJev. Each round re-runs InstallJev so a later fall-closed
+	// clears the plugin and hooks; the sticky remap stays so --resume sees this dir.
 	if jevDir != "" {
 		pluginArgs, err := r.prepareJevLaunch(jevDir, env)
 		if err != nil {
