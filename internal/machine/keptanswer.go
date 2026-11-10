@@ -191,8 +191,7 @@ const (
 	// removed and the entry answered discard.
 	KeptWorkDiscarded KeptWorkEffect = "discarded"
 	// KeptWorkRemoveAnywayShown is a remove-anyway given without Force:
-	// why a discard refuses and what of the loss could be read, with
-	// nothing recorded or released.
+	// why a discard refuses, with nothing recorded or released.
 	KeptWorkRemoveAnywayShown KeptWorkEffect = "remove-anyway-shown"
 	// KeptWorkRemovedAnyway is a remove-anyway given with Force: the
 	// entry was released and the copy left standing.
@@ -216,9 +215,8 @@ type KeptWorkAnswered struct {
 	Run string `json:"run,omitempty"`
 	// Task is the task a carry on created, empty for every other effect.
 	Task string `json:"task,omitempty"`
-	// Loss is what a discard would lose, for a discard shown, and for a
-	// remove-anyway shown what of the loss could be read (possibly
-	// incomplete), absent for every other effect.
+	// Loss is what a discard would lose, for a discard shown, and absent for
+	// every other effect: a remove-anyway shown reads none of the loss.
 	Loss *KeptWorkLoss `json:"loss,omitempty"`
 	// Refusal is why a discard refuses the copy, for a remove-anyway
 	// shown, and absent for every other effect.
@@ -259,7 +257,7 @@ var phraseKeptWorkDiscarded = Phrase{
 
 // phraseKeptWorkRemoveAnywayShown is the row a remove-anyway shown reads as.
 var phraseKeptWorkRemoveAnywayShown = Phrase{
-	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below. Where any of that loss could be read, it follows as Incomplete.",
+	Outcome:     "Nothing was released yet: a discard of that local copy is refused for the reason below, so what it would lose cannot be shown.",
 	Consequence: "The copy stays, with everything it holds, and new work that would start where it stood still waits on it.",
 	Decision:    "Repeat the remove-anyway with --force at a terminal in the foreground and without --json, naming the same task or run, to release the entry and keep the copy; or answer land or carry-on when that is what you want instead.",
 }

@@ -39,8 +39,8 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 			shown.Effect != machine.KeptWorkRemoveAnywayShown || shown.Refusal == "" {
 			t.Fatalf("remove-anyway shown = %+v, %v; want remove-anyway-shown with a refusal", shown, err)
 		}
-		if shown.Loss == nil || len(shown.Loss.Lacks) == 0 {
-			t.Fatalf("shown loss = %+v; want the entry's holds as Incomplete lacks", shown.Loss)
+		if shown.Loss != nil {
+			t.Fatalf("shown loss = %+v; want none, since a discard that refuses reads none of it", shown.Loss)
 		}
 
 		request.Force = true
@@ -55,6 +55,9 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 		if still, err := recordsOf(t, h).KeptWorkEntry(ctx, entry.ID); err != nil || still.Open() ||
 			still.Answer.Or("") != store.KeptRemoveAnyway || !still.RemovedAnywayAt.IsKnown() {
 			t.Fatalf("after confirmation the entry reads %+v, %v; want it answered remove-anyway", still, err)
+		} else if len(still.RemoveAnywayShown) != 0 || still.RemoveAnywayRefusal.Or("") != shown.Refusal {
+			t.Fatalf("the release recorded shown %v and refusal %q; want nothing shown and the refusal %q",
+				still.RemoveAnywayShown, still.RemoveAnywayRefusal.Or(""), shown.Refusal)
 		}
 	})
 }
@@ -85,7 +88,7 @@ func TestARemoveAnywayIsRefusedWhenADiscardCanRemoveTheCopy(t *testing.T) {
 }
 
 // A copy that cannot be verified is offered for remove-anyway (decision 31 /
-// section 13), with the refusal alone and no Incomplete loss list.
+// section 13), with the refusal alone and no loss list.
 func TestARemoveAnywayIsOfferedForAnUnverifiableCopy(t *testing.T) {
 	t.Parallel()
 	requiresIdentifiedPeer(t)
@@ -136,11 +139,7 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		commits := entry.Holds
-		if shown.Loss != nil && len(shown.Loss.Lacks) > 0 {
-			commits = shown.Loss.Lacks
-		}
-		if _, err := writer.ClaimKeptWorkRemoveAnyway(ctx, entry.ID, shown.Refusal, commits, store.ResolvedByPerson()); err != nil {
+		if _, err := writer.ClaimKeptWorkRemoveAnyway(ctx, entry.ID, shown.Refusal, nil, store.ResolvedByPerson()); err != nil {
 			_ = writer.Close()
 			t.Fatal(err)
 		}
@@ -164,4 +163,61 @@ func TestARemoveAnywayForceIsRefusedWhenTheRefusalNoLongerHolds(t *testing.T) {
 			t.Fatalf("after the refuse the entry reads %+v, %v; want it open with no remove-anyway claim", still, err)
 		}
 	})
+}
+
+// A remove-anyway claim a stopped service left owed is taken up at the
+// next open (PRD section 6, section 11): finished, keeping the copy, while
+// the discard still refuses; taken back, leaving the entry open, once a
+// discard can remove the copy.
+func TestARemoveAnywayClaimOwedAtOpenIsFinishedOrTakenBack(t *testing.T) {
+	t.Parallel()
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P15)
+
+	for _, tc := range []struct {
+		name     string
+		shallow  bool
+		released bool
+	}{
+		{name: "refusal still holds", shallow: true, released: true},
+		{name: "refusal cleared", shallow: false, released: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHome(t)
+			subject := newSubject(t)
+			repository := recordRepository(t, h, subject)
+			_, entry := plantKeptInvestigation(t, h, subject, repository.ID)
+			if tc.shallow {
+				git(t, entry.CopyPath, "fetch", "-q", "--depth=1", ".", "HEAD")
+			}
+			writer, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := writer.ClaimKeptWorkRemoveAnyway(t.Context(), entry.ID, "discard refused: planted", nil, store.ResolvedByPerson()); err != nil {
+				_ = writer.Close()
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			withService(t, h, func(serviceUnderTest) {
+				still, err := recordsOf(t, h).KeptWorkEntry(t.Context(), entry.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch {
+				case tc.released && (still.Open() || still.Answer.Or("") != store.KeptRemoveAnyway):
+					t.Fatalf("after open the entry reads %+v; want the owed claim finished as remove-anyway", still)
+				case !tc.released && (!still.Open() || still.RemoveAnywayClaimed()):
+					t.Fatalf("after open the entry reads %+v; want it open with the claim taken back", still)
+				}
+			})
+			if _, err := os.Stat(entry.CopyPath); err != nil {
+				t.Fatalf("the copy must stand either way: %v", err)
+			}
+		})
+	}
 }

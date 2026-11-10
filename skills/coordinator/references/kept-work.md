@@ -29,10 +29,11 @@ place of `--task` for a run's copy.
   that digest still seals the copy. A confirmation is the person's alone: it
   is refused under `--json` and from any process not in the foreground of a
   terminal, which your tool's commands are not, so never try to give one.
-- `--answer remove-anyway` is for a copy a discard refuses (shallow, partial,
-  unverifiable, or a removal that would lose more than was shown). Alone it
-  shows why discard refuses and what of the loss could be read, and records
-  nothing. With `--force` from a terminal's foreground, naming the same task
+- `--answer remove-anyway` is for a copy whose discard preview refuses
+  (shallow, partial or unverifiable), read afresh each time. Alone it shows
+  why discard refuses, and nothing of the loss, and records nothing. A
+  discard refused at its removal puts the copy back and is shown and
+  confirmed again; remove-anyway is refused for it. With `--force` from a terminal's foreground, naming the same task
   or run, it releases the entry and keeps the copy. It is refused when a
   discard can remove the copy, while a claim or a discard set-aside stands,
   under `--json`, and from any process not in a terminal's foreground; never

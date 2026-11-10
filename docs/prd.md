@@ -235,7 +235,7 @@ A change the pipeline authored is author code. It gets the same adversarial revi
 
 Not your commits, not commits that appeared on the remote out of band, not fixes the pipeline itself created. Every history-rewriting update is anchored to a commit the run actually observed, never to the tip read a moment before pushing. When a safety fact cannot be verified against fresh state, refuse the operation and report it.
 
-A discard is held to this too: it refuses a copy whose loss it cannot read exactly. Section 6's [remove anyway](#remove-anyway) is then the answer that releases the entry after such a refusal, keeping the copy, because you give it, at a terminal, having been shown the refusal and what of the loss could be read (decision 31: not an exception that removes the copy).
+A discard is held to this too: it refuses a copy whose loss it cannot read exactly. Section 6's [remove anyway](#remove-anyway) is then the answer that releases the entry after such a refusal, keeping the copy, because you give it, at a terminal, having been shown the refusal (decision 31: not an exception that removes the copy).
 
 Work the pipeline holds always has a path back into your hands, including after a crash, a cancellation, or a failed run.
 
@@ -1160,7 +1160,7 @@ answers are:
 - **discard**: you name the copy, the program shows exactly what will be lost, and it removes the copy only on that answer, recording who discarded what. A confirmed discard of a task's clone removes it on [removing a discarded copy](#discard-removal)'s terms (decision 31), deleting only what you were shown and confirmed, setting each item aside first so that any refusal before the removal's point of no return puts it back. A confirmed discard of a run's worktree removes it on the same terms. An entry over a worktree that is not discarded, landed or carried on closes when P12 cleanup removes its copy on a proof. That proof reads the commits the copy's HEAD and its branches, tags and stash reach, which a proof must find landed, and refuses while git reports a tracked change, a file it does not ignore that no commit records, or a stash. It reads nothing else, so the removal destroys, unchecked, the rest of what a discard shows: a file git ignores, a commit or object only a reflog or another reference reaches, and the copy's repository directory, its hooks and configuration among it.
 
 A kept-work entry is answered as a hold, with section 9's hold answer and no verb of its own;
-section 9 says how, including how a discard is shown before it is confirmed. A copy a discard refuses to remove has one more answer, [remove anyway](#remove-anyway), which is yours alone and which releases the entry while keeping the copy. It is not one of the three answers a waiting task names; a discard's refusal names it, for the copy it refused.
+section 9 says how, including how a discard is shown before it is confirmed. A copy a discard refuses to remove has one more answer, [remove anyway](#remove-anyway), which is yours alone and which releases the entry while keeping the copy. It is not one of the three answers a waiting task names; a discard refused because it cannot read the copy's loss names it, for the copy it refused.
 
 An answer is a **claim** until its outcome is recorded, on the owner's decision of 2026-10-22
 on #475's design, recorded on #530. An answer closes an entry only in the write that records its
@@ -1360,9 +1360,11 @@ never over something written at its path meanwhile, which the discard's own writ
 out, is not. Each is struck
 from the journal once it is back, so a put-back that stops takes up where it stopped. The claim
 is then taken back, and the entry is open as it was, to be shown and confirmed afresh. A refusal
-at step 3, or at step 4 before its point of no return, where the copy held only what was
-confirmed but its removal would lose more or was refused, is recorded on the entry with the
-digest it confirmed, which is what [remove anyway](#remove-anyway) reads. An item that cannot
+at step 3, or at step 4 before its point of no return, is reported to you, and nothing of it
+stays on the entry once the claim is taken back: [remove anyway](#remove-anyway) reads the copy
+afresh, never a refusal a discard met. So a copy whose preview reads but whose removal is
+refused again at each confirmation, such as a clone P12's proof refuses, has no answer that
+releases its entry; that is a residual gap (#880). An item that cannot
 go back, because something now stands where it goes, stays beside the copy, and the refusal
 names both. Until it is put back, no answer reads the copy, each refusing and naming where the
 two stand, and the entry stays open and holding its branch's dispatch. The next answer to an
@@ -1402,12 +1404,14 @@ here claims more:
 #### <a id="remove-anyway"></a>Remove anyway
 
 A discard refuses a copy whose loss it cannot read exactly: a shallow or partial history, a
-layout the program does not read, or a default branch it cannot read now. It also refuses a copy
-in which its removal would lose something it did not show. An entry over such a copy holds the
+layout the program does not read, or a default branch it cannot read now. An entry over such a copy holds the
 new tasks of its project on its branch until P12 cleanup proves its work landed, which may be
 never. For that copy alone you have one more answer, **remove anyway** (decision 31). It
 releases the entry and keeps the copy: it is not a removal, not an exception in P6 or P12, and
-built on decision 31's terms.
+built on decision 31's terms. Whether a discard refuses is read from the copy as it stands, at
+the preview and again at the confirmation. A discard refused at its removal instead puts the
+copy back as it was and records nothing ([a refusal puts everything back](#discard-removal)),
+so remove anyway is refused for that copy while its preview reads.
 
 - **Only for a copy a discard refuses, including one that cannot be verified.** It is accepted
   while a discard's preview of the copy is refused, read again at the confirmation. It is also
@@ -1415,8 +1419,8 @@ built on decision 31's terms.
   can remove it is refused, naming the discard. It is refused while a claim stands on the copy,
   or while what a discard set aside stands beside it.
 - **Shown, then confirmed with `--force` and the task's name.** `--answer remove-anyway` alone
-  shows why a discard refuses and, where any of the loss could be read, prints it as Incomplete
-  (without inventing a discard digest), naming what could not be read in the refusal. It removes
+  shows why a discard refuses. It shows nothing of the loss, since a discard that refuses has
+  read none of it; showing what of it can be read is a residual gap (#880). It removes
   nothing, releases nothing and records nothing. Repeating it with `--force` and the task's name
   typed out is admitted only as a discard's confirmation is, from a terminal's foreground. A
   name that does not match, or a copy that no longer reads as the refusal named, refuses and
@@ -1426,7 +1430,7 @@ built on decision 31's terms.
   later on a proof; this answer does not. A stop part way leaves the claim owed and is taken up
   at the next start, or taken back when the refusal no longer holds.
 - **Recorded.** It is written first as a claim, naming who gave it, from the surface, when, the
-  discard refusal it overrode, and what of the loss was shown. Its outcome is the entry
+  discard refusal it overrode, and what of the loss was shown, which is nothing. Its outcome is the entry
   released, recorded in one write that closes those entries, with the copy still standing.
 
 ### Events and current state
@@ -2606,7 +2610,7 @@ one place its fact is read from. Appended means rows are added and never edited.
 | **local landing record** | Authoritative, appended | Append-only and written once, by the approved fast-forward that delivers a `local` task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a `local` task is derived from it, read in the same tier as the merge record. |
 | **nothing-to-deliver record** | Authoritative, appended | Append-only and written once, in the same write that ends a run on section 5's empty-diff short circuit, of a branch its push anchor found absent where the run would push it, whose submitted commits P12's content check found present in the default-branch commit its rebase stage read at its fresh fetch: the run, that commit, the commit the run was submitted with, the check's answer, the checkpoint entry those facts were read from, and when. The facts are read from the checkpoint history, never from a stage's report or the run's status. The Landed of the task the run is attributed to is derived from it, read in the same tier as the merge record, on the terms of section 6's [nothing left to deliver](#nothing-to-deliver). It moves nothing and removes nothing; the copy's cleanup is decided on P12's proof as after any landing. |
 | **cleanup record** | Authoritative, appended | Append-only and written once, recording the cleanup check it was made from. A delivery task's Complete is derived from it; an investigation's Complete is derived from the record that its findings were relayed, never from this one. With the merge record it is what section 6's resolver reads in the tier above the run tier. So is the nothing-to-deliver record, beside the merge record. |
-| **kept work** | Authoritative | One row per copy kept because its work has not landed: the owner it outlived, what it holds, when it was kept, when it last surfaced, and its answer. It is written once when the copy is kept. Its revisions are the answer's: yours, given as a hold answer, or carry on, recorded by a promotion of the investigation whose copy it is. A land or carry-on answer is written first as a claim, which leaves the row open, and then with its outcome, in the one write that closes the row; a claim the answer takes back itself is cleared, which leaves the row as it was (section 6's [kept work](#kept-work)). A promotion's carry on is written whole, with the promotion. When P12 cleanup removes its copy on a proof, the record of that removal closes it too (section 6). A claim you withdraw is cleared the same way, in the write that appends its kept-work withdrawal record, and a withdraw whose copy is gone also closes the row as gone in that write, the one closure besides a removal on a proof. A confirmed discard of a task's clone is written first as a claim with the digest and the commits it was shown; a confirmed discard refused at its removal leaves that refusal and its digest on the row; the removal of the copy is then written in the one write that closes the row and every other open row of the copy ([removing a discarded copy](#discard-removal)). A discard's journal is not a row: it is the recovery's own account of what was set aside, kept beside the copy. A confirmed remove anyway is written first as a claim with the refusal it overrode and what of the loss it showed; its outcome releases the row and keeps the copy ([remove anyway](#remove-anyway)). |
+| **kept work** | Authoritative | One row per copy kept because its work has not landed: the owner it outlived, what it holds, when it was kept, when it last surfaced, and its answer. It is written once when the copy is kept. Its revisions are the answer's: yours, given as a hold answer, or carry on, recorded by a promotion of the investigation whose copy it is. A land or carry-on answer is written first as a claim, which leaves the row open, and then with its outcome, in the one write that closes the row; a claim the answer takes back itself is cleared, which leaves the row as it was (section 6's [kept work](#kept-work)). A promotion's carry on is written whole, with the promotion. When P12 cleanup removes its copy on a proof, the record of that removal closes it too (section 6). A claim you withdraw is cleared the same way, in the write that appends its kept-work withdrawal record, and a withdraw whose copy is gone also closes the row as gone in that write, the one closure besides a removal on a proof. A confirmed discard of a task's clone is written first as a claim with the digest and the commits it was shown; a confirmed discard refused before its point of no return is reported and its claim taken back, which leaves the row as it was; the removal of the copy is then written in the one write that closes the row and every other open row of the copy ([removing a discarded copy](#discard-removal)). A discard's journal is not a row: it is the recovery's own account of what was set aside, kept beside the copy. A confirmed remove anyway is written first as a claim with the refusal it overrode and what of the loss it showed, which is nothing; its outcome releases the row and keeps the copy ([remove anyway](#remove-anyway)). |
 | **kept-work withdrawal** | Authoritative, appended | Written once per claim you withdraw, in the same write that clears it from the kept-work row: the entry, the claim as it stood (its kind, who gave it and when, and for a carry on the task it named), who withdrew it, derived from the surface, when, where it moved the copy back from if it did, whether it closed the entry as gone, and the answer's note. Whether an entry holds a claim is read from the kept-work row and never from this record. It is the one record that ends a task a withdrawn carry on created: the state resolver reads it in its first tier as that task's terminal record, Withdrawn, and dispatch refuses the task it names ([kept work](#kept-work)). |
 | **housekeeping retirement** <kbd>proposed</kbd> | Authoritative, appended | Written once per housekeeping pass that ends without a terminal record: the pass, how it was retired, and when. How it was retired is the resolution of the retirement hold your answer closed. A pass whose run rebased to nothing writes none: it lands, on section 6's [nothing left to deliver](#nothing-to-deliver). It is the one record that ends a pass's claim on its repository other than the terminal tier ([housekeeping](#housekeeping)). The state resolver does not read it, so a retired pass still shows the state its own records give. Section 11's anchored relaunch does read it, and refuses a retired pass, and section 6's work in flight reads it, so that state alone does not keep a retired pass in flight. |
 | **hold** | Authoritative | A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when `checks_timeout` elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Another is for a stall hold: when a supervision pass reads its worker's screen changed, or a probe reads the worker dead, the question it asked no longer stands, and the service records what it read as the resolution and itself as the resolver (section 6's [stalled worker](#stall-hold)). The third is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule. |
@@ -3051,9 +3055,8 @@ stands. When what would be lost cannot be read exactly, the answer is refused an
 `--confirm` is read with `--answer discard` alone and takes a digest; anything else is incorrect
 usage.
 A confirmed discard removes a run's worktree on the same terms as a task's clone.
-For a copy a discard refuses, its refusal names `--answer remove-anyway`, which
-is answered twice on [remove anyway](#remove-anyway)'s terms: alone it shows the refusal and what
-of the loss can be read, and with `--force` and the task's name typed out it releases the entry
+For a copy whose loss a discard cannot read, its refusal names `--answer remove-anyway`, which
+is answered twice on [remove anyway](#remove-anyway)'s terms: alone it shows the refusal, and with `--force` and the task's name typed out it releases the entry
 and keeps the copy. No verb is added for either.
 <kbd>proposed</kbd> A housekeeping
 pass's retirement hold is answered the same way, with `--answer retire` or

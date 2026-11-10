@@ -13,10 +13,17 @@ import (
 
 // Removing anyway: PRD section 6's release of a kept-work entry after a
 // discard refuses the copy, keeping the copy. Without Force it shows why
-// the discard refuses and what of the loss could be read. With Force,
-// from a terminal's foreground and naming the same task or run, it claims
-// the entry, records the release, and redispatches. It never removes the
-// copy (decision 31).
+// the discard refuses. With Force, from a terminal's foreground and naming
+// the same task or run, it claims the entry, records the release, and
+// redispatches. It never removes the copy (decision 31).
+//
+// Whether a discard refuses is read afresh from the copy each time
+// (removeAnywayProbe); nothing reads a refusal a confirmed discard met
+// earlier, since a pre-PONR refusal takes its claim back and leaves
+// nothing on the entry. So a copy whose preview reads but whose removal
+// keeps being refused is refused here naming the discard, and neither
+// answer releases it (#880). Nothing of the loss is shown either: a
+// discard that refuses has read none of it (#880).
 
 // removeAnywayKeptWork is the remove-anyway answer.
 func (s *Service) removeAnywayKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, force bool) (machine.KeptWorkAnswered, error) {
@@ -48,25 +55,16 @@ func (s *Service) removeAnywayKeptWork(ctx context.Context, req ipc.Request, ent
 	return s.confirmRemoveAnyway(ctx, req, entry)
 }
 
-// showRemoveAnyway reports why a discard refuses and what of the loss
-// could be read, recording nothing.
+// showRemoveAnyway reports why a discard refuses, recording nothing.
 func (s *Service) showRemoveAnyway(ctx context.Context, entry store.KeptWork) (machine.KeptWorkAnswered, error) {
 	if err := s.refuseRemoveAnywayWhileBusy(entry); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	refusal, shown, err := s.removeAnywayProbe(ctx, entry)
+	refusal, err := s.removeAnywayProbe(ctx, entry)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	out := machine.KeptWorkAnswered{
-		Entry:   entry,
-		Effect:  machine.KeptWorkRemoveAnywayShown,
-		Refusal: refusal,
-	}
-	if shown != nil {
-		out.Loss = shown
-	}
-	return out, nil
+	return machine.KeptWorkAnswered{Entry: entry, Effect: machine.KeptWorkRemoveAnywayShown, Refusal: refusal}, nil
 }
 
 // confirmRemoveAnyway claims and releases the entry on a Force
@@ -75,13 +73,9 @@ func (s *Service) confirmRemoveAnyway(ctx context.Context, req ipc.Request, entr
 	if err := s.refuseRemoveAnywayWhileBusy(entry); err != nil {
 		return machine.KeptWorkAnswered{}, err
 	}
-	refusal, shown, err := s.removeAnywayProbe(ctx, entry)
+	refusal, err := s.removeAnywayProbe(ctx, entry)
 	if err != nil {
 		return machine.KeptWorkAnswered{}, err
-	}
-	commits := entry.Holds
-	if shown != nil && len(shown.Lacks) > 0 {
-		commits = shown.Lacks
 	}
 	siblings, err := s.store.OpenKeptWorkOfCopy(ctx, entry.CopyPath)
 	if err != nil {
@@ -93,7 +87,8 @@ func (s *Service) confirmRemoveAnyway(ctx context.Context, req ipc.Request, entr
 			verified = append(verified, k.ID)
 		}
 	}
-	claimed, err := s.store.ClaimKeptWorkRemoveAnyway(ctx, entry.ID, refusal, commits, req.HoldResolver())
+	// The preview showed nothing of the loss, so the claim records that.
+	claimed, err := s.store.ClaimKeptWorkRemoveAnyway(ctx, entry.ID, refusal, nil, req.HoldResolver())
 	switch {
 	case errors.Is(err, store.ErrKeptWorkAnswered) || errors.Is(err, store.ErrKeptWorkClosed) ||
 		errors.Is(err, store.ErrKeptWorkRemoveAnywayClaimed):
@@ -135,7 +130,7 @@ func (s *Service) completeRemoveAnyway(ctx context.Context, entry store.KeptWork
 // is not touched.
 func (s *Service) finishRemoveAnywayClaim(ctx context.Context, entry store.KeptWork, verified []int64) (machine.KeptWorkAnswered, error) {
 	// Re-probe: a refusal that no longer holds takes the claim back.
-	if _, _, err := s.removeAnywayProbe(ctx, entry); err != nil {
+	if _, err := s.removeAnywayProbe(ctx, entry); err != nil {
 		if _, werr := s.store.WithdrawKeptWorkRemoveAnyway(ctx, entry.ID); werr != nil && !errors.Is(werr, store.ErrKeptWorkNotRemoveAnyway) {
 			return machine.KeptWorkAnswered{}, fmt.Errorf("%w (and withdrawing the claim: %w)", err, werr)
 		}
@@ -186,27 +181,27 @@ func (s *Service) refuseRemoveAnywayWhileBusy(entry store.KeptWork) error {
 	return nil
 }
 
-// removeAnywayProbe decides whether remove-anyway is offered: a discard
-// that can read and remove the copy refuses naming discard; otherwise the
-// discard refusal and any partial shown loss are returned.
-func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (refusal string, shown *machine.KeptWorkLoss, err error) {
+// removeAnywayProbe decides whether remove-anyway is offered, from the
+// copy as it reads now: a discard that can read and remove the copy
+// refuses naming discard; otherwise it returns the discard's refusal.
+func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (refusal string, err error) {
 	gatePath, err := s.keptGatePath(ctx, entry)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if verifyErr := s.cleaner.VerifyKeptCopy(ctx, entry, gatePath); verifyErr != nil {
 		switch {
 		case errors.Is(verifyErr, tasks.ErrCopyGone),
 			errors.Is(verifyErr, tasks.ErrRecordNotTheCopys),
 			errors.Is(verifyErr, tasks.ErrLayoutUnsupported):
-			return fmt.Sprintf("discard refused: %v", verifyErr), nil, nil
+			return fmt.Sprintf("discard refused: %v", verifyErr), nil
 		default:
-			return "", nil, verifyErr
+			return "", verifyErr
 		}
 	}
 	_, lossErr := s.cleaner.Loss(ctx, entry, gatePath)
 	if lossErr == nil {
-		return "", nil, fmt.Errorf("%w: kept work entry %d was not released: a discard can remove the copy; confirm that discard instead of remove-anyway",
+		return "", fmt.Errorf("%w: kept work entry %d was not released: a discard can remove the copy; confirm that discard instead of remove-anyway",
 			ipc.ErrRefused, entry.ID)
 	}
 	switch {
@@ -214,10 +209,9 @@ func (s *Service) removeAnywayProbe(ctx context.Context, entry store.KeptWork) (
 		errors.Is(lossErr, tasks.ErrLayoutUnsupported),
 		errors.Is(lossErr, tasks.ErrRecordNotTheCopys),
 		errors.Is(lossErr, tasks.ErrCopyGone):
-		partial := machine.KeptWorkLoss{Lacks: append([]string(nil), entry.Holds...)}
-		return fmt.Sprintf("discard refused: %v", lossErr), &partial, nil
+		return fmt.Sprintf("discard refused: %v", lossErr), nil
 	default:
-		return "", nil, lossErr
+		return "", lossErr
 	}
 }
 

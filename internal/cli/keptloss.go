@@ -41,40 +41,25 @@ func keptLostFileLabel(kind string) string {
 // readOutKeptWorkAnswer is a person's reading of an answer to kept work:
 // the answer's row, and for a discard shown, exactly what would be lost
 // after it, PRD section 9's "shows exactly what would be lost, with a short
-// digest of it". For a remove-anyway shown, the discard refusal and what
-// of the loss could be read. Each line keptLossLines composes is machine
-// text a person copies exactly; when a discard's loss lists nothing,
+// digest of it", and for a remove-anyway shown, the discard's refusal.
+// Each line keptLossLines composes is machine text a person copies
+// exactly, the commits, objects and files of the loss and its digest,
+// after a label; when the loss lists nothing,
 // machine.PhraseKeptWorkLosesNothing stands before the digest instead.
 func readOutKeptWorkAnswer(w io.Writer, a machine.KeptWorkAnswered) {
 	writeln(w, machine.KeptWorkAnsweredPhrase(a))
-	switch a.Effect {
-	case machine.KeptWorkRemoveAnywayShown:
-		if a.Refusal != "" {
-			writeln(w, "Refusal: "+a.Refusal)
-		}
-		if a.Loss != nil {
-			writeln(w, "Incomplete: what of the loss could be read follows; what could not is named in the refusal.")
-			for _, line := range keptLossLines(*a.Loss) {
-				// A remove-anyway partial has no discard digest; omit the
-				// empty Digest: line so Incomplete does not invent one.
-				if a.Loss.Digest == "" && strings.HasPrefix(line, keptLostDigestLabel) {
-					continue
-				}
-				writeln(w, line)
-			}
-		}
+	if a.Effect == machine.KeptWorkRemoveAnywayShown && a.Refusal != "" {
+		writeln(w, "Refusal: "+a.Refusal)
+	}
+	if a.Effect != machine.KeptWorkDiscardShown || a.Loss == nil {
 		return
-	case machine.KeptWorkDiscardShown:
-		if a.Loss == nil {
-			return
-		}
-		lines := keptLossLines(*a.Loss)
-		if len(lines) == 1 {
-			writeln(w, machine.PhraseKeptWorkLosesNothing)
-		}
-		for _, line := range lines {
-			writeln(w, line)
-		}
+	}
+	lines := keptLossLines(*a.Loss)
+	if len(lines) == 1 {
+		writeln(w, machine.PhraseKeptWorkLosesNothing)
+	}
+	for _, line := range lines {
+		writeln(w, line)
 	}
 }
 
