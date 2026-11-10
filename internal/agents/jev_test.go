@@ -276,6 +276,29 @@ func TestInstallJevBuiltinWritesRecordWithoutPlugin(t *testing.T) {
 	}
 }
 
+func TestInstallJevBuiltinClearsPriorJevInstall(t *testing.T) {
+	dir := t.TempDir()
+	jev := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
+	if _, _, err := agents.InstallJev(dir, jev); err != nil {
+		t.Fatalf("InstallJev jev: %v", err)
+	}
+	got, args, err := agents.InstallJev(dir, agents.DecideJev(false, nil, ""))
+	if err != nil {
+		t.Fatalf("InstallJev builtin: %v", err)
+	}
+	if got.Path != agents.CompactionBuiltin || args != nil {
+		t.Fatalf("got %+v args %v", got, args)
+	}
+	plugin := filepath.Join(dir, "plugins", "fast-jev-compaction")
+	if _, err := os.Stat(plugin); !os.IsNotExist(err) {
+		t.Fatalf("plugin still present after builtin: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err == nil && strings.Contains(string(raw), agents.JevFunctionHooksEnv) {
+		t.Fatalf("settings still enable function hooks: %s", raw)
+	}
+}
+
 func TestClaudeVersionAtLeast(t *testing.T) {
 	cases := []struct {
 		v, min string

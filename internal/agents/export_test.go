@@ -139,3 +139,7 @@ func SetSettingsWriteForTest(f func(path string, data []byte) error) {
 	}
 	settingsWrite = f
 }
+
+// SetJevVersionForTest replaces the claude --version string DecideJev sees.
+// Pass "" to restore the live probe.
+func SetJevVersionForTest(version string) { jevVersionForTest = version }

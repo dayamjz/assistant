@@ -108,7 +108,10 @@ func WithSweep(sw Sweep) ClaudeOption {
 
 // WithJevCompaction supplies the opt-in lookup consulted before a long-running
 // Claude Code worker or fixer launch. Called at prepare time so a service can
-// build its catalog before loading config. Nil or false leaves built-in compaction.
+// build its catalog before loading config. Nil or false leaves built-in
+// compaction and does not remap CLAUDE_CONFIG_DIR. True still falls closed to
+// built-in when a precondition fails; only a selected Jev install remaps a
+// stream-json or fixer launch onto a seeded scratch config directory.
 func WithJevCompaction(enabled func() bool) ClaudeOption {
 	return func(s *claudeSettings) { s.jev = enabled }
 }
@@ -300,10 +303,8 @@ type claudeFixer struct {
 func (f *claudeFixer) Apply(ctx context.Context, inv Invocation) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.runner.settings.jevOptIn() && f.jevDir == "" {
-		if dir, err := newJevConfigDir(); err == nil {
-			f.jevDir = dir
-		}
+	if f.jevDir == "" {
+		f.jevDir = f.runner.openFixerJevDir(inv.Dir, environment(f.runner.settings.base, inv.Env))
 	}
 	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true}, f.jevDir)
 	if reference != "" {
@@ -436,6 +437,8 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	env := environment(r.settings.base, inv.Env)
 	args := r.arguments(GrantFor(purpose), inv, s.resume)
 	// Review invocations pass an empty jevDir: Jev is for the fixer and workers only (P4).
+	// A non-empty jevDir is a seeded scratch created only after DecideJev selected
+	// the plugin; each round re-runs InstallJev so a later fall-closed clears it.
 	if jevDir != "" {
 		pluginArgs, err := r.prepareJevLaunch(jevDir, env)
 		if err != nil {

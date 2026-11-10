@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
-	"os"
 	"slices"
 	"unicode/utf8"
 )
@@ -49,18 +47,8 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	}
 	env := WorkerEnvironment(r.settings.base, spec.Env)
 	args := r.workerArguments(spec)
-	var cleanup func()
-	if r.settings.jevOptIn() {
-		configDir, err := newJevConfigDir()
-		if err != nil {
-			return nil, fmt.Errorf("making the stream-json worker's jev configuration directory: %w", err)
-		}
-		cleanup = func() { _ = os.RemoveAll(configDir) }
-		pluginArgs, err := r.prepareJevLaunch(configDir, env)
-		if err != nil {
-			cleanup()
-			return nil, err
-		}
+	configDir, pluginArgs, cleanup := r.attachJevScratch(spec.Dir, env)
+	if configDir != "" {
 		env = withEnvValue(env, claudeConfigVariable, configDir)
 		args = append(args, pluginArgs...)
 	}

@@ -334,7 +334,10 @@ type procWorker struct {
 	// process's end inside that window.
 	afterWrite func(text string)
 	// cleanup runs once after Close has ended the tree. Nil means none.
-	cleanup func()
+	// cleanupOnce guards it: Close waits on done outside closeOnce, so two
+	// callers can both pass that wait and must not double-run cleanup.
+	cleanup     func()
+	cleanupOnce sync.Once
 }
 
 // startWorker starts one process as a worker, delivers instructions on its
@@ -568,10 +571,12 @@ func (w *procWorker) Close() {
 		}
 	})
 	<-w.done
-	if w.cleanup != nil {
-		w.cleanup()
-		w.cleanup = nil
-	}
+	w.cleanupOnce.Do(func() {
+		if w.cleanup != nil {
+			w.cleanup()
+			w.cleanup = nil
+		}
+	})
 }
 
 // tailWriter keeps the most recent limit bytes written to it and counts what
