@@ -57,8 +57,42 @@ func TestInstallJevWritesPluginAndRecord(t *testing.T) {
 	if got.Path != agents.CompactionJev || len(args) != 2 || args[0] != "--plugin-dir" {
 		t.Fatalf("got %+v args %v, want jev with --plugin-dir", got, args)
 	}
-	if _, err := os.Stat(filepath.Join(args[1], "hooks", "fast-jev.ts")); err != nil {
-		t.Fatalf("plugin hook missing under %s: %v", args[1], err)
+	for _, rel := range []string{
+		"hooks/fast-jev.ts",
+		"src/compact.ts",
+		"src/request.ts",
+		".claude-plugin/plugin.json",
+		"package.json",
+	} {
+		if _, err := os.Stat(filepath.Join(args[1], filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("plugin %s missing under %s: %v", rel, args[1], err)
+		}
+	}
+	pluginMeta, err := os.ReadFile(filepath.Join(args[1], ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("plugin.json: %v", err)
+	}
+	var plugin struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(pluginMeta, &plugin); err != nil {
+		t.Fatalf("plugin.json: %v", err)
+	}
+	if plugin.Version != agents.JevPluginVersion {
+		t.Fatalf("plugin.json version = %q, want %s", plugin.Version, agents.JevPluginVersion)
+	}
+	pkgMeta, err := os.ReadFile(filepath.Join(args[1], "package.json"))
+	if err != nil {
+		t.Fatalf("package.json: %v", err)
+	}
+	var pkg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(pkgMeta, &pkg); err != nil {
+		t.Fatalf("package.json: %v", err)
+	}
+	if pkg.Version != agents.JevPluginVersion {
+		t.Fatalf("package.json version = %q, want %s", pkg.Version, agents.JevPluginVersion)
 	}
 	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
 	if err != nil {
@@ -78,6 +112,87 @@ func TestInstallJevWritesPluginAndRecord(t *testing.T) {
 	}
 	if recorded.Path != agents.CompactionJev || recorded.Plugin != agents.JevPluginVersion {
 		t.Fatalf("recorded %+v", recorded)
+	}
+}
+
+func TestInstallJevRewritesStalePlugin(t *testing.T) {
+	dir := t.TempDir()
+	pluginDir := filepath.Join(dir, "plugins", "fast-jev-compaction")
+	hook := filepath.Join(pluginDir, "hooks", "fast-jev.ts")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("stale-hook"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
+	got, args, err := agents.InstallJev(dir, d)
+	if err != nil {
+		t.Fatalf("InstallJev: %v", err)
+	}
+	if got.Path != agents.CompactionJev {
+		t.Fatalf("got %+v, want jev", got)
+	}
+	raw, err := os.ReadFile(filepath.Join(args[1], "hooks", "fast-jev.ts"))
+	if err != nil {
+		t.Fatalf("hook: %v", err)
+	}
+	if string(raw) == "stale-hook" {
+		t.Fatal("left the planted stale hook in place")
+	}
+	if _, err := os.Stat(filepath.Join(args[1], "src", "compact.ts")); err != nil {
+		t.Fatalf("src/compact.ts missing after rewrite: %v", err)
+	}
+}
+
+func TestInstallJevMergesSettings(t *testing.T) {
+	dir := t.TempDir()
+	prior := []byte(`{"env":{"KEEP_ME":"1"},"other":true}` + "\n")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), prior, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
+	if _, _, err := agents.InstallJev(dir, d); err != nil {
+		t.Fatalf("InstallJev: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings["other"] != true {
+		t.Fatalf("settings = %#v, want other kept", settings)
+	}
+	env, _ := settings["env"].(map[string]any)
+	if env["KEEP_ME"] != "1" || env[agents.JevFunctionHooksEnv] != "1" {
+		t.Fatalf("env = %#v, want KEEP_ME and %s", env, agents.JevFunctionHooksEnv)
+	}
+}
+
+func TestInstallJevFallsClosedWhenRecordUnwritable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "compaction.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := agents.DecideJev(true, []string{agents.JevKeyVariable + "=k"}, agents.JevMinClaudeVersion)
+	got, args, err := agents.InstallJev(dir, d)
+	if err != nil {
+		t.Fatalf("InstallJev returned error %v, want nil (fall closed)", err)
+	}
+	if got.Path != agents.CompactionBuiltin || args != nil {
+		t.Fatalf("got %+v args %v, want builtin with no plugin args", got, args)
+	}
+	if !strings.Contains(got.Reason, "record write failed") {
+		t.Fatalf("reason %q, want record write failed", got.Reason)
+	}
+	if got.Path == agents.CompactionJev {
+		t.Fatal("returned Path=jev after a failed record write")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plugins")); !os.IsNotExist(err) {
+		t.Fatalf("plugin tree left after record failure: %v", err)
 	}
 }
 
