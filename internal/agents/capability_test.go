@@ -826,7 +826,9 @@ var overTheWire = map[string]func(t *testing.T) agents.Runner{
 		).Runner()
 	},
 	agents.CursorName: func(t *testing.T) agents.Runner {
-		return standin.NewCursor(t, standin.Script{Steps: []standin.Step{countProbeStep}}).Runner()
+		return standin.NewCursor(t, standin.Script{Steps: []standin.Step{countProbeStep},
+			Worker: &standin.WorkerScript{Exchanges: []standin.Exchange{interruptProbeExchange}}},
+		).Runner()
 	},
 	agents.CodexName: func(t *testing.T) agents.Runner {
 		return standin.NewCodex(t, standin.Script{Steps: []standin.Step{countProbeStep},
@@ -1016,7 +1018,8 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("cursor factory failed: %v", err)
 	}
 	cursorDeclared := cursor.Capabilities()
-	wantCursor := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}, counts...)
+	wantCursor := append([]agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityPipeInterrupt}, counts...)
 	if got := cursorDeclared.List(); !slices.Equal(got, wantCursor) {
 		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}

@@ -217,8 +217,13 @@ func (r *cursorRunner) Capabilities() Capabilities { return cursorDeclaration }
 
 // cursorDeclaration is what Capabilities and the factory's Declares both return.
 var cursorDeclaration = Declare(CapabilityResumableSessions, CapabilityWorkerSessions,
+	CapabilityPipeInterrupt,
 	CapabilityReportsInputTokens, CapabilityReportsOutputTokens,
 	CapabilityReportsCacheReadTokens, CapabilityReportsCacheCreationTokens)
+
+// pipeInterrupt is the Runner half of CapabilityPipeInterrupt: Start's
+// workers implement InterruptibleWorker over ACP session/cancel.
+func (*cursorRunner) pipeInterrupt() {}
 
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces
