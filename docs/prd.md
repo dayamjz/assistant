@@ -1419,12 +1419,12 @@ so remove anyway is refused for that copy while its preview reads.
   can remove it is refused, naming the discard. It is refused while a claim stands on the copy,
   or while what a discard set aside stands beside it.
 - **Shown, then confirmed with `--force` and the task's name.** `--answer remove-anyway` alone
-  shows why a discard refuses. It shows nothing of the loss, since a discard that refuses has
-  read none of it; showing what of it can be read is a residual gap (#880). It removes
-  nothing, releases nothing and records nothing. Repeating it with `--force` and the task's name
-  typed out is admitted only as a discard's confirmation is, from a terminal's foreground. A
-  name that does not match, or a copy that no longer reads as the refusal named, refuses and
-  changes nothing.
+  shows why a discard refuses. It shows nothing of the loss, since a discard that refuses
+  returns its refusal and no loss, even where it read the copy before refusing; showing what of
+  it can be read is a residual gap (#880). It removes nothing, releases nothing and records
+  nothing. Repeating it with `--force` and the task's name typed out is admitted only as a
+  discard's confirmation is, from a terminal's foreground. A name that does not match, or a copy
+  that no longer reads as the refusal named, refuses and changes nothing.
 - **What it does.** It closes the entry (and every other open entry of the same copy that the
   refusal covered) and leaves the copy where it stands. P12 cleanup may still remove the copy
   later on a proof; this answer does not. A stop part way leaves the claim owed and is taken up

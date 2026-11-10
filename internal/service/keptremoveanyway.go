@@ -22,8 +22,9 @@ import (
 // earlier, since a pre-PONR refusal takes its claim back and leaves
 // nothing on the entry. So a copy whose preview reads but whose removal
 // keeps being refused is refused here naming the discard, and neither
-// answer releases it (#880). Nothing of the loss is shown either: a
-// discard that refuses has read none of it (#880).
+// answer releases it (#880). Nothing of the loss is shown either: Loss
+// returns its refusal and no loss, even where it read the copy before
+// refusing (#880).
 
 // removeAnywayKeptWork is the remove-anyway answer.
 func (s *Service) removeAnywayKeptWork(ctx context.Context, req ipc.Request, entry store.KeptWork, force bool) (machine.KeptWorkAnswered, error) {

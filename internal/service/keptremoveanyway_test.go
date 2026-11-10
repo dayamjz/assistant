@@ -40,7 +40,7 @@ func TestARemoveAnywayReleasesAShallowKeptCopyAndKeepsIt(t *testing.T) {
 			t.Fatalf("remove-anyway shown = %+v, %v; want remove-anyway-shown with a refusal", shown, err)
 		}
 		if shown.Loss != nil {
-			t.Fatalf("shown loss = %+v; want none, since a discard that refuses reads none of it", shown.Loss)
+			t.Fatalf("shown loss = %+v; want none, since a discard that refuses returns no loss", shown.Loss)
 		}
 
 		request.Force = true
