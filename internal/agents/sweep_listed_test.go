@@ -32,6 +32,81 @@ func realRefusal(t *testing.T) agents.Refusal {
 	return refusal
 }
 
+// TestAShortLivedUnreadableBlockerIsGoneOnTheReList holds the sweep's one
+// re-list when a refusal's only blockers are unreadable processes: a process
+// of this user outside every copy, whose working directory the first listing
+// is refused, is ended before the second listing, and that second listing
+// finds it gone, so the sweep clears. That is the class a short-lived
+// helper such as tmux's utempter hits on Linux CI (#774): the first listing
+// cannot say where it stands, and by a second look it is already gone. The
+// process is never signalled by the sweep itself. Clear is asserted only
+// where an empty copy's sweep clears; the re-list count is asserted on
+// every host, so a change that cleared by ignoring blockers would still fail.
+func TestAShortLivedUnreadableBlockerIsGoneOnTheReList(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	blockers := hostBlockers(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("the detached process %s is on this test's parent chain", outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID },
+		func() {
+			if err := syscall.Kill(outside.id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				t.Fatalf("ending the refused process %s before the re-list: %v", outside.id, err)
+			}
+			waitEnded(t, outside, "ending the refused process before the re-list")
+		},
+		refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the re-list still named the ended process %s in %s (%+v)", outside.id, r, r)
+	}
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep whose only unreadable blocker was gone on the re-list")
+	hostLimit(t, blockers, "that a sweep whose only unreadable blocker was gone on the re-list clears")
+}
+
+// TestAnUnreadableBlockerStillPresentOnTheReListKeepsTheSweepFromClearing
+// holds the other half of the re-list: a process of this user outside every
+// copy, whose working directory both listings are refused, still blocks and
+// the sweep does not clear. The safety rule stands: never clear while a
+// process that might stand in the copy is still present and unreadable. The
+// process is never signalled.
+func TestAnUnreadableBlockerStillPresentOnTheReListKeepsTheSweepFromClearing(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("the detached process %s is on this test's parent chain", outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, nil, refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if r.Clear() || !blocks(r, outside.id) || r.Unreadable < 1 || mentions(r, outside.id) {
+		t.Fatalf("the sweep refused %s's working directory on both listings and did %s (%+v), want it not clear with that process blocking and never signalled", outside.id, r, r)
+	}
+	requirePresent(t, outside, "a process whose working directory both listings were refused")
+}
+
 // TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing
 // establishes P6 on the sweep's answer: a process of this test's own user,
 // standing in the copy, whose working directory the listing is refused, is

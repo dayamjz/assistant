@@ -19,9 +19,11 @@ paths: ["internal/agents/**"]
   and `EndGroup` the only way to end a group it started from outside the
   invocation, signalling nothing until `Identity.Presence` verifies the
   leader. `ErrSweepUnsupported` means "could not prove", and its zero
-  `SweepResult` is not `Clear`, so never read it as "none found". A sweep
-  refusal's blocker command name is for diagnosis only and must never feed a
-  decision.
+  `SweepResult` is not `Clear`, so never read it as "none found". When a
+  sweep's only blockers are unreadable processes, it lists once more before
+  answering; a blocker still present still refuses, and a copy is never
+  cleared while one remains. A sweep refusal's blocker command name is for
+  diagnosis only and must never feed a decision.
 
 Read `doc.go` before changing the P4 split, the capability declarations, the
 worker, the sweep or `EndGroup`, and for the residual gaps. `grant.go` owns

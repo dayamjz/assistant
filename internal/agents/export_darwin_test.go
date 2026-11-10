@@ -45,9 +45,20 @@ func RealRefusal(ctx context.Context) (Refusal, bool) {
 // obtains first shows it giving for a real one. lsof does not leave out a
 // same-user process's working directory on demand, and this is the one
 // read a test cannot make it refuse.
-func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, _ Refusal) (SweepResult, error) {
-	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
-		return listUnderReading(ctx, d, func(ctx context.Context) (map[int]string, error) {
+func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, refusal Refusal) (SweepResult, error) {
+	r, _, err := SweepRefusingAfter(ctx, s, dir, refuse, nil, refusal)
+	return r, err
+}
+
+// SweepRefusingAfter is SweepRefusing with afterFirst called after the first
+// listing returns, before any re-list Sweeper makes when that listing's only
+// blockers are unreadable processes. listings is how many times the listing
+// ran. A nil afterFirst is SweepRefusing.
+func SweepRefusingAfter(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, afterFirst func(), _ Refusal) (SweepResult, int, error) {
+	var listings int
+	r, err := s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
+		listings++
+		found, listErr := listUnderReading(ctx, d, func(ctx context.Context) (map[int]string, error) {
 			cwds, err := systemLsof.readCwds(ctx)
 			if err != nil {
 				return nil, err
@@ -55,7 +66,12 @@ func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid 
 			maps.DeleteFunc(cwds, func(pid int, _ string) bool { return refuse(pid) })
 			return cwds, nil
 		})
+		if listings == 1 && afterFirst != nil && listErr == nil {
+			afterFirst()
+		}
+		return found, listErr
 	})
+	return r, listings, err
 }
 
 // ProcessIDs lists the identifiers in the kernel's process table.

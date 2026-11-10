@@ -40,14 +40,30 @@ func RealRefusal(context.Context) (Refusal, bool) {
 // it refuse, so the shape is carried over from a real refusal rather than
 // stated.
 func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, refusal Refusal) (SweepResult, error) {
-	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
-		return listUnderReading(ctx, d, func(pid int) (string, error) {
+	r, _, err := SweepRefusingAfter(ctx, s, dir, refuse, nil, refusal)
+	return r, err
+}
+
+// SweepRefusingAfter is SweepRefusing with afterFirst called after the first
+// listing returns, before any re-list Sweeper makes when that listing's only
+// blockers are unreadable processes. listings is how many times the listing
+// ran. A nil afterFirst is SweepRefusing.
+func SweepRefusingAfter(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, afterFirst func(), refusal Refusal) (SweepResult, int, error) {
+	var listings int
+	r, err := s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
+		listings++
+		found, listErr := listUnderReading(ctx, d, func(pid int) (string, error) {
 			if refuse(pid) {
 				return "", &os.PathError{Op: refusal.Op, Path: "/proc/" + strconv.Itoa(pid) + "/cwd", Err: refusal.Err}
 			}
 			return readCwdLink(pid)
 		})
+		if listings == 1 && afterFirst != nil && listErr == nil {
+			afterFirst()
+		}
+		return found, listErr
 	})
+	return r, listings, err
 }
 
 // ProcessIDs lists the identifiers of the numbered entries in /proc.
