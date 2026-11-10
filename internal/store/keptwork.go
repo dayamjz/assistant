@@ -14,12 +14,8 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 )
 
-// KeptAnswer is one of PRD section 6's three answers to kept work. The set
-// is closed in this package: Recognized and every typed writer admit only
-// KeptAnswers. The table's CHECK may already admit a fourth value a later
-// migration will recognize; a row that carries it is unreadable through
-// KeptWorkEntry until then (ErrUnknownKeptAnswer), so the widen alone does
-// not claim the CHECK holds this set.
+// KeptAnswer is one of PRD section 6's answers to kept work. The set is
+// closed and the table's check holds it too.
 type KeptAnswer string
 
 // The answers, in the PRD's order.
@@ -31,10 +27,15 @@ const (
 	// KeptDiscard is "remove the copy", given by a person who was shown
 	// what is lost.
 	KeptDiscard KeptAnswer = "discard"
+	// KeptRemoveAnyway is "release the entry and keep the copy", given
+	// when a discard refuses the copy (decision 31).
+	KeptRemoveAnyway KeptAnswer = "remove-anyway"
 )
 
 // KeptAnswers returns the answers in the PRD's order.
-func KeptAnswers() []KeptAnswer { return []KeptAnswer{KeptLand, KeptCarryOn, KeptDiscard} }
+func KeptAnswers() []KeptAnswer {
+	return []KeptAnswer{KeptLand, KeptCarryOn, KeptDiscard, KeptRemoveAnyway}
+}
 
 // Recognized reports whether a is one of KeptAnswers.
 func (a KeptAnswer) Recognized() bool {
@@ -66,8 +67,8 @@ const KeptRemovedOnProof KeptClosure = "removed-on-proof"
 // never silent". It is written once, by RecordKeptWork, when the copy is
 // kept. Its one revision closes it, once and only while it is open: a
 // person's answer, written only with its outcome (RecordKeptWorkLanding,
-// MarkKeptWorkCarriedOn, RecordKeptWorkDiscard) after it was claimed on the
-// open entry, or the program's closure,
+// MarkKeptWorkCarriedOn, RecordKeptWorkDiscard, RecordKeptWorkRemoveAnyway)
+// after it was claimed on the open entry, or the program's closure,
 // KeptRemovedOnProof, when the copy is removed on a proof. SurfacedAt, the
 // PRD row's "when it last surfaced", is the one other field that moves,
 // only forward, through MarkKeptWorkSurfaced. The schema's seals hold all of
@@ -214,6 +215,18 @@ type KeptWork struct {
 	DiscardDigest    Optional[string]    `json:"discard_digest"`
 	DiscardLacks     []string            `json:"discard_lacks"`
 	DiscardedAt      Optional[time.Time] `json:"discarded_at"`
+	// RemoveAnywayClaimedAt, RemoveAnywayBy, RemoveAnywayRefusal and
+	// RemoveAnywayShown are the remove-anyway claim (discard refusal
+	// overridden and what of the loss was shown, who, when), written
+	// together by ClaimKeptWorkRemoveAnyway on an open entry and withdrawn
+	// by WithdrawKeptWorkRemoveAnyway while unanswered. RemovedAnywayAt is
+	// when the entry was released, written by RecordKeptWorkRemoveAnyway
+	// with the remove-anyway answer; nothing there reads or removes the copy.
+	RemoveAnywayClaimedAt Optional[time.Time] `json:"remove_anyway_claimed_at"`
+	RemoveAnywayBy        Optional[Resolver]  `json:"-"`
+	RemoveAnywayRefusal   Optional[string]    `json:"remove_anyway_refusal"`
+	RemoveAnywayShown     []string            `json:"remove_anyway_shown"`
+	RemovedAnywayAt       Optional[time.Time] `json:"removed_anyway_at"`
 }
 
 // Key is the name a person gives --hold to answer this entry, PRD section
@@ -265,6 +278,12 @@ func (k KeptWork) CarryOnClaimed() bool { return k.Open() && k.CarriedOnTask.IsK
 // withdrawn, and until then holds the entry open.
 func (k KeptWork) DiscardClaimed() bool { return k.Open() && k.DiscardClaimedAt.IsKnown() }
 
+// RemoveAnywayClaimed reports whether the entry is open with a
+// remove-anyway claim on it: a remove-anyway recorded and not yet
+// carried out, which is carried out or withdrawn, and until then holds
+// the entry open.
+func (k KeptWork) RemoveAnywayClaimed() bool { return k.Open() && k.RemoveAnywayClaimedAt.IsKnown() }
+
 // KeptCopy is what a caller states when a copy is kept: whose it is, where
 // it stands, what it was read to hold, and why it was kept. The project and
 // the branch are not stated, because the owner's row is their owner and
@@ -300,21 +319,22 @@ var ErrKeptWorkAnswered = errors.New("store: the kept work entry is already answ
 var ErrKeptWorkClosed = errors.New("store: the kept work entry was closed when its copy was removed on a proof")
 
 // ErrKeptWorkCopyOwed is returned by ClaimKeptWorkLanding,
-// ClaimKeptWorkCarryOn, ClaimKeptWorkDiscard and TransitionTaskShape for an
-// entry of a copy that holds an answer not yet carried out: a landing, a
-// carry on or a discard claimed on any entry of the copy, this one
-// included. Each of those still needs the copy where it stands, and a
-// second answer could move it, remove it, or land it twice. Nothing is
-// written; the owed answer is completed or withdrawn by its own next call
-// or the next start, and the entry can be answered after.
+// ClaimKeptWorkCarryOn, ClaimKeptWorkDiscard, ClaimKeptWorkRemoveAnyway and
+// TransitionTaskShape for an entry of a copy that holds an answer not yet
+// carried out: a landing, a carry on, a discard or a remove-anyway claimed
+// on any entry of the copy, this one included. A second answer could move
+// the copy, remove it, land it twice, or release the entry while another
+// claim still needs it. Nothing is written; the owed answer is completed
+// or withdrawn by its own next call (or, for land/carry-on/discard, the
+// next service start), and the entry can be answered after.
 var ErrKeptWorkCopyOwed = errors.New("store: another kept work entry of the same copy holds an answer not yet carried out")
 
-// ErrKeptWorkUnverified is TransitionTaskShape's, MarkKeptWorkCarriedOn's
-// and RecordKeptWorkDiscard's refusal of a flip, mark or discard record
-// over a copy with an open kept work entry the caller did not verify the
-// copy for: the write would answer that entry, and every answer to a kept
-// copy is given only for a copy the kept-copy verification took. Nothing
-// is written.
+// ErrKeptWorkUnverified is TransitionTaskShape's, MarkKeptWorkCarriedOn's,
+// RecordKeptWorkDiscard's and RecordKeptWorkRemoveAnyway's refusal of a
+// flip, mark, discard or remove-anyway record over a copy with an open
+// kept work entry the caller did not verify the copy for: the write would
+// answer that entry, and every answer to a kept copy is given only for a
+// copy the kept-copy verification took. Nothing is written.
 var ErrKeptWorkUnverified = errors.New("store: an open kept work entry of the copy was not verified before it would be answered")
 
 // ErrKeptWorkCarryOnClaimed is returned, matching ErrKeptWorkCopyOwed too,
@@ -605,10 +625,11 @@ func (s *Store) OpenKeptWork(ctx context.Context) ([]KeptWork, error) {
 
 // OpenKeptWorkOfCopy returns every open entry recorded at copyPath, neither
 // answered nor closed, oldest first: the copy kept at each state it was
-// kept at. It is the set a carry on or a discard of any one of them closes
-// (MarkKeptWorkCarriedOn, RecordKeptWorkDiscard), so it is the read
-// internal/service makes to hold the copy to every one of them before it
-// claims, moves, adopts or removes the copy, and never the answered entry
+// kept at. It is the set a carry on, a discard or a remove-anyway of any
+// one of them closes (MarkKeptWorkCarriedOn, RecordKeptWorkDiscard,
+// RecordKeptWorkRemoveAnyway), so it is the read internal/service makes to
+// hold the copy to every one of them before it claims, moves, adopts,
+// removes or releases the copy's entries, and never the answered entry
 // alone.
 func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]KeptWork, error) {
 	if err := s.live(); err != nil {
@@ -626,8 +647,9 @@ func (s *Store) OpenKeptWorkOfCopy(ctx context.Context, copyPath string) ([]Kept
 }
 
 // openKeptWorkOfCopy is the one spelling of an open entry of a copy, by
-// its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn
-// and RecordKeptWorkDiscard close beside the entry marked.
+// its path: what OpenKeptWorkOfCopy lists and what MarkKeptWorkCarriedOn,
+// RecordKeptWorkDiscard and RecordKeptWorkRemoveAnyway close beside the
+// entry marked.
 const openKeptWorkOfCopy = `copy_path = ? AND answer IS NULL AND closure IS NULL`
 
 // MarkKeptWorkSurfaced records that the entry was raised to someone at at.
@@ -769,11 +791,15 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 	if k.DiscardClaimedAt.IsKnown() {
 		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkDiscardClaimed)
 	}
+	if k.RemoveAnywayClaimedAt.IsKnown() {
+		return fmt.Errorf("%w: %w", ErrKeptWorkCopyOwed, ErrKeptWorkRemoveAnywayClaimed)
+	}
 	var owed int64
 	var what string
 	switch err := tx.QueryRowContext(ctx, `SELECT id, CASE
 			WHEN carried_on_task IS NOT NULL THEN 'claimed carry on by task ' || carried_on_task
 			WHEN discard_claimed_at IS NOT NULL THEN 'claimed discard'
+			WHEN remove_anyway_claimed_at IS NOT NULL THEN 'claimed remove anyway'
 			ELSE 'claimed land' END
 		FROM kept_work WHERE copy_path = ? AND id <> ? AND (`+owedOnCopy+`) ORDER BY id LIMIT 1`, k.CopyPath, k.ID).Scan(&owed, &what); {
 	case err == nil:
@@ -785,26 +811,30 @@ func refuseUnlessAnswerable(ctx context.Context, tx *sql.Tx, k KeptWork) error {
 }
 
 // owedOnCopy is the condition of an entry holding an answer not yet
-// carried out, which ErrKeptWorkCopyOwed names: a landing, a carry on or a
-// discard claimed on an entry neither answered nor closed.
+// carried out, which ErrKeptWorkCopyOwed names: a landing, a carry on, a
+// discard or a remove-anyway claimed on an entry neither answered nor closed.
 const owedOnCopy = `answer IS NULL AND closure IS NULL AND
-	(landing_claimed_at IS NOT NULL OR carried_on_task IS NOT NULL OR discard_claimed_at IS NOT NULL)`
+	(landing_claimed_at IS NOT NULL OR carried_on_task IS NOT NULL OR discard_claimed_at IS NOT NULL
+		OR remove_anyway_claimed_at IS NOT NULL)`
 
 const keptWorkColumns = `SELECT id, task_id, run_id, repository_id, branch, copy_path, holds, reason, detail, kept_at,
 	surfaced_at, answer, answered_by, answered_at, closure, closed_proof, closed_at, lacks, against, unestablished,
 	landing_claimed_at, landing_by, landed_run, carried_on_task, carried_on_copy, carry_on_by, carry_on_claimed_at, carried_on_at,
 	discard_claimed_at, discard_by, discard_digest, discard_lacks, discarded_at,
+	remove_anyway_claimed_at, remove_anyway_by, remove_anyway_refusal, remove_anyway_shown, removed_anyway_at,
 	(SELECT task.machine FROM task WHERE task.id = kept_work.task_id)`
 
 func scanKeptWork(sc scanner) (KeptWork, error) {
 	var k KeptWork
 	var holds, kept string
 	var surfaced, answer, by, answered, closure, proof, closed, lacks, landingClaimed, landingBy, carryOnBy, carryOnClaimed, carriedOn,
-		discardClaimed, discardBy, discardDigest, discardLacks, discarded, machine Optional[string]
+		discardClaimed, discardBy, discardDigest, discardLacks, discarded,
+		removeAnywayClaimed, removeAnywayBy, removeAnywayRefusal, removeAnywayShown, removedAnyway, machine Optional[string]
 	if err := sc.Scan(&k.ID, &k.TaskID, &k.RunID, &k.RepositoryID, &k.Branch, &k.CopyPath, &holds, &k.Reason, &k.Detail,
 		&kept, &surfaced, &answer, &by, &answered, &closure, &proof, &closed, &lacks, &k.Against, &k.Unestablished,
 		&landingClaimed, &landingBy, &k.LandedRun, &k.CarriedOnTask, &k.CarriedOnCopy, &carryOnBy, &carryOnClaimed, &carriedOn,
 		&discardClaimed, &discardBy, &discardDigest, &discardLacks, &discarded,
+		&removeAnywayClaimed, &removeAnywayBy, &removeAnywayRefusal, &removeAnywayShown, &removedAnyway,
 		&machine); err != nil {
 		return KeptWork{}, err
 	}
@@ -889,6 +919,26 @@ func scanKeptWork(sc scanner) (KeptWork, error) {
 		}
 	}
 	if k.DiscardedAt, err = optionalTimeValue(discarded, "discarded_at"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.RemoveAnywayClaimedAt, err = optionalTimeValue(removeAnywayClaimed, "remove_anyway_claimed_at"); err != nil {
+		return KeptWork{}, err
+	}
+	if k.RemoveAnywayBy, err = resolverValue(removeAnywayBy, "remove_anyway_by"); err != nil {
+		return KeptWork{}, err
+	}
+	if refusal, ok := removeAnywayRefusal.Get(); ok {
+		k.RemoveAnywayRefusal = Known(refusal)
+	}
+	if encoded, ok := removeAnywayShown.Get(); ok {
+		if err := json.Unmarshal([]byte(encoded), &k.RemoveAnywayShown); err != nil {
+			return KeptWork{}, fmt.Errorf("column remove_anyway_shown: %w", err)
+		}
+		if k.RemoveAnywayShown == nil {
+			k.RemoveAnywayShown = []string{}
+		}
+	}
+	if k.RemovedAnywayAt, err = optionalTimeValue(removedAnyway, "removed_anyway_at"); err != nil {
 		return KeptWork{}, err
 	}
 	return k, nil
@@ -1358,6 +1408,182 @@ func (s *Store) KeptWorkDiscardsOwed(ctx context.Context) ([]KeptWork, error) {
 	out, err := scanKeptWorkRows(rows)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the kept work discards owed: %w", err)
+	}
+	return out, nil
+}
+
+// ErrKeptWorkRemovedAnyway is returned by RecordKeptWorkRemoveAnyway for an
+// entry already released by remove-anyway.
+var ErrKeptWorkRemovedAnyway = errors.New("store: the kept work entry is already removed anyway")
+
+// ErrKeptWorkNotRemoveAnyway is returned by RecordKeptWorkRemoveAnyway and
+// WithdrawKeptWorkRemoveAnyway for an entry that holds no remove-anyway claim.
+var ErrKeptWorkNotRemoveAnyway = errors.New("store: the kept work entry holds no remove-anyway claim")
+
+// ErrKeptWorkRemoveAnywayClaimed is returned, matching ErrKeptWorkCopyOwed too,
+// by ClaimKeptWorkRemoveAnyway and every other answer for an entry whose
+// remove-anyway is already claimed. The first claim stands and nothing is
+// written.
+var ErrKeptWorkRemoveAnywayClaimed = errors.New("store: the kept work entry's remove-anyway is already claimed")
+
+// ClaimKeptWorkRemoveAnyway records a remove-anyway claim on an open entry:
+// refusal (the discard refusal it overrides), shown (what of the loss was
+// shown), and by, with the instant, before the entry is released, so two
+// releases of one entry get one claim. The entry stays open until
+// RecordKeptWorkRemoveAnyway or WithdrawKeptWorkRemoveAnyway. Refusals:
+// ErrKeptWorkAnswered, ErrKeptWorkClosed, ErrKeptWorkCopyOwed (already
+// claimed, or another entry of the copy owes an answer), empty refusal,
+// ErrNotFound, zero Resolver. Nothing is written on a refusal.
+func (s *Store) ClaimKeptWorkRemoveAnyway(ctx context.Context, id int64, refusal string, shown []string, by Resolver) (KeptWork, error) {
+	if strings.TrimSpace(refusal) == "" {
+		return KeptWork{}, fmt.Errorf("store: kept work entry %d: a remove-anyway records the discard refusal it overrides, and was given none", id)
+	}
+	encoded, err := encodeExamined(shown)
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming the remove-anyway of kept work entry %d: %w", id, err)
+	}
+	who, err := resolverText(by)
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming the remove-anyway of kept work entry %d: %w", id, err)
+	}
+	var out KeptWork
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if err := refuseUnlessAnswerable(ctx, tx, k); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET remove_anyway_claimed_at = ?, remove_anyway_by = ?, remove_anyway_refusal = ?, remove_anyway_shown = ?
+			WHERE id = ?`, encodeTime(nowUTC()), who, refusal, encoded, id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: claiming the remove-anyway of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// WithdrawKeptWorkRemoveAnyway takes back an unanswered remove-anyway claim
+// when the release could not be recorded. ErrKeptWorkAnswered,
+// ErrKeptWorkNotRemoveAnyway, or ErrNotFound; it removes nothing.
+func (s *Store) WithdrawKeptWorkRemoveAnyway(ctx context.Context, id int64) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		if k.Answered() {
+			return ErrKeptWorkAnswered
+		}
+		if !k.RemoveAnywayClaimedAt.IsKnown() {
+			return ErrKeptWorkNotRemoveAnyway
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET remove_anyway_claimed_at = NULL, remove_anyway_by = NULL, remove_anyway_refusal = NULL,
+			remove_anyway_shown = NULL WHERE id = ?`, id); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: withdrawing the remove-anyway claim of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// RecordKeptWorkRemoveAnyway records that the claimed entry is released,
+// once: the entry is answered remove-anyway from its claim, with
+// removed_anyway_at, in one write that also answers every other open entry
+// of the same copy holding no claim of its own, with the same claim (PRD
+// section 6). Nothing here reads the copy or removes it; the answer is the
+// entry's release. verified is those other open entries as
+// OpenKeptWorkOfCopy listed them; one kept since refuses with
+// ErrKeptWorkUnverified and writes nothing. Refusals:
+// ErrKeptWorkRemovedAnyway, ErrKeptWorkAnswered, ErrKeptWorkClosed,
+// ErrKeptWorkNotRemoveAnyway, ErrNotFound.
+func (s *Store) RecordKeptWorkRemoveAnyway(ctx context.Context, id int64, verified []int64) (KeptWork, error) {
+	var out KeptWork
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		k, err := scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		if err != nil {
+			return errNoRows(err)
+		}
+		switch {
+		case k.RemovedAnywayAt.IsKnown():
+			return ErrKeptWorkRemovedAnyway
+		case k.Answered():
+			return ErrKeptWorkAnswered
+		case k.Closure.IsKnown():
+			return ErrKeptWorkClosed
+		case !k.RemoveAnywayClaimedAt.IsKnown():
+			return ErrKeptWorkNotRemoveAnyway
+		}
+		var refusal, shown, by, claimed string
+		if err := tx.QueryRowContext(ctx, `SELECT remove_anyway_refusal, remove_anyway_shown, remove_anyway_by, remove_anyway_claimed_at FROM kept_work WHERE id = ?`,
+			id).Scan(&refusal, &shown, &by, &claimed); err != nil {
+			return err
+		}
+		open, err := tx.QueryContext(ctx, `SELECT id FROM kept_work WHERE `+openKeptWorkOfCopy+` AND id != ? ORDER BY id`, k.CopyPath, id)
+		if err != nil {
+			return err
+		}
+		var unverified []int64
+		for open.Next() {
+			var other int64
+			if err := open.Scan(&other); err != nil {
+				_ = open.Close()
+				return err
+			}
+			if !slices.Contains(verified, other) {
+				unverified = append(unverified, other)
+			}
+		}
+		if err := open.Close(); err != nil {
+			return err
+		}
+		if err := open.Err(); err != nil {
+			return err
+		}
+		if len(unverified) > 0 {
+			return fmt.Errorf("%w: entry %d of the copy was kept after the remove-anyway last read it", ErrKeptWorkUnverified, unverified[0])
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE kept_work SET answer = 'remove-anyway', answered_by = ?, answered_at = ?, remove_anyway_claimed_at = ?,
+			remove_anyway_by = ?, remove_anyway_refusal = ?, remove_anyway_shown = ?, removed_anyway_at = ?
+			WHERE id = ? OR (`+openKeptWorkOfCopy+` AND remove_anyway_claimed_at IS NULL)`,
+			by, claimed, claimed, by, refusal, shown, encodeTime(nowUTC()), id, k.CopyPath); err != nil {
+			return err
+		}
+		out, err = scanKeptWork(tx.QueryRowContext(ctx, keptWorkColumns+` FROM kept_work WHERE id = ?`, id))
+		return err
+	})
+	if err != nil {
+		return KeptWork{}, fmt.Errorf("store: recording the remove-anyway of kept work entry %d: %w", id, err)
+	}
+	return out, nil
+}
+
+// KeptWorkRemoveAnywaysOwed returns every open entry holding a
+// remove-anyway claim, oldest first. Completing or withdrawing those
+// claims at service start is not this package's; the reader only lists
+// them so a caller can.
+func (s *Store) KeptWorkRemoveAnywaysOwed(ctx context.Context) ([]KeptWork, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, keptWorkColumns+` FROM kept_work
+		WHERE remove_anyway_claimed_at IS NOT NULL AND answer IS NULL AND closure IS NULL ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work remove-anyways owed: %w", err)
+	}
+	out, err := scanKeptWorkRows(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the kept work remove-anyways owed: %w", err)
 	}
 	return out, nil
 }

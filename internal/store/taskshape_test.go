@@ -357,3 +357,40 @@ func TestTheFlipRefusesAnEntryWhoseDiscardIsClaimed(t *testing.T) {
 		t.Fatalf("after the refused flip the entry reads %+v, %v; want it open with its discard claimed", still, err)
 	}
 }
+
+// The same owed rule for a remove-anyway claim: dropping it from the
+// flip's owed check while leaving refuseUnlessAnswerable alone would
+// answer carry-on under a standing remove-anyway claim;
+// keptremoveanyway_test.go would still pass.
+func TestTheFlipRefusesAnEntryWhoseRemoveAnywayIsClaimed(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P15)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+	task := seedInvestigation(t, s, "taskaaaaaavr")
+	entry, _, err := s.RecordKeptWork(ctx, KeptCopy{TaskID: task.ID, CopyPath: task.WorktreePath,
+		Holds: []string{"eeee"}, Reason: "unproven", Against: "mmmm"})
+	if err != nil {
+		t.Fatalf("RecordKeptWork: %v", err)
+	}
+	if _, err := s.ClaimKeptWorkRemoveAnyway(ctx, entry.ID, "discard refused: shallow", []string{"eeee"}, ResolvedByPerson()); err != nil {
+		t.Fatal(err)
+	}
+	before := historyOf(t, s, task.ID)
+	anchor := before[len(before)-1].Sequence
+	_, _, err = s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic",
+		config.DeliveryGated, "Deliver it.", anchor, "promoted in the test", ResolvedByMachineInterface(), []int64{entry.ID})
+	if !errors.Is(err, ErrKeptWorkCopyOwed) {
+		t.Fatalf("the flip over a claimed remove-anyway = %v; want ErrKeptWorkCopyOwed", err)
+	}
+	if got, err := s.Task(ctx, task.ID); err != nil || got.Shape != TaskInvestigation {
+		t.Fatalf("after the refused flip the task reads %+v, %v; want the investigation", got, err)
+	}
+	if after := historyOf(t, s, task.ID); len(after) != len(before) {
+		t.Fatalf("the refused flip grew the history from %d to %d entries", len(before), len(after))
+	}
+	if still, err := s.KeptWorkEntry(ctx, entry.ID); err != nil || !still.Open() || !still.RemoveAnywayClaimed() {
+		t.Fatalf("after the refused flip the entry reads %+v, %v; want it open with its remove-anyway claimed", still, err)
+	}
+}
