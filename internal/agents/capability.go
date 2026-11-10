@@ -109,12 +109,28 @@ const (
 	// Claude Code declares it over Escape, on the observations
 	// claudeterminal.go records; the scripted adapter reads no screen, so
 	// it could prove nothing and does not. It is a claim about terminal
-	// workers only: an interrupt over a pipe is a protocol's cancel with a
-	// proof of its own, and nothing in this build declares one. The
-	// conformance suite holds it to the stand-in's model of the CLI and,
-	// where one is on PATH, to the installed CLI, on
+	// workers only: an interrupt over a pipe is CapabilityPipeInterrupt.
+	// The conformance suite holds it to the stand-in's model of the CLI
+	// and, where one is on PATH, to the installed CLI, on
 	// CapabilityTerminalWorkers' terms.
 	CapabilityTerminalInterrupt Capability = "terminal_interrupt"
+	// CapabilityPipeInterrupt is an adapter whose pipe workers can have a
+	// running turn ended while the agent goes on, with the end read off the
+	// protocol rather than a screen. That reading is the proof PRD section
+	// 12 asks of a pipe interrupt before it is offered, and section 6's
+	// steering offers it under the pipe provider once an adapter declares
+	// it. InterruptibleWorker.Interrupt is the mechanism,
+	// InterruptPipeWorker the route this package serves, and a Runner that
+	// carries pipeInterrupter is what Resolve checks a declaration against.
+	// Codex declares it over app-server turn/interrupt (CLI 0.166.0's
+	// TurnInterruptParams). completeTurn recognizes TurnStatus interrupted
+	// when present; that status is held by the schema fixture and the
+	// stand-in, not by a live stdio capture, and idle after the turn ends
+	// remains the settle path the 0.163.0 recording shows. New refuses a
+	// CLI below 0.166.0 so the capability is not advertised there. Other
+	// adapters are not declared until each has a probe of its own. The
+	// conformance suite holds a declaration to the stand-in.
+	CapabilityPipeInterrupt Capability = "pipe_interrupt"
 
 	// CapabilityReportsInputTokens is an adapter that reads the input token
 	// count of PRD section 8's agent invocation record off what its agent
@@ -195,6 +211,11 @@ var capabilityTable = []capabilitySpec{
 		// with one of them would pass Resolve and refuse every interrupt.
 		typing := typer.terminalTyping()
 		return typing.interrupt != "" && typing.read != nil
+	}, nil},
+	{CapabilityPipeInterrupt, func(r Runner) bool {
+		_, workers := r.(WorkerRunner)
+		_, pipe := r.(pipeInterrupter)
+		return workers && pipe
 	}, nil},
 	{CapabilityReportsInputTokens, nil, func(u Usage) Count { return u.InputTokens }},
 	{CapabilityReportsOutputTokens, nil, func(u Usage) Count { return u.OutputTokens }},

@@ -188,6 +188,22 @@ func TestARecoveredCodexRetryIsNotAFailure(t *testing.T) {
 	}
 }
 
+// New refuses a Codex CLI below the pipe_interrupt floor so CapabilityPipeInterrupt
+// is not advertised for an install that cannot serve turn/interrupt.
+func TestCodexNewRefusesACLIBelowThePipeInterruptFloor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("planting an executable script is unix-only here")
+	}
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\necho 'codex-cli 0.165.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := agents.CodexFactory(agents.WithCodexBinary(bin)).New(t.Context(), nil)
+	if !errors.Is(err, agents.ErrCodexVersion) {
+		t.Fatalf("New = %v, want ErrCodexVersion", err)
+	}
+}
+
 // A Codex binary that is not there is refused when the runner is built,
 // typed as the operating system's own not-found, before any process
 // starts; one that goes missing after it was resolved is refused the same
@@ -207,7 +223,7 @@ func TestAMissingCodexBinaryIsATypedRefusalBeforeAnythingStarts(t *testing.T) {
 		t.Skip("the vanished-binary half needs an executable script, which this test writes for a unix shell")
 	}
 	bin := filepath.Join(t.TempDir(), "codex")
-	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := procgroup.WriteProgram(bin, []byte("#!/bin/sh\nif [ \"$1\" = --version ]; then echo codex-cli 0.166.0; exit 0; fi\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	recorded := &recorder{}

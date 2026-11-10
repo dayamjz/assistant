@@ -508,7 +508,10 @@ middle of a turn can be cut short with `assistant coordinator interrupt ID`
 and then sent a message, rather than stopped and relaunched: it is served
 for a Claude Code worker hosted in tmux (under `session_provider: tmux`, or
 under `auto` when that hosts in tmux), which reads the turn's end off its
-screen, and refused for any other worker, with nothing done.
+screen, and for a Codex worker on a pipe (`pipe_interrupt` over app-server
+`turn/interrupt`, which needs CLI 0.166.0 or later; New refuses an older
+Codex so interrupt is not advertised there), and refused for any other
+worker, with nothing done.
 
 ## Keeping a repository's agent context true
 
