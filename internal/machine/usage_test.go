@@ -284,3 +284,43 @@ func TestUsageKeepsAnUnnamedContextWindowApartFromANamedOne(t *testing.T) {
 		t.Fatalf("windows grouped as %q with %d calls at 1m, want 1m,standard,(not named),unknown with 2", got, usage.ByAgent[0].Calls)
 	}
 }
+
+func TestUsageTotalsJevCompactionStats(t *testing.T) {
+	t.Parallel()
+	with := store.AgentInvocation{
+		Purpose: "fix", Agent: "claude", SessionUse: "opened",
+		Started: usageReadAt.Add(-time.Hour), Duration: time.Second,
+		CompactionPath: store.Known("jev"), CompactionEvents: store.Known[int64](2),
+		CompactionCharsBefore: store.Known[int64](1500), CompactionCharsAfter: store.Known[int64](600),
+		CompactionRequests: store.Known[int64](3),
+	}
+	without := store.AgentInvocation{
+		Purpose: "review", Agent: "claude", SessionUse: "none",
+		Started: usageReadAt.Add(-30 * time.Minute), Duration: time.Second,
+	}
+	usage := machine.UsageOf(window(t, "24h"), usageReadAt, []store.AgentInvocation{with, without})
+	if n, ok := usage.Total.CompactionEvents.Total.Get(); !ok || n != 2 || usage.Total.CompactionEvents.Unreported != 1 {
+		t.Fatalf("compaction events %+v, want 2 with one call unreported", usage.Total.CompactionEvents)
+	}
+	if n, ok := usage.Total.CompactionCharsBefore.Total.Get(); !ok || n != 1500 {
+		t.Fatalf("chars before %+v, want 1500", usage.Total.CompactionCharsBefore)
+	}
+	if n, ok := usage.Total.CompactionCharsAfter.Total.Get(); !ok || n != 600 {
+		t.Fatalf("chars after %+v, want 600", usage.Total.CompactionCharsAfter)
+	}
+	if n, ok := usage.Total.CompactionRequests.Total.Get(); !ok || n != 3 {
+		t.Fatalf("requests %+v, want 3", usage.Total.CompactionRequests)
+	}
+	if !contains(usage.Covers, "jev-compaction-stats") {
+		t.Fatalf("Covers %v, want jev-compaction-stats", usage.Covers)
+	}
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

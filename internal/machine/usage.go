@@ -73,7 +73,7 @@ type Usage struct {
 // made, which is everything the invocation record is fed, and not a task
 // worker's turns or any price, which nothing in this build records there.
 var (
-	UsageCovers   = []string{"stage-agent-calls"}
+	UsageCovers   = []string{"stage-agent-calls", "jev-compaction-stats"}
 	UsageExcludes = []string{"worker-turns", "price"}
 )
 
@@ -98,6 +98,15 @@ type UsageTotals struct {
 	CacheReadTokens UsageCount `json:"cache_read_tokens"`
 	// CacheCreationTokens is prompt tokens written to a cache.
 	CacheCreationTokens UsageCount `json:"cache_creation_tokens"`
+	// CompactionEvents is how many successful Jev compact stats lines the
+	// calls harvested. Unreported when a call had no compaction report.
+	CompactionEvents UsageCount `json:"compaction_events"`
+	// CompactionCharsBefore and CompactionCharsAfter sum the plugin's
+	// character counts over those events.
+	CompactionCharsBefore UsageCount `json:"compaction_chars_before"`
+	CompactionCharsAfter  UsageCount `json:"compaction_chars_after"`
+	// CompactionRequests sums the plugin's Jev request counts.
+	CompactionRequests UsageCount `json:"compaction_requests"`
 }
 
 // UsageCount is one token count over a set of calls, kept apart by whether
@@ -140,6 +149,10 @@ func (t *UsageTotals) add(inv store.AgentInvocation) {
 	t.OutputTokens.add(inv.OutputTokens)
 	t.CacheReadTokens.add(inv.CacheReadTokens)
 	t.CacheCreationTokens.add(inv.CacheCreationTokens)
+	t.CompactionEvents.add(inv.CompactionEvents)
+	t.CompactionCharsBefore.add(inv.CompactionCharsBefore)
+	t.CompactionCharsAfter.add(inv.CompactionCharsAfter)
+	t.CompactionRequests.add(inv.CompactionRequests)
 }
 
 // UsageByAgent is the calls one agent made with one model, for one purpose,

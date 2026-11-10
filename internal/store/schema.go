@@ -228,6 +228,11 @@ const keptWorkDiscardMigration = "kept work discard"
 // sealCheckpointTableMigration is a constant.
 const keptWorkRemoveAnywayMigration = "kept work remove-anyway"
 
+// invocationCompactionMigration names the migration that records what Jev
+// compaction did on an agent invocation, for the reason
+// sealCheckpointTableMigration is a constant.
+const invocationCompactionMigration = "agent invocation compaction"
+
 // housekeepingMigration names the migration that adds PRD section 6's
 // housekeeping mark on the task row, for the reason
 // sealCheckpointTableMigration is a constant.
@@ -3126,6 +3131,22 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a kept work entry is removed anyway once, with its remove-anyway answer, after its remove-anyway was claimed');
 				END`,
+		},
+	},
+	{
+		version: 75,
+		name:    invocationCompactionMigration,
+		statements: []string{
+			// Compaction path and summed result.stats for one invocation.
+			// Nullable: a row from before this column, and a call that had
+			// no config dir we control, read unknown. A known empty path is
+			// not written; AppendAgentInvocation leaves the columns unknown
+			// when Compaction was empty.
+			`ALTER TABLE agent_invocation ADD COLUMN compaction_path TEXT`,
+			`ALTER TABLE agent_invocation ADD COLUMN compaction_events INTEGER`,
+			`ALTER TABLE agent_invocation ADD COLUMN compaction_chars_before INTEGER`,
+			`ALTER TABLE agent_invocation ADD COLUMN compaction_chars_after INTEGER`,
+			`ALTER TABLE agent_invocation ADD COLUMN compaction_requests INTEGER`,
 		},
 	},
 }
