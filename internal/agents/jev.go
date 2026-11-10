@@ -192,12 +192,18 @@ func readSettingsJSON(path string) (map[string]any, error) {
 	return settings, nil
 }
 
+// settingsWrite is os.WriteFile in production. Tests replace it to truncate
+// then fail so restoreSettings has a positive control.
+var settingsWrite = func(path string, data []byte, perm os.FileMode) error {
+	return os.WriteFile(path, data, perm)
+}
+
 func writeSettingsJSON(path string, settings map[string]any) error {
 	raw, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("encoding jev settings: %w", err)
 	}
-	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+	if err := settingsWrite(path, append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("writing jev settings: %w", err)
 	}
 	return nil
