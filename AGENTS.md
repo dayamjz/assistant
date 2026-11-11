@@ -76,16 +76,18 @@ those comments are the authority. This is only the map that says which one to
 open first. Operator install and quick-start live in [README.md](README.md).
 
 - `cmd/assistant` is the process boundary and nothing more. The command line is
-  `internal/cli`. Four commands sit outside its verb table because something
-  other than a person types them: `gate` (the `pre-receive` and `post-receive`
-  hooks `internal/gate` writes invoke the binary back), `host` and
-  `coordinator` (the coordinating agent's side), and `worker` (a launched
-  worker's route home).
-- A verb does little itself. It opens the home (`internal/home`) and calls the
-  background service over the local socket (`internal/ipc`).
-  `internal/service` holds that home's exclusive lock, so one service owns a
-  home, and it is wiring rather than policy: every decision it appears to make
-  belongs to a package beneath it.
+  `internal/cli`. Four commands are dispatched beside its verb table, not added
+  to it: `gate` (the `pre-receive` and `post-receive` hooks `internal/gate`
+  writes), `host` (the host turn-end hook), `coordinator` (the coordinating
+  agent's client), and `worker` (a launched worker's route home). PRD section 9
+  and `internal/cli`'s package comment own why those four stand beside the
+  table; that is not an admission rule for a fifth.
+- Most verbs open the home (`internal/home`) and call the background service
+  over the local socket (`internal/ipc`). Some act on the home without the
+  service (`dump`, `db path`, `init`, `doctor`, `eject`). `internal/service`
+  holds that home's exclusive lock, so one service owns a home, and it is
+  wiring rather than policy: every decision it appears to make belongs to a
+  package beneath it.
 - A run is `internal/graph` walking the topology `internal/pipeline` declares,
   with the nine stage bodies in `internal/stages`. The engine is pure, so the
   effects sit at the edges: `internal/vcs` for git, `internal/forge` for a code
@@ -119,8 +121,9 @@ open first. Operator install and quick-start live in [README.md](README.md).
   check (`scripts/leak-check.py`), so a package that leaves a process or temp
   entry behind fails CI even when `make check` passes. `CI_TEST_PACKAGES`,
   `CI_TEST_COUNT` and `CI_TEST_TIMEOUT` parameterize it, which is how
-  `repeat.yml` re-runs a change's own packages several times. Each
-  `scripts/*.py` has a `*-test.py` beside it that CI runs.
+  `repeat.yml` re-runs a change's own packages several times. Each operational
+  `scripts/*.py` has a `*-test.py` beside it that CI runs (`ci-test.sh` pairs
+  with `ci-test-test.py`).
 - The gate runs `make lint` and leaves the full suite to CI
   (`.no-mistakes.yaml`).
 
