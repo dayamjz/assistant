@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -30,6 +31,166 @@ func realRefusal(t *testing.T) agents.Refusal {
 		t.Skip("no process's working directory is unreadable to this test here, so there is no real refusal to carry over and the classification of a refused process is not established through the listing")
 	}
 	return refusal
+}
+
+// TestAShortLivedUnreadableBlockerIsGoneOnTheReList holds the sweep's one
+// re-list when a refusal's only blockers are unreadable processes: a process
+// of this user outside every copy, whose working directory the first listing
+// is refused, is ended before the second listing, and that second listing
+// finds it gone, so the sweep clears. That is the class a short-lived
+// helper such as tmux's utempter hits on Linux CI (#774): the first listing
+// cannot say where it stands, and by a second look it is already gone. The
+// process is never signalled by the sweep itself. Clear is asserted only
+// where an empty copy's sweep clears; the re-list count is asserted on
+// every host, so a change that cleared by ignoring blockers would still fail.
+func TestAShortLivedUnreadableBlockerIsGoneOnTheReList(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	blockers := hostBlockers(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("the detached process %s is on this test's parent chain", outside.id)
+	}
+
+	refuseWhilePresent := func(pid int) bool {
+		if pid != outside.id.PID {
+			return false
+		}
+		// Refuse only while that identity still runs. After afterFirst ends
+		// it, a planted refusal of the same PID would keep a gone or replaced
+		// entry looking like an unreadable blocker on the re-list.
+		presence, err := outside.id.Presence()
+		return err == nil && presence == agents.PresencePresent
+	}
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		refuseWhilePresent,
+		func() {
+			if err := syscall.Kill(outside.id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				t.Fatalf("ending the refused process %s before the re-list: %v", outside.id, err)
+			}
+			waitEnded(t, outside, "ending the refused process before the re-list")
+			deadline := time.Now().Add(sweepEnded)
+			for time.Now().Before(deadline) {
+				presence, err := outside.id.Presence()
+				if err == nil && presence != agents.PresencePresent {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatalf("ending the refused process %s: Presence still present after waitEnded", outside.id)
+		},
+		refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the re-list still named the ended process %s in %s (%+v)", outside.id, r, r)
+	}
+	requireClearUnlessHostBlocks(t, r, &blockers, "the sweep whose only unreadable blocker was gone on the re-list")
+	hostLimit(t, blockers, "that a sweep whose only unreadable blocker was gone on the re-list clears")
+}
+
+// TestAFailedReListKeepsTheFirstPassAnswer holds that when the re-list's
+// listing fails after the first pass already signalled under the copy,
+// Sweep returns that first pass (still not Clear) with no error, rather
+// than a zero result that would claim nothing was signalled.
+func TestAFailedReListKeepsTheFirstPassAnswer(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	inside := startDetached(t, copyDir, false)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), inside.id) || slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("a detached process is on this test's parent chain: inside %s outside %s", inside.id, outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingFailingOn(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, 2, refusal)
+	if err != nil {
+		t.Fatalf("a failed re-list answered %v beside %s, want the first pass with no error", err, r)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 (first pass then a failed re-list)", listings, r)
+	}
+	if r.Clear() || !slices.Contains(r.Ended, inside.id) || !blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the failed re-list did %s (%+v), want the first pass: %s ended, %s blocking, not clear", r, r, inside.id, outside.id)
+	}
+	requirePresent(t, outside, "a refused process after a failed re-list")
+	waitEnded(t, inside, "the first listing before the failed re-list")
+}
+
+// TestAReListKeepsWhatTheFirstListingEnded holds that a re-list for an
+// unreadable-only refusal does not drop processes the first listing ended
+// under the copy. A detached process stands in the copy, and a process of
+// this user outside every copy has its working directory refused on both
+// listings: the first listing ends the one in the copy and sees the outside
+// blocker, the re-list still sees the blocker, and the ended process remains
+// in Ended. Without that keep, a host that already has an unreadable blocker
+// would report 0 ended after every sweep that also cleared a copy.
+func TestAReListKeepsWhatTheFirstListingEnded(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	inside := startDetached(t, copyDir, false)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), inside.id) || slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("a detached process is on this test's parent chain: inside %s outside %s", inside.id, outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, nil, refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if !slices.Contains(r.Ended, inside.id) || !blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the sweep did %s (%+v), want %s ended, %s blocking and never signalled", r, r, inside.id, outside.id)
+	}
+	requirePresent(t, outside, "a refused process after the sweep that ended another")
+	waitEnded(t, inside, "the first listing")
+}
+
+// TestAnUnreadableBlockerStillPresentOnTheReListKeepsTheSweepFromClearing
+// holds the other half of the re-list: a process of this user outside every
+// copy, whose working directory both listings are refused, still blocks and
+// the sweep does not clear. The safety rule stands: never clear while a
+// process that might stand in the copy is still present and unreadable. The
+// process is never signalled.
+func TestAnUnreadableBlockerStillPresentOnTheReListKeepsTheSweepFromClearing(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("the detached process %s is on this test's parent chain", outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, nil, refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if r.Clear() || !blocks(r, outside.id) || r.Unreadable < 1 || mentions(r, outside.id) {
+		t.Fatalf("the sweep refused %s's working directory on both listings and did %s (%+v), want it not clear with that process blocking and never signalled", outside.id, r, r)
+	}
+	requirePresent(t, outside, "a process whose working directory both listings were refused")
 }
 
 // TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing

@@ -318,9 +318,13 @@
 // a host with one whose working directory cannot be read, or, for a service
 // running as root, with any process off the chain whose working directory
 // cannot be read and which answers the signal, refuses every sweep while it
-// runs. The first carve-out is what lets a service running as the same user
-// as an init process whose working directory is refused to it clear at all;
-// its residual, and the second's, is a set-aside process that did reach the
+// runs. When that refusal is the only reason not to clear, the sweep lists
+// once more before answering: a short-lived blocker gone by then no longer
+// refuses, and one still present still does, so a copy is never cleared
+// while an unreadable process that might stand in it remains. The first
+// carve-out is what lets a service running as the same user as an init
+// process whose working directory is refused to it clear at all; its
+// residual, and the second's, is a set-aside process that did reach the
 // copy, which the sweep does not see.
 //
 // A refusal names what refused it. Each process in UnreadableBlocking is a

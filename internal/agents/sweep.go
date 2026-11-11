@@ -240,7 +240,14 @@ func (r SweepResult) String() string {
 //     whose working directory cannot be read and that shares a user with
 //     this process, or, when this process runs as root, answers its zero
 //     signal, refuses every sweep there until that process is gone, wherever
-//     it stands.
+//     it stands. When a listing's only reason not to clear is one or more
+//     such blockers, the sweep lists once more before answering: a
+//     short-lived blocker gone by then no longer refuses, and one still
+//     present still does. That is one re-list, not a wait, and it never
+//     clears while an unreadable process that might stand in the copy is
+//     still present. If the re-list's listing fails, the first pass's
+//     answer is kept (still not Clear): the first pass may already have
+//     signalled, so an error beside the zero result would be dishonest.
 //   - Linux lists from /proc. macOS lists the process table through
 //     kern.proc.all and reads every working directory with one run of
 //     /usr/sbin/lsof, so a sweep there fails when that program is missing
@@ -271,13 +278,24 @@ func NewSweeper(h *home.Home, grace time.Duration, report func(dir string, r Swe
 // ErrSweepTimedOut when the listing's program ran past its deadline; and
 // any other failure of the listing itself, including ctx ending during it. A ctx
 // that ends while signalled processes are being waited on cuts the waits
-// short, and what is still running then is reported Survived.
+// short, and what is still running then is reported Survived. When a
+// completed listing's only reason not to clear is UnreadableBlocking, Sweep
+// lists once more before answering, as Sweeper's comment says. If that
+// re-list's listing fails, Sweep returns the first pass's answer (still not
+// Clear) with no error: the first pass may already have signalled, and an
+// error beside the zero result would claim nothing was signalled.
 func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 	return s.sweep(ctx, dir, listUnder)
 }
 
 // sweep is Sweep with the platform listing passed in, so a test can hand it
-// the listing with one read replaced and every other step real.
+// the listing with one read replaced and every other step real. When the
+// first listing's only blockers are unreadable processes, it lists once
+// more: a short-lived blocker that is gone then no longer refuses, and a
+// blocker still present still does. What the first pass ended is kept; the
+// second listing replaces the unreadable fields and ends any process it
+// newly finds under the copy. A failed re-list keeps the first pass's
+// answer rather than returning an error beside the zero result.
 func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Context, string) (listing, error)) (SweepResult, error) {
 	if s == nil || s.home == nil {
 		return SweepResult{}, fmt.Errorf("agents: a sweep needs the home whose copies it may sweep")
@@ -286,6 +304,27 @@ func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Conte
 	if err != nil {
 		return SweepResult{}, err
 	}
+	r, err := s.sweepListed(ctx, copyDir, list)
+	if err != nil || !onlyUnreadableBlocks(r) {
+		return r, err
+	}
+	again, err := s.sweepListed(ctx, copyDir, list)
+	if err != nil {
+		return r, nil
+	}
+	r.Ended = append(r.Ended, again.Ended...)
+	r.Exited = append(r.Exited, again.Exited...)
+	r.Replaced = append(r.Replaced, again.Replaced...)
+	r.Survived = append(r.Survived, again.Survived...)
+	r.Unverified = append(r.Unverified, again.Unverified...)
+	r.Unreadable = again.Unreadable
+	r.UnreadableBlocking = again.UnreadableBlocking
+	return r, nil
+}
+
+// sweepListed is one listing-and-end pass over copyDir, which home.CopyAt
+// has already accepted.
+func (s *Sweeper) sweepListed(ctx context.Context, copyDir string, list func(context.Context, string) (listing, error)) (SweepResult, error) {
 	found, err := list(ctx, copyDir)
 	if err != nil {
 		return SweepResult{}, fmt.Errorf("agents: listing processes under %s: %w", copyDir, err)
@@ -297,6 +336,17 @@ func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Conte
 	r.UnreadableBlocking = found.blocking
 	r.listed = true
 	return r, nil
+}
+
+// onlyUnreadableBlocks reports whether r would Clear but for
+// UnreadableBlocking: those are the refusals that get one re-list before
+// Sweep answers.
+func onlyUnreadableBlocks(r SweepResult) bool {
+	if len(r.UnreadableBlocking) == 0 {
+		return false
+	}
+	r.UnreadableBlocking = nil
+	return r.Clear()
 }
 
 // SweepUnder is Sweep for the Sweep seam, which takes no answer: what the
@@ -320,7 +370,7 @@ type listing struct {
 }
 
 // endListed ends the listed processes on Sweeper's terms and returns what it
-// did, leaving Dir, the unreadable fields and listed for Sweep to fill.
+// did, leaving Dir, the unreadable fields and listed for sweepListed to fill.
 func endListed(ctx context.Context, ids []Identity, grace time.Duration) SweepResult {
 	var r SweepResult
 	var signalled []Identity
