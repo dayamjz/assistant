@@ -76,6 +76,41 @@ func TestAShortLivedUnreadableBlockerIsGoneOnTheReList(t *testing.T) {
 	hostLimit(t, blockers, "that a sweep whose only unreadable blocker was gone on the re-list clears")
 }
 
+// TestAReListKeepsWhatTheFirstListingEnded holds that a re-list for an
+// unreadable-only refusal does not drop processes the first listing ended
+// under the copy. A detached process stands in the copy, and a process of
+// this user outside every copy has its working directory refused on both
+// listings: the first listing ends the one in the copy and sees the outside
+// blocker, the re-list still sees the blocker, and the ended process remains
+// in Ended. Without that keep, a host that already has an unreadable blocker
+// would report 0 ended after every sweep that also cleared a copy.
+func TestAReListKeepsWhatTheFirstListingEnded(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	inside := startDetached(t, copyDir, false)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), inside.id) || slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("a detached process is on this test's parent chain: inside %s outside %s", inside.id, outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, nil, refusal)
+	if err != nil {
+		t.Fatalf("sweeping %s: %v", copyDir, err)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 listings (a re-list of an unreadable-only refusal)", listings, r)
+	}
+	if !slices.Contains(r.Ended, inside.id) || !blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the sweep did %s (%+v), want %s ended, %s blocking and never signalled", r, r, inside.id, outside.id)
+	}
+	requirePresent(t, outside, "a refused process after the sweep that ended another")
+	waitEnded(t, inside, "the first listing")
+}
+
 // TestAnUnreadableBlockerStillPresentOnTheReListKeepsTheSweepFromClearing
 // holds the other half of the re-list: a process of this user outside every
 // copy, whose working directory both listings are refused, still blocks and

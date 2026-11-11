@@ -286,8 +286,10 @@ func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 // sweep is Sweep with the platform listing passed in, so a test can hand it
 // the listing with one read replaced and every other step real. When the
 // first listing's only blockers are unreadable processes, it lists once
-// more and returns that second answer: a short-lived blocker that is gone
-// then no longer refuses, and a blocker still present still does.
+// more: a short-lived blocker that is gone then no longer refuses, and a
+// blocker still present still does. What the first pass ended is kept; the
+// second listing replaces the unreadable fields and ends any process it
+// newly finds under the copy.
 func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Context, string) (listing, error)) (SweepResult, error) {
 	if s == nil || s.home == nil {
 		return SweepResult{}, fmt.Errorf("agents: a sweep needs the home whose copies it may sweep")
@@ -300,7 +302,18 @@ func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Conte
 	if err != nil || !onlyUnreadableBlocks(r) {
 		return r, err
 	}
-	return s.sweepListed(ctx, copyDir, list)
+	again, err := s.sweepListed(ctx, copyDir, list)
+	if err != nil {
+		return SweepResult{}, err
+	}
+	r.Ended = append(r.Ended, again.Ended...)
+	r.Exited = append(r.Exited, again.Exited...)
+	r.Replaced = append(r.Replaced, again.Replaced...)
+	r.Survived = append(r.Survived, again.Survived...)
+	r.Unverified = append(r.Unverified, again.Unverified...)
+	r.Unreadable = again.Unreadable
+	r.UnreadableBlocking = again.UnreadableBlocking
+	return r, nil
 }
 
 // sweepListed is one listing-and-end pass over copyDir, which home.CopyAt
