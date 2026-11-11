@@ -76,6 +76,37 @@ func TestAShortLivedUnreadableBlockerIsGoneOnTheReList(t *testing.T) {
 	hostLimit(t, blockers, "that a sweep whose only unreadable blocker was gone on the re-list clears")
 }
 
+// TestAFailedReListKeepsTheFirstPassAnswer holds that when the re-list's
+// listing fails after the first pass already signalled under the copy,
+// Sweep returns that first pass (still not Clear) with no error, rather
+// than a zero result that would claim nothing was signalled.
+func TestAFailedReListKeepsTheFirstPassAnswer(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	requiresSweep(t)
+	refusal := realRefusal(t)
+	h, _ := sweepHome(t, sweepBase(t), "home")
+	copyDir := makeTaskCopy(t, h)
+	inside := startDetached(t, copyDir, false)
+	outside := startDetached(t, t.TempDir(), false)
+	if slices.Contains(agents.Ancestry(), inside.id) || slices.Contains(agents.Ancestry(), outside.id) {
+		t.Fatalf("a detached process is on this test's parent chain: inside %s outside %s", inside.id, outside.id)
+	}
+
+	r, listings, err := agents.SweepRefusingFailingOn(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
+		func(pid int) bool { return pid == outside.id.PID }, 2, refusal)
+	if err != nil {
+		t.Fatalf("a failed re-list answered %v beside %s, want the first pass with no error", err, r)
+	}
+	if listings != 2 {
+		t.Fatalf("the sweep listed %d time(s) and did %s, want 2 (first pass then a failed re-list)", listings, r)
+	}
+	if r.Clear() || !slices.Contains(r.Ended, inside.id) || !blocks(r, outside.id) || mentions(r, outside.id) {
+		t.Fatalf("the failed re-list did %s (%+v), want the first pass: %s ended, %s blocking, not clear", r, r, inside.id, outside.id)
+	}
+	requirePresent(t, outside, "a refused process after a failed re-list")
+	waitEnded(t, inside, "the first listing before the failed re-list")
+}
+
 // TestAReListKeepsWhatTheFirstListingEnded holds that a re-list for an
 // unreadable-only refusal does not drop processes the first listing ended
 // under the copy. A detached process stands in the copy, and a process of

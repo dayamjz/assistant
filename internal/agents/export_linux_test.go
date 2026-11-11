@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -49,9 +50,23 @@ func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid 
 // blockers are unreadable processes. listings is how many times the listing
 // ran. A nil afterFirst is SweepRefusing.
 func SweepRefusingAfter(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, afterFirst func(), refusal Refusal) (SweepResult, int, error) {
+	return sweepRefusingAfter(ctx, s, dir, refuse, afterFirst, 0, refusal)
+}
+
+// SweepRefusingFailingOn is SweepRefusingAfter whose listing answers a planted
+// error on the failOn-th call (1-based), so a test can hold the re-list
+// failure path. failOn 0 never plants a failure.
+func SweepRefusingFailingOn(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, failOn int, refusal Refusal) (SweepResult, int, error) {
+	return sweepRefusingAfter(ctx, s, dir, refuse, nil, failOn, refusal)
+}
+
+func sweepRefusingAfter(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, afterFirst func(), failOn int, refusal Refusal) (SweepResult, int, error) {
 	var listings int
 	r, err := s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
 		listings++
+		if failOn > 0 && listings == failOn {
+			return listing{}, fmt.Errorf("agents: planted listing failure on call %d", listings)
+		}
 		found, listErr := listUnderReading(ctx, d, func(pid int) (string, error) {
 			if refuse(pid) {
 				return "", &os.PathError{Op: refusal.Op, Path: "/proc/" + strconv.Itoa(pid) + "/cwd", Err: refusal.Err}

@@ -245,7 +245,9 @@ func (r SweepResult) String() string {
 //     short-lived blocker gone by then no longer refuses, and one still
 //     present still does. That is one re-list, not a wait, and it never
 //     clears while an unreadable process that might stand in the copy is
-//     still present.
+//     still present. If the re-list's listing fails, the first pass's
+//     answer is kept (still not Clear): the first pass may already have
+//     signalled, so an error beside the zero result would be dishonest.
 //   - Linux lists from /proc. macOS lists the process table through
 //     kern.proc.all and reads every working directory with one run of
 //     /usr/sbin/lsof, so a sweep there fails when that program is missing
@@ -278,7 +280,10 @@ func NewSweeper(h *home.Home, grace time.Duration, report func(dir string, r Swe
 // that ends while signalled processes are being waited on cuts the waits
 // short, and what is still running then is reported Survived. When a
 // completed listing's only reason not to clear is UnreadableBlocking, Sweep
-// lists once more before answering, as Sweeper's comment says.
+// lists once more before answering, as Sweeper's comment says. If that
+// re-list's listing fails, Sweep returns the first pass's answer (still not
+// Clear) with no error: the first pass may already have signalled, and an
+// error beside the zero result would claim nothing was signalled.
 func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 	return s.sweep(ctx, dir, listUnder)
 }
@@ -289,7 +294,8 @@ func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 // more: a short-lived blocker that is gone then no longer refuses, and a
 // blocker still present still does. What the first pass ended is kept; the
 // second listing replaces the unreadable fields and ends any process it
-// newly finds under the copy.
+// newly finds under the copy. A failed re-list keeps the first pass's
+// answer rather than returning an error beside the zero result.
 func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Context, string) (listing, error)) (SweepResult, error) {
 	if s == nil || s.home == nil {
 		return SweepResult{}, fmt.Errorf("agents: a sweep needs the home whose copies it may sweep")
@@ -304,7 +310,7 @@ func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Conte
 	}
 	again, err := s.sweepListed(ctx, copyDir, list)
 	if err != nil {
-		return SweepResult{}, err
+		return r, nil
 	}
 	r.Ended = append(r.Ended, again.Ended...)
 	r.Exited = append(r.Exited, again.Exited...)
