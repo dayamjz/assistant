@@ -253,6 +253,19 @@ type Options struct {
 	// export_test.go's WithCleanupAskSpacingForTest sets and the product
 	// never does; zero is landedAskSpacing.
 	cleanupAskSpacing time.Duration
+	// gitDeadlineForTest replaces cfg.GitDeadline after the operator's
+	// file is resolved, which export_test.go's WithGitDeadlineForTest sets
+	// and the product never does; zero leaves the resolved value. It is the
+	// same field a loaded operator file would set, not a path through the
+	// YAML decoder (which refuses values below the one-minute floor). A
+	// test that proves the bound ends a wedged git sets a short value here
+	// so the suite does not wait that floor.
+	gitDeadlineForTest time.Duration
+	// ghDeadlineForTest replaces cfg.GHDeadline after the operator's file
+	// is resolved, on gitDeadlineForTest's terms for the ten-second floor;
+	// export_test.go's WithGHDeadlineForTest sets it and the product never
+	// does.
+	ghDeadlineForTest time.Duration
 	// beforeStaleRemovalRelease runs in recovery between reading a removal
 	// reservation whose owner is gone and releasing it; export_test.go's
 	// WithBeforeStaleRemovalReleaseForTest sets it and the product never
@@ -953,6 +966,12 @@ func (s *Service) openParts(ctx context.Context, o Options, lookup func(string) 
 	global, cfg, digest, err := resolveConfig(s.home.ConfigFile())
 	if err != nil {
 		return err
+	}
+	if o.gitDeadlineForTest > 0 {
+		cfg.GitDeadline = o.gitDeadlineForTest
+	}
+	if o.ghDeadlineForTest > 0 {
+		cfg.GHDeadline = o.ghDeadlineForTest
 	}
 	s.global, s.cfg, s.digest = global, cfg, digest
 	// The code hosts are built once the operator's configuration is read,
