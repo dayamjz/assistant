@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -54,13 +55,32 @@ func TestAShortLivedUnreadableBlockerIsGoneOnTheReList(t *testing.T) {
 		t.Fatalf("the detached process %s is on this test's parent chain", outside.id)
 	}
 
+	refuseWhilePresent := func(pid int) bool {
+		if pid != outside.id.PID {
+			return false
+		}
+		// Refuse only while that identity still runs. After afterFirst ends
+		// it, a planted refusal of the same PID would keep a gone or replaced
+		// entry looking like an unreadable blocker on the re-list.
+		presence, err := outside.id.Presence()
+		return err == nil && presence == agents.PresencePresent
+	}
 	r, listings, err := agents.SweepRefusingAfter(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir,
-		func(pid int) bool { return pid == outside.id.PID },
+		refuseWhilePresent,
 		func() {
 			if err := syscall.Kill(outside.id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 				t.Fatalf("ending the refused process %s before the re-list: %v", outside.id, err)
 			}
 			waitEnded(t, outside, "ending the refused process before the re-list")
+			deadline := time.Now().Add(sweepEnded)
+			for time.Now().Before(deadline) {
+				presence, err := outside.id.Presence()
+				if err == nil && presence != agents.PresencePresent {
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			t.Fatalf("ending the refused process %s: Presence still present after waitEnded", outside.id)
 		},
 		refusal)
 	if err != nil {
