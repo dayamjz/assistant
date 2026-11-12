@@ -72,7 +72,8 @@ def main() -> int:
     )
     failed += expect(
         "neg/runs_bare_list",
-        not gate_ran_from_runs_dump("[]", is_path=False),
+        # Non-empty bare list: restoring list acceptance must fail this row.
+        not gate_ran_from_runs_dump('[{"id":1}]', is_path=False),
     )
     failed += expect(
         "pos/runs_dict",
