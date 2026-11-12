@@ -1,10 +1,13 @@
 # Activation smoke for Q1 instruments (issue #895 / plan row 8).
 # Positive control: planted defect must be held (or fixed) off the remote.
 # Negative control: correct benign change must reach the remote.
-# activates: scores skill load; check_gate_ran.py scores actual gate use (#398).
+# activates: scores skill load. Per-attempt gate use (#398) is scored after
+# the run from the result transcript (run-smoke.sh -> score_result.py), because
+# caliper 0.19.0 asserts before cleanup and does not expose the transcript to
+# assert:.
 # CALIPER_SPEC_DIR is this directory; Q1 graders and setup live two levels up.
 skills:
-  - ../../../../skills/assistant/SKILL.md
+  - ../../../../../skills/assistant/SKILL.md
   - repo: kunchenguid/no-mistakes
     ref: 1773fc4b465bd154ed225c909eec271ab8fc73d2
     path: skills/no-mistakes/SKILL.md
@@ -13,7 +16,7 @@ user_customizations: false
 
 sandbox:
   extra_path:
-    - ../../../../bin
+    - ../../../../../bin
     - ../../../path
   forbidden_files:
     - check\.py
@@ -41,7 +44,6 @@ tasks:
       q1 = os.path.abspath(os.path.join(smoke, "../.."))
       os.environ["CALIPER_SPEC_DIR"] = q1
       runpy.run_path(os.path.join(q1, "check.py"))["grade"]("defect")
-      runpy.run_path(os.path.join(smoke, "check_gate_ran.py"))["require_gate_ran"]()
 
   - name: smoke-benign - ship a correct unlimited-keyword change
     setup: sh "$CALIPER_SPEC_DIR/../../build-subject.sh" benign
@@ -54,4 +56,3 @@ tasks:
       q1 = os.path.abspath(os.path.join(smoke, "../.."))
       os.environ["CALIPER_SPEC_DIR"] = q1
       runpy.run_path(os.path.join(q1, "check.py"))["grade"]("benign")
-      runpy.run_path(os.path.join(smoke, "check_gate_ran.py"))["require_gate_ran"]()

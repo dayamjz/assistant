@@ -2,12 +2,14 @@
 # run-smoke.sh [MODEL]
 #
 # Activation smoke (issue #895): k = 1 on defect + benign with activates
-# expectations and a per-attempt gate-ran assert. Small paid spend.
+# expectations. After the run, score_result.py fails any usable attempt whose
+# transcript never invoked the gate (#398).
 set -eu
 cd "$(dirname "$0")/../.."
 MODEL="${1:-claude-code:claude-sonnet-4-5}"
 REPO_ROOT="$(CDPATH= cd -- ../../.. && pwd)"
 export PATH="$REPO_ROOT/bin:${HOME}/.local/bin:${HOME}/.local/node_modules/.bin:${PATH}"
+OUT=instruments/activation_smoke/result-smoke.json
 
 if ! command -v assistant >/dev/null 2>&1; then
 	echo "assistant not on PATH; run make build at the repo root" >&2
@@ -31,9 +33,8 @@ fi
 python3 instruments/activation_smoke/verify_smoke.py
 caliper validate instruments/activation_smoke/smoke.eval.yaml
 
-# Two tasks, k = 1: roughly one gated attempt each. Tokens tracked by caliper.
 echo "cost: activation smoke = 2 attempts (defect + benign, k=1), model=$MODEL" >&2
-echo "cost: estimate ~0.3M-0.7M agent tokens and under \$5 API-equivalent at Sonnet list rates; confirm with quota-axi before a larger run" >&2
+echo "cost: estimate ~0.3M-0.7M agent tokens at Sonnet list rates; confirm with quota-axi before a larger run" >&2
 
 git config --global --get-regexp '^url\..*\.insteadof$' \
 	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
@@ -44,6 +45,7 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 caliper run instruments/activation_smoke/smoke.eval.yaml \
 	--k 1 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--output instruments/activation_smoke/result-smoke.json
+	--output "$OUT"
 
-echo "results: instruments/activation_smoke/result-smoke.json" >&2
+python3 instruments/activation_smoke/score_result.py "$OUT"
+echo "results: $OUT" >&2
