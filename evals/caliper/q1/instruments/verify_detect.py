@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline guards for detect_gate (positive and negative controls)."""
+"""Offline guards for detect_gate: positive launches and negative controls."""
 from __future__ import annotations
 
 import sys
