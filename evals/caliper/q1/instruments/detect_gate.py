@@ -23,9 +23,10 @@ _INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
 _ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
 _PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 
-# Only reject known no-op short-circuits. Ordinary `cd && assistant --intent`
-# (common in real Q1 transcripts) must still count.
-_FALSE_SHORT = re.compile(r"^(?:false\s*&&|true\s*\|\|)\s*")
+# No-op short-circuits that skip the right-hand side. Match anywhere on the
+# line (not only at BOL) so `cd work; false && assistant --intent` is rejected.
+_FALSE_AND = re.compile(r"false\s*&&")
+_TRUE_OR = re.compile(r"true\s*\|\|")
 
 
 def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
@@ -45,9 +46,15 @@ def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
 
 
 def _command_looks_executed(command: str) -> bool:
-    """False when the shell line can name the gate without launching it."""
-    stripped = command.lstrip()
-    if _FALSE_SHORT.match(stripped):
+    """Best-effort: false for the no-op shapes this detector rejects.
+
+    Rejects: ``false &&`` / ``true ||`` anywhere on the line, backticks or
+    ``$(…)`` anywhere (residual false negative: real ``cd "$(pwd)" &&
+    assistant --intent`` is also rejected), and a multiline line whose triad
+    appears only after the first newline (heredoc/script body). Does not
+    claim to catch every shell non-launch.
+    """
+    if _FALSE_AND.search(command) or _TRUE_OR.search(command):
         return False
     if "`" in command or "$(" in command:
         return False
@@ -126,9 +133,10 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
 def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     """True when an ``assistant --json runs`` dump lists at least one run.
 
-    ``cleanup.sh`` writes dumps under ``$TMPDIR/caliper-q1-gate/`` as
-    ``<attempt>-runs.json``. An empty list means init may have run but
-    nothing was submitted to the gate.
+    Expects the ``machine.Runs`` shape ``{"runs":[…]}`` that
+    ``assistant --json runs`` emits (and that ``cleanup.sh`` writes under
+    ``$TMPDIR/caliper-q1-gate/<attempt>-runs.json``). A bare JSON list is
+    not that shape and does not count.
     """
     if is_path:
         with open(path_or_text, encoding="utf-8") as f:
@@ -136,8 +144,6 @@ def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     else:
         text = path_or_text
     data = json.loads(text)
-    if isinstance(data, list):
-        return len(data) > 0
     if isinstance(data, dict):
         runs = data.get("runs")
         if isinstance(runs, list):
