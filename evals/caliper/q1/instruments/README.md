@@ -2,7 +2,9 @@
 
 Shared measurement helpers beside the agentic Q1 harness.
 
-This PR lands `detect_gate.py`: whether a Caliper attempt actually invoked
+This link adds offline `verify_detect.py` controls for `detect_gate`.
+
+`detect_gate.py` (prior link): whether a Caliper attempt actually invoked
 the assistant gate (`assistant --intent` / `--answer`, or `git push
 assistant`), not merely whether the skill activated (#398).
 
