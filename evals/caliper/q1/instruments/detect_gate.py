@@ -148,61 +148,33 @@ def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     return False
 
 
+def _attempt(cmd: str, nxt: dict[str, Any]) -> dict[str, Any]:
+    return {"transcript": [{"tool_input": {"command": cmd}}, nxt]}
+
+
 def _selftest() -> int:
     failed = 0
-
-    def expect(name: str, cond: bool) -> None:
-        nonlocal failed
+    rows: list[tuple[str, bool]] = [
+        ("neg/dry_run_push", not gate_ran_from_commands(["git push --dry-run assistant"])),
+        ("neg/dry_run_n", not gate_ran_from_commands(["git push -n assistant"])),
+        ("pos/push", gate_ran_from_commands(["git push assistant"])),
+        ("pos/intent_n_text", gate_ran_from_commands(['assistant --intent "add -n"'])),
+        ("pos/attempt", gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "tool_result", "content": "ok"}))),
+        ("neg/attempt_dry_run", not gate_ran_from_attempt(_attempt("git push --dry-run assistant", {"role": "tool_result", "content": "ok"}))),
+        ("neg/user_next", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "user", "content": "go"}))),
+        ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"tool_output": "ok"}))),
+        ("neg/declined", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "tool_result", "content": "User declined to run this command"}))),
+        ("neg/not_found", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "tool_result", "content": "sh: assistant: not found"}))),
+        ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "tool_result", "content": "", "tool_output": "ok"}))),
+        ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
+        ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),
+    ]
+    for name, cond in rows:
         if cond:
             print(f"ok  {name}")
         else:
             print(f"FAIL {name}", file=sys.stderr)
             failed += 1
-
-    expect("neg/dry_run_push", not gate_ran_from_commands(["git push --dry-run assistant"]))
-    expect("neg/dry_run_n", not gate_ran_from_commands(["git push -n assistant"]))
-    expect("pos/push", gate_ran_from_commands(["git push assistant"]))
-    expect(
-        "pos/intent_with_n_flag_text",
-        gate_ran_from_commands(['assistant --intent "add -n / --dry-run support"']),
-    )
-    ok = {
-        "transcript": [
-            {"tool_input": {"command": 'assistant --intent "x"'}},
-            {"role": "tool_result", "content": "ok"},
-        ]
-    }
-    expect("pos/attempt", gate_ran_from_attempt(ok))
-    dry_att = {
-        "transcript": [
-            {"tool_input": {"command": "git push --dry-run assistant"}},
-            {"role": "tool_result", "content": "To github.com:x.git"},
-        ]
-    }
-    expect("neg/attempt_dry_run", not gate_ran_from_attempt(dry_att))
-    user_next = {
-        "transcript": [
-            {"tool_input": {"command": 'assistant --intent "x"'}},
-            {"role": "user", "content": "please continue"},
-        ]
-    }
-    expect("neg/user_next", not gate_ran_from_attempt(user_next))
-    bare_out = {
-        "transcript": [
-            {"tool_input": {"command": 'assistant --intent "x"'}},
-            {"tool_output": "ok"},
-        ]
-    }
-    expect("neg/bare_tool_output", not gate_ran_from_attempt(bare_out))
-    declined = {
-        "transcript": [
-            {"tool_input": {"command": 'assistant --intent "x"'}},
-            {"role": "tool_result", "content": "User declined to run this command"},
-        ]
-    }
-    expect("neg/declined", not gate_ran_from_attempt(declined))
-    expect("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False))
-    expect("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False))
     if failed:
         print(f"{failed} detect_gate selftest(s) failed", file=sys.stderr)
         return 1

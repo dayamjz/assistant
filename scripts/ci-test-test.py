@@ -122,36 +122,34 @@ class InputTest(unittest.TestCase):
         self.assertLess(go_test.index("-race"), go_test.index("-run"))
 
     def test_linux_wrapper_forwards_leak_check_record(self):
-        # #902: Ubuntu 26 ignores bare sudo --preserve-env; without an
-        # explicit env LEAK_CHECK_RECORD=… the -exec recorder stays empty
-        # while go test still reports ok. The Linux stub records env KEY=VAL
-        # args and exits; the suite may still fail later without a real
-        # namespace — this row only locks the forward.
+        # #902: Ubuntu 26 ignores bare sudo --preserve-env. Stub is dash-safe.
         sudo = self.folder / "bin" / "sudo"
-        sudo.write_text(
-            "#!/bin/sh\n"
-            "printf '%s\\n' \"sudo $*\" >> \"$CI_TEST_CALLS\"\n"
-            "while [ $# -gt 0 ]; do\n"
-            "  case $1 in\n"
-            "    env) shift; break ;;\n"
-            "    *) shift ;;\n"
-            "  esac\n"
-            "done\n"
-            "while [ $# -gt 0 ] && [[ $1 == *=* ]]; do\n"
-            "  printf '%s\\n' \"env $1\" >> \"$CI_TEST_CALLS\"\n"
-            "  shift\n"
-            "done\n"
-            "exit 0\n"
-        )
+        sudo.write_text("\n".join([
+            "#!/bin/sh",
+            'printf \'%s\\n\' "sudo $*" >> "$CI_TEST_CALLS"',
+            "while [ $# -gt 0 ]; do",
+            "  case $1 in",
+            "    env) shift; break ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "while [ $# -gt 0 ]; do",
+            "  case $1 in",
+            '    *=*) printf \'%s\\n\' "env $1" >> "$CI_TEST_CALLS"; shift ;;',
+            "    *) break ;;",
+            "  esac",
+            "done",
+            "exit 0",
+            "",
+        ]))
         sudo.chmod(0o755)
-        result, calls = self.run_script_with(
+        _, calls = self.run_script_with(
             None, RUNNER_OS="Linux", CI_TEST_PACKAGES="./internal/agents")
         env_lines = [c for c in calls if c.startswith("env ")]
-        self.assertTrue(env_lines, f"rc={result.returncode} out={result.stdout!r} calls={calls}")
+        self.assertTrue(env_lines, calls)
         joined = " ".join(env_lines)
         self.assertIn("LEAK_CHECK_RECORD=", joined)
-        self.assertIn(
-            str(self.folder / "runner-temp" / "per-package-checked.txt"), joined)
+        self.assertIn(str(self.folder / "runner-temp" / "per-package-checked.txt"), joined)
 
 
 if __name__ == "__main__":
