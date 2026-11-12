@@ -46,17 +46,40 @@ def check_detection() -> int:
             failed += 1
         else:
             print(f"ok  detect/{name} gate_ran={got}")
-    # Short-circuited text must not count; global flags before --intent must.
+    # Short-circuited text must not count, including with a paired tool_result.
     if gate_ran_from_commands(["false && assistant --intent ship"]):
         sys.stderr.write("FAIL detect/short_circuit: counted unexecuted intent\n")
         failed += 1
     else:
         print("ok  detect/short_circuit")
+    short = {
+        "transcript": [
+            {
+                "role": "tool_use",
+                "tool_input": {"command": "false && assistant --intent ship"},
+            },
+            {"role": "tool_result", "content": "Exit code 1\n"},
+        ]
+    }
+    if gate_ran_from_attempt(short):
+        sys.stderr.write(
+            "FAIL detect/short_circuit_with_result: tool_result bypassed guard\n"
+        )
+        failed += 1
+    else:
+        print("ok  detect/short_circuit_with_result")
     if not gate_ran_from_commands(["assistant --json --intent ship"]):
         sys.stderr.write("FAIL detect/json_intent: rejected assistant --json --intent\n")
         failed += 1
     else:
         print("ok  detect/json_intent")
+    if not gate_ran_from_commands(
+        ["assistant --home /tmp/smoke.assistant --intent ship"]
+    ):
+        sys.stderr.write("FAIL detect/home_intent: rejected --home PATH --intent\n")
+        failed += 1
+    else:
+        print("ok  detect/home_intent")
     try:
         require_gate_ran(_load("activated_only_attempt.json"))
     except AssertionError:

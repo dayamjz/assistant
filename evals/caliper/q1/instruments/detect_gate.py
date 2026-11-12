@@ -5,10 +5,9 @@ Caliper's ``activated`` field only says the skill loaded. Issue #398 counted
 gate use as any of ``assistant --intent``, ``assistant --answer``, or
 ``git push assistant``. Skill activation alone is not gate use.
 
-A command text is not enough: a short-circuited shell line can name the
-gate without launching it. Prefer a tool_use whose following tool_result
-shows a real exit status; fall back to bare command matching only when no
-tool_result pairing is available (offline command lists).
+Command text alone is not enough: a short-circuited shell line can name the
+gate without launching it. A following tool_result with an exit code still
+does not prove the gate binary ran when the line short-circuits.
 """
 from __future__ import annotations
 
@@ -16,14 +15,11 @@ import json
 import re
 from typing import Any, Iterable
 
-# Global flags may sit between `assistant` and --intent/--answer
-# (e.g. assistant --json --home H --intent "...").
-_INTENT = re.compile(
-    r"(?:^|[\n;&|]\s*)assistant(?:\s+--(?!intent\b|answer\b)\S+)*\s+--intent\b"
-)
-_ANSWER = re.compile(
-    r"(?:^|[\n;&|]\s*)assistant(?:\s+--(?!intent\b|answer\b)\S+)*\s+--answer\b"
-)
+# Global flags may sit between `assistant` and --intent/--answer, including
+# value-taking flags such as --home PATH or --home=PATH.
+_GLOBAL = r"(?:\s+--\w[\w-]*(?:(?:=|\s+)\S+)?)*"
+_INTENT = re.compile(rf"(?:^|[\n;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
+_ANSWER = re.compile(rf"(?:^|[\n;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
 # Allow flags between push and the remote (git push -u assistant BRANCH).
 _PUSH = re.compile(r"(?:^|[\n;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 
@@ -52,30 +48,32 @@ def _command_looks_executed(command: str) -> bool:
     return not _SHORT_CIRCUIT.search(command)
 
 
+def _matches_triad(command: str) -> bool:
+    return bool(
+        _INTENT.search(command) or _ANSWER.search(command) or _PUSH.search(command)
+    )
+
+
 def gate_ran_from_commands(commands: Iterable[str]) -> bool:
     """True when any executed-looking command matches the #398 triad."""
     for cmd in commands:
-        if not _command_looks_executed(cmd):
-            continue
-        if _INTENT.search(cmd) or _ANSWER.search(cmd) or _PUSH.search(cmd):
+        if _command_looks_executed(cmd) and _matches_triad(cmd):
             return True
     return False
 
 
-def _tool_result_ran(turn: dict[str, Any]) -> bool:
-    """True when a tool_result shows the prior command actually ran."""
+def _tool_result_usable(turn: dict[str, Any]) -> bool:
+    """True when a tool_result is a real command outcome, not a skip."""
     content = turn.get("content")
     if not isinstance(content, str):
         out = turn.get("tool_output")
-        if isinstance(out, str):
-            content = out
-        else:
-            return False
-    # Caliper Bash results usually begin with "Exit code N".
-    if re.match(r"Exit code \d+", content):
-        return True
-    # A non-empty result that is not an explicit skip still counts as ran.
-    return bool(content.strip()) and "command not found" not in content.lower()
+        content = out if isinstance(out, str) else ""
+    if not content.strip():
+        return False
+    lower = content.lower()
+    if "command not found" in lower:
+        return False
+    return True
 
 
 def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
@@ -93,23 +91,18 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
             cmd = inp["command"]
         elif isinstance(inp, str):
             cmd = inp
-        if not cmd:
+        if not cmd or not _matches_triad(cmd):
             continue
-        if not (
-            _INTENT.search(cmd) or _ANSWER.search(cmd) or _PUSH.search(cmd)
-        ):
+        # Short-circuit always disqualifies, even with a paired Exit code.
+        if not _command_looks_executed(cmd):
             continue
-        # Prefer evidence the tool actually ran.
-        ran = False
         if i + 1 < len(transcript) and isinstance(transcript[i + 1], dict):
             nxt = transcript[i + 1]
             if nxt.get("role") in ("tool_result", "user") or nxt.get("tool_output"):
-                ran = _tool_result_ran(nxt)
-        if ran:
-            return True
-        # No paired result: only accept if the command itself cannot short-circuit.
-        if _command_looks_executed(cmd):
-            return True
+                if _tool_result_usable(nxt):
+                    return True
+                continue
+        return True
     return False
 
 
