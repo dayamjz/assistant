@@ -31,6 +31,8 @@ def _load(name: str) -> dict:
 
 
 def check_detection() -> int:
+    from detect_gate import gate_ran_from_commands
+
     failed = 0
     for name, want in (
         ("gated_attempt.json", True),
@@ -44,6 +46,17 @@ def check_detection() -> int:
             failed += 1
         else:
             print(f"ok  detect/{name} gate_ran={got}")
+    # Short-circuited text must not count; global flags before --intent must.
+    if gate_ran_from_commands(["false && assistant --intent ship"]):
+        sys.stderr.write("FAIL detect/short_circuit: counted unexecuted intent\n")
+        failed += 1
+    else:
+        print("ok  detect/short_circuit")
+    if not gate_ran_from_commands(["assistant --json --intent ship"]):
+        sys.stderr.write("FAIL detect/json_intent: rejected assistant --json --intent\n")
+        failed += 1
+    else:
+        print("ok  detect/json_intent")
     try:
         require_gate_ran(_load("activated_only_attempt.json"))
     except AssertionError:
@@ -126,12 +139,18 @@ def check_smoke_paths_and_runner() -> int:
         failed += 1
     else:
         print("ok  run-smoke.sh/k=1")
-    if "score_result.py" not in runner:
-        sys.stderr.write("FAIL run-smoke.sh: missing score_result.py post-check\n")
+    if not re.search(
+        r'(?m)^\s*python3\s+\S*score_result\.py\s+"\$OUT"',
+        code_only,
+    ):
+        sys.stderr.write(
+            "FAIL run-smoke.sh: missing executable "
+            'python3 ...score_result.py "$OUT" outside comments\n'
+        )
         failed += 1
     else:
         print("ok  run-smoke.sh/score_result")
-    if "caliper_rc" not in runner:
+    if "caliper_rc" not in code_only:
         sys.stderr.write(
             "FAIL run-smoke.sh: caliper failure must not skip score_result\n"
         )
