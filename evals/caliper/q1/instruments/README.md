@@ -1,9 +1,8 @@
-# Q1 instruments — activation smoke runner
+# Q1 instruments — activation smoke offline verify
 
-Stacked on `detect_gate`. Lands the live runner (`run-smoke.sh`,
-`score_result.py`, yaml, fixtures). Offline `verify_smoke.py` is the next
-≤300 link.
+Adds `verify_smoke.py` on the smoke-runner tip. Prefer landing
+`verify_detect` before this so command-shape negatives run too.
 
 ```sh
-./instruments/activation_smoke/run-smoke.sh claude-code:claude-sonnet-4-5
+python3 instruments/activation_smoke/verify_smoke.py
 ```
