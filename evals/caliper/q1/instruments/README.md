@@ -1,31 +1,20 @@
 # Q1 instruments (plan row 8 / issue #895)
 
-Measurement tools beside the agentic Q1 harness. This link lands the
-activation smoke; the fixed-diff efficacy runner stacks on top.
+Shared measurement helpers beside the agentic Q1 harness.
 
-| Instrument | Question | Agent chooses the gate? |
-| --- | --- | --- |
-| Activation smoke | Does a shipping prompt load `assistant`, and does the attempt invoke the gate? Graders still separate a held defect from a shipped benign change. | Yes |
+This PR lands `detect_gate.py`: whether a Caliper attempt actually invoked
+the assistant gate (`assistant --intent` / `--answer`, or `git push
+assistant`), not merely whether the skill activated (#398).
 
-**Adoption** here is whether the gate actually ran, scored after the run by
-`score_result.py` (via `detect_gate.py`) against each attempt's transcript.
-Caliper's skill `activated` field alone is not enough (#398).
+Live scoring needs a paired `tool_result` that looks usable. Short-circuited
+shell lines (`false && …`) and heredoc bodies that only name the gate do
+not count. Ordinary `cd work && assistant --intent …` does.
 
-The corrected agentic three-arm Q1 rerun is #896.
+Follow-up PRs stack the activation smoke runner and the fixed-diff
+efficacy arms on this detector.
 
-## Offline checks (no paid model)
-
-```sh
-make build
-cd evals/caliper/q1
-python3 instruments/activation_smoke/verify_smoke.py
-```
-
-## Activation smoke (small paid run)
+## Offline check
 
 ```sh
-./instruments/activation_smoke/run-smoke.sh claude-code:claude-sonnet-4-5
+python3 -c 'from detect_gate import gate_ran_from_commands; assert gate_ran_from_commands(["assistant --intent x"])'
 ```
-
-k = 1 on defect + benign. After caliper exits, `score_result.py` fails any
-usable attempt whose transcript never invoked the gate.
