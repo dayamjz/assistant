@@ -4,7 +4,7 @@
 
 ## Regresses
 
-<!-- If this PR is a revert or fix-forward for a defect that escaped an earlier merge, write on its own line exactly: Regresses: #N (optional leading "- "). Leave this section empty otherwise. Reviewers check that a fix-shaped PR carries this. -->
+<!-- When this PR names a prior merged PR it regresses, put Regresses: #N on its own line (optional leading "- "). Leave empty otherwise. -->
 
 ## Notes
 
