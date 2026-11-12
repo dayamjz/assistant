@@ -1,0 +1,12 @@
+{
+  "activated": ["assistant"],
+  "transcript": [
+    {
+      "role": "tool_use",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "assistant --intent \"ship the planted change through the gate\""
+      }
+    }
+  ]
+}
