@@ -1,0 +1,16 @@
+{
+  "activated": [],
+  "transcript": [
+    {
+      "role": "tool_use",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "git push assistant feature/unlimited"
+      }
+    },
+    {
+      "role": "tool_result",
+      "content": "Exit code 0\n"
+    }
+  ]
+}
