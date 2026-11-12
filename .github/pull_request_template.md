@@ -4,7 +4,7 @@
 
 ## Regresses
 
-<!-- If this PR undoes or repairs a defect that already shipped under an earlier merge, put Regresses: #N on its own line (optional leading "- " or "* "). If it looks like that kind of change but names no earlier merge, put a one-line note saying so. Leave empty otherwise. -->
+<!-- When review-prompt.md's Escaped-defect labels rule applies to this PR, put Regresses: #N on its own line (optional leading "- " or "* "), or a one-line note that no earlier merge is named. Leave empty otherwise. -->
 
 ## Notes
 
