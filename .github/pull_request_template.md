@@ -4,7 +4,7 @@
 
 ## Regresses
 
-<!-- When this PR names a prior merged PR it regresses, put Regresses: #N on its own line (optional leading "- "). Leave empty otherwise. -->
+<!-- When this PR names a prior merged PR it regresses, put Regresses: #N on its own line (optional leading "- " or "* "). Leave empty otherwise. -->
 
 ## Notes
 
