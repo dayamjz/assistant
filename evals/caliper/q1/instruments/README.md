@@ -1,7 +1,5 @@
-# Q1 instruments — fixed-diff efficacy core
+# Q1 instruments — fixed-diff efficacy runner + verify
 
-`report.py` and `arms.py` (oracle drivers) on `detect_gate`. Runner and
-offline verify are the next ≤300 link.
-
-Oracle `full_gate` does not plant `assistant --intent`; `gate_ran` stays
-false with `oracle_standin=True`.
+`run_efficacy.py` and `verify_efficacy.py` on the efficacy-core tip.
+Paid mode prints a cost line and exits 3 until wired (even with
+`Q1_EFFICACY_PAID_OK=1`).
