@@ -16,8 +16,8 @@ jobs:
   check:
     # label keeps the required check name (check (ubuntu-latest)); os is the
     # runner image. ubuntu-latest moved to 26.04 and broke leak-check's
-    # per-package LEAK_CHECK_RECORD (0 packages vs N ok; #902), so Linux
-    # stays on 24.04 until that is fixed.
+    # per-package LEAK_CHECK_RECORD (0 packages vs N ok; #902), so this
+    # job's Linux lane stays on 24.04 until that is fixed.
     name: check (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     # Above the test step's -timeout 30m with room for setup, vet and lint,
