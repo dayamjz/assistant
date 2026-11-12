@@ -96,13 +96,15 @@ import (
 // once. The claim is settled once when the command ends
 // (store.SettleNotification, store.SettleDomainNotification,
 // store.SettleKeptWorkNotification):
-// sent for a command that exited zero, failed for one that exited non-zero,
-// could not start, ran past notifyBound, or was ended by the service
-// closing, each with its exit status when it reported one and a detail
-// saying which. A failure is also written to the service log, naming the
-// wake and never the command line, which may carry the channel's own
-// secret. A failed wake is not retried, because a retry is a second send of
-// a wake the command may already have delivered.
+// sent for a command that exited zero within the bound, failed for one that
+// exited non-zero, could not start, ran past notifyBound (including a shell
+// that raced to exit zero after its child was killed with the group at the
+// bound), or was ended by the service closing, each with its exit status
+// when it reported one on a path that is not the bound and a detail saying
+// which. A failure is also written to the service log, naming the wake and
+// never the command line, which may carry the channel's own secret. A
+// failed wake is not retried, because a retry is a second send of a wake
+// the command may already have delivered.
 //
 // Commands run one at a time, so a channel that hangs delays the wakes
 // behind it and never the loop. On unix running the command for one wake
@@ -415,18 +417,30 @@ func (s *Service) runNotify(ctx context.Context, line string, bound time.Duratio
 	res := stages.RunOperatorCommand(runCtx, stages.OperatorCommand{
 		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail, Grace: notifyGrace,
 	})
+	return settleNotify(ctx, runCtx, bound, res)
+}
+
+// settleNotify turns one RunOperatorCommand result into a notification
+// settlement. The bound's deadline is read before an exit status: ending the
+// command's process group at notifyBound can leave a shell that had a child
+// holding output racing to exit zero after that child was killed (macOS CI
+// observed Outcome:sent ExitCode:0 with "Killed: 9" for sleep in the
+// detail). That delivery did not succeed within the bound, so it is failed
+// at the bound with no exit status, matching a leader that died of the
+// signal itself.
+func settleNotify(ctx, runCtx context.Context, bound time.Duration, res stages.OperatorResult) store.NotificationSettlement {
 	switch {
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
+		return store.NotificationSettlement{Outcome: store.NotificationFailed,
+			Detail: fmt.Sprintf("the command did not exit within %s, and it was ended", bound)}
+	case ctx.Err() != nil:
+		return store.NotificationSettlement{Outcome: store.NotificationFailed,
+			Detail: "the service closed while the command ran, and it was ended"}
 	case res.Exited && res.Code == 0:
 		return store.NotificationSettlement{Outcome: store.NotificationSent, ExitCode: store.Known(0), Detail: res.Tail}
 	case res.Exited:
 		return store.NotificationSettlement{Outcome: store.NotificationFailed, ExitCode: store.Known(res.Code),
 			Detail: fmt.Sprintf("the command exited with status %d: %s", res.Code, res.Tail)}
-	case ctx.Err() != nil:
-		return store.NotificationSettlement{Outcome: store.NotificationFailed,
-			Detail: "the service closed while the command ran, and it was ended"}
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return store.NotificationSettlement{Outcome: store.NotificationFailed,
-			Detail: fmt.Sprintf("the command did not exit within %s, and it was ended", bound)}
 	default:
 		return store.NotificationSettlement{Outcome: store.NotificationFailed,
 			Detail: fmt.Sprintf("the command did not exit on its own: %v", res.Err)}
