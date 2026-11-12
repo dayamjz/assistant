@@ -82,7 +82,11 @@ def gate_ran_from_commands(commands: Iterable[str]) -> bool:
 
 
 def _tool_result_usable(turn: dict[str, Any]) -> bool:
-    """True when a tool_result is a real command outcome, not a skip."""
+    """True when a tool_result is a real command outcome, not a skip.
+
+    Rejects empty text, declined runs, and missing-binary forms from bash
+    (``command not found``) and ash (``not found`` after the binary name).
+    """
     content = turn.get("content")
     if not isinstance(content, str):
         out = turn.get("tool_output")
@@ -90,7 +94,10 @@ def _tool_result_usable(turn: dict[str, Any]) -> bool:
     if not content.strip():
         return False
     lower = content.lower()
-    if "command not found" in lower:
+    if "declined" in lower:
+        return False
+    # bash: "command not found"; ash: "sh: assistant: not found"
+    if "not found" in lower:
         return False
     return True
 
@@ -99,11 +106,12 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
     """True when the attempt's transcript shows a gate invocation that ran.
 
     Live caliper transcripts pair tool_use with tool_result. A triad
-    tool_use without a usable following result does not count.
+    tool_use without a usable following result does not count. A non-list
+    transcript cannot prove that pairing, so it never counts.
     """
     transcript = attempt.get("transcript") or []
     if not isinstance(transcript, list):
-        return gate_ran_from_commands(commands_from_transcript(transcript))
+        return False
 
     for i, turn in enumerate(transcript):
         if not isinstance(turn, dict):
