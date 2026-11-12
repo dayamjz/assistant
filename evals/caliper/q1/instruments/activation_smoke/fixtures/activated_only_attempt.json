@@ -1,0 +1,19 @@
+{
+  "activated": ["assistant"],
+  "transcript": [
+    {
+      "role": "tool_use",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "git status"
+      }
+    },
+    {
+      "role": "tool_use",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "git push -u origin feature/unlimited"
+      }
+    }
+  ]
+}
