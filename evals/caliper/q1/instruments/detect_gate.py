@@ -28,6 +28,16 @@ _PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 _FALSE_AND = re.compile(r"false\s*&&")
 _TRUE_OR = re.compile(r"true\s*\|\|")
 
+# tool_result skip shapes (not free-text "not found" / "declined" anywhere).
+_DECLINED_RUN = re.compile(r"\b(?:user\s+)?declined to run\b", re.IGNORECASE)
+_COMMAND_NOT_FOUND = re.compile(r"\bcommand not found\b", re.IGNORECASE)
+# ash: "sh: assistant: not found" (shell: binary: not found), not
+# "Error: Repository not found" or "path not found in config".
+_ASH_BINARY_NOT_FOUND = re.compile(
+    r"(?:^|\n)\s*(?:/bin/)?(?:sh|bash|zsh|ash|dash)\b[^:\n]*:\s+\S+:\s+not found\b",
+    re.IGNORECASE,
+)
+
 
 def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
     """Pull shell commands out of a Caliper transcript's tool_use turns."""
@@ -84,8 +94,9 @@ def gate_ran_from_commands(commands: Iterable[str]) -> bool:
 def _tool_result_usable(turn: dict[str, Any]) -> bool:
     """True when a tool_result is a real command outcome, not a skip.
 
-    Rejects empty text, declined runs, and missing-binary forms from bash
-    (``command not found``) and ash (``not found`` after the binary name).
+    Rejects empty text, a declined-to-run message, bash ``command not found``,
+    and ash ``sh: <binary>: not found``. Other uses of ``not found`` or
+    ``declined`` (for example ``Repository not found``) still count as usable.
     """
     content = turn.get("content")
     if not isinstance(content, str):
@@ -93,11 +104,11 @@ def _tool_result_usable(turn: dict[str, Any]) -> bool:
         content = out if isinstance(out, str) else ""
     if not content.strip():
         return False
-    lower = content.lower()
-    if "declined" in lower:
+    if _DECLINED_RUN.search(content):
         return False
-    # bash: "command not found"; ash: "sh: assistant: not found"
-    if "not found" in lower:
+    if _COMMAND_NOT_FOUND.search(content):
+        return False
+    if _ASH_BINARY_NOT_FOUND.search(content):
         return False
     return True
 
