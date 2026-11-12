@@ -87,8 +87,8 @@ jobs:
 
   # Runs make lint, then the race suite as CI's check job runs it
   # (.github/actions/test-env, then scripts/ci-test.sh, which owns that
-  # environment and says why each part is there), on ubuntu-24.04 and
-  # macos-latest (same Linux pin as ci.yml check; #902). Not make check: on a Linux runner a bare go test shares
+  # environment and says why each part is there), on ubuntu-latest and
+  # macos-latest. Not make check: on a Linux runner a bare go test shares
   # the host's process table, where the runner keeps processes of the
   # test user that cannot be read, and the suite's process listings
   # refuse while one runs (Release runs 40132462905 and 42521151868
@@ -105,7 +105,7 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
         with:
