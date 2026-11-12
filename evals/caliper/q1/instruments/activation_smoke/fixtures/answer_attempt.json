@@ -7,6 +7,10 @@
       "tool_input": {
         "command": "assistant --answer approved"
       }
+    },
+    {
+      "role": "tool_result",
+      "content": "Exit code 0\n"
     }
   ]
 }

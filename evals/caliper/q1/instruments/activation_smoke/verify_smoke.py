@@ -80,6 +80,39 @@ def check_detection() -> int:
         failed += 1
     else:
         print("ok  detect/home_intent")
+    heredoc = {
+        "transcript": [
+            {
+                "role": "tool_use",
+                "tool_input": {
+                    "command": (
+                        "cat >run.sh <<'EOF'\n"
+                        "assistant --intent ship\n"
+                        "EOF"
+                    )
+                },
+            },
+            {"role": "tool_result", "content": "Exit code 0\n"},
+        ]
+    }
+    if gate_ran_from_attempt(heredoc):
+        sys.stderr.write("FAIL detect/heredoc: counted script body as gate use\n")
+        failed += 1
+    else:
+        print("ok  detect/heredoc")
+    no_result = {
+        "transcript": [
+            {
+                "role": "tool_use",
+                "tool_input": {"command": "assistant --intent ship"},
+            }
+        ]
+    }
+    if gate_ran_from_attempt(no_result):
+        sys.stderr.write("FAIL detect/no_result: accepted tool_use without result\n")
+        failed += 1
+    else:
+        print("ok  detect/no_result")
     try:
         require_gate_ran(_load("activated_only_attempt.json"))
     except AssertionError:

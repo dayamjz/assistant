@@ -5,9 +5,9 @@ Caliper's ``activated`` field only says the skill loaded. Issue #398 counted
 gate use as any of ``assistant --intent``, ``assistant --answer``, or
 ``git push assistant``. Skill activation alone is not gate use.
 
-Command text alone is not enough: a short-circuited shell line can name the
-gate without launching it. A following tool_result with an exit code still
-does not prove the gate binary ran when the line short-circuits.
+Command text alone is not enough: a short-circuited shell line, or a heredoc
+that only writes the gate command into a file, can name the gate without
+launching it. Live scoring requires a paired tool_result that looks usable.
 """
 from __future__ import annotations
 
@@ -15,15 +15,14 @@ import json
 import re
 from typing import Any, Iterable
 
-# Global flags may sit between `assistant` and --intent/--answer, including
-# value-taking flags such as --home PATH or --home=PATH.
+# Match only at the start of the command or after a same-line shell separator.
+# Do not match after an interior newline: that is how a heredoc body names the
+# gate without launching it.
 _GLOBAL = r"(?:\s+--\w[\w-]*(?:(?:=|\s+)\S+)?)*"
-_INTENT = re.compile(rf"(?:^|[\n;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
-_ANSWER = re.compile(rf"(?:^|[\n;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
-# Allow flags between push and the remote (git push -u assistant BRANCH).
-_PUSH = re.compile(r"(?:^|[\n;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
+_INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
+_ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
+_PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 
-# Shell short-circuit / grouping that can name the gate without running it.
 _SHORT_CIRCUIT = re.compile(r"(?:&&|\|\||`|\$\(|;\s*then\b)")
 
 
@@ -45,7 +44,15 @@ def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
 
 def _command_looks_executed(command: str) -> bool:
     """False when the shell line can name the gate without launching it."""
-    return not _SHORT_CIRCUIT.search(command)
+    if _SHORT_CIRCUIT.search(command):
+        return False
+    # A multiline command that only embeds the triad after a newline is a
+    # script/heredoc body, not a direct launch.
+    if "\n" in command:
+        first, _, rest = command.partition("\n")
+        if not _matches_triad(first) and _matches_triad(rest):
+            return False
+    return True
 
 
 def _matches_triad(command: str) -> bool:
@@ -77,7 +84,11 @@ def _tool_result_usable(turn: dict[str, Any]) -> bool:
 
 
 def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
-    """True when the attempt's transcript shows a gate invocation that ran."""
+    """True when the attempt's transcript shows a gate invocation that ran.
+
+    Live caliper transcripts pair tool_use with tool_result. A triad
+    tool_use without a usable following result does not count.
+    """
     transcript = attempt.get("transcript") or []
     if not isinstance(transcript, list):
         return gate_ran_from_commands(commands_from_transcript(transcript))
@@ -93,16 +104,17 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
             cmd = inp
         if not cmd or not _matches_triad(cmd):
             continue
-        # Short-circuit always disqualifies, even with a paired Exit code.
         if not _command_looks_executed(cmd):
             continue
-        if i + 1 < len(transcript) and isinstance(transcript[i + 1], dict):
-            nxt = transcript[i + 1]
-            if nxt.get("role") in ("tool_result", "user") or nxt.get("tool_output"):
-                if _tool_result_usable(nxt):
-                    return True
-                continue
-        return True
+        if i + 1 >= len(transcript) or not isinstance(transcript[i + 1], dict):
+            continue
+        nxt = transcript[i + 1]
+        if not (
+            nxt.get("role") in ("tool_result", "user") or nxt.get("tool_output")
+        ):
+            continue
+        if _tool_result_usable(nxt):
+            return True
     return False
 
 
