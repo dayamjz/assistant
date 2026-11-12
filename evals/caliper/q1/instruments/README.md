@@ -12,15 +12,5 @@ only name the gate do not count. Ordinary `cd work && assistant --intent …`
 does. Any backtick or `$(…)` on the line is treated as not executed
 (residual false negative for real `cd "$(pwd)" && assistant …`).
 
-Follow-up PRs stack the activation smoke runner and the fixed-diff
-efficacy arms on this detector.
-
-## Offline check
-
-```sh
-cd evals/caliper/q1/instruments
-python3 verify_detect.py
-```
-
-`verify_detect.py` covers positive launches and the short-circuit /
-heredoc / missing-`tool_result` / bare-list runs-dump negatives.
+Offline negative controls and the activation-smoke / fixed-diff runners
+stack in follow-up PRs of 300 code lines or under each.

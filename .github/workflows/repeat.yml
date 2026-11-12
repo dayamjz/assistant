@@ -59,8 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-24.04: same pin as ci.yml check (#902 / ubuntu-26 leak-check).
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/test-env

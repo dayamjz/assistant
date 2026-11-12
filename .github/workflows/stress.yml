@@ -56,8 +56,7 @@ jobs:
       fail-fast: false
       max-parallel: 2
       matrix:
-        # ubuntu-24.04: same pin as ci.yml check (#902 / ubuntu-26 leak-check).
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-latest, macos-latest]
         run: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
