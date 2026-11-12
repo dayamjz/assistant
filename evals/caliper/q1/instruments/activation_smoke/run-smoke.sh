@@ -50,9 +50,9 @@ caliper run instruments/activation_smoke/smoke.eval.yaml \
 
 # Score gate use even when caliper failed (an ungated defect ships as a
 # task failure; the #398 diagnostic must still run against the result).
+score_rc=0
 if [ -f "$OUT" ]; then
-	python3 instruments/activation_smoke/score_result.py "$OUT"
-	score_rc=$?
+	python3 instruments/activation_smoke/score_result.py "$OUT" || score_rc=$?
 else
 	echo "score_result: missing $OUT (caliper exit $caliper_rc)" >&2
 	score_rc=1

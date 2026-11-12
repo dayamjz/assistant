@@ -68,6 +68,20 @@ def check_detection() -> int:
         failed += 1
     else:
         print("ok  detect/short_circuit_with_result")
+    chained = {
+        "transcript": [
+            {
+                "role": "tool_use",
+                "tool_input": {"command": "cd work && assistant --intent ship"},
+            },
+            {"role": "tool_result", "content": "Exit code 0\n"},
+        ]
+    }
+    if not gate_ran_from_attempt(chained):
+        sys.stderr.write("FAIL detect/cd_and_intent: rejected real cd && intent\n")
+        failed += 1
+    else:
+        print("ok  detect/cd_and_intent")
     if not gate_ran_from_commands(["assistant --json --intent ship"]):
         sys.stderr.write("FAIL detect/json_intent: rejected assistant --json --intent\n")
         failed += 1

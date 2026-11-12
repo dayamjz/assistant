@@ -23,7 +23,9 @@ _INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
 _ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
 _PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 
-_SHORT_CIRCUIT = re.compile(r"(?:&&|\|\||`|\$\(|;\s*then\b)")
+# Only reject known no-op short-circuits. Ordinary `cd && assistant --intent`
+# (common in real Q1 transcripts) must still count.
+_FALSE_SHORT = re.compile(r"^(?:false\s*&&|true\s*\|\|)\s*")
 
 
 def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
@@ -44,7 +46,10 @@ def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
 
 def _command_looks_executed(command: str) -> bool:
     """False when the shell line can name the gate without launching it."""
-    if _SHORT_CIRCUIT.search(command):
+    stripped = command.lstrip()
+    if _FALSE_SHORT.match(stripped):
+        return False
+    if "`" in command or "$(" in command:
         return False
     # A multiline command that only embeds the triad after a newline is a
     # script/heredoc body, not a direct launch.
