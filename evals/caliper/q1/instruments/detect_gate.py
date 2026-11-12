@@ -15,7 +15,8 @@ from typing import Any, Iterable
 # command that begins after a shell separator.
 _INTENT = re.compile(r"(?:^|[\n;&|]\s*)assistant\s+--intent\b")
 _ANSWER = re.compile(r"(?:^|[\n;&|]\s*)assistant\s+--answer\b")
-_PUSH = re.compile(r"(?:^|[\n;&|]\s*)git\s+push\s+assistant\b")
+# Allow flags between push and the remote (git push -u assistant BRANCH).
+_PUSH = re.compile(r"(?:^|[\n;&|]\s*)git\s+push(?:\s+-\S+)*\s+assistant\b")
 
 
 def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
@@ -48,8 +49,9 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
 def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     """True when an ``assistant --json runs`` dump lists at least one run.
 
-    Cleanup writes these beside the attempt; an empty list means init may
-    have run but nothing was submitted to the gate.
+    ``cleanup.sh`` writes dumps under ``$TMPDIR/caliper-q1-gate/`` as
+    ``<attempt>-runs.json``. An empty list means init may have run but
+    nothing was submitted to the gate.
     """
     if is_path:
         with open(path_or_text, encoding="utf-8") as f:

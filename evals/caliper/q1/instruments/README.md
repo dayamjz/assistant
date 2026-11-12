@@ -7,8 +7,9 @@ activation smoke; the fixed-diff efficacy runner stacks on top.
 | --- | --- | --- |
 | Activation smoke | Does a shipping prompt load `assistant`, and does the attempt invoke the gate? Graders still separate a held defect from a shipped benign change. | Yes |
 
-**Adoption** here is whether the gate actually ran (`detect_gate.py` /
-`check_gate_ran.py`), separate from Caliper's skill `activated` field (#398).
+**Adoption** here is whether the gate actually ran, scored after the run by
+`score_result.py` (via `detect_gate.py`) against each attempt's transcript.
+Caliper's skill `activated` field alone is not enough (#398).
 
 The corrected agentic three-arm Q1 rerun is #896.
 
@@ -26,5 +27,5 @@ python3 instruments/activation_smoke/verify_smoke.py
 ./instruments/activation_smoke/run-smoke.sh claude-code:claude-sonnet-4-5
 ```
 
-k = 1 on defect + benign. `check_gate_ran.py` fails when the attempt never
-invoked the gate, even if Caliper's `activated` field is set.
+k = 1 on defect + benign. After caliper exits, `score_result.py` fails any
+usable attempt whose transcript never invoked the gate.

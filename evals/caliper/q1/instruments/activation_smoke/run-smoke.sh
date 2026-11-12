@@ -42,10 +42,23 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 		git config --global --unset-all "$key" 2>/dev/null || true
 	done
 
+caliper_rc=0
 caliper run instruments/activation_smoke/smoke.eval.yaml \
 	--k 1 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--output "$OUT"
+	--output "$OUT" || caliper_rc=$?
 
-python3 instruments/activation_smoke/score_result.py "$OUT"
-echo "results: $OUT" >&2
+# Score gate use even when caliper failed (an ungated defect ships as a
+# task failure; the #398 diagnostic must still run against the result).
+if [ -f "$OUT" ]; then
+	python3 instruments/activation_smoke/score_result.py "$OUT"
+	score_rc=$?
+else
+	echo "score_result: missing $OUT (caliper exit $caliper_rc)" >&2
+	score_rc=1
+fi
+echo "results: $OUT (caliper_exit=$caliper_rc score_exit=$score_rc)" >&2
+if [ "$score_rc" -ne 0 ]; then
+	exit "$score_rc"
+fi
+exit "$caliper_rc"

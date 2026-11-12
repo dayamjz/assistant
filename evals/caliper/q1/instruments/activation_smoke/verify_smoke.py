@@ -77,24 +77,52 @@ def check_smoke_paths_and_runner() -> int:
     else:
         print("ok  smoke.yaml/controls")
 
-    # Resolve every relative skills: / extra_path entry against the YAML dir.
+    # Resolve skills/extra_path entries and setup/cleanup script paths.
     for line in text.splitlines():
         m = re.match(r"\s*-\s+(\.\./\S+)", line)
-        if not m:
+        if m:
+            rel = m.group(1)
+            target = (HERE / rel).resolve()
+            if not target.exists():
+                sys.stderr.write(
+                    f"FAIL smoke.yaml/path {rel}: resolves to missing {target}\n"
+                )
+                failed += 1
+            else:
+                print(f"ok  smoke.yaml/path {rel} -> {target.relative_to(REPO)}")
             continue
-        rel = m.group(1)
-        target = (HERE / rel).resolve()
-        if not target.exists():
-            sys.stderr.write(
-                f"FAIL smoke.yaml/path {rel}: resolves to missing {target}\n"
-            )
+        m = re.search(r'\$CALIPER_SPEC_DIR/(\.\./[^"\s]+)/(build-subject|cleanup)\.sh', line)
+        if m:
+            rel = m.group(1)
+            target = (HERE / rel / f"{m.group(2)}.sh").resolve()
+            if not target.exists():
+                sys.stderr.write(
+                    f"FAIL smoke.yaml/hook {m.group(2)}.sh via {rel}: "
+                    f"missing {target}\n"
+                )
+                failed += 1
+            else:
+                print(f"ok  smoke.yaml/hook {m.group(2)}.sh -> {target.relative_to(REPO)}")
+
+    # Assert block resets CALIPER_SPEC_DIR to q1 via join(smoke, "../..").
+    if 'os.path.join(smoke, "../..")' not in text:
+        sys.stderr.write(
+            "FAIL smoke.yaml/assert: missing join(smoke, \"../..\") for q1 graders\n"
+        )
+        failed += 1
+    else:
+        q1 = (HERE / "../..").resolve()
+        if not (q1 / "check.py").is_file():
+            sys.stderr.write(f"FAIL smoke.yaml/assert: {q1}/check.py missing\n")
             failed += 1
         else:
-            print(f"ok  smoke.yaml/path {rel} -> {target.relative_to(REPO)}")
+            print("ok  smoke.yaml/assert q1 graders")
 
     runner = (HERE / "run-smoke.sh").read_text(encoding="utf-8")
-    if not re.search(r"--k\s+1\b", runner):
-        sys.stderr.write("FAIL run-smoke.sh: missing --k 1\n")
+    # Comments must not satisfy --k 1; strip them before matching.
+    code_only = "\n".join(ln.split("#", 1)[0] for ln in runner.splitlines())
+    if not re.search(r"--k\s+1\b", code_only):
+        sys.stderr.write("FAIL run-smoke.sh: missing --k 1 outside comments\n")
         failed += 1
     else:
         print("ok  run-smoke.sh/k=1")
@@ -103,6 +131,13 @@ def check_smoke_paths_and_runner() -> int:
         failed += 1
     else:
         print("ok  run-smoke.sh/score_result")
+    if "caliper_rc" not in runner:
+        sys.stderr.write(
+            "FAIL run-smoke.sh: caliper failure must not skip score_result\n"
+        )
+        failed += 1
+    else:
+        print("ok  run-smoke.sh/score_after_caliper_failure")
     return failed
 
 
