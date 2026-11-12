@@ -214,7 +214,8 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    # ubuntu-24.04: same pin as check (#902 / ubuntu-26 sudo --preserve-env drop).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
