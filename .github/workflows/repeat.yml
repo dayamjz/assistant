@@ -55,11 +55,14 @@ jobs:
     needs: plan
     if: needs.plan.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # 90m: full-RISKY gate changes run service under -count=3; macos
+    # cancelled mid-service at 60m (#908 / batch a#904 job 131350640563).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # ubuntu-24.04: same pin as ci.yml check (#902 / ubuntu-26 leak-check).
+        os: [ubuntu-24.04, macos-latest]
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/test-env
@@ -83,7 +86,9 @@ jobs:
           CI_TEST_COUNT: ${{ env.REPEAT_COUNT }}
           # go test's bound is per package binary, and -count runs every
           # test that many times inside one binary.
-          CI_TEST_TIMEOUT: 55m
+          # Per-package bound above the job leftover after leak-check-test
+          # repeats; service alone is ~31m on ubuntu / longer on macos (#908).
+          CI_TEST_TIMEOUT: 80m
         run: bash scripts/ci-test.sh
 
   repeat:
