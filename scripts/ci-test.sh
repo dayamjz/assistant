@@ -108,10 +108,25 @@ else
   echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
 fi
 export ASSISTANT_REQUIRE_TMUX=1
+# Per-package -exec appends here; set before the Linux wrapper is built so
+# env can name the path on argv (#902 / #912). That keeps the recorder
+# reachable even when the wrapper's environment is not preserved.
+export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 run=()
 if [ "$RUNNER_OS" = "Linux" ]; then
   export ASSISTANT_REQUIRE_SWEEP_CLEAR=1
-  run=(sudo --preserve-env env "PATH=$PATH" "HOME=$HOME"
+  # Pass the vars -exec and the suite need as env KEY=VAL on argv rather
+  # than relying on sudo preserving the parent environment (#902 / #912).
+  run=(sudo --preserve-env env
+    "PATH=$PATH"
+    "HOME=$HOME"
+    "TMPDIR=${TMPDIR:-}"
+    "LEAK_CHECK_RECORD=$LEAK_CHECK_RECORD"
+    "ASSISTANT_REQUIRE_TMUX=$ASSISTANT_REQUIRE_TMUX"
+    "ASSISTANT_REQUIRE_SWEEP_CLEAR=$ASSISTANT_REQUIRE_SWEEP_CLEAR"
+    "GOTOOLCHAIN=${GOTOOLCHAIN:-local}"
+    "RUNNER_TEMP=$RUNNER_TEMP"
+    "RUNNER_OS=$RUNNER_OS"
     unshare --pid --fork --mount-proc tini --
     bash -c 'setpriv --reuid=65534 --regid=65534 --clear-groups sleep infinity &
       uid=$1 gid=$2; shift 2
@@ -151,7 +166,6 @@ fi
 # reports ok must be among them, so a lost -exec fails the step,
 # and so does a run whose --per-package claim did not hold.
 per_package=(-exec "python3 $PWD/scripts/leak-check.py package --")
-export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 "${run[@]}" python3 scripts/leak-check.py self-test
 : > "$LEAK_CHECK_RECORD"
 run_args=()
