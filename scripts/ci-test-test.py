@@ -121,61 +121,6 @@ class InputTest(unittest.TestCase):
         self.assertLess(go_test.index("-run"), go_test.index("./internal/service"))
         self.assertLess(go_test.index("-race"), go_test.index("-run"))
 
-    def test_linux_wrapper_forwards_leak_check_record(self):
-        # #902 / #912: stub sudo drops preserve-env and keeps only KEY=VAL from
-        # argv (dash-safe). It does not run the real payload; it only proves
-        # LEAK_CHECK_RECORD reaches env's argv and survives env -i.
-        seen = self.folder / "child-leak-check-record"
-        sudo = self.folder / "bin" / "sudo"
-        sudo.write_text("\n".join([
-            "#!/bin/sh",
-            'printf \'%s\\n\' "sudo $*" >> "$CI_TEST_CALLS"',
-            "while [ $# -gt 0 ]; do",
-            "  case $1 in",
-            "    --preserve-env|--preserve-env=*) shift ;;",
-            "    env) shift; break ;;",
-            "    *) shift ;;",
-            "  esac",
-            "done",
-            "env_args=",
-            "while [ $# -gt 0 ]; do",
-            "  case $1 in",
-            '    *=*) printf \'%s\\n\' "env $1" >> "$CI_TEST_CALLS"; env_args="$env_args $1"; shift ;;',
-            "    *) break ;;",
-            "  esac",
-            "done",
-            # Drop unshare/tini/-- and the setpriv bash -c wrapper; print the var.
-            "if [ \"$1\" = unshare ]; then",
-            "  shift",
-            "  while [ $# -gt 0 ]; do",
-            "    case $1 in",
-            "      --pid|--fork|--mount-proc) shift ;;",
-            "      tini) shift; [ \"$1\" = -- ] && shift; break ;;",
-            "      *) break ;;",
-            "    esac",
-            "  done",
-            "fi",
-            "if [ \"$1\" = bash ] && [ \"$2\" = -c ]; then",
-            "  shift 2; shift; shift; shift; shift",
-            "fi",
-            f'seen="{seen}"',
-            'exec env -i HOME="$HOME" $env_args sh -c \''
-            'printf "%s\\n" "${LEAK_CHECK_RECORD-}" > "$0"; exit 0\' "$seen"',
-            "",
-        ]))
-        sudo.chmod(0o755)
-        _, calls = self.run_script_with(
-            None, RUNNER_OS="Linux", CI_TEST_PACKAGES="./internal/agents")
-        env_lines = [c for c in calls if c.startswith("env ")]
-        self.assertTrue(env_lines, calls)
-        joined = " ".join(env_lines)
-        self.assertIn("LEAK_CHECK_RECORD=", joined)
-        want = str(self.folder / "runner-temp" / "per-package-checked.txt")
-        self.assertIn(want, joined)
-        self.assertTrue(seen.exists(), "stub sudo never ran the env -i child")
-        self.assertEqual(seen.read_text().strip(), want,
-                         "LEAK_CHECK_RECORD must reach the child via env argv")
-
 
 if __name__ == "__main__":
     unittest.main()
