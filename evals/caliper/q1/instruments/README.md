@@ -6,48 +6,55 @@ This PR lands `detect_gate.py`: whether a Caliper attempt actually invoked
 the assistant gate (`assistant --intent` / `--answer`, or `git push
 assistant`), not merely whether the skill activated (#398).
 
-Live scoring is `gate_ran_from_attempt`: a paired `tool_result` that looks
-usable. What does not count:
+Live scoring is `gate_ran_from_attempt`. A gate command counts only when its
+paired `tool_result` shows it reached the gate, wherever it sits on its line:
 
-- A gate command that is not the first command of its line (after `&&`,
-  `||`, `;` or `|`) unless its own output is in the result: the progress
-  line `internal/cli/runs.go` prints before calling the service
-  (`starting or attaching ...`, `answering ...`), or for a push one more
-  `To <remote>` line than there are earlier `git push` commands on the line.
-  Text alone cannot say whether `cd dir && assistant --intent ...` ran, so a
-  failed `cd`, `assistant --cancel && ...` and `false && ...` all score false.
-- A result saying the `assistant` binary was not found, in any shell's
-  wording (`(eval):1: command not found: assistant`, `bash: assistant:
-  command not found`, `sh: 1: assistant: not found`), or that the user
-  declined to run it.
-- A push that never reached the gate's receive hook: dry-run flags
-  (`--dry-run`, `-n`, combined short flags like `-fn`) before or after the
-  remote; a remote that is not exactly `assistant` (`assistant-backup`); no
-  `assistant` remote; `Everything up-to-date`. With git 2.54 none of these
-  ran a `pre-receive` hook.
-- Text that only names the gate inside quotes, comments or heredoc bodies.
-  Quoted intent text is ignored, so `assistant --intent "fix false && x"`
-  counts.
+- `--intent` / `--answer`: a progress line `internal/cli/runs.go` prints
+  (`starting or attaching ...`, `answering ...`), with no
+  `the background service is not running` failure
+  (`internal/cli/client.go`). The CLI prints the progress line before it
+  dials the service, so the line alone shows only that it tried.
+- `git push assistant`: under git's `To <remote>` line, a ref that was
+  updated (` * `, `   `, ` + `, ` - `) or that the pre-receive hook declined
+  (`! [remote rejected] ... (pre-receive hook declined)`). The push must be
+  the line's only `git push`, because another push's report looks the same.
+  With git 2.54, a bad refspec, a local `! [rejected]` (non-fast-forward),
+  `Everything up-to-date` and a missing remote all left the hook unrun and
+  printed none of these. A dry run also left it unrun but does print
+  ` * [new branch]`, so dry runs are excluded by their flags (below), not by
+  this evidence.
+
+So a command the shell skipped (a failed `cd`, `assistant --cancel && ...`,
+`false && ...`), a missing `assistant` binary in any shell's wording, and a
+declined tool call all score false, because none prints that evidence.
+
+What is not a gate command at all: a push with dry-run flags (`--dry-run`,
+`-n`, combined short flags like `-fn`) before or after the remote, quoted or
+not (`"--dry-run"`); a remote that is not exactly `assistant`
+(`assistant-backup`); and text that names the gate only inside a multi-word
+quoted span, a comment or a heredoc body. A one-word quoted span is read as
+that word, so `git push "assistant"` is a push to `assistant`, and quoted
+intent text is ignored, so `assistant --intent "fix false && x"` counts.
 
 Residual false negatives (real gate runs that still score false): any
-backtick or `$(...)` on the line; leading whitespace before the triad; a gate
-command only on a later line of a multi-line command; an env prefix
+backtick or `$(...)` on the line; leading whitespace before the gate command;
+a gate command only on a later line of a multi-line command; an env prefix
 (`VAR=val assistant ...`); a path invocation (`./bin/assistant ...`);
-`git -C dir push assistant`; and a gate command after another command whose
-evidence is missing from the result: `git push -q` (git 2.54 printed no `To`
-line), output filtered through a pipe, an earlier `git push -q` on the line,
-or a run started in the background. The progress lines are matched as
-`internal/cli/runs.go` words them today; rewording them makes such commands
-score false, and nothing here detects that drift. A push line where another
-push prints `Everything up-to-date` also scores false.
+`git -C dir push assistant`; a line with more than one `git push`; `git push
+-q` or `--porcelain` (git 2.54 printed no status block for `-q`); output
+filtered through a pipe that drops the evidence; and a run started in the
+background, whose output goes to a file. The progress lines are matched as
+`internal/cli/runs.go` words them today; rewording them makes intents and
+answers score false, and nothing here detects that drift.
 
 `gate_ran_from_commands` is only the offline command-text heuristic (verify /
 selftest); it sees no result, so it counts `cd missing && assistant --intent`
 and rejects only literal `false &&` / `true ||` short-circuits.
 
 `python3 detect_gate.py` runs the fail-before selftest: one `class_*` row per
-command shape earlier reviews found (short-circuit, failed `cd`, not found,
-flags after the remote, remote-name prefix, up-to-date), each with result text
-taken from the recorded Q1 run or captured from zsh and git 2.54. Fuller
-offline controls and the activation-smoke / fixed-diff runners stack in
-follow-up PRs of 300 code lines or under each.
+command shape the reviews found (short-circuit, failed `cd`, not found, flags
+after the remote, remote-name prefix, up-to-date, a push that failed before
+the hook, a quoted flag, no service), each with result text recorded in the
+Q1 run or captured from zsh, git 2.54 or this repository's CLI. Fuller offline
+controls and the activation-smoke / fixed-diff runners stack in follow-up PRs
+of 300 code lines or under each.
