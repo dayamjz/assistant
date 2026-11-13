@@ -139,6 +139,11 @@ type commandResult struct {
 	// non-zero, because a non-zero status is the answer rather than a failure
 	// to obtain one.
 	err error
+	// timedOut is true when this call's own bound (commandSpec.timeout) had
+	// passed when the command ended or was never started, read then and not
+	// after the output drain: a descendant holding the pipe past the bound
+	// must not rewrite whether the bound ended the command.
+	timedOut bool
 	// short is set when the read of the command's output did not reach the
 	// end of it: the grace expired with the pipe still open, or the read
 	// failed. Neither the record nor the projection then holds the whole
@@ -283,7 +288,7 @@ func runBounded(ctx, runCtx context.Context, spec commandSpec) commandResult {
 	timedOut := spec.timeout > 0 && ctx.Err() == nil && errors.Is(runCtx.Err(), context.DeadlineExceeded)
 	if cmd.Process == nil {
 		<-copied
-		res := commandResult{code: -1, err: runErr}
+		res := commandResult{code: -1, err: runErr, timedOut: timedOut}
 		// procgroup.Run starts nothing once runCtx has ended and answers its
 		// error, so a bound that passed before the command could start is
 		// read by the same rule as one that passed while it ran. Any other
@@ -295,7 +300,7 @@ func runBounded(ctx, runCtx context.Context, spec commandSpec) commandResult {
 		return settle(res)
 	}
 
-	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
+	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace), timedOut: timedOut}
 	// A command procgroup.Run abandoned reports no status: procgroup.ErrAbandoned
 	// owns that its process state stays nil, so this read finds none.
 	if cmd.ProcessState != nil {
