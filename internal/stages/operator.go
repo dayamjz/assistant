@@ -17,8 +17,12 @@ import (
 // leader of a process group of its own, which is ended when the command
 // returns or its context ends (procgroup.Run), and a descendant that left the
 // group is not ended.
-// Unlike a stage's command it takes no command slot and no time limit of
-// runCommand's own, because its caller's context is its deadline.
+// Unlike a stage's command it takes no command slot. Its bound is
+// OperatorCommand.Timeout when set, which runCommand reads at command end
+// (OperatorResult.TimedOut) rather than after the output drain, so a
+// descendant holding the pipe past the bound cannot rewrite whether the
+// bound ended the command. Ending ctx still ends the command and, on linux
+// and darwin, its process group.
 //
 // It is exported for one consumer, internal/service's notify.go, which runs
 // the global-only notify.command once per wake. That is the reason this
@@ -41,6 +45,11 @@ type OperatorCommand struct {
 	// bounds and on which platforms. Zero or less means commandGrace, so no
 	// value leaves the wait unbounded.
 	Grace time.Duration
+	// Timeout is how long the command may run before it is ended. Zero means
+	// no bound of runCommand's own: only ending ctx ends it. Positive is
+	// measured from when the command holds its slot, and TimedOut on the
+	// result is read when the command ends, not after the output drain.
+	Timeout time.Duration
 }
 
 // OperatorResult is what running an OperatorCommand produced. It reports
@@ -55,6 +64,11 @@ type OperatorResult struct {
 	// Tail is the redacted end of the command's output, bounded by
 	// OperatorCommand.Tail.
 	Tail string
+	// TimedOut is true when OperatorCommand.Timeout had passed when the
+	// command ended or was never started. It is independent of Exited: a
+	// shell that races to exit zero after its group was killed at the bound
+	// still reports TimedOut.
+	TimedOut bool
 	// Err is the error from starting or waiting on the process, nil when it
 	// ran and exited on its own, including when it exited non-zero, or the
 	// reason its output was not read to the end.
@@ -62,17 +76,16 @@ type OperatorResult struct {
 }
 
 // RunOperatorCommand runs c to completion on runCommand's terms. Ending ctx
-// ends the command and, on linux and darwin, its process group, which the
-// result then reports as not having exited on its own; a caller that bounds
-// a command with a deadline reads why from the context rather than from the
-// result.
+// ends the command and, on linux and darwin, its process group. A positive
+// c.Timeout is runCommand's own bound: TimedOut is set when that bound ended
+// the command, read at command end and not after the output drain.
 //
 // On linux and darwin the call returns at most c.Grace after the command
 // exited, when the read of the output is given up, and at most twice c.Grace
-// after ctx ended: the group is sent SIGKILL at once, the command is given
-// c.Grace to exit, past which procgroup.Run answers ErrAbandoned without it,
-// and the read is then given up after c.Grace more. Elsewhere commandGrace
-// says what is not bounded.
+// after ctx or the Timeout ended: the group is sent SIGKILL at once, the
+// command is given c.Grace to exit, past which procgroup.Run answers
+// ErrAbandoned without it, and the read is then given up after c.Grace more.
+// Elsewhere commandGrace says what is not bounded.
 func RunOperatorCommand(ctx context.Context, c OperatorCommand) OperatorResult {
 	grace := c.Grace
 	if grace <= 0 {
@@ -85,9 +98,10 @@ func RunOperatorCommand(ctx context.Context, c OperatorCommand) OperatorResult {
 		record:     io.Discard,
 		projection: c.Tail,
 		grace:      grace,
+		timeout:    c.Timeout,
 		redact:     redact.New(),
 	})
-	out := OperatorResult{Exited: res.exited, Code: res.code, Tail: res.tail, Err: res.err}
+	out := OperatorResult{Exited: res.exited, Code: res.code, Tail: res.tail, TimedOut: res.timedOut, Err: res.err}
 	if out.Err == nil {
 		out.Err = res.short
 	}
