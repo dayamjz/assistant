@@ -96,13 +96,16 @@ import (
 // once. The claim is settled once when the command ends
 // (store.SettleNotification, store.SettleDomainNotification,
 // store.SettleKeptWorkNotification):
-// sent for a command that exited zero, failed for one that exited non-zero,
-// could not start, ran past notifyBound, or was ended by the service
-// closing, each with its exit status when it reported one and a detail
-// saying which. A failure is also written to the service log, naming the
-// wake and never the command line, which may carry the channel's own
-// secret. A failed wake is not retried, because a retry is a second send of
-// a wake the command may already have delivered.
+// sent for a command that exited zero within the bound, failed for one that
+// exited non-zero, could not start, ran past notifyBound (including a shell
+// that raced to exit zero after its child was killed with the group at the
+// bound; stages reports TimedOut then, read at command end), or was ended
+// by the service closing without an exit status, each with its exit status
+// when it reported one on a path that is not the bound and a detail saying
+// which. A failure is also written to the service log, naming the wake and
+// never the command line, which may carry the channel's own secret. A
+// failed wake is not retried, because a retry is a second send of a wake
+// the command may already have delivered.
 //
 // Commands run one at a time, so a channel that hangs delays the wakes
 // behind it and never the loop. On unix running the command for one wake
@@ -410,12 +413,27 @@ func (s *Service) runNotify(ctx context.Context, line string, bound time.Duratio
 		return store.NotificationSettlement{Outcome: store.NotificationFailed,
 			Detail: fmt.Sprintf("the wake could not be encoded, and the command was not run: %v", err)}
 	}
-	runCtx, cancel := context.WithTimeout(ctx, bound)
-	defer cancel()
-	res := stages.RunOperatorCommand(runCtx, stages.OperatorCommand{
-		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail, Grace: notifyGrace,
+	res := stages.RunOperatorCommand(ctx, stages.OperatorCommand{
+		Line: line, Dir: s.home.Root(), Stdin: string(row) + "\n", Tail: notifyTail, Grace: notifyGrace, Timeout: bound,
 	})
+	return settleNotify(ctx, bound, res)
+}
+
+// settleNotify turns one RunOperatorCommand result into a notification
+// settlement. TimedOut is preferred over an exit status: ending the
+// command's process group at notifyBound can leave a shell that had a child
+// holding output racing to exit zero after that child was killed (macOS CI
+// observed Outcome:sent ExitCode:0 with "Killed: 9" for sleep in the
+// detail). That delivery did not succeed within the bound, so it is failed
+// at the bound with no exit status. TimedOut is the stages runner's own
+// signal, read when the command ended and not after the output drain, so a
+// descendant that holds stdout past the bound cannot turn a zero exit
+// inside the bound into a failure.
+func settleNotify(ctx context.Context, bound time.Duration, res stages.OperatorResult) store.NotificationSettlement {
 	switch {
+	case res.TimedOut:
+		return store.NotificationSettlement{Outcome: store.NotificationFailed,
+			Detail: fmt.Sprintf("the command did not exit within %s, and it was ended", bound)}
 	case res.Exited && res.Code == 0:
 		return store.NotificationSettlement{Outcome: store.NotificationSent, ExitCode: store.Known(0), Detail: res.Tail}
 	case res.Exited:
@@ -424,9 +442,6 @@ func (s *Service) runNotify(ctx context.Context, line string, bound time.Duratio
 	case ctx.Err() != nil:
 		return store.NotificationSettlement{Outcome: store.NotificationFailed,
 			Detail: "the service closed while the command ran, and it was ended"}
-	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
-		return store.NotificationSettlement{Outcome: store.NotificationFailed,
-			Detail: fmt.Sprintf("the command did not exit within %s, and it was ended", bound)}
 	default:
 		return store.NotificationSettlement{Outcome: store.NotificationFailed,
 			Detail: fmt.Sprintf("the command did not exit on its own: %v", res.Err)}
