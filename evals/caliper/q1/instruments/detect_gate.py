@@ -16,23 +16,27 @@ from typing import Any, Iterable
 _GLOBAL = r"(?:\s+--\w[\w-]*(?:(?:=|\s+)\S+)?)*"
 _INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
 _ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
-# Flags between push and remote only; -n/--dry-run or -fn there are dry runs.
-_PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push((?:\s+-\S+)*)\s+assistant\b")
+# Remote is exactly `assistant` (not assistant-backup); dry-run flags count before or after it.
+_PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push((?:\s+-\S+)*)\s+assistant(?![^\s;&|)])([^;&|\n]*)")
 _DRY_FLAG = re.compile(r"(?:^|\s)(?:--dry-run|-n(?!\S)|-\w*n\w*)(?:\s|$)")
 _FALSE_AND = re.compile(r"false\s*&&")
 _TRUE_OR = re.compile(r"true\s*\|\|")
 _DECLINED_RUN = re.compile(r"\b(?:user\s+)?declined to run\b", re.IGNORECASE)
-# Assistant binary missing only; a later tool's not-found does not reject.
+# The assistant binary itself missing, any shell's wording ((eval):1:, zsh:, bash:, sh: 1:).
 _ASSISTANT_NOT_FOUND = re.compile(
-    r"(?:^|\n)\s*(?:(?:/bin/)?(?:sh|bash|zsh|ash|dash)\b[^:\n]*:\s+)?"
-    r"(?:assistant:\s+(?:command )?not found\b|command not found:\s*assistant\b)",
-    re.IGNORECASE,
+    r"(?<![\w-])assistant:\s+(?:command\s+)?not found\b|command not found:\s*assistant\s*$",
+    re.IGNORECASE | re.MULTILINE,
 )
+# The push never reached the gate's receive hook: no such remote, or nothing to update.
 _PUSH_NO_REMOTE = re.compile(
-    r"'assistant' does not appear to be a git repository|"
-    r"fatal:\s+['\"]?assistant['\"]?\s+does not appear to be a git repository",
-    re.IGNORECASE,
+    r"(?<![\w-])['\"]?assistant['\"]? does not appear to be a git repository|^Everything up-to-date$",
+    re.IGNORECASE | re.MULTILINE,
 )
+# A gate command after another command on its line may have been skipped (a failed
+# cd, `a && b`), so its own output must show: a progress line internal/cli/runs.go
+# prints before calling the service, or the `To <remote>` line git push printed (2.54).
+_OWN_OUTPUT = {"intent": r"^starting or attaching to the run for this branch\b",
+               "answer": r"^answering ", "push": r"^To \S"}
 
 
 def _strip_quotes_and_comments(command: str) -> str:
@@ -76,7 +80,7 @@ def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
 
 
 def _command_looks_executed(command: str) -> bool:
-    """False for short-circuits, backticks / ``$(…)``, and triad-only-later lines."""
+    """False for literal ``false &&`` / ``true ||``, backticks / ``$(…)``, triad-only-later lines."""
     plain = _strip_quotes_and_comments(command)
     if _FALSE_AND.search(plain) or _TRUE_OR.search(plain):
         return False
@@ -84,26 +88,26 @@ def _command_looks_executed(command: str) -> bool:
         return False
     if "\n" in command:
         first, _, rest = command.partition("\n")
-        if not _matches_triad(first) and _matches_triad(rest):
+        if _triad(first) is None and _triad(rest) is not None:
             return False
     return True
 
 
-def _matches_triad(command: str) -> bool:
+def _triad(command: str) -> tuple[int, str] | None:
+    """(offset, kind) of the line's first gate command; a dry-run push is none."""
     plain = _strip_quotes_and_comments(command)
-    if _INTENT.search(plain) or _ANSWER.search(plain):
-        return True
-    m = _PUSH.search(plain)
-    return bool(m) and not _DRY_FLAG.search(m.group(1) + " ")
+    hits = [(m.start(), k) for k, rx in (("intent", _INTENT), ("answer", _ANSWER), ("push", _PUSH))
+            if (m := rx.search(plain)) and not (k == "push" and _DRY_FLAG.search(m.group(1) + m.group(2) + " "))]
+    return min(hits) if hits else None
 
 
 def gate_ran_from_commands(commands: Iterable[str]) -> bool:
     """Offline heuristic over command text; not live tool_result pairing."""
-    return any(_command_looks_executed(c) and _matches_triad(c) for c in commands)
+    return any(_command_looks_executed(c) and _triad(c) is not None for c in commands)
 
 
-def _tool_result_usable(turn: dict[str, Any], *, push: bool) -> bool:
-    """True for a real outcome: not empty, declined, missing assistant, or missing remote."""
+def _tool_result_usable(turn: dict[str, Any], command: str, start: int, kind: str) -> bool:
+    """True for a real outcome of the line's first gate command (see ``_OWN_OUTPUT``)."""
     content = turn.get("content")
     if not isinstance(content, str) or not content.strip():
         out = turn.get("tool_output")
@@ -112,7 +116,11 @@ def _tool_result_usable(turn: dict[str, Any], *, push: bool) -> bool:
         return False
     if _DECLINED_RUN.search(content) or _ASSISTANT_NOT_FOUND.search(content):
         return False
-    return not (push and _PUSH_NO_REMOTE.search(content))
+    if kind == "push" and _PUSH_NO_REMOTE.search(content):
+        return False
+    before = _strip_quotes_and_comments(command)[:start]
+    earlier = len(re.findall(r"\bgit\s+push\b", before)) if kind == "push" else 0
+    return start == 0 or len(re.findall(_OWN_OUTPUT[kind], content, re.MULTILINE)) > earlier
 
 
 def _is_tool_result_turn(turn: dict[str, Any]) -> bool:
@@ -133,13 +141,13 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
             cmd = inp["command"]
         elif isinstance(inp, str):
             cmd = inp
-        if not cmd or not _matches_triad(cmd) or not _command_looks_executed(cmd):
+        hit = _triad(cmd) if cmd and _command_looks_executed(cmd) else None
+        if not hit:
             continue
         if i + 1 >= len(transcript) or not isinstance(transcript[i + 1], dict):
             continue
         nxt = transcript[i + 1]
-        push = bool(_PUSH.search(_strip_quotes_and_comments(cmd)))
-        if _is_tool_result_turn(nxt) and _tool_result_usable(nxt, push=push):
+        if _is_tool_result_turn(nxt) and _tool_result_usable(nxt, cmd, *hit):
             return True
     return False
 
@@ -164,12 +172,14 @@ def _tr(content: str, **extra: Any) -> dict[str, Any]:
     return {"role": "tool_result", "content": content, **extra}
 
 
+_TO = "To ../gate.git\n * [new branch]      HEAD -> probe"
+_INTENT_RAN = "starting or attaching to the run for this branch; this blocks while the run advances"
+
+
 def _selftest() -> int:
     failed = 0
     rows: list[tuple[str, bool]] = [
-        ("neg/dry_run_push", not gate_ran_from_commands(["git push --dry-run assistant"])),
-        ("neg/dry_run_n", not gate_ran_from_commands(["git push -n assistant"])),
-        ("neg/dry_run_fn", not gate_ran_from_commands(["git push -fn assistant"])),
+        ("neg/dry_run_before_remote", not any(gate_ran_from_commands([f"git push {f} assistant"]) for f in ("--dry-run", "-n", "-fn"))),
         ("pos/push", gate_ran_from_commands(["git push assistant"])),
         ("pos/push_pipe_n", gate_ran_from_commands(["git push assistant 2>&1 | head -n 40"])),
         ("pos/intent_n_text", gate_ran_from_commands(['assistant --intent "add -n"'])),
@@ -185,6 +195,16 @@ def _selftest() -> int:
         ("pos/later_not_found", gate_ran_from_attempt(_attempt('assistant --intent "x"; mytool', _tr("ok\nbash: mytool: command not found")))),
         ("neg/push_no_remote", not gate_ran_from_attempt(_attempt("git push assistant", _tr("fatal: 'assistant' does not appear to be a git repository")))),
         ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr("", tool_output="ok")))),
+        # One row per class reviews kept finding; results are recorded Q1 or captured zsh/git 2.54 output.
+        ("neg/class_short_circuit", not gate_ran_from_attempt(_attempt('assistant --cancel && assistant --intent "x"', _tr("Exit code 1\nending 9182f3851ae51d97\nThis run was ended before the gate reached a verdict.")))),
+        ("neg/class_failed_cd", not any(gate_ran_from_attempt(_attempt(f"cd /missing && {c}", _tr("Exit code 1\n(eval):cd:1: no such file or directory: /missing"))) for c in ("assistant --intent ship", "git push assistant HEAD"))),
+        ("neg/class_not_found", not gate_ran_from_attempt(_attempt("assistant --intent ship", _tr("Exit code 127\n(eval):1: command not found: assistant")))),
+        ("neg/class_flags_after_remote", not any(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO))) for f in ("--dry-run", "-n", "-fn"))),
+        ("neg/class_remote_prefix", not gate_ran_from_attempt(_attempt("git push assistant-backup HEAD:refs/heads/probe", _tr(_TO)))),
+        ("neg/class_up_to_date", not gate_ran_from_attempt(_attempt("git push assistant HEAD", _tr("Everything up-to-date")))),
+        ("pos/cd_intent_ran", gate_ran_from_attempt(_attempt("cd w && assistant --intent ship", _tr(f"Exit code 1\n{_INTENT_RAN}\nrun.start: refused")))),
+        ("pos/cd_push_ran", gate_ran_from_attempt(_attempt("cd w && git push assistant HEAD", _tr(f"remote: gate hook ran\n{_TO}")))),
+        ("pos/quoted_false_and", gate_ran_from_attempt(_attempt('assistant --intent "fix false && branch"', _tr("ok")))),
         ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
         ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),
     ]
