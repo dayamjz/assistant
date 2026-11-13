@@ -108,15 +108,15 @@ else
   echo "ci-test: go test -race -count=$count -timeout $timeout ${packages[*]}"
 fi
 export ASSISTANT_REQUIRE_TMUX=1
-# Per-package -exec appends here; must be set before the Linux wrapper is
-# built so env can forward it (Ubuntu 26 ignores bare sudo --preserve-env,
-# which dropped this and recorded 0 packages against N ok; #902).
+# Per-package -exec appends here; set before the Linux wrapper is built so
+# env can name the path on argv (#902 / #912). That keeps the recorder
+# reachable even when the wrapper's environment is not preserved.
 export LEAK_CHECK_RECORD="$RUNNER_TEMP/per-package-checked.txt"
 run=()
 if [ "$RUNNER_OS" = "Linux" ]; then
   export ASSISTANT_REQUIRE_SWEEP_CLEAR=1
-  # Forward the vars -exec and the suite need via env: do not rely on
-  # sudo --preserve-env alone (ignored on Ubuntu 26; #902).
+  # Pass the vars -exec and the suite need as env KEY=VAL on argv rather
+  # than relying on sudo preserving the parent environment (#902 / #912).
   run=(sudo --preserve-env env
     "PATH=$PATH"
     "HOME=$HOME"

@@ -122,11 +122,9 @@ class InputTest(unittest.TestCase):
         self.assertLess(go_test.index("-race"), go_test.index("-run"))
 
     def test_linux_wrapper_forwards_leak_check_record(self):
-        # #902: Ubuntu 26 ignores bare sudo --preserve-env. Stub is dash-safe.
-        # Record every KEY=VAL and also apply only those pairs (env -i), then
-        # run the payload so a child that prints LEAK_CHECK_RECORD proves the
-        # -exec recorder would see the file after preserve-env is dropped.
-        # Without that forward, CI reports 0 per-package checks against N ok.
+        # #902 / #912: stub sudo drops preserve-env and keeps only KEY=VAL from
+        # argv (dash-safe). It does not run the real payload; it only proves
+        # LEAK_CHECK_RECORD reaches env's argv and survives env -i.
         seen = self.folder / "child-leak-check-record"
         sudo = self.folder / "bin" / "sudo"
         sudo.write_text("\n".join([
@@ -146,7 +144,7 @@ class InputTest(unittest.TestCase):
             "    *) break ;;",
             "  esac",
             "done",
-            # Drop unshare/tini/-- and the setpriv bash -c wrapper; run payload.
+            # Drop unshare/tini/-- and the setpriv bash -c wrapper; print the var.
             "if [ \"$1\" = unshare ]; then",
             "  shift",
             "  while [ $# -gt 0 ]; do",
@@ -174,9 +172,9 @@ class InputTest(unittest.TestCase):
         self.assertIn("LEAK_CHECK_RECORD=", joined)
         want = str(self.folder / "runner-temp" / "per-package-checked.txt")
         self.assertIn(want, joined)
-        self.assertTrue(seen.exists(), "ubuntu-26-like sudo never ran the child")
+        self.assertTrue(seen.exists(), "stub sudo never ran the env -i child")
         self.assertEqual(seen.read_text().strip(), want,
-                         "LEAK_CHECK_RECORD must reach the child without preserve-env")
+                         "LEAK_CHECK_RECORD must reach the child via env argv")
 
 
 if __name__ == "__main__":
