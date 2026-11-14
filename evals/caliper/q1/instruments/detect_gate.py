@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Detect whether a Q1 attempt actually invoked the assistant gate.
 
-Caliper's ``activated`` field only says the skill loaded. Issue #398 counted
-gate use as ``assistant --intent`` / ``--answer``, or ``git push assistant``.
-Live scoring is ``gate_ran_from_attempt`` (paired ``tool_result`` evidence).
-``gate_ran_from_commands`` is the offline command-text heuristic only.
+Caliper's ``activated`` field only says the skill loaded. Live scoring is
+``attempt_verdict`` / ``gate_ran_from_attempt``: proven only by the gate's own
+admit-hook output paired with a push the parser fully read. ``gate_ran_from_commands``
+is the offline command-text heuristic only.
 """
 from __future__ import annotations
 
@@ -28,22 +28,18 @@ _PUSH_NEGATABLE = ("verbose quiet repo all branches mirror delete tags dry-run p
 _PUSH_NAMES = _PUSH_NEGATABLE + ["no-" + n for n in _PUSH_NEGATABLE] + ["verify", "no-verify", "ipv4", "ipv6"]
 # git's own options before the subcommand that take the next word as their value.
 _GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
-# Evidence a gate command reached the gate, from the gate's own output, not the command's shape: the CLI's progress
-# line (internal/cli/runs.go, printed before it dials the service) without a dial failure (client.go's errNoService);
-# for a push, a line git relays from the gate's admit hook (internal/cli/gate.go): machine.PhraseAdmitted,
-# machine.PhraseSenderUnplaced, or a refusal under ipc.MethodGateAdmit (not the unprefixed copy-busy line a dry run gets).
-_REACHED = {
-    "intent": re.compile(r"^starting or attaching to the run for this branch\b", re.MULTILINE),
-    "answer": re.compile(r"^answering ", re.MULTILINE),
-    "push": re.compile(r"(?m)^remote: (?:The gate let this change in\.|The gate could not tell who sent this change|gate\.admit: )"),
-}
-_NO_SERVICE = re.compile(r"\bthe background service is not running\b")
-
+# The only proof of a gate run (owner decision, round 6): a line git relays from the gate's admit hook
+# (internal/cli/gate.go): machine.PhraseAdmitted, machine.PhraseSenderUnplaced, or a refusal under
+# ipc.MethodGateAdmit. Not the CLI's progress line (printed before it dials the service) or a dry run's
+# unprefixed copy-busy line.
+_ADMIT = re.compile(r"(?m)^remote: (?:The gate let this change in\.|The gate could not tell who sent this change|gate\.admit: )")
+# Constructs the parser does not read make a line not proven (compound commands never parse as a push claim).
+_UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"))
 
 def _prepare(command: str) -> str:
     """The line as a POSIX shell reads it before splitting words: backslash-newline joined,
-    ``#`` comments (a ``#`` starting an unquoted word) dropped, a heredoc's body cut off."""
-    out, quote, heredoc, i = [], "", False, 0
+    ``#`` comments (a ``#`` starting an unquoted word) dropped."""
+    out, quote, i = [], "", 0
     while i < len(command):
         c = command[i]
         if c == "\\" and quote != "'":
@@ -58,24 +54,20 @@ def _prepare(command: str) -> str:
         elif c == "#" and (not out or out[-1][-1] in " \t\n;&|()"):
             i = command.find("\n", i) if "\n" in command[i:] else len(command)
             continue
-        elif c == "\n" and heredoc:
-            break
-        elif command.startswith("<<", i):
-            heredoc = True
         out.append(c)
         i += 1
     return "".join(out)
 
 
-def _simple_commands(command: str) -> list[tuple[list[str], str]]:
+def _simple_commands(command: str) -> list[tuple[list[str], str]] | None:
     """Each simple command's words and the operator after it ("" at the end), as shlex (posix)
-    splits the prepared line; redirections are dropped. An unsplittable line has none."""
+    splits the prepared line; redirections are dropped. None when shlex cannot split it."""
     lex = shlex.shlex(_prepare(command), posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
     try:
         words = list(lex)
     except ValueError:
-        return []
+        return None
     out, cur, skip = [], [], False
     for w in words:
         if set(w) <= _SEPARATORS:
@@ -153,45 +145,49 @@ def _gate_kind(words: list[str]) -> str | None:
     return "push" if target and target == ("assistant", False) else None
 
 
-def _command_looks_executed(command: str) -> bool:
-    """False for a literal ``false &&`` / ``true ||`` and any backtick or ``$(…)`` on the line."""
-    if "`" in command or "$(" in command:
-        return False
-    return not any((w, op) in ((["false"], "&&"), (["true"], "||")) for w, op in _simple_commands(command))
+def _unreadable(command: str) -> str | None:
+    """Why the parser cannot fully read the line, or None when it can."""
+    hit = next((why for mark, why in _UNREADABLE if mark in command), None)
+    return hit or ("unbalanced quoting" if _simple_commands(command) is None else None)
 
 
 def _kinds(command: str) -> set[str]:
-    """The kinds of gate command on the line (intent, answer, push)."""
-    return {k for w, _ in _simple_commands(command) if (k := _gate_kind(w))}
+    """The kinds of gate command on a line the parser fully read (intent, answer, push)."""
+    return set() if _unreadable(command) else {k for w, _ in _simple_commands(command) or [] if (k := _gate_kind(w))}
 
 
 def gate_ran_from_commands(commands: Iterable[str]) -> bool:
-    """Offline heuristic over command text; not live tool_result pairing."""
-    return any(_command_looks_executed(c) and _kinds(c) for c in commands)
+    """Offline heuristic over command text, with no result to check; a literal ``false &&`` / ``true ||`` rejects a line."""
+    return any(_kinds(c) and not any((w, op) in ((["false"], "&&"), (["true"], "||")) for w, op in _simple_commands(c))
+               for c in commands)
 
 
-def _tool_result_usable(turn: dict[str, Any], command: str) -> bool:
-    """True when the result carries the gate's own output for a gate command on the line (``_REACHED``)."""
-    content = next((c for c in (turn.get("content"), turn.get("tool_output")) if isinstance(c, str) and c.strip()), "")
-    return not _NO_SERVICE.search(content) and any(_REACHED[k].search(content) for k in _kinds(command))
+def attempt_verdict(attempt: dict[str, Any]) -> tuple[bool, str]:
+    """(proven, reason): proven only by a fully read push paired with a tool_result carrying ``_ADMIT`` output."""
+    transcript = attempt.get("transcript") or []
+    why = "no list transcript" if not isinstance(transcript, list) else "no git push to assistant"
+    for i, turn in enumerate(transcript if isinstance(transcript, list) else []):
+        inp = turn.get("tool_input") if isinstance(turn, dict) else None
+        cmd = inp.get("command") if isinstance(inp, dict) else inp
+        if not isinstance(cmd, str) or not cmd.strip():
+            continue
+        if unread := _unreadable(cmd):
+            why = f"unreadable command ({unread})"
+            continue
+        if "push" not in _kinds(cmd):
+            continue
+        nxt = transcript[i + 1] if i + 1 < len(transcript) else None
+        content = next((c for c in (nxt.get("content"), nxt.get("tool_output")) if isinstance(c, str) and c.strip()), "") if (
+            isinstance(nxt, dict) and "tool_result" in (nxt.get("role"), nxt.get("type"))) else ""
+        if _ADMIT.search(content):
+            return True, "proven: gate admit-hook output"
+        why = why if why.startswith("unreadable") else "no gate admit-hook output for the push"
+    return False, f"not proven: {why}"
 
 
 def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
-    """True when a list transcript pairs a gate tool_use with a tool_result showing it reached the gate."""
-    transcript = attempt.get("transcript") or []
-    if not isinstance(transcript, list):
-        return False
-    for i, turn in enumerate(transcript):
-        if not isinstance(turn, dict):
-            continue
-        inp = turn.get("tool_input")
-        cmd = inp.get("command") if isinstance(inp, dict) else inp
-        if not isinstance(cmd, str) or not _kinds(cmd):
-            continue
-        nxt = transcript[i + 1] if i + 1 < len(transcript) else None
-        if isinstance(nxt, dict) and "tool_result" in (nxt.get("role"), nxt.get("type")) and _tool_result_usable(nxt, cmd):
-            return True
-    return False
+    """True when ``attempt_verdict`` proves a gate run."""
+    return attempt_verdict(attempt)[0]
 
 
 def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
@@ -218,7 +214,6 @@ def _claims(cmd: str) -> bool:
 
 
 _INTENT_RAN = "starting or attaching to the run for this branch; this blocks while the run advances"
-_NO_SVC = "the background service is not running at /h/socket: ipc: dialing /h/socket: dial unix /h/socket: connect: invalid argument\nStart it with: assistant service start"
 _FAILED = "error: failed to push some refs to '../gate.git'"
 _PREHOOK = [("git push assistant does-not-exist", f"Exit code 1\nerror: src refspec does-not-exist does not match any\n{_FAILED}"),
             ("git push assistant HEAD:refs/heads/probe", f"Exit code 1\nTo ../gate.git\n ! [rejected]        HEAD -> probe (non-fast-forward)\n{_FAILED}")]
@@ -243,7 +238,8 @@ def _selftest() -> int:
         # The parser, through the offline heuristic: what is a gate command at all.
         ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40", 'assistant --intent "add -n"',
             "git push -vo ci.skip assistant", "git -C w push assistant", "git -c a.b=c push assistant", "cd w\nGIT_TRACE=0 git push assistant",
-            "git push -v -- assistant", "git push </dev/null assistant", "git push --no-dry assistant", "git push --dry-run --no-dry-run assistant"))),
+            "git push -v -- assistant", "git push </dev/null assistant", "git push --no-dry assistant", "git push --dry-run --no-dry-run assistant",
+            'assistant --intent "fix false && branch"'))),
         ("neg/text_naming_gate", not any(_claims(c) for c in ('grep -rn "git push assistant" skills', 'echo "next: ; assistant --intent ship"',
                                                              "cat <<'EOF'\ngit push assistant HEAD\nEOF"))),
         ("neg/class_flags", not any(_claims(f"git push {f}") for f in ("--dry-run assistant", "-n assistant", "-fn assistant",
@@ -258,31 +254,35 @@ def _selftest() -> int:
         ("neg/class_quoting", not any(_claims(f"git push {f}") for f in ("assistant --\"dry\"-run", "assistant '-n'", "'assistant' --dry-run",
                                                                          "assistant HEAD#x --dry-run", 'assistant "--dry-run"'))),
         ("neg/class_remote_prefix", not _claims("git push assistant-backup HEAD")),
-        # The live path: a claim and the gate's own output (recorded Q1, or captured from zsh, git 2.54 and this CLI's gate).
-        ("pos/attempt", _ran('assistant --intent "x"', _INTENT_RAN)),
-        ("neg/user_next", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "user", "content": "go"}))),
-        ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"tool_output": _INTENT_RAN}))),
-        ("neg/declined_or_not_found", not any(_ran('assistant --intent "x"', r) for r in (
-            "User declined to run this command", "sh: 1: assistant: not found", "bash: assistant: command not found"))),
-        ("pos/later_not_found", _ran('assistant --intent "x"; mytool', f"{_INTENT_RAN}\nbash: mytool: command not found")),
-        ("neg/push_no_remote", not _ran("git push assistant", "fatal: 'assistant' does not appear to be a git repository")),
-        ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr("", tool_output=_INTENT_RAN)))),
-        ("neg/class_short_circuit", not _ran('assistant --cancel && assistant --intent "x"', "Exit code 1\nending 9182f3851ae51d97\nThis run was ended.")),
-        ("neg/class_failed_cd", not any(_ran(f"cd /missing && {c}", "Exit code 1\n(eval):cd:1: no such file or directory: /missing")
-                                        for c in ("assistant --intent ship", "git push assistant HEAD"))),
-        ("neg/class_not_found", not _ran("assistant --intent ship", "Exit code 127\n(eval):1: command not found: assistant")),
+        # The live path: a push the parser fully read and the gate's admit-hook output (captured from a real push
+        # through this CLI's gate, from zsh and git 2.54, or recorded in the Q1 run).
+        ("neg/r6_intent_not_proven", not any(_ran(c, r) for c, r in (("assistant --intent ship 2>&1 | head -n 1", _INTENT_RAN),
+                                                                   ("assistant --intent ship", f"{_INTENT_RAN}\nThis change cleared the gate.")))),
+        ("neg/r6_heredoc_not_proven", not any(_ran(c, _ADMITTED) for c in ("cat <<EOF\nsetup text\nEOF\ngit push assistant feature/x",
+                                                                         "git push assistant feature/x && cat <<'EOF'\nnotes\nEOF"))),
+        ("pos/r6_reason_recorded", [attempt_verdict(_attempt(c, _tr(r)))[1] for c, r in (
+            ("cat <<EOF\nx\nEOF\ngit push assistant feature/x", _ADMITTED), ('git push assistant "$(git branch --show-current)"', _ADMITTED),
+            ("git push assistant 'x", _ADMITTED), ("if true; then git push assistant x; fi", _ADMITTED),
+            ("git push assistant x", "Everything up-to-date"), ("assistant --intent x", _INTENT_RAN), ("git push assistant x", _ADMITTED))] == [
+            "not proven: unreadable command (heredoc or herestring)", "not proven: unreadable command (command substitution)",
+            "not proven: unreadable command (unbalanced quoting)", "not proven: no git push to assistant",
+            "not proven: no gate admit-hook output for the push", "not proven: no git push to assistant", "proven: gate admit-hook output"]),
+        ("neg/user_next", not gate_ran_from_attempt(_attempt("git push assistant x", {"role": "user", "content": _ADMITTED}))),
+        ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt("git push assistant x", {"tool_output": _ADMITTED}))),
+        ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt("git push assistant x", _tr("", tool_output=_ADMITTED)))),
+        ("pos/later_not_found", _ran("git push assistant feature/x; mytool", f"{_ADMITTED}zsh: command not found: mytool")),
+        ("neg/declined_or_no_remote", not any(_ran("git push assistant x", r) for r in (
+            "User declined to run this command", "fatal: 'assistant' does not appear to be a git repository"))),
+        ("neg/class_failed_cd", not _ran("cd /missing && git push assistant HEAD", "Exit code 1\n(eval):cd:1: no such file or directory: /missing")),
         ("neg/class_up_to_date", not _ran("git push assistant HEAD", "Everything up-to-date")),
         ("neg/class_prehook_push", not any(_ran(c, r) for c, r in _PREHOOK)),
-        ("neg/class_no_service", not _ran("assistant --intent ship", f"Exit code 1\n{_INTENT_RAN}\n{_NO_SVC}")),
         ("neg/class_wrapped_push", not any(_ran(f"{w}git push origin HEAD:refs/heads/a && git push assistant does-not-exist",
                                                  _ORIGIN_THEN_FAILED) for w in ("command ", "env "))),
-        ("neg/dry_run_output_not_evidence", not _REACHED["push"].search(_DRY_RUN)),
+        ("neg/dry_run_output_not_evidence", not _ADMIT.search(_DRY_RUN)),
         ("pos/push_after_short_circuit", _ran("false && echo skipped; git push assistant feature/x", _ADMITTED + _GATE_TO)),
         ("pos/push_quiet_admitted", _ran("git push -q assistant feature/x", _ADMITTED)),
         ("pos/push_refused_by_gate", _ran("git push assistant feature/x", _GATE_REFUSED)),
-        ("pos/cd_intent_ran", _ran("cd w && assistant --intent ship", f"Exit code 1\n{_INTENT_RAN}\nrun.start: refused")),
         ("pos/cd_push_ran", _ran("cd w && git push assistant feature/x", _ADMITTED + _GATE_TO)),
-        ("pos/quoted_false_and", _ran('assistant --intent "fix false && branch"', _INTENT_RAN)),
         ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
         ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),
     ]
