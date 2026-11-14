@@ -15,7 +15,12 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-_SEPARATORS = set(";&|()\n")
+# Fail closed on shell grammar: a token of these characters must be one of the operators or redirections listed;
+# any parenthesis (subshell, grouping, function definition), any other token, and an operator without a command
+# on each side (a trailing ; or & aside) make the line not read.
+_PUNCT = set(";&|()<>\n")
+_OPERATORS = {";", "&&", "||", "|", "&"}
+_REDIRECTS = {"<", ">", ">>", "<>", ">|", ">&", "<&", "&>", "&>>"}
 # Fail closed: an option word not listed here, including one that ends the run early (--version, --help, -h), makes
 # the command no gate command. Each git push word below was seen to pass git 2.54's option parsing; a value-taking
 # option counts only as the exact --name=value word listed. Not listed, so never read: -o, --repo, -n / --dry-run,
@@ -53,33 +58,38 @@ def _shield(command: str) -> str:
 def _simple_commands(command: str, marks: bool = False) -> list[tuple[list[str], str]]:
     """Each simple command's words (keeping ``_QUOTED`` only with ``marks``) and the operator after it ("" at the
     end), as shlex (posix) splits the shielded line; redirections and their targets are dropped. Raises ValueError
-    with the reason when shlex cannot split the line, a redirection has no target word, or bare empty parentheses
-    (``name()``, which defines a function with any body and runs nothing) appear."""
+    with the reason when shlex cannot split the line or its operators and redirections break the rules at
+    ``_PUNCT``, or a redirection has no target word."""
     lex = shlex.shlex(_shield(command), posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
     try:
         words = list(lex)
     except ValueError:
         raise ValueError("unbalanced quoting") from None
-    out, cur, skip, prev = [], [], False, ""
+    out, cur, skip = [], [], False
     for w in words:
-        op, redirect = set(w) <= _SEPARATORS, set(w) & set("<>") and set(w) <= set("<>&|")
-        if skip and (op or redirect):
-            raise ValueError("redirection without a target")
-        if op and ("()" in w or (prev.endswith("(") and w.startswith(")"))):
-            raise ValueError("function definition")
-        prev = w
-        if op:
-            out.append((cur, w))
-            cur = []
-        elif redirect:
-            skip = True
-        elif not skip:
-            cur.append(w if marks else w.replace(_QUOTED, ""))
-        else:
+        if set(w) <= _PUNCT:  # an operator or redirection: a word with any quoting or escape carries _QUOTED
+            if set(w) & set("()"):
+                raise ValueError("parentheses")
+            if w not in _OPERATORS | _REDIRECTS:
+                raise ValueError("unknown operator")
+            if skip:
+                raise ValueError("redirection without a target")
+            if w in _REDIRECTS:
+                skip = True
+            elif not cur:
+                raise ValueError("operator without a command on each side")
+            else:
+                out.append((cur, w))
+                cur = []
+        elif skip:
             skip = False
+        else:
+            cur.append(w if marks else w.replace(_QUOTED, ""))
     if skip:
         raise ValueError("redirection without a target")
+    if out and not cur and out[-1][1] not in (";", "&"):
+        raise ValueError("operator without a command on each side")
     return [(c, op) for c, op in out + [(cur, "")] if c]
 
 
@@ -197,15 +207,21 @@ def _selftest() -> int:
                                                        "git push assistant --help", "git push -h assistant"))),
         # Round 4: a function definition, a quoted or escaped assignment, or a redirection with no target is not read.
         ("neg/class_function_def", [_unreadable(c) for c in ("f() (git push assistant)", "f ( ) { git push assistant; }", "function f { git push assistant; }")]
-            == ["function definition", "function definition", "compound command"] and _claims("(git push assistant)")
-            and _claims('git commit -m "f()" && git push assistant')),
+            == ["parentheses", "parentheses", "compound command"] and _claims('git commit -m "f()" && git push assistant')),
         ("neg/class_quoted_assignment", [_unreadable(c) for c in ('"X=y" git push assistant', "X\\=y git push assistant", "'X'=y git push assistant",
             'A=1 "X=y" git push assistant')] == ["quoted assignment"] * 4 and _claims('X="a b" git push assistant')),
         ("neg/class_redirect_no_target", [_unreadable(c) for c in ("git push assistant >", "git push assistant 2>", "git push assistant > ; true",
             "git push assistant > > x")] == ["redirection without a target"] * 4 and _claims("git push assistant > out")),
+        # Round 5: any bare parenthesis or brace group, and an operator without a command on each side, is not read.
+        ("neg/class_parentheses", [_unreadable(c) for c in ("(git push assistant", "git push assistant)", "(git push assistant)",
+            "true && (git push assistant)", "{ git push assistant; }")] == ["parentheses"] * 4 + ["compound command"]),
+        ("neg/class_operator_sequence", [_unreadable(c) for c in ("git push assistant ;; true", "true &&& git push assistant", "true && && git push assistant",
+            "; git push assistant", "git push assistant &&", "git push assistant |", "git push assistant >; true", "cat <(git push assistant")] ==
+            ["unknown operator"] * 2 + ["operator without a command on each side"] * 4 + ["unknown operator", "parentheses"]
+            and all(_claims(f"git push assistant {op}") for op in (";", "&", "2>&1 | cat", "&>/dev/null", ">> log &"))),
         # A line the reader does not fully read is never a gate command, whatever it holds.
         ("neg/not_read", [_unreadable(c) for c in _NOT_READ] == ["heredoc or herestring", "command substitution", "command substitution", "comment",
-            "multiline command", "unbalanced quoting", "compound command", "compound command"] and not any(_claims(c) for c in _NOT_READ)),
+            "multiline command", "unbalanced quoting", "parentheses", "compound command"] and not any(_claims(c) for c in _NOT_READ)),
         ("neg/literal_short_circuit", not any(_claims(f"cd w; {c} git push assistant") for c in ("false &&", "true ||"))),
         ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
         ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),

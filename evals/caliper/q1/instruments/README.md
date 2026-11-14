@@ -35,12 +35,25 @@ anywhere (a backslash-newline continuation or a trailing newline too), quoting
 list: `! [[ ]] { } case coproc do done elif else esac fi for function if in
 select then time until while`, plus zsh's `foreach end repeat nocorrect`), so
 the body of a compound command such as `case x in x) git push assistant x;;
-esac` is never read as a command of its own. Also not read: bare empty
-parentheses (`f() (git push assistant)`, `f ( ) { ...; }`: bash and zsh only
-define `f` and run nothing), a word in command position shaped `NAME=value`
-but quoted or escaped up to its `=` (`"X=y" git push assistant`, `X\=y`,
-`'X'=y`: the shell runs a command named `X=y`, which is not found), and a
-redirection with no target word (`git push assistant >`, a parse error).
+esac` is never read as a command of its own. Also not read, with no grammar
+parser behind it:
+
+- any `(` or `)` outside quotes: a subshell or grouping (`(git push
+  assistant)`, which runs, is not read either), an unbalanced one (`(git push
+  assistant`, a syntax error), a function definition (`f() (git push
+  assistant)` only defines `f`), or a process substitution (`<(...)`);
+- an operator or redirection token other than `;`, `&&`, `||`, `|`, `&` and
+  `<`, `>`, `>>`, `<>`, `>|`, `>&`, `<&`, `&>`, `&>>` (`git push assistant ;;
+  true`, `>;`, bash's `|&`);
+- an operator without a command on each side (`true && && git push
+  assistant`, a leading `;`, a trailing `&&` or `|`); a trailing `;` or `&` is
+  read. bash refuses each of these; zsh accepts a leading `;` and a trailing
+  `&&`, which are not read anyway;
+- a word in command position shaped `NAME=value` but quoted or escaped up to
+  its `=` (`"X=y" git push assistant`, `X\=y`, `'X'=y`: the shell runs a
+  command named `X=y`, which is not found);
+- a redirection with no target word (`git push assistant >`, a parse error),
+  including one written before an operator or another redirection.
 
 Apart from those marks, nothing is matched against the raw text: the line is
 read the way a POSIX shell splits it, then each command's words are read the
@@ -48,10 +61,11 @@ way the program parses them.
 
 - Shell: `shlex` (POSIX mode) splits words, removing quotes and escapes
   (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all `--dry-run`), and `;`,
-  `&&`, `||`, `|`, `&` and parentheses separate commands. Redirections and
-  their targets are dropped. Only a bare operator character splits: a `;`,
-  `&`, `|`, `(`, `)`, `<` or `>` inside quotes or after a backslash is literal
-  text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
+  `&&`, `||`, `|` and `&` separate commands. Redirections and their targets
+  are dropped (so a command that is only a redirection, such as `> out;`,
+  leaves its operator without a command and the line is not read). Only a
+  bare operator character counts: a `;`, `&`, `|`, `(`, `)`, `<` or `>` inside
+  quotes or after a backslash is literal text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
   are one `echo` command, not a gate command. An empty quoted word (`''`) is
   a word, never a separator.
 - A command's program is the first word after any `VAR=value` assignments
@@ -93,7 +107,8 @@ escape, option value, missing value, cluster, quoting, quoted or escaped
 operator characters, an empty quoted word, remote-name prefix, text that
 only names the gate, a refused or unlisted value, an unknown option, and
 options that end the run early such as `--version` and `--help`), each
-not-read shape with the reason the reader gives (function definitions,
+not-read shape with the reason the reader gives (parentheses, unknown
+operators, operators without a command on each side, function definitions,
 quoted assignments and target-less redirections among them), the literal
 short-circuit rule, and the runs dump. Reverting any one guard fails a row;
 in the reserved-word list, an opener such as `case` is also caught by its
