@@ -15,12 +15,16 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-# Fail closed on shell grammar: a token of these characters must be one of the operators or redirections listed;
-# any parenthesis (subshell, grouping, function definition), any other token, and an operator without a command
-# on each side (a trailing ; or & aside) make the line not read.
-_PUNCT = set(";&|()<>\n")
+# Fail closed on shell syntax, with no grammar parser: outside single quotes a readable line holds only the
+# characters in _PLAIN (in double quotes, anything but $, backtick and backslash). Any other character makes it not
+# read, with the reason below; two-character marks are named first. Then a token of ; & | must be one of _OPERATORS
+# with a command on each side (a trailing ; or & aside).
+_PLAIN = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \t-_./=:@,+%;&|")
+_MARK_REASONS = {"<<": "heredoc or herestring", "$(": "command substitution"}
+_CHAR_REASONS = {"$": "expansion", "`": "command substitution", "\\": "escape", "(": "parentheses", ")": "parentheses",
+                 "{": "brace", "}": "brace", "<": "redirection", ">": "redirection", "*": "glob", "?": "glob", "[": "glob",
+                 "]": "glob", "~": "tilde", "!": "negation or history", "#": "comment", "\n": "multiline command"}
 _OPERATORS = {";", "&&", "||", "|", "&"}
-_REDIRECTS = {"<", ">", ">>", "<>", ">|", ">&", "<&", "&>", "&>>"}
 # Fail closed: an option word not listed here, including one that ends the run early (--version, --help, -h), makes
 # the command no gate command. Each git push word below was seen to pass git 2.54's option parsing; a value-taking
 # option counts only as the exact --name=value word listed. Not listed, so never read: -o, --repo, -n / --dry-run,
@@ -30,64 +34,55 @@ _PUSH_OPTIONS = set("-u --set-upstream -v --verbose -q --quiet -f --force --forc
 _PUSH_CLUSTER = re.compile(r"-[uvqf]+")
 # assistant (internal/cli): exactly one of these flags and a non-empty value, as the next word or after `=`.
 _ASSISTANT_FLAGS = {"--intent": "intent", "-intent": "intent", "--answer": "answer", "-answer": "answer"}
-# Not read, so never a gate command: a line with one of these marks (a newline, continuations included), or with a command that
-# begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no compound body reads as a command.
-_UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"), ("#", "comment"),
-               ("\n", "multiline command"))
-_QUOTED = "\ue007"  # where quoting or an escape starts, so an assignment is told from a quoted look-alike
+# Not read either: a command that begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no
+# compound body reads as a command of its own.
+_QUOTED = "\ue007"  # where quoting starts, so an assignment is told from a quoted look-alike
 _ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=.*", re.S)
 _RESERVED = set("! [[ ]] { } case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
 
 def _shield(command: str) -> str:
-    """The line with ``_QUOTED`` before each opening quote and each backslash outside quotes. shlex reads it as a
-    word character, so a word with any quoting or escape is never empty and never reads as an operator or a
-    redirection (``';'``, ``\\;``), and an assignment is told from a quoted look-alike."""
-    out, quote, i = [], "", 0
-    while i < len(command):
-        c = command[i]
-        if c == "\\" and quote != "'":
-            out.append(("" if quote else _QUOTED) + command[i:i + 2])
-            i += 2
-            continue
+    """The line with ``_QUOTED`` before each opening quote. shlex reads it as a word character, so a quoted word is
+    never empty and never reads as an operator (``';'``), and an assignment is told from a quoted look-alike."""
+    out, quote = [], ""
+    for c in command:
         out.append(_QUOTED + c if not quote and c in "'\"" else c)
         quote = ("" if quote == c else quote) if quote else (c if c in "'\"" else "")
-        i += 1
     return "".join(out)
+
+
+def _off_list(command: str) -> str | None:
+    """Why a character outside single quotes is off the allowlist (``_PLAIN``; in double quotes only ``$``,
+    backtick and backslash are), or "unbalanced quoting" for an unclosed quote; None when every character is on it."""
+    quote = ""
+    for i, c in enumerate(command):
+        if c == quote:
+            quote = ""
+        elif quote == "'" or (quote and c not in "$`\\"):
+            continue
+        elif c in "'\"":
+            quote = c
+        elif quote or c not in _PLAIN:
+            return _MARK_REASONS.get(command[i:i + 2]) or _CHAR_REASONS.get(c, "character not on the allowlist")
+    return "unbalanced quoting" if quote else None
 
 
 def _simple_commands(command: str, marks: bool = False) -> list[tuple[list[str], str]]:
     """Each simple command's words (keeping ``_QUOTED`` only with ``marks``) and the operator after it ("" at the
-    end), as shlex (posix) splits the shielded line; redirections and their targets are dropped. Raises ValueError
-    with the reason when shlex cannot split the line or its operators and redirections break the rules at
-    ``_PUNCT``, or a redirection has no target word."""
-    lex = shlex.shlex(_shield(command), posix=True, punctuation_chars=";&|()<>\n")
-    lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
-    try:
-        words = list(lex)
-    except ValueError:
-        raise ValueError("unbalanced quoting") from None
-    out, cur, skip = [], [], False
-    for w in words:
-        if set(w) <= _PUNCT:  # an operator or redirection: a word with any quoting or escape carries _QUOTED
-            if set(w) & set("()"):
-                raise ValueError("parentheses")
-            if w not in _OPERATORS | _REDIRECTS:
+    end), as shlex (posix) splits the shielded line. Only for a line ``_off_list`` passes. Raises ValueError with
+    the reason when a token of ; & | is not one of ``_OPERATORS`` or has no command on each side."""
+    lex = shlex.shlex(_shield(command), posix=True, punctuation_chars=";&|")
+    lex.whitespace, lex.whitespace_split, lex.commenters = " \t", True, ""
+    out, cur = [], []
+    for w in lex:
+        if set(w) <= set(";&|"):  # an operator: a quoted word carries _QUOTED, so it never is one
+            if w not in _OPERATORS:
                 raise ValueError("unknown operator")
-            if skip:
-                raise ValueError("redirection without a target")
-            if w in _REDIRECTS:
-                skip = True
-            elif not cur:
+            if not cur:
                 raise ValueError("operator without a command on each side")
-            else:
-                out.append((cur, w))
-                cur = []
-        elif skip:
-            skip = False
+            out.append((cur, w))
+            cur = []
         else:
             cur.append(w if marks else w.replace(_QUOTED, ""))
-    if skip:
-        raise ValueError("redirection without a target")
     if out and not cur and out[-1][1] not in (";", "&"):
         raise ValueError("operator without a command on each side")
     return [(c, op) for c, op in out + [(cur, "")] if c]
@@ -121,8 +116,8 @@ def _gate_kind(words: list[str]) -> str | None:
 
 def _unreadable(command: str) -> str | None:
     """Why the parser cannot fully read the line, or None when it can."""
-    if hit := next((why for mark, why in _UNREADABLE if mark in command), None):
-        return hit
+    if why := _off_list(command):
+        return why
     try:
         cmds = _simple_commands(command, marks=True)
     except ValueError as refused:
@@ -133,8 +128,8 @@ def _unreadable(command: str) -> str | None:
 
 
 def _quoted_assignment(words: list[str]) -> bool:
-    """True when a word in command position looks like ``NAME=value`` but is quoted or escaped up to its ``=``, so
-    the shell runs it as a command name (not found) instead of assigning."""
+    """True when a word in command position looks like ``NAME=value`` but is quoted up to its ``=``, so the shell
+    runs it as a command name (not found) instead of assigning."""
     for w in words:
         if not _ASSIGNMENT.fullmatch(w.replace(_QUOTED, "")):
             return False
@@ -174,8 +169,8 @@ def _selftest() -> int:
     failed = 0
     rows: list[tuple[str, bool]] = [
         # The parser, through the offline heuristic: what is a gate command at all.
-        ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40", 'assistant --intent "add -n"',
-            "git -C w push assistant", "cd w; GIT_TRACE=0 git push assistant", "git push </dev/null assistant", 'assistant --intent "fix false && branch"',
+        ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant | head -n 40", 'assistant --intent "add -n"',
+            "git -C w push assistant", "cd w; GIT_TRACE=0 git push assistant", 'assistant --intent "fix false && branch"',
             "assistant --intent=ship", "assistant -intent ship", "/usr/local/bin/assistant --answer yes", "git push -uvf assistant HEAD"))),
         ("pos/listed_options", all(_claims(f"git push {o} assistant feature/x") for o in "-u --set-upstream -v --verbose -q --quiet -f --force "
             "--force-with-lease --no-verify --follow-tags --tags --porcelain --signed=no --recurse-submodules=no".split())),
@@ -195,7 +190,7 @@ def _selftest() -> int:
         ("neg/class_missing_value", not any(_claims(f"git push {f}") for f in ("assistant -o", "assistant -vo", "-o", "assistant --push-option"))
             and not any(_claims(f"assistant {f}") for f in ("--intent", "--intent=", "--intent ''", "--answer"))),
         ("neg/class_quoted_operator", not any(_claims(c) for c in ("echo ';' assistant --intent ship", "echo '|' git push assistant",
-            "echo '(' git push assistant", 'echo "&&" git push assistant', "echo \\; git push assistant")) and _claims('echo "a\\";" ; git push assistant')),
+            "echo '(' git push assistant", 'echo "&&" git push assistant', "echo \\; git push assistant")) and _claims('echo "a;" ; git push assistant')),
         # Allowlist round: an option or value not listed, or one that ends the run early, is never a gate command.
         ("neg/class_bad_value", not any(_claims(f"git push assistant {o}") for o in ("--signed=banana", "--recurse-submodules=banana"))),
         ("neg/class_unlisted_value", not any(_claims(f"git push assistant {o}") for o in ("--signed=yes", "--recurse-submodules=check"))),
@@ -207,18 +202,33 @@ def _selftest() -> int:
                                                        "git push assistant --help", "git push -h assistant"))),
         # Round 4: a function definition, a quoted or escaped assignment, or a redirection with no target is not read.
         ("neg/class_function_def", [_unreadable(c) for c in ("f() (git push assistant)", "f ( ) { git push assistant; }", "function f { git push assistant; }")]
-            == ["parentheses", "parentheses", "compound command"] and _claims('git commit -m "f()" && git push assistant')),
+            == ["parentheses", "parentheses", "brace"] and _claims('git commit -m "f()" && git push assistant')),
         ("neg/class_quoted_assignment", [_unreadable(c) for c in ('"X=y" git push assistant', "X\\=y git push assistant", "'X'=y git push assistant",
-            'A=1 "X=y" git push assistant')] == ["quoted assignment"] * 4 and _claims('X="a b" git push assistant')),
+            'A=1 "X=y" git push assistant')] == ["quoted assignment", "escape", "quoted assignment", "quoted assignment"]
+            and _claims('X="a b" git push assistant')),
         ("neg/class_redirect_no_target", [_unreadable(c) for c in ("git push assistant >", "git push assistant 2>", "git push assistant > ; true",
-            "git push assistant > > x")] == ["redirection without a target"] * 4 and _claims("git push assistant > out")),
+            "git push assistant > > x")] == ["redirection"] * 4 and not _claims("git push assistant > out")),
         # Round 5: any bare parenthesis or brace group, and an operator without a command on each side, is not read.
         ("neg/class_parentheses", [_unreadable(c) for c in ("(git push assistant", "git push assistant)", "(git push assistant)",
-            "true && (git push assistant)", "{ git push assistant; }")] == ["parentheses"] * 4 + ["compound command"]),
+            "true && (git push assistant)", "{ git push assistant; }")] == ["parentheses"] * 4 + ["brace"]),
         ("neg/class_operator_sequence", [_unreadable(c) for c in ("git push assistant ;; true", "true &&& git push assistant", "true && && git push assistant",
             "; git push assistant", "git push assistant &&", "git push assistant |", "git push assistant >; true", "cat <(git push assistant")] ==
-            ["unknown operator"] * 2 + ["operator without a command on each side"] * 4 + ["unknown operator", "parentheses"]
-            and all(_claims(f"git push assistant {op}") for op in (";", "&", "2>&1 | cat", "&>/dev/null", ">> log &"))),
+            ["unknown operator"] * 2 + ["operator without a command on each side"] * 4 + ["redirection"] * 2
+            and all(_claims(f"git push assistant {op}") for op in (";", "&", "| cat"))),
+        # Round 6: outside single quotes only allowlisted characters are read (in double quotes, no $, backtick or \\).
+        ("neg/r6_expansion", [_unreadable(c) for c in ("echo ${q1_review_unset:-x; git push assistant; y}", "echo $HOME; git push assistant",
+            'git push assistant "$BRANCH"', "git push $'assistant'")] == ["expansion"] * 4),
+        ("neg/r6_substitution", [_unreadable(c) for c in ("echo $(git push assistant)", "echo `git push assistant`", 'echo "`git push assistant`"')]
+            == ["command substitution"] * 3 and _claims("git commit -m '#1 $(x) `y` \\' && git push assistant")),
+        ("neg/r6_escape", [_unreadable(c) for c in ("git push \\assistant", "echo \\; git push assistant", 'git push assistant "a\\b"')] == ["escape"] * 3),
+        ("neg/r6_redirect", [_unreadable(c) for c in ("git push assistant > out", "git push assistant 2>&1", "git push assistant <in")] == ["redirection"] * 3),
+        ("neg/r6_glob_tilde_brace", [_unreadable(c) for c in ("git push assistant feature/*", "git push assistant HEAD:x/?", "git push assistant [ab]",
+            "git push assistant x[y", "git -C ~/w push assistant", "git push assistant {a,b}", "git push assistant x{y")] == ["glob"] * 4 + ["tilde"]
+            + ["brace"] * 2),
+        ("neg/r6_bang", [_unreadable(c) for c in ("! git push assistant", "git push assistant !x")] == ["negation or history"] * 2),
+        ("neg/r6_comment", _unreadable("git push assistant # x") == "comment" and _claims("git push assistant '#x'")),
+        ("pos/r6_plain_characters", _claims("git push assistant\tHEAD:refs/heads/a-b_c.d+e,f@g%h")),
+        ("neg/r6_other_char", [_unreadable(c) for c in ("git push assistant ^x", "git push assistant \u00e9")] == ["character not on the allowlist"] * 2),
         # A line the reader does not fully read is never a gate command, whatever it holds.
         ("neg/not_read", [_unreadable(c) for c in _NOT_READ] == ["heredoc or herestring", "command substitution", "command substitution", "comment",
             "multiline command", "unbalanced quoting", "parentheses", "compound command"] and not any(_claims(c) for c in _NOT_READ)),

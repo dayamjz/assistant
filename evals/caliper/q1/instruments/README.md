@@ -28,48 +28,48 @@ in Caliper attempts, which is a decision for the owner.
 
 ## How a command line is read
 
-Not read, so never a gate command: a line holding a heredoc or herestring
-(`<<`), a command substitution (backtick or `$(`), a `#` anywhere, a newline
-anywhere (a backslash-newline continuation or a trailing newline too), quoting
-`shlex` cannot split, or a command that begins with a reserved word (bash's
-list: `! [[ ]] { } case coproc do done elif else esac fi for function if in
-select then time until while`, plus zsh's `foreach end repeat nocorrect`), so
-the body of a compound command such as `case x in x) git push assistant x;;
-esac` is never read as a command of its own. Also not read, with no grammar
-parser behind it:
+The reader fails closed on shell syntax, with no grammar parser: it reads only
+lines made of characters it knows, and every other line is not read, so never
+a gate command, with the reason `_unreadable` gives.
 
-- any `(` or `)` outside quotes: a subshell or grouping (`(git push
-  assistant)`, which runs, is not read either), an unbalanced one (`(git push
-  assistant`, a syntax error), a function definition (`f() (git push
-  assistant)` only defines `f`), or a process substitution (`<(...)`);
-- an operator or redirection token other than `;`, `&&`, `||`, `|`, `&` and
-  `<`, `>`, `>>`, `<>`, `>|`, `>&`, `<&`, `&>`, `&>>` (`git push assistant ;;
-  true`, `>;`, bash's `|&`);
-- an operator without a command on each side (`true && && git push
-  assistant`, a leading `;`, a trailing `&&` or `|`); a trailing `;` or `&` is
-  read. bash refuses each of these; zsh accepts a leading `;` and a trailing
-  `&&`, which are not read anyway;
-- a word in command position shaped `NAME=value` but quoted or escaped up to
-  its `=` (`"X=y" git push assistant`, `X\=y`, `'X'=y`: the shell runs a
-  command named `X=y`, which is not found);
-- a redirection with no target word (`git push assistant >`, a parse error),
-  including one written before an operator or another redirection.
+- Outside quotes, only ASCII letters and digits, space, tab, `- _ . / = : @ ,
+  + %`, the operator characters `; & |`, and quotes are on the allowlist.
+  Anything else is not read: `$` (any expansion: `${...}`, `$x`, `$'...'`;
+  `${unset:-x; git push assistant; y}` only prints text), backtick and `$(`
+  (command substitution), `\` (escape, so a continuation too), `(` `)`
+  (subshell, grouping, function definition, process substitution), `{` `}`
+  (brace group or expansion), `<` `>` (redirection, heredoc), `*` `?` `[` `]`
+  (glob; bash and zsh treat an unmatched one differently), `~` (tilde), `!`
+  (negation or history), `#` (comment), a newline, and any other character.
+- Inside single quotes every character is literal and read
+  (`git commit -m '#1 $(x)'` is plain text). Inside double quotes everything
+  is read except `$`, backtick and `\`, which expand or escape there. An
+  unclosed quote is not read.
+- Of the operator characters, only `;`, `&&`, `||`, `|` and `&` are read, each
+  with a command on each side (a trailing `;` or `&` is read): `;;`, `&&&`,
+  `|&`, `true && && x`, a leading `;` and a trailing `&&` or `|` are not. bash
+  refuses each of these; zsh accepts a leading `;` and a trailing `&&`, which
+  are not read anyway.
+- A command that begins with a reserved word (bash's list: `! [[ ]] { } case
+  coproc do done elif else esac fi for function if in select then time until
+  while`, plus zsh's `foreach end repeat nocorrect`) is not read, so the body
+  of a compound command (`for b in x; git push assistant`) is never read as a
+  command of its own.
+- A word in command position shaped `NAME=value` but quoted up to its `=`
+  (`"X=y" git push assistant`, `'X'=y`) is not read: the shell runs a command
+  named `X=y`, which is not found.
 
-Apart from those marks, nothing is matched against the raw text: the line is
-read the way a POSIX shell splits it, then each command's words are read the
-way the program parses them.
+Of a line that passes, nothing more is matched against the raw text: the line
+is split the way a POSIX shell splits it, then each command's words are read
+the way the program parses them.
 
-- Shell: `shlex` (POSIX mode) splits words, removing quotes and escapes
-  (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all `--dry-run`), and `;`,
-  `&&`, `||`, `|` and `&` separate commands. Redirections and their targets
-  are dropped (so a command that is only a redirection, such as `> out;`,
-  leaves its operator without a command and the line is not read). Only a
-  bare operator character counts: a `;`, `&`, `|`, `(`, `)`, `<` or `>` inside
-  quotes or after a backslash is literal text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
-  are one `echo` command, not a gate command. An empty quoted word (`''`) is
-  a word, never a separator.
+- Shell: `shlex` (POSIX mode) splits words, removing quotes
+  (`"--dry-run"` and `--"dry"-run` are both `--dry-run`), and the operators
+  separate commands. A quoted operator character is literal text, so
+  `echo ';' assistant --intent ship` is one `echo` command. An empty quoted
+  word (`''`) is a word, never a separator.
 - A command's program is the first word after any `VAR=value` assignments
-  written with no quote or escape up to the `=`.
+  written with no quote up to the `=`.
   The reader fails closed: any option word not listed below, including one
   that ends the run before a gate command (`--version`, `--help`, `-h`), or
   any value not listed, makes the command no gate command. It is never
@@ -96,8 +96,9 @@ way the program parses them.
 
 Residual misses: a wrapper before the program (`env`, `command`, `exec`,
 `sudo`, `sh -c '...'`) or a git alias, which the reader does not see as a
-push, and a file-descriptor redirection written before the remote (`2>log`,
-which splits as a word `2`).
+push, and every valid line the allowlist does not read (a redirection such
+as `2>&1`, a variable such as `"$BRANCH"`, a subshell, a glob in a refspec):
+failing closed under-counts by design.
 
 ## Selftest
 
@@ -107,11 +108,12 @@ escape, option value, missing value, cluster, quoting, quoted or escaped
 operator characters, an empty quoted word, remote-name prefix, text that
 only names the gate, a refused or unlisted value, an unknown option, and
 options that end the run early such as `--version` and `--help`), each
-not-read shape with the reason the reader gives (parentheses, unknown
-operators, operators without a command on each side, function definitions,
-quoted assignments and target-less redirections among them), the literal
-short-circuit rule, and the runs dump. Reverting any one guard fails a row;
-in the reserved-word list, an opener such as `case` is also caught by its
-closer (`esac`). Fuller offline controls, live scoring, and the
+not-read class with the reason the reader gives (expansion, command
+substitution, escape, redirection, glob, tilde, brace, `!`, comment, other
+characters, parentheses, unknown operators, operators without a command on
+each side, quoted assignments, reserved words), a positive control that each
+allowlisted punctuation character is read, the literal short-circuit rule, and
+the runs dump. Reverting any one guard or allowlist entry fails a row (in the
+reserved-word list, an opener such as `case` is also caught by its closer). Fuller offline controls, live scoring, and the
 activation-smoke / fixed-diff runners stack in follow-up PRs of 300 code
 lines or under each.
