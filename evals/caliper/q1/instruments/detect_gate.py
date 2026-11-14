@@ -9,25 +9,28 @@ Live scoring is ``gate_ran_from_attempt`` (paired ``tool_result`` evidence).
 from __future__ import annotations
 
 import json
+import os
 import re
+import shlex
 import sys
+from pathlib import Path
 from typing import Any, Iterable
 
-_GLOBAL = r"(?:\s+--\w[\w-]*(?:(?:=|\s+)\S+)?)*"
-_INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
-_ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
-# Remote is exactly `assistant` (not assistant-backup); dry-run flags count before or after it.
-_PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push((?:\s+-\S+)*)\s+assistant(?![^\s;&|)])([^;&|\n]*)")
-# git 2.54 takes any unambiguous long-option prefix (`--dr`; `--d` is ambiguous with
-# --delete and refused) and lets the last of --dry-run / --no-dry-run win.
-_DRY_FLAG = re.compile(r"(?<!\S)(?:--(no-)?dr(?:y(?:-(?:r(?:un?)?)?)?)?|-[^\s-]*n\S*)(?!\S)")
-_FALSE_AND = re.compile(r"false\s*&&")
-_TRUE_OR = re.compile(r"true\s*\|\|")
-# Evidence that a gate command reached the gate, not only that it started. The CLI
-# prints its progress line (internal/cli/runs.go) before it dials the service, so a
-# dial failure (internal/cli/client.go's errNoService) after it is not a reach. A push
-# reached the receive hook when git 2.54 reported, under its `To` line, an updated
-# ref or one the pre-receive hook declined; a local rejection or bad refspec is not.
+_SEPARATORS = set(";&|()\n")
+# `git push -h` of git 2.54. parse-options takes an exact long name or the one name a prefix abbreviates (`--dr`;
+# `--d` is ambiguous with --delete), lets options follow positionals, ends them at `--`, and gives a value-taking
+# option the next word whatever it looks like (`-o --no-dry-run`); -v -q -d -n -f -u -4 -6 take none.
+_PUSH_VALUE = {"repo", "recurse-submodules", "receive-pack", "exec", "push-option"}
+_PUSH_EQ_ONLY = {"force-with-lease", "signed"}
+_PUSH_NEGATABLE = ("verbose quiet repo all branches mirror delete tags dry-run porcelain force force-with-lease "
+                   "force-if-includes recurse-submodules thin receive-pack exec set-upstream progress prune "
+                   "follow-tags signed atomic push-option").split()
+_PUSH_NAMES = _PUSH_NEGATABLE + ["no-" + n for n in _PUSH_NEGATABLE] + ["verify", "no-verify", "ipv4", "ipv6"]
+# git's own options before the subcommand that take the next word as their value.
+_GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
+# Evidence a gate command reached the gate: the CLI's progress line (internal/cli/runs.go), printed before it
+# dials the service, without a dial failure (internal/cli/client.go's errNoService); for a push, an updated or
+# pre-receive-declined ref under git 2.54's `To` line (a local rejection or bad refspec is not a reach).
 _REACHED = {
     "intent": re.compile(r"^starting or attaching to the run for this branch\b", re.MULTILINE),
     "answer": re.compile(r"^answering ", re.MULTILINE),
@@ -36,73 +39,134 @@ _REACHED = {
 _NO_SERVICE = re.compile(r"\bthe background service is not running\b")
 
 
-def _dry_run(args: str) -> bool:
-    """True when the last dry-run flag in a push's arguments (``-n``, ``--dr``...) is not negated."""
-    flags = _DRY_FLAG.findall(args)
-    return bool(flags) and flags[-1] == ""
-
-
-def _strip_quotes_and_comments(command: str) -> str:
-    """Unquote one-word spans (``"--dry-run"``), blank the rest, and drop ``#`` comments."""
-    out: list[str] = []
-    i, n = 0, len(command)
-    while i < n:
+def _prepare(command: str) -> str:
+    """The line as a POSIX shell reads it before splitting words: backslash-newline joined,
+    ``#`` comments (a ``#`` starting an unquoted word) dropped, a heredoc's body cut off."""
+    out, quote, heredoc, i = [], "", False, 0
+    while i < len(command):
         c = command[i]
-        if c in "'\"":
-            q = c
-            i += 1
-            start = i
-            while i < n and command[i] != q:
-                if command[i] == "\\" and q == '"':
-                    i += 2
-                    continue
-                i += 1
-            word = command[start:i]
-            i += 1
-            out.append(word if re.fullmatch(r"[\w./:=@+-]*", word) else " ")
+        if c == "\\" and quote != "'":
+            if command[i + 1:i + 2] != "\n":
+                out.append(command[i:i + 2])
+            i += 2
             continue
-        if c == "#" and (i == 0 or command[i - 1].isspace()):
+        if quote:
+            quote = "" if c == quote else quote
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (not out or out[-1][-1] in " \t\n;&|()"):
+            i = command.find("\n", i) if "\n" in command[i:] else len(command)
+            continue
+        elif c == "\n" and heredoc:
             break
+        elif command.startswith("<<", i):
+            heredoc = True
         out.append(c)
         i += 1
     return "".join(out)
 
 
-def commands_from_transcript(transcript: Iterable[Any] | None) -> list[str]:
-    """Pull shell commands out of a Caliper transcript's tool_use turns."""
-    out: list[str] = []
-    for turn in transcript or []:
-        if not isinstance(turn, dict):
-            continue
-        inp = turn.get("tool_input")
-        if isinstance(inp, dict):
-            cmd = inp.get("command")
-            if isinstance(cmd, str) and cmd.strip():
-                out.append(cmd)
-        elif isinstance(inp, str) and inp.strip():
-            out.append(inp)
-    return out
+def _simple_commands(command: str) -> list[tuple[list[str], str]]:
+    """Each simple command's words and the operator after it ("" at the end), as shlex (posix)
+    splits the prepared line; redirections are dropped. An unsplittable line has none."""
+    lex = shlex.shlex(_prepare(command), posix=True, punctuation_chars=";&|()<>\n")
+    lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
+    try:
+        words = list(lex)
+    except ValueError:
+        return []
+    out, cur, skip = [], [], False
+    for w in words:
+        if set(w) <= _SEPARATORS:
+            out.append((cur, w))
+            cur = []
+        elif set(w) & set("<>") and set(w) <= set("<>&|"):
+            skip = True
+        elif not skip:
+            cur.append(w)
+        else:
+            skip = False
+    return [(c, op) for c, op in out + [(cur, "")] if c]
+
+
+def _program(words: list[str]) -> list[str]:
+    """The words from the program on, past leading ``VAR=value`` assignments."""
+    while words and re.fullmatch(r"[A-Za-z_]\w*=.*", words[0], re.S):
+        words = words[1:]
+    return words
+
+
+def _is_push(words: list[str]) -> bool:
+    words = _program(words)
+    return bool(words) and os.path.basename(words[0]) == "git" and "push" in words[1:]
+
+
+def _push_long(name: str) -> str | None:
+    if name in _PUSH_NAMES:
+        return name
+    hits = [n for n in _PUSH_NAMES if n.startswith(name)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _push_target(args: list[str]) -> tuple[str | None, bool] | None:
+    """(repository, dry run) as git push parses ``args``; None for options git refuses."""
+    repo, dry, positional, i = None, False, [], 0
+    while i < len(args):
+        a, i = args[i], i + 1
+        if a == "--":
+            positional += args[i:]
+            break
+        if a.startswith("--"):
+            raw, eq, value = a[2:].partition("=")
+            name = _push_long(raw)
+            if name is None or (eq and name not in _PUSH_VALUE | _PUSH_EQ_ONLY):
+                return None
+            if name in _PUSH_VALUE and not eq:
+                if i >= len(args):
+                    return None
+                value, i = args[i], i + 1
+            repo = value if name == "repo" else repo
+            dry = {"dry-run": True, "no-dry-run": False}.get(name, dry)
+        elif a.startswith("-") and a != "-":
+            for j, c in enumerate(a[1:], 1):
+                if c == "o":
+                    i += j == len(a) - 1
+                    break
+                if c not in "vqdnfu46":
+                    return None
+                dry = dry or c == "n"
+        else:
+            positional.append(a)
+    return (positional[0] if positional else repo), dry
+
+
+def _gate_kind(words: list[str]) -> str | None:
+    """intent, answer or push when the simple command is a gate command, else None; a push
+    is one only to the remote named exactly `assistant` and not a dry run."""
+    words = _program(words)
+    prog = os.path.basename(words[0]) if words else ""
+    if prog == "assistant":
+        flags = [re.fullmatch(r"--?(intent|answer)(?:=.*)?", w, re.S) for w in words[1:]]
+        return next((m.group(1) for m in flags if m), None)
+    i = 1
+    while prog == "git" and i < len(words) and words[i].startswith("-"):
+        i += 2 if words[i] in _GIT_VALUE else 1
+    if prog != "git" or words[i:i + 1] != ["push"]:
+        return None
+    target = _push_target(words[i + 1:])
+    return "push" if target and target == ("assistant", False) else None
 
 
 def _command_looks_executed(command: str) -> bool:
-    """False for literal ``false &&`` / ``true ||``, backticks / ``$(…)``, triad-only-later lines."""
-    plain = _strip_quotes_and_comments(command)
-    if _FALSE_AND.search(plain) or _TRUE_OR.search(plain):
-        return False
+    """False for a literal ``false &&`` / ``true ||`` and any backtick or ``$(…)`` on the line."""
     if "`" in command or "$(" in command:
         return False
-    if "\n" in command:
-        first, _, rest = command.partition("\n")
-        if not _kinds(first) and _kinds(rest):
-            return False
-    return True
+    return not any((w, op) in ((["false"], "&&"), (["true"], "||")) for w, op in _simple_commands(command))
 
 
 def _kinds(command: str) -> set[str]:
-    """The kinds of gate command on the line (intent, answer, push); a dry-run push is none."""
-    plain = _strip_quotes_and_comments(command)
-    return {k for k, rx in (("intent", _INTENT), ("answer", _ANSWER), ("push", _PUSH))
-            if (m := rx.search(plain)) and not (k == "push" and _dry_run(m.group(1) + m.group(2)))}
+    """The kinds of gate command on the line (intent, answer, push)."""
+    return {k for w, _ in _simple_commands(command) if (k := _gate_kind(w))}
 
 
 def gate_ran_from_commands(commands: Iterable[str]) -> bool:
@@ -113,17 +177,10 @@ def gate_ran_from_commands(commands: Iterable[str]) -> bool:
 def _tool_result_usable(turn: dict[str, Any], command: str) -> bool:
     """True when the result shows a gate command on the line reached the gate (``_REACHED``): a push
     only as the line's one ``git push`` (another's report looks the same), an intent or answer only if dialed."""
-    content = turn.get("content")
-    if not isinstance(content, str) or not content.strip():
-        out = turn.get("tool_output")
-        content = out if isinstance(out, str) else ""
-    one_push = len(re.findall(r"\bgit\s+push\b", _strip_quotes_and_comments(command))) == 1
+    content = next((c for c in (turn.get("content"), turn.get("tool_output")) if isinstance(c, str) and c.strip()), "")
+    one_push = sum(_is_push(w) for w, _ in _simple_commands(command)) == 1
     return any(_REACHED[k].search(content) and (one_push if k == "push" else not _NO_SERVICE.search(content))
                for k in _kinds(command))
-
-
-def _is_tool_result_turn(turn: dict[str, Any]) -> bool:
-    return turn.get("role") == "tool_result" or turn.get("type") == "tool_result"
 
 
 def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
@@ -135,29 +192,18 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
         if not isinstance(turn, dict):
             continue
         inp = turn.get("tool_input")
-        cmd = None
-        if isinstance(inp, dict) and isinstance(inp.get("command"), str):
-            cmd = inp["command"]
-        elif isinstance(inp, str):
-            cmd = inp
-        if not cmd or not _command_looks_executed(cmd) or not _kinds(cmd):
+        cmd = inp.get("command") if isinstance(inp, dict) else inp
+        if not isinstance(cmd, str) or not cmd or not _command_looks_executed(cmd) or not _kinds(cmd):
             continue
-        if i + 1 >= len(transcript) or not isinstance(transcript[i + 1], dict):
-            continue
-        nxt = transcript[i + 1]
-        if _is_tool_result_turn(nxt) and _tool_result_usable(nxt, cmd):
+        nxt = transcript[i + 1] if i + 1 < len(transcript) else None
+        if isinstance(nxt, dict) and "tool_result" in (nxt.get("role"), nxt.get("type")) and _tool_result_usable(nxt, cmd):
             return True
     return False
 
 
 def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     """True for ``{"runs":[…]}`` with a non-empty list; bare JSON lists do not count."""
-    if is_path:
-        with open(path_or_text, encoding="utf-8") as f:
-            text = f.read()
-    else:
-        text = path_or_text
-    data = json.loads(text)
+    data = json.loads(Path(path_or_text).read_text(encoding="utf-8") if is_path else path_or_text)
     runs = data.get("runs") if isinstance(data, dict) else None
     return isinstance(runs, list) and len(runs) > 0
 
@@ -168,6 +214,10 @@ def _attempt(cmd: str, nxt: dict[str, Any]) -> dict[str, Any]:
 
 def _tr(content: str, **extra: Any) -> dict[str, Any]:
     return {"role": "tool_result", "content": content, **extra}
+
+
+def _ran(cmd: str, content: str) -> bool:
+    return gate_ran_from_attempt(_attempt(cmd, _tr(content)))
 
 
 _TO = "To ../gate.git\n * [new branch]      HEAD -> probe"
@@ -184,11 +234,10 @@ def _selftest() -> int:
     failed = 0
     rows: list[tuple[str, bool]] = [
         ("neg/dry_run_before_remote", not any(gate_ran_from_commands([f"git push {f} assistant"]) for f in ("--dry-run", "-n", "-fn"))),
-        ("pos/push", gate_ran_from_commands(["git push assistant"])),
-        ("pos/push_pipe_n", gate_ran_from_commands(["git push assistant 2>&1 | head -n 40"])),
-        ("pos/intent_n_text", gate_ran_from_commands(['assistant --intent "add -n"'])),
-        ("neg/grep_text", not gate_ran_from_commands(['grep -rn "git push assistant" skills'])),
-        ("neg/echo_quoted", not gate_ran_from_commands(['echo "next: ; assistant --intent ship"'])),
+        ("pos/commands", all(gate_ran_from_commands([c]) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40",
+                                                                    'assistant --intent "add -n"'))),
+        ("neg/text_naming_gate", not any(gate_ran_from_commands([c]) for c in ('grep -rn "git push assistant" skills',
+                                                                              'echo "next: ; assistant --intent ship"'))),
         ("pos/attempt", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr(_INTENT_RAN)))),
         ("neg/attempt_dry_run", not gate_ran_from_attempt(_attempt("git push --dry-run assistant", _tr("ok")))),
         ("neg/user_next", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "user", "content": "go"}))),
@@ -207,7 +256,20 @@ def _selftest() -> int:
                                             for f in ("--dr", "--dry", "--dry-ru", "--no-dry-run --dry"))),
         ("pos/negated_dry_run_last", all(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO)))
                                          for f in ("--no-dry", "--dry-run --no-dry-run"))),
-        ("pos/ambiguous_d_is_no_dry_run", gate_ran_from_commands(["git push assistant --d HEAD"])),
+        ("pos/ambiguous_d_refused", _push_target(["assistant", "--d"]) is None and _push_target(["assistant", "--dr"]) == ("assistant", True)),
+        ("neg/class_continuation", not _ran("git push assistant \\\n  --dry-run HEAD:refs/heads/probe", _TO)),
+        ("neg/class_escape", not _ran("git push assistant \\--dry-run HEAD:refs/heads/probe", _TO)),
+        ("neg/class_option_value", not any(_ran(f"git push assistant {f} HEAD:refs/heads/probe", _TO) for f in (
+            "--dry-run -o --no-dry-run", "-n --push-option --no-dry", "-n --push-o=--no-dry-run", "-n -o--no-dry-run"))),
+        ("neg/class_cluster", not any(_ran(f"git push {f} assistant HEAD:refs/heads/probe", _TO) for f in ("-vn", "-fnu", "-un"))),
+        ("neg/class_quoting", not any(_ran(f"git push {f} HEAD:refs/heads/probe", _TO) for f in (
+            "assistant --\"dry\"-run", "assistant '-n'", "'assistant' --dry-run", "assistant HEAD#x --dry-run"))),
+        ("neg/heredoc_body", not gate_ran_from_commands(["cat <<'EOF'\ngit push assistant HEAD\nEOF"])),
+        ("pos/cluster_o_value", _ran("git push -vo ci.skip assistant HEAD:refs/heads/probe", _TO)),
+        ("pos/git_global_options", all(_ran(f"git {g} push assistant HEAD:refs/heads/probe", _TO) for g in ("-C w", "-c push.default=current"))),
+        ("pos/env_prefix_later_line", _ran("cd w\nGIT_TRACE=0 git push assistant HEAD:refs/heads/probe", _TO)),
+        ("pos/double_dash", _ran("git push -v -- assistant HEAD:refs/heads/probe", _TO)),
+        ("pos/redirect_before_remote", _ran("git push </dev/null assistant HEAD:refs/heads/probe", _TO)),
         ("neg/class_remote_prefix", not gate_ran_from_attempt(_attempt("git push assistant-backup HEAD:refs/heads/probe", _tr(_TO)))),
         ("neg/class_up_to_date", not gate_ran_from_attempt(_attempt("git push assistant HEAD", _tr("Everything up-to-date")))),
         ("neg/class_prehook_push", not any(gate_ran_from_attempt(_attempt(c, _tr(r))) for c, r in _PREHOOK)),

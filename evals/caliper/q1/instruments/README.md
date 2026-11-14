@@ -28,28 +28,47 @@ So a command the shell skipped (a failed `cd`, `assistant --cancel && ...`,
 `false && ...`), a missing `assistant` binary in any shell's wording, and a
 declined tool call all score false, because none prints that evidence.
 
-What is not a gate command at all: a push whose last dry-run flag is not
-negated, before or after the remote, quoted or not (`"--dry-run"`). The flags
-are `-n`, combined short flags like `-fn`, and `--dry-run` or any prefix of it
-git 2.54 accepts (`--dr` up to `--dry-ru`); `--d` is not one, since git
-refuses it as ambiguous with `--delete`. A later `--no-dry-run` (or `--no-dr`
-and longer) cancels an earlier dry-run flag, as it does in git. Also not a
-gate command: a remote that is not exactly `assistant`
-(`assistant-backup`); and text that names the gate only inside a multi-word
-quoted span, a comment or a heredoc body. A one-word quoted span is read as
-that word, so `git push "assistant"` is a push to `assistant`, and quoted
-intent text is ignored, so `assistant --intent "fix false && x"` counts.
+How a command line is read. Nothing is matched against the raw text: the
+line is read the way a POSIX shell splits it, then each command's words are
+read the way the program parses them.
+
+- Shell: backslash-newline continuations are joined; a `#` that starts an
+  unquoted word begins a comment (a `#` inside a word does not); a heredoc's
+  body is data, not commands; then `shlex` (POSIX mode) splits words, removing
+  quotes and escapes (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all
+  `--dry-run`), and `;`, `&&`, `||`, `|`, `&`, parentheses and newlines
+  separate commands. Redirections and their targets are dropped. A line
+  `shlex` cannot split (an unclosed quote) has no gate command.
+- A command's program is the first word after any `VAR=value` assignments;
+  `assistant` or a path ending in `/assistant` is the CLI, whose `--intent` /
+  `--answer` (also `-intent`, `--intent=...`) make it a gate command.
+- `git`: its own options before the subcommand are skipped (`-C <path>` and
+  `-c <name>=<value>` take the next word). After `push`, arguments are walked
+  with `git push -h`'s option table from git 2.54: an exact long name or the
+  one name a prefix abbreviates (`--dr` is `--dry-run`; `--d` is ambiguous with
+  `--delete` and git refuses it, so that push is not a gate command), options
+  after positionals, `--` ending options, short clusters (`-vn`), and
+  value-taking options (`-o`, `--push-option`, `--repo`, `--receive-pack`,
+  `--exec`, `--recurse-submodules`) consuming the next word whatever it looks
+  like, so `-o --no-dry-run` is a push option, not a negation. `-n` /
+  `--dry-run` and `--no-dry-run` set the dry run, the last one winning. The
+  first positional (or `--repo` when there is none) is the remote, which must
+  be exactly `assistant`; a dry run is not a gate command.
+
+A real-git differential run (42 command lines through `zsh -c` against a bare
+repository whose `pre-receive` hook records each run) found no line the
+detector counted that git did not deliver to the hook; the misses are the
+residuals below.
 
 Residual false negatives (real gate runs that still score false): any
-backtick or `$(...)` on the line; leading whitespace before the gate command;
-a gate command only on a later line of a multi-line command; an env prefix
-(`VAR=val assistant ...`); a path invocation (`./bin/assistant ...`);
-`git -C dir push assistant`; a push option given as `-o <value>` before the
-remote; a short-flag bundle that holds `n` as the value of `-o` (`-on`); a
-line with more than one `git push`; `git push -q` or `--porcelain` (git 2.54
-printed no status block for `-q`); output
-filtered through a pipe that drops the evidence; and a run started in the
-background, whose output goes to a file. The progress lines are matched as
+backtick or `$(...)` on the line; a wrapper before the program (`env`,
+`command`, `exec`, `sudo`, `sh -c '...'`); a git alias for push; a line with
+more than one `git push`; `git push -q` or `--porcelain` (git 2.54 printed no
+status block for `-q`); output redirected away or filtered through a pipe that
+drops the evidence; a file-descriptor redirection written before the remote
+(`2>log`, which splits as a word `2`); a herestring (`<<<`), whose following
+lines are cut like a heredoc body; and a run started in the background, whose
+output goes to a file. The progress lines are matched as
 `internal/cli/runs.go` words them today; rewording them makes intents and
 answers score false, and nothing here detects that drift.
 
@@ -59,8 +78,9 @@ and rejects only literal `false &&` / `true ||` short-circuits.
 
 `python3 detect_gate.py` runs the fail-before selftest: one `class_*` row per
 command shape the reviews found (short-circuit, failed `cd`, not found, flags
-after the remote, remote-name prefix, up-to-date, a push that failed before
-the hook, a quoted flag, no service), each with result text recorded in the
+after the remote, flag spelling, remote-name prefix, up-to-date, a push that
+failed before the hook, a quoted flag, no service, continuation, escape,
+option value, cluster, quoting), each with result text recorded in the
 Q1 run or captured from zsh, git 2.54 or this repository's CLI. Fuller offline
 controls and the activation-smoke / fixed-diff runners stack in follow-up PRs
 of 300 code lines or under each.
