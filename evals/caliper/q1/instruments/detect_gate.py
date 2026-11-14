@@ -28,13 +28,14 @@ _PUSH_NEGATABLE = ("verbose quiet repo all branches mirror delete tags dry-run p
 _PUSH_NAMES = _PUSH_NEGATABLE + ["no-" + n for n in _PUSH_NEGATABLE] + ["verify", "no-verify", "ipv4", "ipv6"]
 # git's own options before the subcommand that take the next word as their value.
 _GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
-# Evidence a gate command reached the gate: the CLI's progress line (internal/cli/runs.go), printed before it
-# dials the service, without a dial failure (internal/cli/client.go's errNoService); for a push, an updated or
-# pre-receive-declined ref under git 2.54's `To` line (a local rejection or bad refspec is not a reach).
+# Evidence a gate command reached the gate, from the gate's own output, not the command's shape: the CLI's progress
+# line (internal/cli/runs.go, printed before it dials the service) without a dial failure (client.go's errNoService);
+# for a push, a line git relays from the gate's admit hook (internal/cli/gate.go): machine.PhraseAdmitted,
+# machine.PhraseSenderUnplaced, or a refusal under ipc.MethodGateAdmit (not the unprefixed copy-busy line a dry run gets).
 _REACHED = {
     "intent": re.compile(r"^starting or attaching to the run for this branch\b", re.MULTILINE),
     "answer": re.compile(r"^answering ", re.MULTILINE),
-    "push": re.compile(r"(?m)^To \S.*(?:\n .*)*?\n(?: [ *+-] \S| ! \[remote rejected\] .*\(pre-receive hook declined\))"),
+    "push": re.compile(r"(?m)^remote: (?:The gate let this change in\.|The gate could not tell who sent this change|gate\.admit: )"),
 }
 _NO_SERVICE = re.compile(r"\bthe background service is not running\b")
 
@@ -94,11 +95,6 @@ def _program(words: list[str]) -> list[str]:
     while words and re.fullmatch(r"[A-Za-z_]\w*=.*", words[0], re.S):
         words = words[1:]
     return words
-
-
-def _is_push(words: list[str]) -> bool:
-    words = _program(words)
-    return bool(words) and os.path.basename(words[0]) == "git" and "push" in words[1:]
 
 
 def _push_long(name: str) -> str | None:
@@ -175,12 +171,9 @@ def gate_ran_from_commands(commands: Iterable[str]) -> bool:
 
 
 def _tool_result_usable(turn: dict[str, Any], command: str) -> bool:
-    """True when the result shows a gate command on the line reached the gate (``_REACHED``): a push
-    only as the line's one ``git push`` (another's report looks the same), an intent or answer only if dialed."""
+    """True when the result carries the gate's own output for a gate command on the line (``_REACHED``)."""
     content = next((c for c in (turn.get("content"), turn.get("tool_output")) if isinstance(c, str) and c.strip()), "")
-    one_push = sum(_is_push(w) for w, _ in _simple_commands(command)) == 1
-    return any(_REACHED[k].search(content) and (one_push if k == "push" else not _NO_SERVICE.search(content))
-               for k in _kinds(command))
+    return not _NO_SERVICE.search(content) and any(_REACHED[k].search(content) for k in _kinds(command))
 
 
 def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
@@ -193,7 +186,7 @@ def gate_ran_from_attempt(attempt: dict[str, Any]) -> bool:
             continue
         inp = turn.get("tool_input")
         cmd = inp.get("command") if isinstance(inp, dict) else inp
-        if not isinstance(cmd, str) or not cmd or not _command_looks_executed(cmd) or not _kinds(cmd):
+        if not isinstance(cmd, str) or not _kinds(cmd):
             continue
         nxt = transcript[i + 1] if i + 1 < len(transcript) else None
         if isinstance(nxt, dict) and "tool_result" in (nxt.get("role"), nxt.get("type")) and _tool_result_usable(nxt, cmd):
@@ -220,75 +213,82 @@ def _ran(cmd: str, content: str) -> bool:
     return gate_ran_from_attempt(_attempt(cmd, _tr(content)))
 
 
-_TO = "To ../gate.git\n * [new branch]      HEAD -> probe"
+def _claims(cmd: str) -> bool:
+    return gate_ran_from_commands([cmd])
+
+
 _INTENT_RAN = "starting or attaching to the run for this branch; this blocks while the run advances"
 _NO_SVC = "the background service is not running at /h/socket: ipc: dialing /h/socket: dial unix /h/socket: connect: invalid argument\nStart it with: assistant service start"
 _FAILED = "error: failed to push some refs to '../gate.git'"
 _PREHOOK = [("git push assistant does-not-exist", f"Exit code 1\nerror: src refspec does-not-exist does not match any\n{_FAILED}"),
-            ("git push assistant HEAD:refs/heads/probe", f"Exit code 1\nTo ../gate.git\n ! [rejected]        HEAD -> probe (non-fast-forward)\n{_FAILED}"),
-            ("git push origin HEAD:x && git push assistant nope", f"To ../o.git\n * [new branch]      HEAD -> x\nerror: src refspec nope does not match any\n{_FAILED}")]
-_DECLINED = "Exit code 1\nTo ../gate.git\n ! [remote rejected] HEAD -> d (pre-receive hook declined)\n" + _FAILED
+            ("git push assistant HEAD:refs/heads/probe", f"Exit code 1\nTo ../gate.git\n ! [rejected]        HEAD -> probe (non-fast-forward)\n{_FAILED}")]
+
+
+# Recorded from a real push through this CLI's gate (scratch home; paths shortened to /h).
+_GATE_TO = "To /h/a/repos/24c5359d9b0ab873.git"
+_ADMITTED = ("remote: The gate let this change in. It is validated before it goes anywhere. Nothing to decide yet.        \n"
+             "remote:   refs/heads/feature/x        \nremote: feature/x: Validation of this change has begun. It goes on in the "
+             "service, so nothing here waits for it. Ask assistant status from its branch for where it stands.        \n")
+_GATE_REFUSED = ("Exit code 1\nremote: gate.admit: service: agents: no configured agent is runnable - so ... the push to gate "
+                 f"24c5359d9b0ab873 is refused (internal)        \n{_GATE_TO}\n ! [remote rejected] feature/x -> feature/x (pre-receive hook declined)")
+_DRY_RUN = ("A local copy for a run is being set up or cleaned up where this change is received. The change is taken in once that "
+            f"is done, within a bounded time, and nothing you sent is lost meanwhile. Nothing to decide yet.\n{_GATE_TO}\n * [new branch]      feature/x -> dry")
+_ORIGIN_THEN_FAILED = ("To ../o.git\n * [new branch]      HEAD -> a\nerror: src refspec does-not-exist does not match any\n"
+                       "error: failed to push some refs to '/h/a/repos/24c5359d9b0ab873.git'")
 
 
 def _selftest() -> int:
     failed = 0
     rows: list[tuple[str, bool]] = [
-        ("neg/dry_run_before_remote", not any(gate_ran_from_commands([f"git push {f} assistant"]) for f in ("--dry-run", "-n", "-fn"))),
-        ("pos/commands", all(gate_ran_from_commands([c]) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40",
-                                                                    'assistant --intent "add -n"'))),
-        ("neg/text_naming_gate", not any(gate_ran_from_commands([c]) for c in ('grep -rn "git push assistant" skills',
-                                                                              'echo "next: ; assistant --intent ship"'))),
-        ("pos/attempt", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr(_INTENT_RAN)))),
-        ("neg/attempt_dry_run", not gate_ran_from_attempt(_attempt("git push --dry-run assistant", _tr("ok")))),
-        ("neg/user_next", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "user", "content": "go"}))),
-        ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"tool_output": "ok"}))),
-        ("neg/declined_or_not_found", not any(gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr(r))) for r in (
-            "User declined to run this command", "sh: 1: assistant: not found", "bash: assistant: command not found"))),
-        ("pos/later_not_found", gate_ran_from_attempt(_attempt('assistant --intent "x"; mytool', _tr(f"{_INTENT_RAN}\nbash: mytool: command not found")))),
-        ("neg/push_no_remote", not gate_ran_from_attempt(_attempt("git push assistant", _tr("fatal: 'assistant' does not appear to be a git repository")))),
-        ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr("", tool_output=_INTENT_RAN)))),
-        # One row per class reviews found; results recorded in Q1 or captured from zsh, git 2.54, this CLI.
-        ("neg/class_short_circuit", not gate_ran_from_attempt(_attempt('assistant --cancel && assistant --intent "x"', _tr("Exit code 1\nending 9182f3851ae51d97\nThis run was ended before the gate reached a verdict.")))),
-        ("neg/class_failed_cd", not any(gate_ran_from_attempt(_attempt(f"cd /missing && {c}", _tr("Exit code 1\n(eval):cd:1: no such file or directory: /missing"))) for c in ("assistant --intent ship", "git push assistant HEAD"))),
-        ("neg/class_not_found", not gate_ran_from_attempt(_attempt("assistant --intent ship", _tr("Exit code 127\n(eval):1: command not found: assistant")))),
-        ("neg/class_flags_after_remote", not any(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO))) for f in ("--dry-run", "-n", "-fn"))),
-        ("neg/class_flag_spelling", not any(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO)))
-                                            for f in ("--dr", "--dry", "--dry-ru", "--no-dry-run --dry"))),
-        ("pos/negated_dry_run_last", all(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO)))
-                                         for f in ("--no-dry", "--dry-run --no-dry-run"))),
+        # The parser, through the offline heuristic: what is a gate command at all.
+        ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40", 'assistant --intent "add -n"',
+            "git push -vo ci.skip assistant", "git -C w push assistant", "git -c a.b=c push assistant", "cd w\nGIT_TRACE=0 git push assistant",
+            "git push -v -- assistant", "git push </dev/null assistant", "git push --no-dry assistant", "git push --dry-run --no-dry-run assistant"))),
+        ("neg/text_naming_gate", not any(_claims(c) for c in ('grep -rn "git push assistant" skills', 'echo "next: ; assistant --intent ship"',
+                                                             "cat <<'EOF'\ngit push assistant HEAD\nEOF"))),
+        ("neg/class_flags", not any(_claims(f"git push {f}") for f in ("--dry-run assistant", "-n assistant", "-fn assistant",
+                                                                       "assistant --dry-run", "assistant -n", "assistant -fn"))),
+        ("neg/class_flag_spelling", not any(_claims(f"git push assistant {f}") for f in ("--dr", "--dry", "--dry-ru", "--no-dry-run --dry"))),
         ("pos/ambiguous_d_refused", _push_target(["assistant", "--d"]) is None and _push_target(["assistant", "--dr"]) == ("assistant", True)),
-        ("neg/class_continuation", not _ran("git push assistant \\\n  --dry-run HEAD:refs/heads/probe", _TO)),
-        ("neg/class_escape", not _ran("git push assistant \\--dry-run HEAD:refs/heads/probe", _TO)),
-        ("neg/class_option_value", not any(_ran(f"git push assistant {f} HEAD:refs/heads/probe", _TO) for f in (
+        ("neg/class_continuation", not _claims("git push assistant \\\n  --dry-run HEAD")),
+        ("neg/class_escape", not _claims("git push assistant \\--dry-run HEAD")),
+        ("neg/class_option_value", not any(_claims(f"git push assistant {f}") for f in (
             "--dry-run -o --no-dry-run", "-n --push-option --no-dry", "-n --push-o=--no-dry-run", "-n -o--no-dry-run"))),
-        ("neg/class_cluster", not any(_ran(f"git push {f} assistant HEAD:refs/heads/probe", _TO) for f in ("-vn", "-fnu", "-un"))),
-        ("neg/class_quoting", not any(_ran(f"git push {f} HEAD:refs/heads/probe", _TO) for f in (
-            "assistant --\"dry\"-run", "assistant '-n'", "'assistant' --dry-run", "assistant HEAD#x --dry-run"))),
-        ("neg/heredoc_body", not gate_ran_from_commands(["cat <<'EOF'\ngit push assistant HEAD\nEOF"])),
-        ("pos/cluster_o_value", _ran("git push -vo ci.skip assistant HEAD:refs/heads/probe", _TO)),
-        ("pos/git_global_options", all(_ran(f"git {g} push assistant HEAD:refs/heads/probe", _TO) for g in ("-C w", "-c push.default=current"))),
-        ("pos/env_prefix_later_line", _ran("cd w\nGIT_TRACE=0 git push assistant HEAD:refs/heads/probe", _TO)),
-        ("pos/double_dash", _ran("git push -v -- assistant HEAD:refs/heads/probe", _TO)),
-        ("pos/redirect_before_remote", _ran("git push </dev/null assistant HEAD:refs/heads/probe", _TO)),
-        ("neg/class_remote_prefix", not gate_ran_from_attempt(_attempt("git push assistant-backup HEAD:refs/heads/probe", _tr(_TO)))),
-        ("neg/class_up_to_date", not gate_ran_from_attempt(_attempt("git push assistant HEAD", _tr("Everything up-to-date")))),
-        ("neg/class_prehook_push", not any(gate_ran_from_attempt(_attempt(c, _tr(r))) for c, r in _PREHOOK)),
-        ("neg/class_quoted_flag", not gate_ran_from_attempt(_attempt('cd . && git push assistant "--dry-run" HEAD:refs/heads/probe', _tr(_TO)))),
-        ("neg/class_no_service", not gate_ran_from_attempt(_attempt("assistant --intent ship", _tr(f"Exit code 1\n{_INTENT_RAN}\n{_NO_SVC}")))),
-        ("pos/push_quiet_hook", gate_ran_from_attempt(_attempt("git push assistant HEAD:refs/heads/probe", _tr(_TO)))),
-        ("pos/push_hook_declined", gate_ran_from_attempt(_attempt("git push assistant HEAD:refs/heads/d", _tr(_DECLINED)))),
-        ("pos/cd_intent_ran", gate_ran_from_attempt(_attempt("cd w && assistant --intent ship", _tr(f"Exit code 1\n{_INTENT_RAN}\nrun.start: refused")))),
-        ("pos/cd_push_ran", gate_ran_from_attempt(_attempt("cd w && git push assistant HEAD", _tr(f"remote: gate hook ran\n{_TO}")))),
-        ("pos/quoted_false_and", gate_ran_from_attempt(_attempt('assistant --intent "fix false && branch"', _tr(_INTENT_RAN)))),
+        ("neg/class_cluster", not any(_claims(f"git push {f} assistant") for f in ("-vn", "-fnu", "-un"))),
+        ("neg/class_quoting", not any(_claims(f"git push {f}") for f in ("assistant --\"dry\"-run", "assistant '-n'", "'assistant' --dry-run",
+                                                                         "assistant HEAD#x --dry-run", 'assistant "--dry-run"'))),
+        ("neg/class_remote_prefix", not _claims("git push assistant-backup HEAD")),
+        # The live path: a claim and the gate's own output (recorded Q1, or captured from zsh, git 2.54 and this CLI's gate).
+        ("pos/attempt", _ran('assistant --intent "x"', _INTENT_RAN)),
+        ("neg/user_next", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"role": "user", "content": "go"}))),
+        ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt('assistant --intent "x"', {"tool_output": _INTENT_RAN}))),
+        ("neg/declined_or_not_found", not any(_ran('assistant --intent "x"', r) for r in (
+            "User declined to run this command", "sh: 1: assistant: not found", "bash: assistant: command not found"))),
+        ("pos/later_not_found", _ran('assistant --intent "x"; mytool', f"{_INTENT_RAN}\nbash: mytool: command not found")),
+        ("neg/push_no_remote", not _ran("git push assistant", "fatal: 'assistant' does not appear to be a git repository")),
+        ("pos/empty_content_tool_output", gate_ran_from_attempt(_attempt('assistant --intent "x"', _tr("", tool_output=_INTENT_RAN)))),
+        ("neg/class_short_circuit", not _ran('assistant --cancel && assistant --intent "x"', "Exit code 1\nending 9182f3851ae51d97\nThis run was ended.")),
+        ("neg/class_failed_cd", not any(_ran(f"cd /missing && {c}", "Exit code 1\n(eval):cd:1: no such file or directory: /missing")
+                                        for c in ("assistant --intent ship", "git push assistant HEAD"))),
+        ("neg/class_not_found", not _ran("assistant --intent ship", "Exit code 127\n(eval):1: command not found: assistant")),
+        ("neg/class_up_to_date", not _ran("git push assistant HEAD", "Everything up-to-date")),
+        ("neg/class_prehook_push", not any(_ran(c, r) for c, r in _PREHOOK)),
+        ("neg/class_no_service", not _ran("assistant --intent ship", f"Exit code 1\n{_INTENT_RAN}\n{_NO_SVC}")),
+        ("neg/class_wrapped_push", not any(_ran(f"{w}git push origin HEAD:refs/heads/a && git push assistant does-not-exist",
+                                                 _ORIGIN_THEN_FAILED) for w in ("command ", "env "))),
+        ("neg/dry_run_output_not_evidence", not _REACHED["push"].search(_DRY_RUN)),
+        ("pos/push_after_short_circuit", _ran("false && echo skipped; git push assistant feature/x", _ADMITTED + _GATE_TO)),
+        ("pos/push_quiet_admitted", _ran("git push -q assistant feature/x", _ADMITTED)),
+        ("pos/push_refused_by_gate", _ran("git push assistant feature/x", _GATE_REFUSED)),
+        ("pos/cd_intent_ran", _ran("cd w && assistant --intent ship", f"Exit code 1\n{_INTENT_RAN}\nrun.start: refused")),
+        ("pos/cd_push_ran", _ran("cd w && git push assistant feature/x", _ADMITTED + _GATE_TO)),
+        ("pos/quoted_false_and", _ran('assistant --intent "fix false && branch"', _INTENT_RAN)),
         ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
         ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),
     ]
     for name, cond in rows:
-        if cond:
-            print(f"ok  {name}")
-        else:
-            print(f"FAIL {name}", file=sys.stderr)
-            failed += 1
+        print(f"{'ok ' if cond else 'FAIL'} {name}", file=sys.stdout if cond else sys.stderr)
+        failed += not cond
     if failed:
         print(f"{failed} detect_gate selftest(s) failed", file=sys.stderr)
         return 1

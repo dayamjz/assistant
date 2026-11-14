@@ -6,27 +6,32 @@ This PR lands `detect_gate.py`: whether a Caliper attempt actually invoked
 the assistant gate (`assistant --intent` / `--answer`, or `git push
 assistant`), not merely whether the skill activated (#398).
 
-Live scoring is `gate_ran_from_attempt`. A gate command counts only when its
-paired `tool_result` shows it reached the gate, wherever it sits on its line:
+Live scoring is `gate_ran_from_attempt`. A command counts when it parses as a
+gate command (below) and its paired `tool_result` carries the gate's own
+output, so the evidence is tied to the gate rather than to the command's shape:
 
 - `--intent` / `--answer`: a progress line `internal/cli/runs.go` prints
   (`starting or attaching ...`, `answering ...`), with no
   `the background service is not running` failure
   (`internal/cli/client.go`). The CLI prints the progress line before it
   dials the service, so the line alone shows only that it tried.
-- `git push assistant`: under git's `To <remote>` line, a ref that was
-  updated (` * `, `   `, ` + `, ` - `) or that the pre-receive hook declined
-  (`! [remote rejected] ... (pre-receive hook declined)`). The push must be
-  the line's only `git push`, because another push's report looks the same.
-  With git 2.54, a bad refspec, a local `! [rejected]` (non-fast-forward),
-  `Everything up-to-date` and a missing remote all left the hook unrun and
-  printed none of these. A dry run also left it unrun but does print
-  ` * [new branch]`, so dry runs are excluded by their flags (below), not by
-  this evidence.
+- A push: a line git relays from the gate's admit hook
+  (`internal/cli/gate.go`, `assistant gate admit`): `remote: The gate let this
+  change in.` (`machine.PhraseAdmitted`), `machine.PhraseSenderUnplaced`, or
+  `remote: gate.admit: ...`, the service refusing the push under
+  `ipc.MethodGateAdmit`. A refusal counts: the gate ran and said no. Captured
+  from a real push through this CLI's gate, these lines appear with and
+  without `-q`. No other remote, dry run, push the shell skipped, or push that
+  failed before the hook prints them. A dry run does print the receive
+  command's copy-busy sentence, but without the `remote:` prefix, and that
+  line is not evidence.
 
 So a command the shell skipped (a failed `cd`, `assistant --cancel && ...`,
-`false && ...`), a missing `assistant` binary in any shell's wording, and a
-declined tool call all score false, because none prints that evidence.
+`false && ...`), a missing `assistant` binary in any shell's wording, a
+declined tool call, a push that failed locally (bad refspec, non-fast-forward,
+`Everything up-to-date`, no such remote) and another push's report on the same
+line all score false, because none carries that output; and an unrelated
+short-circuit earlier on the line does not hide a gate command that ran.
 
 How a command line is read. Nothing is matched against the raw text: the
 line is read the way a POSIX shell splits it, then each command's words are
@@ -55,32 +60,34 @@ read the way the program parses them.
   first positional (or `--repo` when there is none) is the remote, which must
   be exactly `assistant`; a dry run is not a gate command.
 
-A real-git differential run (42 command lines through `zsh -c` against a bare
-repository whose `pre-receive` hook records each run) found no line the
-detector counted that git did not deliver to the hook; the misses are the
-residuals below.
+Residual false negatives (real gate runs that still score false): a wrapper
+before the program (`env`, `command`, `exec`, `sudo`, `sh -c '...'`) or a git
+alias, which the parser does not read as a gate command; output redirected
+away or filtered through a pipe that drops the evidence; a file-descriptor
+redirection written before the remote (`2>log`, which splits as a word `2`);
+a herestring (`<<<`), whose following lines are cut like a heredoc body; a
+refusal the service words without `gate.admit:`; and a run started in the
+background, whose output goes to a file. The progress lines and gate phrases
+are matched as `internal/cli` and `internal/machine` word them today;
+rewording them makes those commands score false, and nothing here detects
+that drift.
 
-Residual false negatives (real gate runs that still score false): any
-backtick or `$(...)` on the line; a wrapper before the program (`env`,
-`command`, `exec`, `sudo`, `sh -c '...'`); a git alias for push; a line with
-more than one `git push`; `git push -q` or `--porcelain` (git 2.54 printed no
-status block for `-q`); output redirected away or filtered through a pipe that
-drops the evidence; a file-descriptor redirection written before the remote
-(`2>log`, which splits as a word `2`); a herestring (`<<<`), whose following
-lines are cut like a heredoc body; and a run started in the background, whose
-output goes to a file. The progress lines are matched as
-`internal/cli/runs.go` words them today; rewording them makes intents and
-answers score false, and nothing here detects that drift.
+Residual false positive: earlier gate output replayed by another command on
+the same line (for example `cat` of a saved push log beside a push to
+`assistant` that fails) is read as this push's evidence.
 
 `gate_ran_from_commands` is only the offline command-text heuristic (verify /
-selftest); it sees no result, so it counts `cd missing && assistant --intent`
-and rejects only literal `false &&` / `true ||` short-circuits.
+selftest); it sees no result, so it counts `cd missing && assistant --intent`,
+and it rejects a line with a literal `false &&` / `true ||` or any backtick or
+`$(...)`. The live path does not apply that rejection.
 
-`python3 detect_gate.py` runs the fail-before selftest: one `class_*` row per
-command shape the reviews found (short-circuit, failed `cd`, not found, flags
-after the remote, flag spelling, remote-name prefix, up-to-date, a push that
-failed before the hook, a quoted flag, no service, continuation, escape,
-option value, cluster, quoting), each with result text recorded in the
-Q1 run or captured from zsh, git 2.54 or this repository's CLI. Fuller offline
-controls and the activation-smoke / fixed-diff runners stack in follow-up PRs
-of 300 code lines or under each.
+`python3 detect_gate.py` runs the fail-before selftest. Parser rows go
+through `gate_ran_from_commands` (what is a gate command: flags, flag
+spelling, continuation, escape, option value, cluster, quoting, remote-name
+prefix). Live rows go through `gate_ran_from_attempt` with result text
+recorded in the Q1 run or captured from zsh, git 2.54, and a real push through
+this repository's CLI and gate (short-circuit, failed `cd`, not found,
+up-to-date, a push that failed before the hook, no service, a wrapped push
+beside another remote's report, a dry run's output). Fuller offline controls
+and the activation-smoke / fixed-diff runners stack in follow-up PRs of 300
+code lines or under each.
