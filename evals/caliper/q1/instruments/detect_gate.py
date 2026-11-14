@@ -31,12 +31,29 @@ _GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-e
 # begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no compound body reads as a command.
 _UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"), ("#", "comment"),
                ("\n", "multiline command"))
+_STAND_IN = str.maketrans(";&|()<>", "\ue000\ue001\ue002\ue003\ue004\ue005\ue006")
 _RESERVED = set("! [[ ]] { } case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
+
+def _shield(command: str) -> str:
+    """The line with each quoted or backslash-escaped ``;&|()<>`` swapped for a stand-in that shlex reads as a word
+    character, so only a bare one is an operator or a redirection."""
+    out, quote, i = [], "", 0
+    while i < len(command):
+        c = command[i]
+        if c == "\\" and quote != "'":
+            out.append(command[i:i + 2].translate(_STAND_IN))
+            i += 2
+            continue
+        quote = ("" if quote == c else quote) if quote else (c if c in "'\"" else "")
+        out.append(c.translate(_STAND_IN) if quote else c)
+        i += 1
+    return "".join(out)
+
 
 def _simple_commands(command: str) -> list[tuple[list[str], str]] | None:
     """Each simple command's words and the operator after it ("" at the end), as shlex (posix)
-    splits the line; redirections are dropped. None when shlex cannot split it."""
-    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
+    splits the shielded line; redirections are dropped. None when shlex cannot split it."""
+    lex = shlex.shlex(_shield(command), posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
     try:
         words = list(lex)
@@ -91,7 +108,9 @@ def _push_target(args: list[str]) -> tuple[str | None, bool] | None:
             dry = {"dry-run": True, "no-dry-run": False}.get(name, dry)
         elif a.startswith("-") and a != "-":
             for j, c in enumerate(a[1:], 1):
-                if c == "o":
+                if c == "o":  # its value is the rest of the word, else the next word; git refuses a missing one
+                    if j == len(a) - 1 and i >= len(args):
+                        return None
                     i += j == len(a) - 1
                     break
                 if c not in "vqdnfu46":
@@ -177,6 +196,10 @@ def _selftest() -> int:
         ("neg/class_quoting", not any(_claims(f"git push {f}") for f in ("assistant --\"dry\"-run", "assistant '-n'", "'assistant' --dry-run",
                                                                          "assistant HEAD#x --dry-run", 'assistant "--dry-run"'))),
         ("neg/class_remote_prefix", not _claims("git push assistant-backup HEAD")),
+        ("neg/class_missing_value", not any(_claims(f"git push {f}") for f in ("assistant -o", "assistant -vo", "-o", "assistant --push-option"))
+            and all(_claims(f"git push {f}") for f in ("assistant -ofoo", "assistant -o foo", "assistant -vo --", "-o x assistant"))),
+        ("neg/class_quoted_operator", not any(_claims(c) for c in ("echo ';' assistant --intent ship", "echo '|' git push assistant",
+            "echo '(' git push assistant", 'echo "&&" git push assistant', "echo \\; git push assistant")) and _claims('echo "a\\";" ; git push assistant')),
         # A line the reader does not fully read is never a gate command, whatever it holds.
         ("neg/not_read", [_unreadable(c) for c in _NOT_READ] == ["heredoc or herestring", "command substitution", "command substitution", "comment",
             "multiline command", "unbalanced quoting", "compound command", "compound command"] and not any(_claims(c) for c in _NOT_READ)),

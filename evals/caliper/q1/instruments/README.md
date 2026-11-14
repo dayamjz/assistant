@@ -44,7 +44,10 @@ way the program parses them.
 - Shell: `shlex` (POSIX mode) splits words, removing quotes and escapes
   (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all `--dry-run`), and `;`,
   `&&`, `||`, `|`, `&` and parentheses separate commands. Redirections and
-  their targets are dropped.
+  their targets are dropped. Only a bare operator character splits: a `;`,
+  `&`, `|`, `(`, `)`, `<` or `>` inside quotes or after a backslash is literal
+  text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
+  are one `echo` command, not a gate command.
 - A command's program is the first word after any `VAR=value` assignments;
   `assistant` or a path ending in `/assistant` is the CLI, whose `--intent` /
   `--answer` (also `-intent`, `--intent=...`) make it a gate command.
@@ -56,7 +59,11 @@ way the program parses them.
   after positionals, `--` ending options, short clusters (`-vn`), and
   value-taking options (`-o`, `--push-option`, `--repo`, `--receive-pack`,
   `--exec`, `--recurse-submodules`) consuming the next word whatever it looks
-  like, so `-o --no-dry-run` is a push option, not a negation. `-n` /
+  like, so `-o --no-dry-run` is a push option, not a negation. `-o` is the
+  only short option with a value: the rest of its word (`-ofoo`), else the
+  next word; with neither (`git push assistant -o`, `-vo` last) git exits 129
+  "requires a value", so that push is not a gate command, and the same holds
+  for a long value-taking option with nothing after it. `-n` /
   `--dry-run` and `--no-dry-run` set the dry run, the last one winning. The
   first positional (or `--repo` when there is none) is the remote, which must
   be exactly `assistant`; a dry run is not a gate command.
@@ -69,8 +76,9 @@ which splits as a word `2`).
 ## Selftest
 
 `python3 detect_gate.py` runs the fail-before selftest: what is a gate
-command (flags, flag spelling, continuation, escape, option value, cluster,
-quoting, remote-name prefix, text that only names the gate), each not-read
+command (flags, flag spelling, continuation, escape, option value, missing
+option value, cluster, quoting, quoted or escaped operator characters,
+remote-name prefix, text that only names the gate), each not-read
 mark with the reason the reader gives, the literal short-circuit rule, and
 the runs dump. Reverting any one guard fails a row; in the reserved-word
 list, an opener such as `case` is also caught by its closer (`esac`). Fuller offline controls,
