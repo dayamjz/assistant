@@ -12,10 +12,23 @@ gate's own admit-hook output proves a gate run: a line git relays from
 this change in.` (`machine.PhraseAdmitted`), `machine.PhraseSenderUnplaced`,
 or `remote: gate.admit: ...` (the service refusing the push under
 `ipc.MethodGateAdmit`; a refusal counts, since the gate ran and said no). It
-must be paired with a `git push` to `assistant` that the parser fully read.
+must be in the one `tool_result` whose `tool_use_id` matches the `id` of a
+`git push` to `assistant` that the parser fully read. Results are paired by
+that id and never by position: in a batch (calls, then their results) the
+turn after a call is another call or another call's result, and
+`result-q1-ablated.json` here holds two such batches.
 These lines were captured from a real push through this CLI's gate, with and
 without `-q`. A dry run prints only the receive command's copy-busy sentence,
 without the `remote:` prefix, and that is not proof.
+
+Caliper 0.19.0 has no field for those ids: its `TranscriptTurn`
+(`caliper/schema/results.py`) lists only `role`, `content`, `tool_name`,
+`tool_input` and `tool_output`, and the four recorded results here carry no
+`id` or `tool_use_id`. So an attempt in that format scores not proven ("no
+tool_result paired by id to the push"), whatever its pushes printed. The
+selftest's id rows model a transcript that keeps the stream's ids, which
+Caliper 0.19.0 cannot produce. Getting Caliper to record the ids is the change
+that would let a Caliper attempt be proven.
 
 Not proven, with the reason `attempt_verdict` gives:
 
@@ -24,28 +37,34 @@ Not proven, with the reason `attempt_verdict` gives:
   head -n 1` with no service shows only that line). An attempt that used the
   gate only through `--intent` therefore scores not proven. The recorded Q1
   runs used only `--intent`, so they score 0 of 35 here (the earlier,
-  progress-line detector scored 11).
+  progress-line detector scored 11); they also carry no ids.
 - A line the parser does not fully read: a heredoc or herestring (`<<`), a
-  command substitution (backtick or `$(`), or quoting `shlex` cannot split. Such
-  a line is not proven rather than guessed at, even when gate output follows.
+  command substitution (backtick or `$(`), a `#` anywhere, a newline anywhere
+  (a backslash-newline continuation or a trailing newline too), quoting `shlex`
+  cannot split, or a command that begins with a reserved word (bash's list:
+  `! [[ ]] { } case coproc do done elif else esac fi for function if in select
+  then time until while`, plus zsh's `foreach end repeat nocorrect`), so the
+  body of a compound command such as `case x in x) git push assistant x;;
+  esac` is never read as a command of its own. Such a line is not proven
+  rather than guessed at, even when gate output follows.
+- A push whose result is not matched by id: no `id` on the call, no result
+  with its `tool_use_id`, more than one such result, more than one call with
+  that `id`, or a matched turn that is not a `tool_result`.
 - A push with no admit-hook line in its result: the shell skipped it (a failed
   `cd`, `false && ...`), it failed before the hook (bad refspec,
   non-fast-forward, `Everything up-to-date`, no such remote), the call was
   declined, or the line beside it is another remote's report. An unrelated
   short-circuit earlier on the line does not hide a push that ran.
 
-How a command line is read. Nothing is matched against the raw text: the
-line is read the way a POSIX shell splits it, then each command's words are
-read the way the program parses them.
+How a command line is read. Apart from the not-read marks above, nothing is
+matched against the raw text: the line is read the way a POSIX shell splits
+it, then each command's words are read the way the program parses them.
 
-- Shell: backslash-newline continuations are joined; a `#` that starts an
-  unquoted word begins a comment (a `#` inside a word does not); then `shlex`
-  (POSIX mode) splits words, removing
-  quotes and escapes (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all
-  `--dry-run`), and `;`, `&&`, `||`, `|`, `&`, parentheses and newlines
-  separate commands. Redirections and their targets are dropped. A compound
-  command (`if`, `while`, `{ ...; }`, `!`) or a process substitution never
-  parses as a push claim.
+- Shell: only a single line with none of the not-read marks above is read.
+  `shlex` (POSIX mode) splits words, removing quotes and escapes
+  (`"--dry-run"`, `\--dry-run`, `--"dry"-run` are all `--dry-run`), and `;`,
+  `&&`, `||`, `|`, `&` and parentheses separate commands. Redirections and
+  their targets are dropped.
 - A command's program is the first word after any `VAR=value` assignments;
   `assistant` or a path ending in `/assistant` is the CLI, whose `--intent` /
   `--answer` (also `-intent`, `--intent=...`) make it a gate command.
@@ -79,7 +98,8 @@ the same line (for example `cat` of a saved push log beside a push to
 `gate_ran_from_commands` is only the offline command-text heuristic (verify /
 selftest). It sees no result, so it still counts `--intent` / `--answer` and
 `cd missing && assistant --intent`. It rejects a line it cannot fully read and
-one with a literal `false &&` / `true ||`.
+one with a literal `false &&` / `true ||` (that last rule has no row in this
+PR's selftest; the `verify_detect` stack link checks it).
 
 `python3 detect_gate.py` runs the fail-before selftest. Parser rows go
 through `gate_ran_from_commands` (flags, flag spelling, continuation, escape,
@@ -88,6 +108,9 @@ through `gate_ran_from_attempt` / `attempt_verdict` with result text captured
 from a real push through this repository's CLI and gate, from zsh and git
 2.54, or recorded in the Q1 run. They cover intent not proven, heredoc not
 proven, the reasons, failed `cd`, up-to-date, a push that failed before the
-hook, a wrapped push beside another remote's report, and a dry run's output.
+hook, a wrapped push beside another remote's report, a dry run's output,
+pairing by id in a batch (a saved gate log read beside a failing push is not
+proven; a gate result in a batch is), unmatched ids, and multiline, comment
+and compound lines.
 Fuller offline controls and the activation-smoke / fixed-diff runners stack
 in follow-up PRs of 300 code lines or under each.

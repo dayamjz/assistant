@@ -3,7 +3,7 @@
 
 Caliper's ``activated`` field only says the skill loaded. Live scoring is
 ``attempt_verdict`` / ``gate_ran_from_attempt``: proven only by the gate's own
-admit-hook output paired with a push the parser fully read. ``gate_ran_from_commands``
+admit-hook output in the result paired by id with a push the parser fully read. ``gate_ran_from_commands``
 is the offline command-text heuristic only.
 """
 from __future__ import annotations
@@ -33,36 +33,16 @@ _GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-e
 # ipc.MethodGateAdmit. Not the CLI's progress line (printed before it dials the service) or a dry run's
 # unprefixed copy-busy line.
 _ADMIT = re.compile(r"(?m)^remote: (?:The gate let this change in\.|The gate could not tell who sent this change|gate\.admit: )")
-# Constructs the parser does not read make a line not proven (compound commands never parse as a push claim).
-_UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"))
-
-def _prepare(command: str) -> str:
-    """The line as a POSIX shell reads it before splitting words: backslash-newline joined,
-    ``#`` comments (a ``#`` starting an unquoted word) dropped."""
-    out, quote, i = [], "", 0
-    while i < len(command):
-        c = command[i]
-        if c == "\\" and quote != "'":
-            if command[i + 1:i + 2] != "\n":
-                out.append(command[i:i + 2])
-            i += 2
-            continue
-        if quote:
-            quote = "" if c == quote else quote
-        elif c in "'\"":
-            quote = c
-        elif c == "#" and (not out or out[-1][-1] in " \t\n;&|()"):
-            i = command.find("\n", i) if "\n" in command[i:] else len(command)
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
+# Not read, so not proven: a line with one of these marks (a newline, continuations included), or with a command that
+# begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no compound body reads as a command.
+_UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"), ("#", "comment"),
+               ("\n", "multiline command"))
+_RESERVED = set("! [[ ]] { } case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
 
 def _simple_commands(command: str) -> list[tuple[list[str], str]] | None:
     """Each simple command's words and the operator after it ("" at the end), as shlex (posix)
-    splits the prepared line; redirections are dropped. None when shlex cannot split it."""
-    lex = shlex.shlex(_prepare(command), posix=True, punctuation_chars=";&|()<>\n")
+    splits the line; redirections are dropped. None when shlex cannot split it."""
+    lex = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
     lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
     try:
         words = list(lex)
@@ -147,8 +127,11 @@ def _gate_kind(words: list[str]) -> str | None:
 
 def _unreadable(command: str) -> str | None:
     """Why the parser cannot fully read the line, or None when it can."""
-    hit = next((why for mark, why in _UNREADABLE if mark in command), None)
-    return hit or ("unbalanced quoting" if _simple_commands(command) is None else None)
+    if hit := next((why for mark, why in _UNREADABLE if mark in command), None):
+        return hit
+    if (cmds := _simple_commands(command)) is None:
+        return "unbalanced quoting"
+    return "compound command" if any(w[0] in _RESERVED for w, _ in cmds) else None
 
 
 def _kinds(command: str) -> set[str]:
@@ -163,11 +146,13 @@ def gate_ran_from_commands(commands: Iterable[str]) -> bool:
 
 
 def attempt_verdict(attempt: dict[str, Any]) -> tuple[bool, str]:
-    """(proven, reason): proven only by a fully read push paired with a tool_result carrying ``_ADMIT`` output."""
+    """(proven, reason): proven only by a fully read push whose one tool_result, matched by the transcript's own
+    call ``id`` and result ``tool_use_id`` and never by position, carries ``_ADMIT`` output."""
     transcript = attempt.get("transcript") or []
     why = "no list transcript" if not isinstance(transcript, list) else "no git push to assistant"
-    for i, turn in enumerate(transcript if isinstance(transcript, list) else []):
-        inp = turn.get("tool_input") if isinstance(turn, dict) else None
+    turns = [t for t in transcript if isinstance(t, dict)] if isinstance(transcript, list) else []
+    for turn in turns:
+        inp = turn.get("tool_input")
         cmd = inp.get("command") if isinstance(inp, dict) else inp
         if not isinstance(cmd, str) or not cmd.strip():
             continue
@@ -176,12 +161,12 @@ def attempt_verdict(attempt: dict[str, Any]) -> tuple[bool, str]:
             continue
         if "push" not in _kinds(cmd):
             continue
-        nxt = transcript[i + 1] if i + 1 < len(transcript) else None
-        content = next((c for c in (nxt.get("content"), nxt.get("tool_output")) if isinstance(c, str) and c.strip()), "") if (
-            isinstance(nxt, dict) and "tool_result" in (nxt.get("role"), nxt.get("type"))) else ""
-        if _ADMIT.search(content):
+        cid = turn.get("id")
+        res = [t for t in turns if t.get("tool_use_id") == cid] if [t.get("id") for t in turns].count(cid) == 1 else []
+        paired = len(res) == 1 and "tool_result" in (res[0].get("role"), res[0].get("type"))
+        if paired and _ADMIT.search(next((c for c in (res[0].get("content"), res[0].get("tool_output")) if isinstance(c, str) and c.strip()), "")):
             return True, "proven: gate admit-hook output"
-        why = why if why.startswith("unreadable") else "no gate admit-hook output for the push"
+        why = why if why.startswith("unreadable") else f"no {'gate admit-hook output for' if paired else 'tool_result paired by id to'} the push"
     return False, f"not proven: {why}"
 
 
@@ -197,8 +182,13 @@ def gate_ran_from_runs_dump(path_or_text: str, *, is_path: bool = True) -> bool:
     return isinstance(runs, list) and len(runs) > 0
 
 
+def _batch(calls: list[tuple[str, str]], results: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    return {"transcript": [{"role": "tool_use", "id": i, "tool_input": {"command": c}} for i, c in calls] +
+            [{**r, "tool_use_id": i} for i, r in results]}
+
+
 def _attempt(cmd: str, nxt: dict[str, Any]) -> dict[str, Any]:
-    return {"transcript": [{"tool_input": {"command": cmd}}, nxt]}
+    return _batch([("t1", cmd)], [("t1", nxt)])
 
 
 def _tr(content: str, **extra: Any) -> dict[str, Any]:
@@ -237,7 +227,7 @@ def _selftest() -> int:
     rows: list[tuple[str, bool]] = [
         # The parser, through the offline heuristic: what is a gate command at all.
         ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40", 'assistant --intent "add -n"',
-            "git push -vo ci.skip assistant", "git -C w push assistant", "git -c a.b=c push assistant", "cd w\nGIT_TRACE=0 git push assistant",
+            "git push -vo ci.skip assistant", "git -C w push assistant", "git -c a.b=c push assistant", "cd w; GIT_TRACE=0 git push assistant",
             "git push -v -- assistant", "git push </dev/null assistant", "git push --no-dry assistant", "git push --dry-run --no-dry-run assistant",
             'assistant --intent "fix false && branch"'))),
         ("neg/text_naming_gate", not any(_claims(c) for c in ('grep -rn "git push assistant" skills', 'echo "next: ; assistant --intent ship"',
@@ -265,7 +255,7 @@ def _selftest() -> int:
             ("git push assistant 'x", _ADMITTED), ("if true; then git push assistant x; fi", _ADMITTED),
             ("git push assistant x", "Everything up-to-date"), ("assistant --intent x", _INTENT_RAN), ("git push assistant x", _ADMITTED))] == [
             "not proven: unreadable command (heredoc or herestring)", "not proven: unreadable command (command substitution)",
-            "not proven: unreadable command (unbalanced quoting)", "not proven: no git push to assistant",
+            "not proven: unreadable command (unbalanced quoting)", "not proven: unreadable command (compound command)",
             "not proven: no gate admit-hook output for the push", "not proven: no git push to assistant", "proven: gate admit-hook output"]),
         ("neg/user_next", not gate_ran_from_attempt(_attempt("git push assistant x", {"role": "user", "content": _ADMITTED}))),
         ("neg/bare_tool_output", not gate_ran_from_attempt(_attempt("git push assistant x", {"tool_output": _ADMITTED}))),
@@ -274,7 +264,6 @@ def _selftest() -> int:
         ("neg/declined_or_no_remote", not any(_ran("git push assistant x", r) for r in (
             "User declined to run this command", "fatal: 'assistant' does not appear to be a git repository"))),
         ("neg/class_failed_cd", not _ran("cd /missing && git push assistant HEAD", "Exit code 1\n(eval):cd:1: no such file or directory: /missing")),
-        ("neg/class_up_to_date", not _ran("git push assistant HEAD", "Everything up-to-date")),
         ("neg/class_prehook_push", not any(_ran(c, r) for c, r in _PREHOOK)),
         ("neg/class_wrapped_push", not any(_ran(f"{w}git push origin HEAD:refs/heads/a && git push assistant does-not-exist",
                                                  _ORIGIN_THEN_FAILED) for w in ("command ", "env "))),
@@ -283,6 +272,17 @@ def _selftest() -> int:
         ("pos/push_quiet_admitted", _ran("git push -q assistant feature/x", _ADMITTED)),
         ("pos/push_refused_by_gate", _ran("git push assistant feature/x", _GATE_REFUSED)),
         ("pos/cd_push_ran", _ran("cd w && git push assistant feature/x", _ADMITTED + _GATE_TO)),
+        # Round 7: a result is its call's only by the transcript's own id, and a multiline or compound line is not read.
+        ("neg/r7_batch_log_then_failed_push", not gate_ran_from_attempt(_batch([("a", "cat gate.log"), ("b", _PREHOOK[0][0])],
+                                                                               [("a", _tr(_ADMITTED)), ("b", _tr(_PREHOOK[0][1]))]))),
+        ("pos/r7_batch_gate_result", gate_ran_from_attempt(_batch([("a", "git status"), ("b", "git push assistant feature/x")],
+                                                                  [("a", _tr("On branch feature/x")), ("b", _tr(_ADMITTED))]))),
+        ("neg/r7_unpaired", {attempt_verdict(t)[1] for p in ["git push assistant x"] for t in ({"transcript": [{"tool_input": {"command": p}}, _tr(_ADMITTED)]},
+            _batch([("a", p)], [("b", _tr(_ADMITTED))]), _batch([("a", p)], [("a", _tr(_ADMITTED))] * 2),
+            _batch([("a", p), ("a", "true")], [("a", _tr(_ADMITTED))]))} == {"not proven: no tool_result paired by id to the push"}),
+        ("neg/r7_not_read", [attempt_verdict(_attempt(c, _tr(_ADMITTED)))[1] for c in ("if true; then\n git push assistant feature/x\nfi",
+            "echo # ; git push assistant x", "case x in x) git push assistant x;; esac", "for b in x; git push assistant x")] == [
+            f"not proven: unreadable command ({w})" for w in ("multiline command", "comment", "compound command", "compound command")]),
         ("neg/bare_list", not gate_ran_from_runs_dump('[{"id":1}]', is_path=False)),
         ("pos/runs", gate_ran_from_runs_dump('{"runs":[{"id":1}]}', is_path=False)),
     ]
