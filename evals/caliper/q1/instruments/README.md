@@ -35,7 +35,12 @@ anywhere (a backslash-newline continuation or a trailing newline too), quoting
 list: `! [[ ]] { } case coproc do done elif else esac fi for function if in
 select then time until while`, plus zsh's `foreach end repeat nocorrect`), so
 the body of a compound command such as `case x in x) git push assistant x;;
-esac` is never read as a command of its own.
+esac` is never read as a command of its own. Also not read: bare empty
+parentheses (`f() (git push assistant)`, `f ( ) { ...; }`: bash and zsh only
+define `f` and run nothing), a word in command position shaped `NAME=value`
+but quoted or escaped up to its `=` (`"X=y" git push assistant`, `X\=y`,
+`'X'=y`: the shell runs a command named `X=y`, which is not found), and a
+redirection with no target word (`git push assistant >`, a parse error).
 
 Apart from those marks, nothing is matched against the raw text: the line is
 read the way a POSIX shell splits it, then each command's words are read the
@@ -49,7 +54,8 @@ way the program parses them.
   text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
   are one `echo` command, not a gate command. An empty quoted word (`''`) is
   a word, never a separator.
-- A command's program is the first word after any `VAR=value` assignments.
+- A command's program is the first word after any `VAR=value` assignments
+  written with no quote or escape up to the `=`.
   The reader fails closed: any option word not listed below, including one
   that ends the run before a gate command (`--version`, `--help`, `-h`), or
   any value not listed, makes the command no gate command. It is never
@@ -86,9 +92,11 @@ command (each listed option, dry-run flags, flag spelling, continuation,
 escape, option value, missing value, cluster, quoting, quoted or escaped
 operator characters, an empty quoted word, remote-name prefix, text that
 only names the gate, a refused or unlisted value, an unknown option, and
-options that end the run early such as `--version` and `--help`), each not-read
-mark with the reason the reader gives, the literal short-circuit rule, and
-the runs dump. Reverting any one guard fails a row; in the reserved-word
-list, an opener such as `case` is also caught by its closer (`esac`). Fuller offline controls,
-live scoring, and the activation-smoke / fixed-diff runners stack in
-follow-up PRs of 300 code lines or under each.
+options that end the run early such as `--version` and `--help`), each
+not-read shape with the reason the reader gives (function definitions,
+quoted assignments and target-less redirections among them), the literal
+short-circuit rule, and the runs dump. Reverting any one guard fails a row;
+in the reserved-word list, an opener such as `case` is also caught by its
+closer (`esac`). Fuller offline controls, live scoring, and the
+activation-smoke / fixed-diff runners stack in follow-up PRs of 300 code
+lines or under each.
