@@ -28,9 +28,13 @@ So a command the shell skipped (a failed `cd`, `assistant --cancel && ...`,
 `false && ...`), a missing `assistant` binary in any shell's wording, and a
 declined tool call all score false, because none prints that evidence.
 
-What is not a gate command at all: a push with dry-run flags (`--dry-run`,
-`-n`, combined short flags like `-fn`) before or after the remote, quoted or
-not (`"--dry-run"`); a remote that is not exactly `assistant`
+What is not a gate command at all: a push whose last dry-run flag is not
+negated, before or after the remote, quoted or not (`"--dry-run"`). The flags
+are `-n`, combined short flags like `-fn`, and `--dry-run` or any prefix of it
+git 2.54 accepts (`--dr` up to `--dry-ru`); `--d` is not one, since git
+refuses it as ambiguous with `--delete`. A later `--no-dry-run` (or `--no-dr`
+and longer) cancels an earlier dry-run flag, as it does in git. Also not a
+gate command: a remote that is not exactly `assistant`
 (`assistant-backup`); and text that names the gate only inside a multi-word
 quoted span, a comment or a heredoc body. A one-word quoted span is read as
 that word, so `git push "assistant"` is a push to `assistant`, and quoted
@@ -40,8 +44,10 @@ Residual false negatives (real gate runs that still score false): any
 backtick or `$(...)` on the line; leading whitespace before the gate command;
 a gate command only on a later line of a multi-line command; an env prefix
 (`VAR=val assistant ...`); a path invocation (`./bin/assistant ...`);
-`git -C dir push assistant`; a line with more than one `git push`; `git push
--q` or `--porcelain` (git 2.54 printed no status block for `-q`); output
+`git -C dir push assistant`; a push option given as `-o <value>` before the
+remote; a short-flag bundle that holds `n` as the value of `-o` (`-on`); a
+line with more than one `git push`; `git push -q` or `--porcelain` (git 2.54
+printed no status block for `-q`); output
 filtered through a pipe that drops the evidence; and a run started in the
 background, whose output goes to a file. The progress lines are matched as
 `internal/cli/runs.go` words them today; rewording them makes intents and

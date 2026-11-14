@@ -18,7 +18,9 @@ _INTENT = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--intent\b")
 _ANSWER = re.compile(rf"(?:^|[;&|]\s*)assistant{_GLOBAL}\s+--answer\b")
 # Remote is exactly `assistant` (not assistant-backup); dry-run flags count before or after it.
 _PUSH = re.compile(r"(?:^|[;&|]\s*)git\s+push((?:\s+-\S+)*)\s+assistant(?![^\s;&|)])([^;&|\n]*)")
-_DRY_FLAG = re.compile(r"(?:^|\s)(?:--dry-run|-n(?!\S)|-\w*n\w*)(?:\s|$)")
+# git 2.54 takes any unambiguous long-option prefix (`--dr`; `--d` is ambiguous with
+# --delete and refused) and lets the last of --dry-run / --no-dry-run win.
+_DRY_FLAG = re.compile(r"(?<!\S)(?:--(no-)?dr(?:y(?:-(?:r(?:un?)?)?)?)?|-[^\s-]*n\S*)(?!\S)")
 _FALSE_AND = re.compile(r"false\s*&&")
 _TRUE_OR = re.compile(r"true\s*\|\|")
 # Evidence that a gate command reached the gate, not only that it started. The CLI
@@ -32,6 +34,12 @@ _REACHED = {
     "push": re.compile(r"(?m)^To \S.*(?:\n .*)*?\n(?: [ *+-] \S| ! \[remote rejected\] .*\(pre-receive hook declined\))"),
 }
 _NO_SERVICE = re.compile(r"\bthe background service is not running\b")
+
+
+def _dry_run(args: str) -> bool:
+    """True when the last dry-run flag in a push's arguments (``-n``, ``--dr``...) is not negated."""
+    flags = _DRY_FLAG.findall(args)
+    return bool(flags) and flags[-1] == ""
 
 
 def _strip_quotes_and_comments(command: str) -> str:
@@ -94,7 +102,7 @@ def _kinds(command: str) -> set[str]:
     """The kinds of gate command on the line (intent, answer, push); a dry-run push is none."""
     plain = _strip_quotes_and_comments(command)
     return {k for k, rx in (("intent", _INTENT), ("answer", _ANSWER), ("push", _PUSH))
-            if (m := rx.search(plain)) and not (k == "push" and _DRY_FLAG.search(m.group(1) + m.group(2) + " "))}
+            if (m := rx.search(plain)) and not (k == "push" and _dry_run(m.group(1) + m.group(2)))}
 
 
 def gate_ran_from_commands(commands: Iterable[str]) -> bool:
@@ -195,6 +203,11 @@ def _selftest() -> int:
         ("neg/class_failed_cd", not any(gate_ran_from_attempt(_attempt(f"cd /missing && {c}", _tr("Exit code 1\n(eval):cd:1: no such file or directory: /missing"))) for c in ("assistant --intent ship", "git push assistant HEAD"))),
         ("neg/class_not_found", not gate_ran_from_attempt(_attempt("assistant --intent ship", _tr("Exit code 127\n(eval):1: command not found: assistant")))),
         ("neg/class_flags_after_remote", not any(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO))) for f in ("--dry-run", "-n", "-fn"))),
+        ("neg/class_flag_spelling", not any(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO)))
+                                            for f in ("--dr", "--dry", "--dry-ru", "--no-dry-run --dry"))),
+        ("pos/negated_dry_run_last", all(gate_ran_from_attempt(_attempt(f"git push assistant {f} HEAD:refs/heads/probe", _tr(_TO)))
+                                         for f in ("--no-dry", "--dry-run --no-dry-run"))),
+        ("pos/ambiguous_d_is_no_dry_run", gate_ran_from_commands(["git push assistant --d HEAD"])),
         ("neg/class_remote_prefix", not gate_ran_from_attempt(_attempt("git push assistant-backup HEAD:refs/heads/probe", _tr(_TO)))),
         ("neg/class_up_to_date", not gate_ran_from_attempt(_attempt("git push assistant HEAD", _tr("Everything up-to-date")))),
         ("neg/class_prehook_push", not any(gate_ran_from_attempt(_attempt(c, _tr(r))) for c, r in _PREHOOK)),
