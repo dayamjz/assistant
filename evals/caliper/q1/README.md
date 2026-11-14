@@ -8,7 +8,7 @@ off the remote, and at what cost?
 | --- | --- |
 | `q1-pilot.eval.yaml` | Pilot (plan step 3): one defect family + benign, k = 1. Recorded in `docs/evaluations/2026-10-15-caliper-q1-pilot.md`. |
 | `q1.eval.yaml` | Full Q1 harness (issue #287): all six plan families + second benign, `no-mistakes` neighbour, code-host stand-in. |
-| `instruments/` | Plan row 8 / issue #895: `detect_gate.py` (gate-ran vs skill activated, #398). Activation smoke and fixed-diff efficacy stack in follow-up PRs. See `instruments/README.md`. |
+| `instruments/` | Plan row 8 / issue #895: `detect_gate.py` (gate command reader and offline heuristic, beside the skill's activation, #398). Live scoring, activation smoke and fixed-diff efficacy stack in follow-up PRs. See `instruments/README.md`. |
 
 Nothing here runs in `make check` or CI. Graders are checked by
 `verify_graders.py` before spending agent runs.
