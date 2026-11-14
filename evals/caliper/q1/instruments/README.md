@@ -9,8 +9,8 @@ offline heuristic built on it, and a check of a runs dump. Caliper's
 what the attempt typed instead.
 
 - `gate_ran_from_commands(commands)`: true when some line is a gate command
-  the reader fully read (a `git push` to `assistant` that is not a dry run, or
-  `assistant --intent` / `--answer`). It sees no result, so it says an attempt
+  the reader fully read and whose every option is on its allowlist (a `git
+  push` to `assistant`, or `assistant --intent` / `--answer` with a value). It sees no result, so it says an attempt
   claimed a gate command, never that the gate ran: `cd missing && assistant
   --intent` still counts. A line with a literal `false &&` or `true ||` is
   rejected.
@@ -47,26 +47,32 @@ way the program parses them.
   their targets are dropped. Only a bare operator character splits: a `;`,
   `&`, `|`, `(`, `)`, `<` or `>` inside quotes or after a backslash is literal
   text, so `echo ';' assistant --intent ship` and `echo \; git push assistant`
-  are one `echo` command, not a gate command.
-- A command's program is the first word after any `VAR=value` assignments;
-  `assistant` or a path ending in `/assistant` is the CLI, whose `--intent` /
-  `--answer` (also `-intent`, `--intent=...`) make it a gate command.
-- `git`: its own options before the subcommand are skipped (`-C <path>` and
-  `-c <name>=<value>` take the next word). After `push`, arguments are walked
-  with `git push -h`'s option table from git 2.54: an exact long name or the
-  one name a prefix abbreviates (`--dr` is `--dry-run`; `--d` is ambiguous with
-  `--delete` and git refuses it, so that push is not a gate command), options
-  after positionals, `--` ending options, short clusters (`-vn`), and
-  value-taking options (`-o`, `--push-option`, `--repo`, `--receive-pack`,
-  `--exec`, `--recurse-submodules`) consuming the next word whatever it looks
-  like, so `-o --no-dry-run` is a push option, not a negation. `-o` is the
-  only short option with a value: the rest of its word (`-ofoo`), else the
-  next word; with neither (`git push assistant -o`, `-vo` last) git exits 129
-  "requires a value", so that push is not a gate command, and the same holds
-  for a long value-taking option with nothing after it. `-n` /
-  `--dry-run` and `--no-dry-run` set the dry run, the last one winning. The
-  first positional (or `--repo` when there is none) is the remote, which must
-  be exactly `assistant`; a dry run is not a gate command.
+  are one `echo` command, not a gate command. An empty quoted word (`''`) is
+  a word, never a separator.
+- A command's program is the first word after any `VAR=value` assignments.
+  The reader fails closed: any option word not listed below, including one
+  that ends the run before a gate command (`--version`, `--help`, `-h`), or
+  any value not listed, makes the command no gate command. It is never
+  parsed further.
+- `assistant` (or a path ending in `/assistant`): exactly one of `--intent`,
+  `-intent`, `--answer`, `-answer`, with a non-empty value as the next word
+  or after `=`, and no other word. Checked against this repository's CLI:
+  those forms get past its flag parsing, `--version` or `--help` first only
+  prints, and a missing value or an extra word is refused. Valid flags the
+  reader does not list (`--json`, `--home PATH`) make the command no gate
+  command, so they under-count.
+- `git`: the only option before the subcommand is `-C <path>` (a missing
+  path fails when git runs, which this offline heuristic cannot see, like a
+  failed `cd`). After `push`, each option word must be one of `-u`,
+  `--set-upstream`, `-v`, `--verbose`, `-q`, `--quiet`, `-f`, `--force`,
+  `--force-with-lease`, `--no-verify`, `--follow-tags`, `--tags`,
+  `--porcelain`, `--signed=no`, `--recurse-submodules=no`, or a cluster of
+  `u`, `v`, `q`, `f` (`-uvf`). Each was seen to pass git 2.54's option
+  parsing. Not accepted, so never a gate command: a dry run (`-n`,
+  `--dry-run`), `-o` / `--push-option`, `--repo`, any other value
+  (`--signed=banana`, which git refuses, and `--signed=yes`, which it would
+  accept), an abbreviation (`--forc`), and `--`. The first word that is not
+  an option is the remote, which must be exactly `assistant`.
 
 Residual misses: a wrapper before the program (`env`, `command`, `exec`,
 `sudo`, `sh -c '...'`) or a git alias, which the reader does not see as a
@@ -76,9 +82,11 @@ which splits as a word `2`).
 ## Selftest
 
 `python3 detect_gate.py` runs the fail-before selftest: what is a gate
-command (flags, flag spelling, continuation, escape, option value, missing
-option value, cluster, quoting, quoted or escaped operator characters,
-remote-name prefix, text that only names the gate), each not-read
+command (each listed option, dry-run flags, flag spelling, continuation,
+escape, option value, missing value, cluster, quoting, quoted or escaped
+operator characters, an empty quoted word, remote-name prefix, text that
+only names the gate, a refused or unlisted value, an unknown option, and
+options that end the run early such as `--version` and `--help`), each not-read
 mark with the reason the reader gives, the literal short-circuit rule, and
 the runs dump. Reverting any one guard fails a row; in the reserved-word
 list, an opener such as `case` is also caught by its closer (`esac`). Fuller offline controls,

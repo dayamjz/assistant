@@ -16,17 +16,15 @@ from pathlib import Path
 from typing import Iterable
 
 _SEPARATORS = set(";&|()\n")
-# `git push -h` of git 2.54. parse-options takes an exact long name or the one name a prefix abbreviates (`--dr`;
-# `--d` is ambiguous with --delete), lets options follow positionals, ends them at `--`, and gives a value-taking
-# option the next word whatever it looks like (`-o --no-dry-run`); -v -q -d -n -f -u -4 -6 take none.
-_PUSH_VALUE = {"repo", "recurse-submodules", "receive-pack", "exec", "push-option"}
-_PUSH_EQ_ONLY = {"force-with-lease", "signed"}
-_PUSH_NEGATABLE = ("verbose quiet repo all branches mirror delete tags dry-run porcelain force force-with-lease "
-                   "force-if-includes recurse-submodules thin receive-pack exec set-upstream progress prune "
-                   "follow-tags signed atomic push-option").split()
-_PUSH_NAMES = _PUSH_NEGATABLE + ["no-" + n for n in _PUSH_NEGATABLE] + ["verify", "no-verify", "ipv4", "ipv6"]
-# git's own options before the subcommand that take the next word as their value.
-_GIT_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--super-prefix"}
+# Fail closed: an option word not listed here, including one that ends the run early (--version, --help, -h), makes
+# the command no gate command. Each git push word below was seen to pass git 2.54's option parsing; a value-taking
+# option counts only as the exact --name=value word listed. Not listed, so never read: -o, --repo, -n / --dry-run,
+# abbreviations, `--`, and every git option before the subcommand except -C <path>.
+_PUSH_OPTIONS = set("-u --set-upstream -v --verbose -q --quiet -f --force --force-with-lease --no-verify --follow-tags --tags "
+                    "--porcelain --signed=no --recurse-submodules=no".split())
+_PUSH_CLUSTER = re.compile(r"-[uvqf]+")
+# assistant (internal/cli): exactly one of these flags and a non-empty value, as the next word or after `=`.
+_ASSISTANT_FLAGS = {"--intent": "intent", "-intent": "intent", "--answer": "answer", "-answer": "answer"}
 # Not read, so never a gate command: a line with one of these marks (a newline, continuations included), or with a command that
 # begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no compound body reads as a command.
 _UNREADABLE = (("<<", "heredoc or herestring"), ("`", "command substitution"), ("$(", "command substitution"), ("#", "comment"),
@@ -61,7 +59,7 @@ def _simple_commands(command: str) -> list[tuple[list[str], str]] | None:
         return None
     out, cur, skip = [], [], False
     for w in words:
-        if set(w) <= _SEPARATORS:
+        if w and set(w) <= _SEPARATORS:  # an empty quoted word ('') is a word
             out.append((cur, w))
             cur = []
         elif set(w) & set("<>") and set(w) <= set("<>&|"):
@@ -80,62 +78,23 @@ def _program(words: list[str]) -> list[str]:
     return words
 
 
-def _push_long(name: str) -> str | None:
-    if name in _PUSH_NAMES:
-        return name
-    hits = [n for n in _PUSH_NAMES if n.startswith(name)]
-    return hits[0] if len(hits) == 1 else None
-
-
-def _push_target(args: list[str]) -> tuple[str | None, bool] | None:
-    """(repository, dry run) as git push parses ``args``; None for options git refuses."""
-    repo, dry, positional, i = None, False, [], 0
-    while i < len(args):
-        a, i = args[i], i + 1
-        if a == "--":
-            positional += args[i:]
-            break
-        if a.startswith("--"):
-            raw, eq, value = a[2:].partition("=")
-            name = _push_long(raw)
-            if name is None or (eq and name not in _PUSH_VALUE | _PUSH_EQ_ONLY):
-                return None
-            if name in _PUSH_VALUE and not eq:
-                if i >= len(args):
-                    return None
-                value, i = args[i], i + 1
-            repo = value if name == "repo" else repo
-            dry = {"dry-run": True, "no-dry-run": False}.get(name, dry)
-        elif a.startswith("-") and a != "-":
-            for j, c in enumerate(a[1:], 1):
-                if c == "o":  # its value is the rest of the word, else the next word; git refuses a missing one
-                    if j == len(a) - 1 and i >= len(args):
-                        return None
-                    i += j == len(a) - 1
-                    break
-                if c not in "vqdnfu46":
-                    return None
-                dry = dry or c == "n"
-        else:
-            positional.append(a)
-    return (positional[0] if positional else repo), dry
+def _push_remote(args: list[str]) -> str | None:
+    """The remote of a git push whose every option word is on the allowlist, else None."""
+    if any(a.startswith("-") and a not in _PUSH_OPTIONS and not _PUSH_CLUSTER.fullmatch(a) for a in args):
+        return None
+    return next((a for a in args if not a.startswith("-")), None)
 
 
 def _gate_kind(words: list[str]) -> str | None:
-    """intent, answer or push when the simple command is a gate command, else None; a push
-    is one only to the remote named exactly `assistant` and not a dry run."""
+    """intent, answer or push when the simple command is a gate command on the allowlists, else None; a push is
+    one only to the remote named exactly `assistant`."""
     words = _program(words)
     prog = os.path.basename(words[0]) if words else ""
     if prog == "assistant":
-        flags = [re.fullmatch(r"--?(intent|answer)(?:=.*)?", w, re.S) for w in words[1:]]
-        return next((m.group(1) for m in flags if m), None)
-    i = 1
-    while prog == "git" and i < len(words) and words[i].startswith("-"):
-        i += 2 if words[i] in _GIT_VALUE else 1
-    if prog != "git" or words[i:i + 1] != ["push"]:
-        return None
-    target = _push_target(words[i + 1:])
-    return "push" if target and target == ("assistant", False) else None
+        args = words[1].split("=", 1) if len(words) == 2 else words[1:]
+        return _ASSISTANT_FLAGS.get(args[0]) if len(args) == 2 and args[1] else None
+    rest = words[3:] if words[1:2] == ["-C"] else words[1:]
+    return "push" if prog == "git" and rest[:1] == ["push"] and _push_remote(rest[1:]) == "assistant" else None
 
 
 def _unreadable(command: str) -> str | None:
@@ -179,15 +138,15 @@ def _selftest() -> int:
     rows: list[tuple[str, bool]] = [
         # The parser, through the offline heuristic: what is a gate command at all.
         ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant 2>&1 | head -n 40", 'assistant --intent "add -n"',
-            "git push -vo ci.skip assistant", "git -C w push assistant", "git -c a.b=c push assistant", "cd w; GIT_TRACE=0 git push assistant",
-            "git push -v -- assistant", "git push </dev/null assistant", "git push --no-dry assistant", "git push --dry-run --no-dry-run assistant",
-            'assistant --intent "fix false && branch"'))),
+            "git -C w push assistant", "cd w; GIT_TRACE=0 git push assistant", "git push </dev/null assistant", 'assistant --intent "fix false && branch"',
+            "assistant --intent=ship", "assistant -intent ship", "/usr/local/bin/assistant --answer yes", "git push -uvf assistant HEAD"))),
+        ("pos/listed_options", all(_claims(f"git push {o} assistant feature/x") for o in "-u --set-upstream -v --verbose -q --quiet -f --force "
+            "--force-with-lease --no-verify --follow-tags --tags --porcelain --signed=no --recurse-submodules=no".split())),
         ("neg/text_naming_gate", not any(_claims(c) for c in ('grep -rn "git push assistant" skills', 'echo "next: ; assistant --intent ship"',
                                                              "cat <<'EOF'\ngit push assistant HEAD\nEOF"))),
         ("neg/class_flags", not any(_claims(f"git push {f}") for f in ("--dry-run assistant", "-n assistant", "-fn assistant",
                                                                        "assistant --dry-run", "assistant -n", "assistant -fn"))),
         ("neg/class_flag_spelling", not any(_claims(f"git push assistant {f}") for f in ("--dr", "--dry", "--dry-ru", "--no-dry-run --dry"))),
-        ("pos/ambiguous_d_refused", _push_target(["assistant", "--d"]) is None and _push_target(["assistant", "--dr"]) == ("assistant", True)),
         ("neg/class_continuation", not _claims("git push assistant \\\n  --dry-run HEAD")),
         ("neg/class_escape", not _claims("git push assistant \\--dry-run HEAD")),
         ("neg/class_option_value", not any(_claims(f"git push assistant {f}") for f in (
@@ -197,9 +156,18 @@ def _selftest() -> int:
                                                                          "assistant HEAD#x --dry-run", 'assistant "--dry-run"'))),
         ("neg/class_remote_prefix", not _claims("git push assistant-backup HEAD")),
         ("neg/class_missing_value", not any(_claims(f"git push {f}") for f in ("assistant -o", "assistant -vo", "-o", "assistant --push-option"))
-            and all(_claims(f"git push {f}") for f in ("assistant -ofoo", "assistant -o foo", "assistant -vo --", "-o x assistant"))),
+            and not any(_claims(f"assistant {f}") for f in ("--intent", "--intent=", "--intent ''", "--answer"))),
         ("neg/class_quoted_operator", not any(_claims(c) for c in ("echo ';' assistant --intent ship", "echo '|' git push assistant",
             "echo '(' git push assistant", 'echo "&&" git push assistant', "echo \\; git push assistant")) and _claims('echo "a\\";" ; git push assistant')),
+        # Allowlist round: an option or value not listed, or one that ends the run early, is never a gate command.
+        ("neg/class_bad_value", not any(_claims(f"git push assistant {o}") for o in ("--signed=banana", "--recurse-submodules=banana"))),
+        ("neg/class_unlisted_value", not any(_claims(f"git push assistant {o}") for o in ("--signed=yes", "--recurse-submodules=check"))),
+        ("neg/class_empty_word", not any(_claims(c) for c in ("echo '' git push assistant", 'echo "" assistant --intent ship'))),
+        ("neg/class_ends_early", not any(_claims(c) for c in ("assistant --version --intent ship", "git --version push assistant",
+                                                             "git push --version assistant"))),
+        ("neg/class_unknown_option", not any(_claims(c) for c in ("assistant --frobnicate --intent ship", "git --frobnicate push assistant"))),
+        ("neg/class_help", not any(_claims(c) for c in ("assistant --help --intent ship", "assistant -h --intent ship", "git --help push assistant",
+                                                       "git push assistant --help", "git push -h assistant"))),
         # A line the reader does not fully read is never a gate command, whatever it holds.
         ("neg/not_read", [_unreadable(c) for c in _NOT_READ] == ["heredoc or herestring", "command substitution", "command substitution", "comment",
             "multiline command", "unbalanced quoting", "compound command", "compound command"] and not any(_claims(c) for c in _NOT_READ)),
