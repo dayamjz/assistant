@@ -87,8 +87,10 @@ directory for the write-up. The record holds:
     persisted home was observed. It is not proof that the gate never started.
   - `no-checkout`: the home exists and the checkout does not.
   - `error`: `runs` exited non-zero or did not answer with a runs document,
-    the service being down included. This is indeterminate, never "did not
-    reach the gate".
+    the service being down included, or cleanup itself raised before the
+    read finished. In that last case `errors` has a `cleanup: ...` line and
+    there may be no `runs` step, because `runs` was never asked. This is
+    indeterminate, never "did not reach the gate".
   - `read`: `runs` answered. `repositories` is the sorted set of distinct
     `repository_id` values among the runs it returned, with `null` for a run
     that has none. It is empty when there are no runs, and it does not count
@@ -96,7 +98,9 @@ directory for the write-up. The record holds:
 - Each `assistant` call as its own step: `service` (`--json service status`),
   `usage`, `runs` and `stop`. A step has `argv`, `cwd`, `exit`, `stderr`, and
   its decoded `output`, or its raw `stdout` when that is not JSON. A `usage`
-  step that succeeded names the `file` its output went to instead.
+  step that succeeded also names the `file` its output was saved to. A
+  failed save is a `usage: writing ...` line in `errors`, and the reads go
+  on.
   `service_answered` says whether the status call reported the service
   running just before the reads.
 

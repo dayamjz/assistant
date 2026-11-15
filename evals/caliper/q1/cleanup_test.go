@@ -196,18 +196,25 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	}
 }
 
-// TestCleanupStopsTheServiceWhenAReadRaises: a usage file that cannot be
-// written (here a directory in its place) raises, and the stop still runs.
-func TestCleanupStopsTheServiceWhenAReadRaises(t *testing.T) {
+// TestCleanupStillReadsWhenTheUsageFileCannotBeWritten: a directory where the
+// usage file goes fails that side write alone. The usage step is kept, the
+// held run is still read, the service is still stopped, and the hook exits 1.
+func TestCleanupStillReadsWhenTheUsageFileCannotBeWritten(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
+	a.assistant(a.checkout, "--json", "--intent", "ship the branch")
 	want(t, "mkdir", os.MkdirAll(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"), 0o755), nil)
 	code, out, r := a.cleanup()
 	want(t, "exit", code, 1)
-	want(t, "outcome", r.Outcome, "error")
+	want(t, "outcome", r.Outcome, "read")
+	want(t, "usage exit", r.Usage.Exit, 0)
+	want(t, "runs exit", r.Runs.Exit, 0)
+	if len(r.Runs.Output.Runs) != 1 || r.Runs.Output.Runs[0]["status"] != "held" {
+		t.Errorf("runs = %v, want the held run", r.Runs.Output.Runs)
+	}
 	want(t, "stop exit", r.Stop.Exit, 0)
 	want(t, "service up after cleanup", a.running(), false)
-	if !strings.Contains(out, "cleanup: ") {
-		t.Errorf("the raised error is not on stderr:\n%s", out)
+	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "usage: writing ") || !strings.Contains(out, "usage: writing ") {
+		t.Errorf("errors = %v, want the failed usage write alone, on stderr too:\n%s", r.Errors, out)
 	}
 }

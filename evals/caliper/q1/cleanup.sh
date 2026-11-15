@@ -42,19 +42,21 @@ def call(name, args, cwd, out=None):
         step["exit"], step["stderr"], stdout = p.returncode, p.stderr, p.stdout
     except (OSError, subprocess.TimeoutExpired) as e:
         step["exit"], step["stderr"], stdout = None, str(e), ""
-    if out is not None and step["exit"] == 0:
-        with open(out, "w") as f:
-            f.write(stdout)
-        step["file"] = os.path.basename(out)
-    else:
-        try:
-            step["output"] = json.loads(stdout)
-        except ValueError:
-            step["output"], step["stdout"] = None, stdout
+    try:
+        step["output"] = json.loads(stdout)
+    except ValueError:
+        step["output"], step["stdout"] = None, stdout
+    record[name] = step  # stored before the file write below, which may fail
     if step["exit"] != 0:
         record["errors"].append("%s: exit %s: %s" % (
             name, step["exit"], (step["stderr"] or stdout).strip()))
-    record[name] = step
+    elif out is not None:
+        try:
+            with open(out, "w") as f:
+                f.write(stdout)
+            step["file"] = os.path.basename(out)
+        except OSError as e:  # a side file: recorded, and the reads go on
+            record["errors"].append("%s: writing %s: %r" % (name, out, e))
     return step
 
 def capture():
