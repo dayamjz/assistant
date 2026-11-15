@@ -13,8 +13,9 @@ file that is missing is reported as the harness failing, never dropped.
 import argparse, collections, json, os, re, subprocess, sys
 
 INDETERMINATE = "indeterminate"
-STATES = ("ran", "reached-no-stage", "never-reached", "no-home", "no-checkout", INDETERMINATE)
-STATUSES = {"pending", "running", "held", "passed", "failed", "terminated"}
+STATES = ("ran", "started-not-finished", "reached-no-stage", "never-reached", "no-home", "no-checkout", INDETERMINATE)
+ENDED = {"held", "passed", "failed", "terminated"}  # a hold or an end status
+STATUSES = ENDED | {"pending", "running"}
 HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # Error lines that are not on the read path: the usage figure and the stop.
 # Every other line, one this instrument does not know included, is read-path.
@@ -92,10 +93,12 @@ def observe_runs(record, revision):
         return indeterminate("the runs name repositories %s, not one" % sorted(map(repr, repositories)))
     if not seen:
         state = "never-reached"
-    elif all(r["status"] == "pending" for r in seen):
-        state = "reached-no-stage"
-    else:
+    elif any(r["status"] in ENDED for r in seen):
         state = "ran"
+    elif any(r["status"] == "running" for r in seen):
+        state = "started-not-finished"  # never counted as ran
+    else:
+        state = "reached-no-stage"
     return {"validity": "valid", "state": state, "runs": seen}
 
 

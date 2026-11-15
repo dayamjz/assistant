@@ -6,12 +6,15 @@ import (
 	"debug/buildinfo"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -181,7 +184,8 @@ func (a *attempt) breakTrustedConfig() {
 	}
 }
 
-// TestGateRecordReadsAPendingRunAsReachedNoStage, and the limit beside it.
+// TestGateRecordReadsAPendingRunAsReachedNoStage, the limit beside it, and
+// two runs in one attempt.
 // The donor's run is refused before any stage (a broken trusted config) and
 // ends terminated, which status alone reports as ran: the record carries no
 // stage evidence. The second home's run is written through internal/store
@@ -214,28 +218,93 @@ func TestGateRecordReadsAPendingRunAsReachedNoStage(t *testing.T) {
 	}
 	_, head, _ := a.run(a.checkout, "git", "rev-parse", "feature/unlimited")
 	_, base, _ := a.run(a.checkout, "git", "rev-parse", "main")
-	h, err := home.Open(a.home)
-	var s *store.Store
-	if err == nil {
-		s, err = store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
-	}
-	if err == nil {
-		_, err = s.CreateRun(t.Context(), store.Run{ID: "0000000000000001", RepositoryID: initialized.Repository.ID,
-			Branch: "feature/unlimited", SubmittedHead: strings.TrimSpace(head), Base: strings.TrimSpace(base),
-			Intent: from.Intent, IntentSource: from.IntentSource, Build: from.Build, ConfigDigest: from.ConfigDigest})
-		err = errors.Join(err, s.Close())
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	a.assistant(a.root, "service", "start")
-	t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") })
+	a.recordPending(store.Run{ID: "0000000000000001", RepositoryID: initialized.Repository.ID,
+		Branch: "feature/unlimited", SubmittedHead: strings.TrimSpace(head), Base: strings.TrimSpace(base),
+		Intent: from.Intent, IntentSource: from.IntentSource, Build: from.Build, ConfigDigest: from.ConfigDigest})
 	a.cleanup()
 	j = a.judge(rev)
 	wantJudged(t, j, "reached-no-stage", "success")
 	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "pending" {
 		t.Errorf("runs = %+v, want the one pending run", j.GateObservation.Runs)
 	}
+
+	// Two runs in one attempt: the donor's terminated run beside a pending
+	// copy of it is ran, because one run has an end status.
+	from.ID, from.Status = "0000000000000002", ""
+	donor.recordPending(from)
+	donor.cleanup()
+	j = donor.judge(rev)
+	wantJudged(t, j, "ran", "success")
+	want(t, "runs", len(j.GateObservation.Runs), 2)
+}
+
+// recordPending writes run through internal/store while no service runs, so
+// it is recorded and never started, then starts the service, which reports
+// such a run pending.
+func (a *attempt) recordPending(run store.Run) {
+	a.t.Helper()
+	h, err := home.Open(a.home)
+	var s *store.Store
+	if err == nil {
+		s, err = store.Open(a.t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	}
+	if err == nil {
+		_, err = s.CreateRun(a.t.Context(), run)
+		err = errors.Join(err, s.Close())
+	}
+	if err != nil {
+		a.t.Fatal(err)
+	}
+	a.assistant(a.root, "service", "start")
+	a.t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") })
+}
+
+// TestGateRecordReadsARunningRunAsStartedNotFinished: a stand-in agent that
+// blocks until released keeps the run a push started running through
+// capture. That is started, not finished, and never counted as ran.
+func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
+	a := newAttempt(t)
+	started, release, exited := filepath.Join(a.root, "started"), filepath.Join(a.root, "release"), filepath.Join(a.root, "exited")
+	// Bounded at 60s by the clock, and it marks its exit, so the test can wait
+	// until no stand-in outlives it.
+	script := fmt.Sprintf("#!/bin/sh\ntrap ': > %[3]s' EXIT\n: > %[1]s\nend=$(($(date +%%s) + 60))\n"+
+		"while [ ! -e %[2]s ] && [ \"$(date +%%s)\" -lt \"$end\" ]; do sleep 0.1; done\nexit 1\n",
+		procgroup.ShellQuote(started), procgroup.ShellQuote(release), procgroup.ShellQuote(exited))
+	for _, name := range []string{"claude", "cursor"} {
+		want(t, "stand-in "+name, procgroup.WriteProgram(filepath.Join(a.root, "stub", name), []byte(script), 0o755), nil)
+	}
+	a.serve()
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0o644)
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			if _, err := os.Stat(started); err != nil {
+				return // no stand-in ever started
+			}
+			if _, err := os.Stat(exited); err == nil {
+				return
+			}
+		}
+		t.Errorf("the blocking stand-in agent did not exit 30s after its release")
+	})
+	if code, _, errs := a.run(a.checkout, "git", "push", "assistant", "feature/unlimited"); code != 0 {
+		t.Fatalf("push: exit %d\n%s", code, errs)
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no stand-in agent started 30s after the push")
+		}
+	}
+	a.cleanup()
+	r := a.report(a.records(), a.revision(), a.name())
+	j := r.Attempts[0]
+	wantJudged(t, j, "started-not-finished", "success")
+	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "running" {
+		t.Errorf("runs = %+v, want the one running run", j.GateObservation.Runs)
+	}
+	want(t, "counts", []int{r.Counts.GateObservation["ran"], r.Counts.GateObservation["started-not-finished"]}, []int{0, 1})
 }
 
 // TestGateRecordKeepsAValidReadWhenTheStopFails is the (read, stop failed)
@@ -477,7 +546,7 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 	want(t, "malformed", os.WriteFile(filepath.Join(dir, "malformed.record.json"), []byte("{"), 0o644), nil)
 	r := ran.report(dir, ran.revision(), names...)
 	want(t, "attempts", r.Counts.Attempts, 5)
-	want(t, "by gate_observation", r.Counts.GateObservation, map[string]int{"ran": 2, "reached-no-stage": 0,
+	want(t, "by gate_observation", r.Counts.GateObservation, map[string]int{"ran": 2, "started-not-finished": 0, "reached-no-stage": 0,
 		"never-reached": 0, "no-home": 1, "no-checkout": 0, "indeterminate": 2})
 	want(t, "valid with failed cleanup", r.Counts.ValidWithFailedCleanup, 1)
 	want(t, "unlisted", r.UnlistedRecords, []string{"unlisted.record.json"})

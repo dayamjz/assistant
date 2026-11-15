@@ -197,8 +197,12 @@ The valid states, from the runs:
 
 - `never-reached`: no run.
 - `reached-no-stage`: every run is `pending`, recorded and never started.
-- `ran`: at least one run left `pending`. Each run's status at capture is
-  reported, so a count traces to its rows.
+- `started-not-finished`: a run is still `running`, and no run is `held`,
+  `passed`, `failed` or `terminated`. The gate started and did not finish,
+  and this is never counted as `ran`.
+- `ran`: at least one run is `held`, `passed`, `failed` or `terminated`.
+
+Each run's status at capture is reported, so a count traces to its rows.
 
 The `counts` share one denominator, every `ATTEMPT` named:
 `gate_observation` counts the attempts in each state and `indeterminate`, and
@@ -216,7 +220,7 @@ Limits:
 - **`config_digest` is checked for shape only.** The binary writes no value
   the harness could compare against: the digest covers the trusted commit and
   the configuration documents, so two attempts of one build differ.
-- **A status beyond `pending` does not prove that a stage ran.** A run the
+- **`ran` does not prove that a stage ran.** A run the
   gate refused before its first stage, for example under a trusted
   configuration it cannot parse, ends `terminated` and counts as `ran`. Its
   `terminated` status is reported. The record carries no stage evidence.
