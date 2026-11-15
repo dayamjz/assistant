@@ -344,10 +344,23 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
 	// An assistant ahead of the real one on PATH that, asked to stop, first
-	// stops the service itself and then hands the same stop to the real
-	// binary, so the stop cleanup sees is the real binary's failure.
+	// stops the service itself, then waits until status no longer reports it
+	// running (a stop exits on Accepted while the socket may still answer),
+	// and only then hands the same stop to the real binary, so the stop
+	// cleanup sees is the real binary's answer to a service that is down. A
+	// service still up after 30s exits 97, which fails the test loudly.
 	wrap := filepath.Join(a.root, "wrap")
-	script := fmt.Sprintf("#!/bin/sh\ncase \" $* \" in *\" service stop \"*) %[1]s \"$@\" >/dev/null 2>&1;; esac\nexec %[1]s \"$@\"\n", procgroup.ShellQuote(a.bin))
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in *" service stop "*)
+	%[1]s "$@" >/dev/null 2>&1
+	i=0
+	while %[1]s --home %[2]s --json service status 2>/dev/null | grep -q '"running":true'; do
+		i=$((i+1)); [ "$i" -lt 300 ] || { echo "wrap: the service still runs 30s after its stop" >&2; exit 97; }
+		sleep 0.1
+	done;;
+esac
+exec %[1]s "$@"
+`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home))
 	if err := os.Mkdir(wrap, 0o755); err != nil {
 		t.Fatal(err)
 	}
