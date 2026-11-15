@@ -12,6 +12,7 @@ import os
 import re
 import shlex
 import sys
+import unicodedata
 from pathlib import Path
 from typing import Iterable
 
@@ -36,7 +37,7 @@ _PUSH_CLUSTER = re.compile(r"-[uvqf]+")
 _ASSISTANT_FLAGS = {"--intent": "intent", "-intent": "intent", "--answer": "answer", "-answer": "answer"}
 # Not read either: a command that begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no
 # compound body reads as a command of its own.
-_QUOTED = "\ue007"  # where quoting starts, so an assignment is told from a quoted look-alike
+_QUOTED = "\ue007"  # where quoting starts; private-use, so _unreadable refuses a raw line holding one
 _ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=.*", re.S)
 _RESERVED = set("! [[ ]] { } case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
 
@@ -116,6 +117,8 @@ def _gate_kind(words: list[str]) -> str | None:
 
 def _unreadable(command: str) -> str | None:
     """Why the parser cannot fully read the line, or None when it can."""
+    if any(unicodedata.category(c) == "Co" for c in command):  # raw input never holds a marker such as _QUOTED
+        return "private-use character"
     if why := _off_list(command):
         return why
     try:
@@ -228,6 +231,9 @@ def _selftest() -> int:
         ("neg/r6_bang", [_unreadable(c) for c in ("! git push assistant", "git push assistant !x")] == ["negation or history"] * 2),
         ("neg/r6_comment", _unreadable("git push assistant # x") == "comment" and _claims("git push assistant '#x'")),
         ("pos/r6_plain_characters", _claims("git push assistant\tHEAD:refs/heads/a-b_c.d+e,f@g%h")),
+        # Round 7: a character the reader could use as an internal marker (any private-use one) is never read.
+        ("neg/r7_private_use", [_unreadable(c) for c in ("git push 'assi\ue007stant' HEAD:refs/heads/review", "git push assi\ue007stant HEAD",
+            "git push '\ue000assistant'", "git push 'assistant\U000f0000'", "git push assistant 'x\U0010fffd'")] == ["private-use character"] * 5),
         ("neg/r6_other_char", [_unreadable(c) for c in ("git push assistant ^x", "git push assistant \u00e9")] == ["character not on the allowlist"] * 2),
         # A line the reader does not fully read is never a gate command, whatever it holds.
         ("neg/not_read", [_unreadable(c) for c in _NOT_READ] == ["heredoc or herestring", "command substitution", "command substitution", "comment",

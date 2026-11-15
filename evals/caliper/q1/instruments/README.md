@@ -32,6 +32,13 @@ The reader fails closed on shell syntax, with no grammar parser: it reads only
 lines made of characters it knows, and every other line is not read, so never
 a gate command, with the reason `_unreadable` gives.
 
+- First, a line holding any private-use character (Unicode category `Co`:
+  U+E000-U+F8FF and the two supplementary private-use planes), quoted or not,
+  is not read. The reader marks quoting internally with one such character,
+  so raw input that already held one could otherwise be rewritten (a remote
+  `'assi<U+E007>stant'` read as `assistant`); refusing the whole category means
+  no marker the reader uses can collide with input.
+
 - Outside quotes, only ASCII letters and digits, space, tab, `- _ . / = : @ ,
   + %`, the operator characters `; & |`, and quotes are on the allowlist.
   Anything else is not read: `$` (any expansion: `${...}`, `$x`, `$'...'`;
@@ -108,9 +115,9 @@ escape, option value, missing value, cluster, quoting, quoted or escaped
 operator characters, an empty quoted word, remote-name prefix, text that
 only names the gate, a refused or unlisted value, an unknown option, and
 options that end the run early such as `--version` and `--help`), each
-not-read class with the reason the reader gives (expansion, command
-substitution, escape, redirection, glob, tilde, brace, `!`, comment, other
-characters, parentheses, unknown operators, operators without a command on
+not-read class with the reason the reader gives (private-use characters,
+expansion, command substitution, escape, redirection, glob, tilde, brace,
+`!`, comment, other characters, parentheses, unknown operators, operators without a command on
 each side, quoted assignments, reserved words), a positive control that each
 allowlisted punctuation character is read, the literal short-circuit rule, and
 the runs dump. Reverting any one guard or allowlist entry fails a row (in the
