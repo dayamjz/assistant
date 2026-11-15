@@ -22,19 +22,16 @@ git config --global --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL" 2>/dev/n
 workdir="${CALIPER_WORKDIR:-.}"
 attempt_root="$(CDPATH= cd -- "$workdir/.." && pwd)"
 mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
-# One record per attempt (README "Gate record"), read from the nested checkout
-# with --home. runs needs the live service, so the stop comes last. A failed
-# call is in the record and on stderr and exits 1; Caliper keeps the grade.
+# One record per attempt (README "Gate record"). Only runs reads from the nested
+# checkout; it needs the live service, so the stop comes last, in a finally.
 exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
 import datetime, json, os, subprocess, sys
-
 root, gate = sys.argv[1], sys.argv[2]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
 checkout = os.path.join(root, "work", "work")
-record = {"schema": 1, "attempt": attempt, "home": home, "checkout": checkout,
-          "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-          "errors": []}
+record = {"schema": 1, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+          "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
 def call(name, args, cwd, out=None):
     """Run assistant and record its exit status, stderr and output, never discarded."""
@@ -42,11 +39,9 @@ def call(name, args, cwd, out=None):
     try:
         p = subprocess.run(step["argv"], cwd=cwd, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=120)
-        step.update(exit=p.returncode, stderr=p.stderr)
-        stdout = p.stdout
+        step["exit"], step["stderr"], stdout = p.returncode, p.stderr, p.stdout
     except (OSError, subprocess.TimeoutExpired) as e:
-        step.update(exit=None, stderr=str(e))
-        stdout = ""
+        step["exit"], step["stderr"], stdout = None, str(e), ""
     if out is not None and step["exit"] == 0:
         with open(out, "w") as f:
             f.write(stdout)
@@ -66,24 +61,26 @@ def capture():
     if not os.path.isdir(home):
         record["outcome"] = "no-home"
         return
-    status = call("service", ["--json", "service", "status"], root)["output"]
-    record["service_answered"] = isinstance(status, dict) and status.get("running") is True
-    call("usage", ["--json", "runs", "--usage=1h"], root,
-         os.path.join(gate, attempt + "-usage.json"))
-    if not os.path.isdir(checkout):
-        record["outcome"] = "no-checkout"
-    else:
-        read = call("runs", ["--json", "runs"], checkout)
-        doc = read["output"]
-        runs = doc.get("runs", False) if isinstance(doc, dict) else False
-        ok = read["exit"] == 0 and (runs is None or isinstance(runs, list))
-        record["outcome"] = "read" if ok else "error"
-        if ok:
-            record["repositories"] = sorted({r.get("repository_id") for r in runs or []
-                                             if isinstance(r, dict)}, key=str)
-        elif read["exit"] == 0:
-            record["errors"].append("runs: exit 0, but the output is not a runs document")
-    call("stop", ["service", "stop", "--force"], root)
+    try:  # an exception in a read still reaches the stop, then the record
+        status = call("service", ["--json", "service", "status"], root)["output"]
+        record["service_answered"] = isinstance(status, dict) and status.get("running") is True
+        call("usage", ["--json", "runs", "--usage=1h"], root,
+             os.path.join(gate, attempt + "-usage.json"))
+        if not os.path.isdir(checkout):
+            record["outcome"] = "no-checkout"
+        else:
+            read = call("runs", ["--json", "runs"], checkout)
+            doc = read["output"]
+            runs = doc.get("runs", False) if isinstance(doc, dict) else False
+            ok = read["exit"] == 0 and (runs is None or isinstance(runs, list))
+            record["outcome"] = "read" if ok else "error"
+            if ok:
+                record["repositories"] = sorted({r.get("repository_id") for r in runs or []
+                                                 if isinstance(r, dict)}, key=str)
+            elif read["exit"] == 0:
+                record["errors"].append("runs: exit 0, but the output is not a runs document")
+    finally:
+        call("stop", ["service", "stop", "--force"], root)
 
 try:
     capture()

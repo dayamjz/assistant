@@ -109,10 +109,11 @@ out (#919).
 A failed call (status, usage, runs or stop) is written into the record and
 printed on stderr, and cleanup then exits 1. `no-home` and `no-checkout`
 alone exit 0.
-Under caliper-eval 0.19.0 (`runner.py` `_run_attempt`), a failed cleanup keeps
-the attempt's grade, adds a hook failure to the attempt and to the run, and
-makes `caliper run` exit non-zero. `run-full.sh` records that exit and still
-runs the other arm.
+Exiting 1 puts a failed capture in front of whoever runs the hook, where the
+old hook wrote an error into a file and exited 0. What the eval runner then
+does with the attempt is the runner's own contract, and this directory does
+not state it. `run-full.sh` records each arm's exit status and still runs the
+other arm. The service stop runs even when a read raises.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside

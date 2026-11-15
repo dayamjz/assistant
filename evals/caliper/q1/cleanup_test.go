@@ -19,8 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// spec is this directory, where cleanup.sh and build-subject.sh are.
-var spec string
+var spec string // this directory, where cleanup.sh and build-subject.sh are
 
 func TestMain(m *testing.M) {
 	var err error
@@ -50,10 +49,10 @@ type attempt struct {
 func newAttempt(t *testing.T) *attempt {
 	t.Helper()
 	bin, err := journey.Binary()
-	if err != nil {
-		t.Fatal(err)
+	root := ""
+	if err == nil {
+		root, err = standin.TempDir("q1")
 	}
-	root, err := standin.TempDir("q1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +64,7 @@ func newAttempt(t *testing.T) *attempt {
 	if err == nil {
 		err = errors.Join(os.Mkdir(a.work, 0o755), os.Mkdir(stub, 0o755))
 	}
-	// Stand-in agents that fail at once: the gate admits a run, review holds it, and no model is asked.
+	// Stand-in agents that fail at once: the gate admits a run, and no model is asked.
 	for _, name := range []string{"claude", "cursor"} {
 		if err == nil {
 			err = procgroup.WriteProgram(filepath.Join(stub, name), []byte("#!/bin/sh\nexit 1\n"), 0o755)
@@ -108,9 +107,8 @@ func (a *attempt) assistant(dir string, args ...string) string {
 	return out
 }
 
-// serve builds the benign subject as the setup hook does, then does what the
-// agent does before it sends anything: init in the checkout and start the
-// service, which answers a readiness check before start returns.
+// serve builds the subject as setup does, then does what the agent does first:
+// init in the checkout and start the service (ready when start returns).
 func (a *attempt) serve() {
 	a.t.Helper()
 	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
@@ -162,9 +160,8 @@ func want(t *testing.T, what string, got, wanted any) {
 	}
 }
 
-// TestCleanupReadsTheRunsThenStopsTheService is the good read: a run the gate
-// really held, read from the attempt's checkout while the service answers,
-// and only then the stop.
+// TestCleanupReadsTheRunsThenStopsTheService is the good read: the run the gate
+// held, read from the attempt's checkout while the service answers, then the stop.
 func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
@@ -178,32 +175,39 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	want(t, "errors", r.Errors, []string{})
 	want(t, "attempt", r.Attempt, filepath.Base(a.root))
 	want(t, "home", r.Home, a.home)
-	if _, err := time.Parse(time.RFC3339, r.CapturedAt); err != nil {
-		t.Errorf("captured_at: %v", err)
+	_, err := time.Parse(time.RFC3339, r.CapturedAt)
+	want(t, "captured_at parse error", err, nil)
+	want(t, "service answered at capture", r.ServiceAnswered, true)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "service up after cleanup", a.running(), false)
+	want(t, "runs cwd", r.Runs.Cwd, a.checkout)
+	want(t, "runs exit", r.Runs.Exit, 0)
+	want(t, "usage exit", r.Usage.Exit, 0)
+	if len(r.Runs.Output.Runs) != 1 {
+		t.Fatalf("runs = %v, want the one run\n%s", r.Runs.Output.Runs, out)
 	}
-	t.Run("good read", func(t *testing.T) {
-		want(t, "runs cwd", r.Runs.Cwd, a.checkout)
-		want(t, "runs exit", r.Runs.Exit, 0)
-		want(t, "usage exit", r.Usage.Exit, 0)
-		if len(r.Runs.Output.Runs) != 1 {
-			t.Fatalf("runs = %v, want the one run", r.Runs.Output.Runs)
-		}
-		run := r.Runs.Output.Runs[0]
-		want(t, "run id", run["id"], started.Record.ID)
-		want(t, "repositories", r.Repositories, []any{run["repository_id"]})
-		build, _ := run["build"].(map[string]any)
-		for field, v := range map[string]any{"status": run["status"], "submitted_head": run["submitted_head"],
-			"config_digest": run["config_digest"], "build.revision": build["revision"]} {
-			if s, _ := v.(string); s == "" {
-				t.Errorf("run has no %s: %v", field, run)
-			}
-		}
-	})
-	t.Run("read then stop", func(t *testing.T) {
-		want(t, "service answered at capture", r.ServiceAnswered, true)
-		want(t, "stop exit", r.Stop.Exit, 0)
-		if a.running() {
-			t.Errorf("the service still answers after cleanup:\n%s", out)
-		}
-	})
+	run := r.Runs.Output.Runs[0]
+	want(t, "run id", run["id"], started.Record.ID)
+	want(t, "run status", run["status"], "held")
+	want(t, "repositories", r.Repositories, []any{run["repository_id"]})
+	build, _ := run["build"].(map[string]any)
+	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
+		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
+	}
+}
+
+// TestCleanupStopsTheServiceWhenAReadRaises: a usage file that cannot be
+// written (here a directory in its place) raises, and the stop still runs.
+func TestCleanupStopsTheServiceWhenAReadRaises(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	want(t, "mkdir", os.MkdirAll(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"), 0o755), nil)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "service up after cleanup", a.running(), false)
+	if !strings.Contains(out, "cleanup: ") {
+		t.Errorf("the raised error is not on stderr:\n%s", out)
+	}
 }
