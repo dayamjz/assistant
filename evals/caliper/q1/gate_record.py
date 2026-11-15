@@ -182,8 +182,11 @@ def main(argv):
     results = [judge(a, os.path.join(args.records, a + ".record.json"), built) for a in args.attempts]
     named = {a + ".record.json" for a in args.attempts}
     unlisted = sorted(n for n in os.listdir(args.records) if n.endswith(".record.json") and n not in named)
+    # Stage execution is not measured (#926): no status, and no missing log,
+    # stands in for it, so ran is never a stage-execution count.
     json.dump({"schema": 1, "build": built, "attempts": results, "counts": counts(results),
-               "unlisted_records": unlisted}, sys.stdout, indent=2, sort_keys=True)
+               "stage_execution": "not measured", "unlisted_records": unlisted},
+              sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 
 

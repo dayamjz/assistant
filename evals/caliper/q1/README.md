@@ -137,7 +137,8 @@ basename. It refuses (exit 2) without a full revision, without `true` or
 `false` for `--modified`, without an attempt, with an attempt named twice
 (it would count twice in the one denominator), or without the records
 directory. It prints one JSON document: `build` (the two values it was
-given), `attempts`, `counts`, and `unlisted_records`, the record files in
+given), `attempts`, `counts`, `stage_execution`, which is always
+`"not measured"` (see Limits), and `unlisted_records`, the record files in
 the directory that no `ATTEMPT` named, listed rather than dropped.
 
 A binary built from a working copy with uncommitted changes is not the
@@ -210,7 +211,9 @@ The valid states, from the runs:
 - `started-not-finished`: a run is still `running`, and no run is `held`,
   `passed`, `failed` or `terminated`. The gate started and did not finish,
   and this is never counted as `ran`.
-- `ran`: at least one run is `held`, `passed`, `failed` or `terminated`.
+- `ran`: at least one run reached a held or terminal status (`held`,
+  `passed`, `failed` or `terminated`). It does not mean that a stage
+  executed.
 
 Each run's status at capture is reported, so a count traces to its rows.
 
@@ -239,10 +242,14 @@ Limits:
   compares neither: a comparison would need the home's configuration path
   and the digest's composition, which `internal/home` and `internal/service`
   own, so a fabricated sha256-shaped digest on an unresolved run passes.
-- **`ran` does not prove that a stage ran.** A run the
-  gate refused before its first stage, for example under a trusted
-  configuration it cannot parse, ends `terminated` and counts as `ran`. Its
-  `terminated` status is reported. The record carries no stage evidence.
+- **Stage execution is not measured** (`"stage_execution": "not measured"`
+  in every report). The record carries no stage evidence, so `ran` is never a
+  stage-execution count. The instrument does not infer execution from a
+  status: a run the gate refused before its first stage, for example under a
+  trusted configuration it cannot parse, ends `terminated` and counts as
+  `ran`, with its `terminated` status reported. It reads no stage log, so it
+  never treats a missing log as a stage that did not execute. Measuring it is
+  #926, needed before any Q1 claim that depends on stage execution.
 - **The checkout must still exist.** The `submitted_head` check reads the
   attempt's checkout, so a run whose checkout is gone is indeterminate.
 - **One checkout's runs.** `runs` sees only the checkout's repository (see

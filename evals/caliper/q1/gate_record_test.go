@@ -48,6 +48,7 @@ type report struct {
 		GateObservation        map[string]int `json:"gate_observation"`
 		ValidWithFailedCleanup int            `json:"valid_with_failed_cleanup"`
 	}
+	StageExecution  string   `json:"stage_execution"`
 	UnlistedRecords []string `json:"unlisted_records"`
 }
 
@@ -170,6 +171,7 @@ func TestGateRecordReadsAHeldRunAsRan(t *testing.T) {
 	wantJudged(t, j, "ran", "success")
 	want(t, "stop exit", j.CleanupStatus.Exit, 0)
 	want(t, "counts", []int{r.Counts.Attempts, r.Counts.GateObservation["ran"], r.Counts.ValidWithFailedCleanup}, []int{1, 1, 0})
+	want(t, "stage_execution (#926)", r.StageExecution, "not measured")
 	if len(j.GateObservation.Runs) != 1 {
 		t.Fatalf("runs = %+v, want the one held run", j.GateObservation.Runs)
 	}
