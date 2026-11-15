@@ -4,11 +4,12 @@ README "Gate record instrument" owns the two fields, the mapping table, the
 counts and the limits. This reads `<attempt>.record.json` files only: no
 transcript, and no shell command an attempt typed.
 
-    python3 gate_record.py --revision REV --records DIR ATTEMPT...
+    python3 gate_record.py --revision REV --modified MOD --records DIR ATTEMPT...
 
-REV is the revision of the assistant binary the harness built (`go version -m`).
-ATTEMPT is an attempt root's basename; every one named is reported, so a record
-file that is missing is reported as the harness failing, never dropped.
+REV and MOD are the vcs.revision and vcs.modified of the assistant binary the
+harness built (`go version -m`). ATTEMPT is an attempt root's basename; every
+one named is reported, so a record file that is missing is reported as the
+harness failing, never dropped.
 """
 import argparse, collections, json, os, re, subprocess, sys
 
@@ -63,7 +64,7 @@ def commit_in(checkout, sha):
         return False
 
 
-def observe_runs(record, revision):
+def observe_runs(record, built):
     """The gate state the runs read shows, or the first check it fails."""
     step, checkout = record.get("runs"), record.get("checkout")
     if not isinstance(step, dict) or step.get("cwd") != checkout:
@@ -82,12 +83,13 @@ def observe_runs(record, revision):
             return indeterminate("run %s: unknown status %r" % (rid, run.get("status")))
         if not isinstance(head, str) or not HEX40.match(head) or not commit_in(checkout, head):
             return indeterminate("run %s: submitted_head %r is not a commit in %s" % (rid, head, checkout))
-        if build.get("revision") != revision:
-            return indeterminate("run %s: build.revision %r is not %s" % (rid, build.get("revision"), revision))
+        if build.get("revision") != built["revision"] or build.get("modified") is not built["modified"]:
+            return indeterminate("run %s: build.revision %r, build.modified %r is not the built binary's %s, %s" % (
+                rid, build.get("revision"), build.get("modified"), built["revision"], built["modified"]))
         if not isinstance(run.get("config_digest"), str) or not HEX64.match(run["config_digest"]):
             return indeterminate("run %s: config_digest %r is not a sha256" % (rid, run.get("config_digest")))
-        seen.append({"id": rid, "status": run["status"], "submitted_head": head,
-                     "build": {"revision": build["revision"]}, "config_digest": run["config_digest"]})
+        seen.append({"id": rid, "status": run["status"], "submitted_head": head, "config_digest": run["config_digest"],
+                     "build": {"revision": build["revision"], "modified": build["modified"]}})
     repositories = {r.get("repository_id") if isinstance(r.get("repository_id"), str) else None for r in runs}
     if len(repositories) > 1 or repositories & {None, ""}:
         return indeterminate("the runs name repositories %s, not one" % sorted(map(repr, repositories)))
@@ -102,7 +104,7 @@ def observe_runs(record, revision):
     return {"validity": "valid", "state": state, "runs": seen}
 
 
-def judge(attempt, path, revision):
+def judge(attempt, path, built):
     """One attempt's gate_observation and cleanup_status, from its record."""
     unread = {"status": "failure", "exit": None, "stderr": None}
     try:
@@ -130,13 +132,13 @@ def judge(attempt, path, revision):
     elif gate == INDETERMINATE:
         observation = indeterminate("cleanup outcome error: %s" % "; ".join(map(str, errors)))
     elif record.get("schema") != 1 or record.get("attempt") != attempt or not isinstance(home, str) \
-            or os.path.basename(os.path.dirname(home)) != attempt \
+            or os.path.basename(home) != ".assistant" or os.path.basename(os.path.dirname(home)) != attempt \
             or checkout != os.path.join(os.path.dirname(home), "work", "work"):
         observation = indeterminate("the record's schema, attempt, home or checkout is not this attempt's")
     elif read_path:
         observation = indeterminate("read-path errors: %s" % "; ".join(map(str, read_path)))
     elif gate == "runs":
-        observation = observe_runs(record, revision)
+        observation = observe_runs(record, built)
     else:
         observation = {"validity": "valid", "state": gate, "runs": []}
     return {"attempt": attempt, "gate_observation": observation, "cleanup_status": cleanup_status}
@@ -165,6 +167,7 @@ def counts(results):
 def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--revision", required=True, help="the built binary's vcs.revision")
+    parser.add_argument("--modified", required=True, choices=("true", "false"), help="its vcs.modified")
     parser.add_argument("--records", required=True, help="the caliper-q1-gate directory")
     parser.add_argument("attempts", nargs="+")
     args = parser.parse_args(argv)
@@ -172,10 +175,13 @@ def main(argv):
         parser.error("--revision %r is not a full commit id" % args.revision)
     if not os.path.isdir(args.records):
         parser.error("--records %r is not a directory" % args.records)
-    results = [judge(a, os.path.join(args.records, a + ".record.json"), args.revision) for a in args.attempts]
+    if len(set(args.attempts)) != len(args.attempts):  # it would count twice in the one denominator
+        parser.error("an attempt is named more than once: %s" % " ".join(args.attempts))
+    built = {"revision": args.revision, "modified": args.modified == "true"}
+    results = [judge(a, os.path.join(args.records, a + ".record.json"), built) for a in args.attempts]
     named = {a + ".record.json" for a in args.attempts}
     unlisted = sorted(n for n in os.listdir(args.records) if n.endswith(".record.json") and n not in named)
-    json.dump({"schema": 1, "revision": args.revision, "attempts": results, "counts": counts(results),
+    json.dump({"schema": 1, "build": built, "attempts": results, "counts": counts(results),
                "unlisted_records": unlisted}, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
 

@@ -126,21 +126,30 @@ gate ran, from the saved records alone. It reads no transcript and parses no
 command an attempt typed.
 
 ```sh
-REV=$(go version -m ../../../bin/assistant | sed -n 's/^[[:space:]]*build[[:space:]]*vcs.revision=//p')
-python3 gate_record.py --revision "$REV" --records "$TMPDIR/caliper-q1-gate" ATTEMPT...
+vcs() { go version -m ../../../bin/assistant | sed -n "s/^[[:space:]]*build[[:space:]]*vcs.$1=//p"; }
+python3 gate_record.py --revision "$(vcs revision)" --modified "$(vcs modified)" \
+  --records "$TMPDIR/caliper-q1-gate" ATTEMPT...
 ```
 
-`--revision` is the `vcs.revision` of the binary the harness built, and each
-`ATTEMPT` is an attempt root's basename. It refuses (exit 2) without a full
-revision, without an attempt, or without the records directory. It prints one
-JSON document: `attempts`, `counts`, and `unlisted_records`, the record files
-in the directory that no `ATTEMPT` named, listed rather than dropped.
+`--revision` and `--modified` are the `vcs.revision` and `vcs.modified` of
+the binary the harness built, and each `ATTEMPT` is an attempt root's
+basename. It refuses (exit 2) without a full revision, without `true` or
+`false` for `--modified`, without an attempt, with an attempt named twice
+(it would count twice in the one denominator), or without the records
+directory. It prints one JSON document: `build` (the two values it was
+given), `attempts`, `counts`, and `unlisted_records`, the record files in
+the directory that no `ATTEMPT` named, listed rather than dropped.
+
+A binary built from a working copy with uncommitted changes is not the
+commit its revision names. Its report says `"modified": true` in `build` and
+in every run's `build`, so it is never read as that commit. Measure Q1 with a
+binary built from a clean checkout.
 
 Each attempt has two fields, never merged:
 
 - `gate_observation`: `validity` `valid`, with a `state` and the `runs` behind
-  it (`id`, `status`, `submitted_head`, `build.revision` and `config_digest`,
-  as `runs` reported them), or `indeterminate`, with a `reason`.
+  it (`id`, `status`, `submitted_head`, `build.revision`, `build.modified`
+  and `config_digest`, as `runs` reported them), or `indeterminate`, with a `reason`.
 - `cleanup_status`: `status` `success`, `failure` or `not-attempted`, with the
   stop's `exit` and `stderr`.
 
@@ -190,7 +199,8 @@ A valid row becomes indeterminate when any check fails:
 - **One repository.** The runs name one `repository_id`, never null.
 - **Each run.** A known `status`. `submitted_head` is a full commit id that
   names a commit in the attempt's checkout (`git cat-file -e`).
-  `build.revision` equals `--revision`. `config_digest` is 64 lowercase hex
+  `build.revision` equals `--revision` and `build.modified` equals
+  `--modified`. `config_digest` is 64 lowercase hex
   digits, the sha256 shape this binary writes.
 
 The valid states, from the runs:

@@ -28,8 +28,11 @@ type judged struct {
 		Runs                    []struct {
 			ID, Status    string
 			SubmittedHead string `json:"submitted_head"`
-			Build         struct{ Revision string }
-			ConfigDigest  string `json:"config_digest"`
+			Build         struct {
+				Revision string
+				Modified bool
+			}
+			ConfigDigest string `json:"config_digest"`
 		}
 	} `json:"gate_observation"`
 	CleanupStatus struct {
@@ -48,21 +51,34 @@ type report struct {
 	UnlistedRecords []string `json:"unlisted_records"`
 }
 
-// revision is the vcs.revision the toolchain stamped into the built binary,
-// read from the file rather than from anything the binary reports.
-func (a *attempt) revision() string {
+// built is the vcs.revision and vcs.modified the toolchain stamped into a
+// binary, as gate_record.py's --revision and --modified take them.
+type built struct{ revision, modified string }
+
+// args are the instrument's arguments for this build.
+func (b built) args() []string { return []string{"--revision", b.revision, "--modified", b.modified} }
+
+// built reads the built binary's stamp from the file rather than from
+// anything the binary reports.
+func (a *attempt) built() built {
 	a.t.Helper()
 	info, err := buildinfo.ReadFile(a.bin)
 	if err != nil {
 		a.t.Fatal(err)
 	}
+	var b built
 	for _, s := range info.Settings {
-		if s.Key == "vcs.revision" && s.Value != "" {
-			return s.Value
+		switch s.Key {
+		case "vcs.revision":
+			b.revision = s.Value
+		case "vcs.modified":
+			b.modified = s.Value
 		}
 	}
-	a.t.Fatalf("%s carries no vcs.revision", a.bin)
-	return ""
+	if b.revision == "" || b.modified == "" {
+		a.t.Fatalf("%s carries no vcs.revision or vcs.modified: %+v", a.bin, b)
+	}
+	return b
 }
 
 func (a *attempt) name() string    { return filepath.Base(a.root) }
@@ -76,9 +92,9 @@ func (a *attempt) instrument(args ...string) (int, string, string) {
 
 // report runs the instrument over records for the named attempts, failing
 // the test unless it answers with a report.
-func (a *attempt) report(records, revision string, attempts ...string) report {
+func (a *attempt) report(records string, b built, attempts ...string) report {
 	a.t.Helper()
-	code, out, errs := a.instrument(append([]string{"--revision", revision, "--records", records}, attempts...)...)
+	code, out, errs := a.instrument(append(append(b.args(), "--records", records), attempts...)...)
 	var r report
 	if err := json.Unmarshal([]byte(out), &r); code != 0 || err != nil || len(r.Attempts) != len(attempts) {
 		a.t.Fatalf("gate_record.py: exit %d, %v\n%s%s", code, err, out, errs)
@@ -87,9 +103,9 @@ func (a *attempt) report(records, revision string, attempts ...string) report {
 }
 
 // judge is the instrument's answer for this attempt's own record alone.
-func (a *attempt) judge(revision string) judged {
+func (a *attempt) judge(b built) judged {
 	a.t.Helper()
-	return a.report(a.records(), revision, a.name()).Attempts[0]
+	return a.report(a.records(), b, a.name()).Attempts[0]
 }
 
 // wantJudged checks both fields; state is the valid state, or "" for indeterminate.
@@ -148,7 +164,7 @@ func TestGateRecordReadsAHeldRunAsRan(t *testing.T) {
 	a.serve()
 	id := a.startRun()
 	a.cleanup()
-	rev := a.revision()
+	rev := a.built()
 	r := a.report(a.records(), rev, a.name())
 	j := r.Attempts[0]
 	wantJudged(t, j, "ran", "success")
@@ -158,10 +174,10 @@ func TestGateRecordReadsAHeldRunAsRan(t *testing.T) {
 		t.Fatalf("runs = %+v, want the one held run", j.GateObservation.Runs)
 	}
 	got, db := j.GateObservation.Runs[0], a.stored(id)
-	want(t, "run", []string{got.ID, got.Status, got.SubmittedHead, got.Build.Revision, got.ConfigDigest},
-		[]string{db.ID, string(db.Status), db.SubmittedHead, db.Build.Revision, db.ConfigDigest})
+	want(t, "run", []any{got.ID, got.Status, got.SubmittedHead, got.Build.Revision, got.Build.Modified, got.ConfigDigest},
+		[]any{db.ID, string(db.Status), db.SubmittedHead, db.Build.Revision, db.Build.Modified, db.ConfigDigest})
 	want(t, "status", got.Status, "held")
-	want(t, "build.revision is the built binary's", got.Build.Revision, rev)
+	want(t, "build is the built binary's", []any{got.Build.Revision, got.Build.Modified}, []any{rev.revision, rev.modified == "true"})
 }
 
 // TestGateRecordReadsNoRunAsNeverReached: a served home with no run.
@@ -169,7 +185,7 @@ func TestGateRecordReadsNoRunAsNeverReached(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
 	a.cleanup()
-	j := a.judge(a.revision())
+	j := a.judge(a.built())
 	wantJudged(t, j, "never-reached", "success")
 	want(t, "runs", len(j.GateObservation.Runs), 0)
 }
@@ -200,7 +216,7 @@ func TestGateRecordReadsAPendingRunAsReachedNoStage(t *testing.T) {
 		t.Fatalf("a run under a broken trusted config was not refused:\n%s", out)
 	}
 	donor.cleanup()
-	rev := donor.revision()
+	rev := donor.built()
 	j := donor.judge(rev)
 	wantJudged(t, j, "ran", "success")
 	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "terminated" {
@@ -298,7 +314,7 @@ func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
 		}
 	}
 	a.cleanup()
-	r := a.report(a.records(), a.revision(), a.name())
+	r := a.report(a.records(), a.built(), a.name())
 	j := r.Attempts[0]
 	wantJudged(t, j, "started-not-finished", "success")
 	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "running" {
@@ -316,7 +332,7 @@ func TestGateRecordKeepsAValidReadWhenTheStopFails(t *testing.T) {
 	a.startRun()
 	a.failStop()
 	a.cleanup()
-	r := a.report(a.records(), a.revision(), a.name())
+	r := a.report(a.records(), a.built(), a.name())
 	j := r.Attempts[0]
 	wantJudged(t, j, "ran", "failure")
 	want(t, "stop exit", j.CleanupStatus.Exit, 1)
@@ -340,7 +356,7 @@ subprocess.run = run
 `)
 	a.cleanup()
 	a.env = nil
-	j = a.judge(a.revision())
+	j = a.judge(a.built())
 	wantJudged(t, j, "ran", "failure")
 	want(t, "stop exit", j.CleanupStatus.Exit, nil)
 	want(t, "stop stderr", j.CleanupStatus.Stderr, "injected fault in the stop")
@@ -355,7 +371,7 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 		t.Fatalf("build-subject: exit %d\n%s", code, errs)
 	}
 	a.cleanup()
-	j := a.judge(a.revision())
+	j := a.judge(a.built())
 	wantJudged(t, j, "no-home", "not-attempted")
 	want(t, "stop exit", j.CleanupStatus.Exit, nil)
 
@@ -371,7 +387,7 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 			cleanup = "failure"
 		}
 		a.cleanup()
-		wantJudged(t, a.judge(a.revision()), "no-checkout", cleanup)
+		wantJudged(t, a.judge(a.built()), "no-checkout", cleanup)
 	}
 }
 
@@ -386,7 +402,7 @@ func TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop(t *testing.T)
 		t.Fatal(err)
 	}
 	a.cleanup()
-	j := a.judge(a.revision())
+	j := a.judge(a.built())
 	wantJudged(t, j, "", "success")
 	wantReason(t, j, "cleanup outcome error: runs: exit 1")
 
@@ -397,7 +413,7 @@ func TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop(t *testing.T)
 		t.Fatal("the service still runs 30s after its stop")
 	}
 	a.cleanup()
-	j = a.judge(a.revision())
+	j = a.judge(a.built())
 	wantJudged(t, j, "", "failure")
 	wantReason(t, j, "cleanup outcome error: ")
 	want(t, "stop exit", j.CleanupStatus.Exit, 1)
@@ -416,7 +432,7 @@ os.path.isdir = isdir
 		t.Fatalf("outcome %q with stop %s, want error with no stop", r.Outcome, r.steps["stop"])
 	}
 	a.env = nil
-	j = a.judge(a.revision())
+	j = a.judge(a.built())
 	wantJudged(t, j, "", "failure")
 	wantReason(t, j, "cleanup outcome error: cleanup: RuntimeError('injected fault before the read')")
 }
@@ -440,7 +456,7 @@ builtins.sorted = sorted
 		t.Fatalf("outcome %q with runs %v, want the producer's read with the held run (#923)", r.Outcome, r.Runs.Output.Runs)
 	}
 	a.env = nil
-	j := a.judge(a.revision())
+	j := a.judge(a.built())
 	wantJudged(t, j, "", "success")
 	wantReason(t, j, "injected fault after the read")
 }
@@ -468,7 +484,8 @@ func (a *attempt) copyRecord(dir, name string, edit func(map[string]any)) string
 }
 
 // TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary: the same real
-// record is valid, then indeterminate against another revision, under
+// record is valid, then indeterminate against another revision or modified
+// flag, under
 // another attempt's name, with one field hand-edited (malformed input, which
 // no real home writes, so edited), and once the checkout no longer holds
 // submitted_head.
@@ -477,16 +494,21 @@ func TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary(t *testing.T) {
 	a.serve()
 	a.startRun()
 	a.cleanup()
-	rev := a.revision()
+	rev := a.built()
 	wantJudged(t, a.judge(rev), "ran", "success")
 
-	other := strings.Repeat("0", 40)
-	if rev == other {
-		other = strings.Repeat("1", 40)
+	other := built{strings.Repeat("0", 40), rev.modified}
+	if rev.revision == other.revision {
+		other.revision = strings.Repeat("1", 40)
 	}
 	j := a.judge(other)
 	wantJudged(t, j, "", "success")
 	wantReason(t, j, "build.revision")
+	// The same revision from a build that was (or was not) modified is not this build.
+	other = built{rev.revision, map[string]string{"true": "false", "false": "true"}[rev.modified]}
+	j = a.judge(other)
+	wantJudged(t, j, "", "success")
+	wantReason(t, j, "build.modified")
 
 	edited := filepath.Join(a.root, "edited")
 	j = a.report(edited, rev, a.copyRecord(edited, "another-attempt", nil)).Attempts[0]
@@ -505,6 +527,7 @@ func TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary(t *testing.T) {
 		{"not made from the record's checkout", func(rec map[string]any) { rec["runs"].(map[string]any)["cwd"] = a.root }},
 		{"not a row of the mapping table", func(rec map[string]any) { rec["outcome"] = "maybe" }},
 		{"not a successful runs document", func(rec map[string]any) { rec["runs"].(map[string]any)["output"] = map[string]any{} }},
+		{"not this attempt's", func(rec map[string]any) { rec["home"] = filepath.Join(a.root, "elsewhere") }},
 	} {
 		j = a.report(edited, rev, a.copyRecord(edited, a.name(), c.edit)).Attempts[0]
 		wantJudged(t, j, "", "success")
@@ -544,7 +567,7 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 		nohome.copyRecord(dir, nohome.name(), nil), "never-written", "malformed"}
 	ran.copyRecord(dir, "unlisted", nil)
 	want(t, "malformed", os.WriteFile(filepath.Join(dir, "malformed.record.json"), []byte("{"), 0o644), nil)
-	r := ran.report(dir, ran.revision(), names...)
+	r := ran.report(dir, ran.built(), names...)
 	want(t, "attempts", r.Counts.Attempts, 5)
 	want(t, "by gate_observation", r.Counts.GateObservation, map[string]int{"ran": 2, "started-not-finished": 0, "reached-no-stage": 0,
 		"never-reached": 0, "no-home": 1, "no-checkout": 0, "indeterminate": 2})
@@ -556,17 +579,21 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 	wantReason(t, r.Attempts[4], "record unreadable")
 }
 
-// TestGateRecordRefusesWithoutACheckableRevision: with no full revision, or no
-// attempts, there is nothing to check against, so the instrument refuses
-// rather than reporting.
+// TestGateRecordRefusesWithoutACheckableRevision: with no full revision, no
+// modified flag, no attempts, or an attempt named twice (it would count twice
+// in the one denominator), the instrument refuses rather than reporting.
 func TestGateRecordRefusesWithoutACheckableRevision(t *testing.T) {
 	a := newAttempt(t)
 	want(t, "mkdir", os.Mkdir(a.records(), 0o755), nil)
+	b := a.built()
 	for _, args := range [][]string{
-		{"--revision", "", "--records", a.records(), a.name()},
-		{"--revision", "abc", "--records", a.records(), a.name()},
-		{"--revision", a.revision(), "--records", a.records()},
-		{"--revision", a.revision(), "--records", filepath.Join(a.root, "absent"), a.name()},
+		{"--revision", "", "--modified", b.modified, "--records", a.records(), a.name()},
+		{"--revision", "abc", "--modified", b.modified, "--records", a.records(), a.name()},
+		{"--revision", b.revision, "--records", a.records(), a.name()},
+		{"--revision", b.revision, "--modified", "maybe", "--records", a.records(), a.name()},
+		{"--revision", b.revision, "--modified", b.modified, "--records", a.records()},
+		{"--revision", b.revision, "--modified", b.modified, "--records", a.records(), a.name(), a.name()},
+		{"--revision", b.revision, "--modified", b.modified, "--records", filepath.Join(a.root, "absent"), a.name()},
 	} {
 		if code, out, _ := a.instrument(args...); code != 2 {
 			t.Errorf("gate_record.py %v: exit %d, want 2\n%s", args, code, out)
