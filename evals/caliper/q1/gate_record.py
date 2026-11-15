@@ -151,8 +151,9 @@ def state(result):
 
 
 def operationally_failed(result):
-    """Derived from the two fields, never stored: the cleanup failed, so the
-    attempt is never a clean validated landing whatever the gate showed."""
+    """Derived from cleanup_status alone, never stored: the cleanup failed,
+    so the attempt is never a clean validated landing whatever gate_observation
+    shows."""
     return result["cleanup_status"]["status"] == "failure"
 
 

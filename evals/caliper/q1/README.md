@@ -227,9 +227,18 @@ Limits:
   A row that copies a real `build.revision`, a commit of its checkout and a
   sha256-shaped digest passes. The checks raise the cost of a fake row and
   prove no row real.
-- **`config_digest` is checked for shape only.** The binary writes no value
-  the harness could compare against: the digest covers the trusted commit and
-  the configuration documents, so two attempts of one build differ.
+- **`config_digest` is checked for shape only, even where a value is
+  known.** A run is created with the digest of the home's own configuration
+  file alone (the sha256 of empty bytes, `e3b0c442...b855`, when there is
+  none). The digest is replaced, covering the trusted commit and the
+  configuration documents, only once the run resolves its configuration. So a
+  resolved run's digest differs between attempts of one build, while one that
+  never resolved, a `pending` run or one refused before its configuration
+  (whose `config_rejections` is null), carries that home-file digest, which
+  is the same across attempts with no configuration file. The instrument
+  compares neither: a comparison would need the home's configuration path
+  and the digest's composition, which `internal/home` and `internal/service`
+  own, so a fabricated sha256-shaped digest on an unresolved run passes.
 - **`ran` does not prove that a stage ran.** A run the
   gate refused before its first stage, for example under a trusted
   configuration it cannot parse, ends `terminated` and counts as `ran`. Its
