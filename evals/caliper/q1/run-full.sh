@@ -75,7 +75,7 @@ if [ -f result-q1-with-skill.json ] && [ -f result-q1-ablated.json ]; then
 	caliper compare result-q1-with-skill.json result-q1-ablated.json || true
 fi
 echo "results: result-q1-with-skill.json result-q1-ablated.json" >&2
-echo "collect gate usage from \${TMPDIR}/caliper-q1-gate/ into the write-up" >&2
+echo "collect gate records and usage from \${TMPDIR}/caliper-q1-gate/ into the write-up" >&2
 if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ]; then
 	echo "arm exit status: with-skill=$with_rc ablated=$ablated_rc" >&2
 	exit 1
