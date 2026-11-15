@@ -9,8 +9,10 @@ off the remote, and at what cost?
 | `q1-pilot.eval.yaml` | Pilot (plan step 3): one defect family + benign, k = 1. Recorded in `docs/evaluations/2026-10-15-caliper-q1-pilot.md`. |
 | `q1.eval.yaml` | Full Q1 harness (issue #287): all six plan families + second benign, `no-mistakes` neighbour, code-host stand-in. |
 
-Nothing here runs in `make check` or CI. Graders are checked by
-`verify_graders.py` before spending agent runs.
+No spec or grader here runs in `make check` or CI. Graders are checked by
+`verify_graders.py` before spending agent runs. The one exception is
+`cleanup_test.go`, a Go test of `cleanup.sh` that `go test ./...` runs against
+the built binary (see "Gate record" below).
 
 ## How to run
 
@@ -66,6 +68,51 @@ remotes.
 **Answer keys.** `sandbox.forbidden_files` marks `check.py`,
 `build-subject.sh`, the hidden tests, and related grader files as cheats in
 the transcript scan. Caliper also auto-forbids this YAML.
+
+**Gate record.** `cleanup.sh` writes one record per attempt to
+`$TMPDIR/caliper-q1-gate/<attempt-root>.record.json`. A missing record means
+the harness failed. When the usage read succeeds, its output is saved beside
+the record as `<attempt-root>-usage.json`. With `no-home`, or a failed usage
+read, there is no usage file, and the attempt's usage is then unreported, not
+zero. Nothing in this directory reads that file: `run-full.sh` only names the
+directory for the write-up. The record holds:
+
+- `schema` (1), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+  `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
+  failed call, plus one when `runs` exits 0 without a runs document, and one
+  when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
+  not always point at a step with a non-zero exit.
+- `outcome`, exactly one of:
+  - `no-home`: the home is missing. Nothing is read or stopped. This means no
+    persisted home was observed. It is not proof that the gate never started.
+  - `no-checkout`: the home exists and the checkout does not.
+  - `error`: `runs` exited non-zero or did not answer with a runs document,
+    the service being down included. This is indeterminate, never "did not
+    reach the gate".
+  - `read`: `runs` answered. `repositories` is the sorted set of distinct
+    `repository_id` values among the runs it returned, with `null` for a run
+    that has none. It is empty when there are no runs, and it does not count
+    runs: two runs of one repository give one entry.
+- Each `assistant` call as its own step: `service` (`--json service status`),
+  `usage`, `runs` and `stop`. A step has `argv`, `cwd`, `exit`, `stderr`, and
+  its decoded `output`, or its raw `stdout` when that is not JSON. A `usage`
+  step that succeeded names the `file` its output went to instead.
+  `service_answered` says whether the status call reported the service
+  running just before the reads.
+
+The `runs` read needs the live service, so it comes before `service stop`.
+It runs from the attempt's checkout and sees only runs of that checkout's
+repository. `assistant dump` needs no service, but it lists only runs a task
+owns. A run started by `git push assistant` has no task, so `dump` leaves it
+out (#919).
+
+A failed call (status, usage, runs or stop) is written into the record and
+printed on stderr, and cleanup then exits 1. `no-home` and `no-checkout`
+alone exit 0.
+Under caliper-eval 0.19.0 (`runner.py` `_run_attempt`), a failed cleanup keeps
+the attempt's grade, adds a hook failure to the attempt and to the run, and
+makes `caliper run` exit non-zero. `run-full.sh` records that exit and still
+runs the other arm.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside
