@@ -30,16 +30,16 @@ _OPERATORS = {";", "&&", "||", "|", "&"}
 # the command no gate command. Each git push word below was seen to pass git 2.54's option parsing; a value-taking
 # option counts only as the exact --name=value word listed. Not listed, so never read: -o, --repo, -n / --dry-run,
 # abbreviations, `--`, and every git option before the subcommand except -C <path>.
-_PUSH_OPTIONS = set("-u --set-upstream -v --verbose -q --quiet -f --force --force-with-lease --no-verify --follow-tags --tags "
-                    "--porcelain --signed=no --recurse-submodules=no".split())
-_PUSH_CLUSTER = re.compile(r"-[uvqf]+")
+_PUSH_OPTIONS = set("--set-upstream --verbose --quiet --force --force-with-lease --no-verify --follow-tags --tags --porcelain "
+                    "--signed=no --recurse-submodules=no".split())
+_PUSH_CLUSTER = re.compile(r"-[uvqf]+")  # -u -v -q -f alone or clustered
 # assistant (internal/cli): exactly one of these flags and a non-empty value, as the next word or after `=`.
 _ASSISTANT_FLAGS = {"--intent": "intent", "-intent": "intent", "--answer": "answer", "-answer": "answer"}
-# Not read either: a command that begins with a reserved word (bash's, plus zsh's foreach end repeat nocorrect), so no
-# compound body reads as a command of its own.
+# Not read either: a command that begins with a reserved word (bash's made of letters, plus zsh's foreach end repeat
+# nocorrect; bash's ! { } [[ ]] are off the character allowlist already), so no compound body reads as a command.
 _QUOTED = "\ue007"  # where quoting starts; private-use, so _unreadable refuses a raw line holding one
 _ASSIGNMENT = re.compile(r"[A-Za-z_]\w*=.*", re.S)
-_RESERVED = set("! [[ ]] { } case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
+_RESERVED = set("case coproc do done elif else end esac fi for foreach function if in nocorrect repeat select then time until while".split())
 
 def _shield(command: str) -> str:
     """The line with ``_QUOTED`` before each opening quote. shlex reads it as a word character, so a quoted word is
@@ -174,7 +174,10 @@ def _selftest() -> int:
         # The parser, through the offline heuristic: what is a gate command at all.
         ("pos/commands", all(_claims(c) for c in ("git push assistant", "git push assistant | head -n 40", 'assistant --intent "add -n"',
             "git -C w push assistant", "cd w; GIT_TRACE=0 git push assistant", 'assistant --intent "fix false && branch"',
-            "assistant --intent=ship", "assistant -intent ship", "/usr/local/bin/assistant --answer yes", "git push -uvf assistant HEAD"))),
+            "assistant --intent=ship", "assistant -intent ship", "/usr/local/bin/assistant --answer yes", "git push -uvf assistant HEAD",
+            "git fetch || git push assistant"))),
+        ("pos/assistant_flags", [_kinds(f"assistant {f}") for f in ("--intent x", "-intent x", "--answer x", "-answer x", "--intent=x", "-answer=x")]
+            == [{"intent"}, {"intent"}, {"answer"}, {"answer"}, {"intent"}, {"answer"}]),
         ("pos/listed_options", all(_claims(f"git push {o} assistant feature/x") for o in "-u --set-upstream -v --verbose -q --quiet -f --force "
             "--force-with-lease --no-verify --follow-tags --tags --porcelain --signed=no --recurse-submodules=no".split())),
         ("neg/text_naming_gate", not any(_claims(c) for c in ('grep -rn "git push assistant" skills', 'echo "next: ; assistant --intent ship"',
@@ -226,11 +229,14 @@ def _selftest() -> int:
         ("neg/r6_escape", [_unreadable(c) for c in ("git push \\assistant", "echo \\; git push assistant", 'git push assistant "a\\b"')] == ["escape"] * 3),
         ("neg/r6_redirect", [_unreadable(c) for c in ("git push assistant > out", "git push assistant 2>&1", "git push assistant <in")] == ["redirection"] * 3),
         ("neg/r6_glob_tilde_brace", [_unreadable(c) for c in ("git push assistant feature/*", "git push assistant HEAD:x/?", "git push assistant [ab]",
-            "git push assistant x[y", "git -C ~/w push assistant", "git push assistant {a,b}", "git push assistant x{y")] == ["glob"] * 4 + ["tilde"]
-            + ["brace"] * 2),
+            "git push assistant x[y", "git push assistant x]y", "git -C ~/w push assistant", "git push assistant {a,b}", "git push assistant x{y",
+            "git push assistant x}y")] == ["glob"] * 5 + ["tilde"] + ["brace"] * 3),
+        ("neg/reserved_words", all(_unreadable(f"{r} git push assistant") == "compound command" for r in "case coproc do done elif else end esac fi "
+            "for foreach function if in nocorrect repeat select then time until while".split())),
         ("neg/r6_bang", [_unreadable(c) for c in ("! git push assistant", "git push assistant !x")] == ["negation or history"] * 2),
         ("neg/r6_comment", _unreadable("git push assistant # x") == "comment" and _claims("git push assistant '#x'")),
-        ("pos/r6_plain_characters", _claims("git push assistant\tHEAD:refs/heads/a-b_c.d+e,f@g%h")),
+        ("pos/r6_plain_characters", _claims("git push assistant\tHEAD:refs/heads/a-b_c.d+e,f@g%h/ABCDEFGHIJKLMNOPQRSTUVWXYZ/abcdefghijklmnopqrstuvwxyz/"
+            "0123456789")),
         # Round 7: a character the reader could use as an internal marker (any private-use one) is never read.
         ("neg/r7_private_use", [_unreadable(c) for c in ("git push 'assi\ue007stant' HEAD:refs/heads/review", "git push assi\ue007stant HEAD",
             "git push '\ue000assistant'", "git push 'assistant\U000f0000'", "git push assistant 'x\U0010fffd'")] == ["private-use character"] * 5),

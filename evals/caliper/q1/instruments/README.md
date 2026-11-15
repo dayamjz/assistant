@@ -57,11 +57,12 @@ a gate command, with the reason `_unreadable` gives.
   `|&`, `true && && x`, a leading `;` and a trailing `&&` or `|` are not. bash
   refuses each of these; zsh accepts a leading `;` and a trailing `&&`, which
   are not read anyway.
-- A command that begins with a reserved word (bash's list: `! [[ ]] { } case
+- A command that begins with a reserved word (bash's made of letters: `case
   coproc do done elif else esac fi for function if in select then time until
   while`, plus zsh's `foreach end repeat nocorrect`) is not read, so the body
   of a compound command (`for b in x; git push assistant`) is never read as a
-  command of its own.
+  command of its own. bash's other reserved words, `! { } [[ ]]`, are off the
+  character allowlist and refused before this.
 - A word in command position shaped `NAME=value` but quoted up to its `=`
   (`"X=y" git push assistant`, `'X'=y`) is not read: the shell runs a command
   named `X=y`, which is not found.
@@ -94,7 +95,7 @@ the way the program parses them.
   `--set-upstream`, `-v`, `--verbose`, `-q`, `--quiet`, `-f`, `--force`,
   `--force-with-lease`, `--no-verify`, `--follow-tags`, `--tags`,
   `--porcelain`, `--signed=no`, `--recurse-submodules=no`, or a cluster of
-  `u`, `v`, `q`, `f` (`-uvf`). Each was seen to pass git 2.54's option
+  `u`, `v`, `q`, `f` (`-uvf`; one letter alone is the same rule). Each was seen to pass git 2.54's option
   parsing. Not accepted, so never a gate command: a dry run (`-n`,
   `--dry-run`), `-o` / `--push-option`, `--repo`, any other value
   (`--signed=banana`, which git refuses, and `--signed=yes`, which it would
@@ -117,10 +118,16 @@ only names the gate, a refused or unlisted value, an unknown option, and
 options that end the run early such as `--version` and `--help`), each
 not-read class with the reason the reader gives (private-use characters,
 expansion, command substitution, escape, redirection, glob, tilde, brace,
-`!`, comment, other characters, parentheses, unknown operators, operators without a command on
-each side, quoted assignments, reserved words), a positive control that each
-allowlisted punctuation character is read, the literal short-circuit rule, and
-the runs dump. Reverting any one guard or allowlist entry fails a row (in the
-reserved-word list, an opener such as `case` is also caught by its closer). Fuller offline controls, live scoring, and the
+`!`, comment, other characters, parentheses, unknown operators, operators
+without a command on each side, quoted assignments, reserved words), a
+positive control that each
+allowlisted character (every letter, digit and punctuation mark) is read,
+each `assistant` flag form and the gate command kind it reads as, each
+operator, each reserved word, the literal short-circuit rule, and the runs
+dump. Removing any one entry of the reader's tables (`_PLAIN`, `_OPERATORS`,
+`_PUSH_OPTIONS`, the `_PUSH_CLUSTER` letters, `_RESERVED`,
+`_ASSISTANT_FLAGS`, `_CHAR_REASONS`, `_MARK_REASONS`) fails a row, as does
+each guard reverted one at a time in a 60-mutation run; the rows list the
+entries literally rather than reading the tables. Fuller offline controls, live scoring, and the
 activation-smoke / fixed-diff runners stack in follow-up PRs of 300 code
 lines or under each.
