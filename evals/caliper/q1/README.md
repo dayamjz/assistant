@@ -211,9 +211,8 @@ The valid states, from the runs:
 - `started-not-finished`: a run is still `running`, and no run is `held`,
   `passed`, `failed` or `terminated`. The gate started and did not finish,
   and this is never counted as `ran`.
-- `ran`: at least one run reached a held or terminal status (`held`,
-  `passed`, `failed` or `terminated`). It does not mean that a stage
-  executed.
+- `ran`: a run reached a hold or an end status (`held`, `passed`,
+  `failed` or `terminated`). It does not mean that a stage executed.
 
 Each run's status at capture is reported, so a count traces to its rows.
 
@@ -230,25 +229,17 @@ Limits:
   A row that copies a real `build.revision`, a commit of its checkout and a
   sha256-shaped digest passes. The checks raise the cost of a fake row and
   prove no row real.
-- **`config_digest` is checked for shape only, even where a value is
-  known.** A run is created with the digest of the home's own configuration
-  file alone (the sha256 of empty bytes, `e3b0c442...b855`, when there is
-  none). The digest is replaced, covering the trusted commit and the
-  configuration documents, only once the run resolves its configuration. So a
-  resolved run's digest differs between attempts of one build, while one that
-  never resolved, a `pending` run or one refused before its configuration
-  (whose `config_rejections` is null), carries that home-file digest, which
-  is the same across attempts with no configuration file. The instrument
-  compares neither: a comparison would need the home's configuration path
-  and the digest's composition, which `internal/home` and `internal/service`
-  own, so a fabricated sha256-shaped digest on an unresolved run passes.
+- **`config_digest` is shape-checked only.** For a run that never resolved
+  its configuration it is the same operator-layer digest across attempts, so
+  it is not evidence that a run belongs to an attempt. `submitted_head` in
+  the attempt's checkout and the build check carry that.
 - **Stage execution is not measured** (`"stage_execution": "not measured"`
   in every report). The record carries no stage evidence, so `ran` is never a
   stage-execution count. The instrument does not infer execution from a
   status: a run the gate refused before its first stage, for example under a
   trusted configuration it cannot parse, ends `terminated` and counts as
-  `ran`, with its `terminated` status reported. It reads no stage log, so it
-  never treats a missing log as a stage that did not execute. Measuring it is
+  `ran`, with its `terminated` status reported. It reads no stage log, and a
+  missing stage log is never read as non-execution. Measuring it is
   #926, needed before any Q1 claim that depends on stage execution.
 - **The checkout must still exist.** The `submitted_head` check reads the
   attempt's checkout, so a run whose checkout is gone is indeterminate.
