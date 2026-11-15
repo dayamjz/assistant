@@ -253,3 +253,113 @@ os.path.isdir = isdir
 		t.Errorf("errors = %v, want the injected fault, on stderr too:\n%s", r.Errors, out)
 	}
 }
+
+// usageFile reports whether cleanup saved a usage read beside the record.
+func (a *attempt) usageFile() bool {
+	_, err := os.Stat(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"))
+	return err == nil
+}
+
+// TestCleanupMarksAnAttemptWithNoHome: no <attempt>/.assistant is a record
+// saying so, not a missing file and not an error, and nothing is stopped.
+func TestCleanupMarksAnAttemptWithNoHome(t *testing.T) {
+	a := newAttempt(t)
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "outcome", r.Outcome, "no-home")
+	want(t, "errors", r.Errors, []string{})
+	want(t, "stop exit", r.Stop.Exit, nil)
+	if a.usageFile() {
+		t.Errorf("a usage file was written for an attempt with no home:\n%s", out)
+	}
+}
+
+// TestCleanupMarksAMissingCheckout: a home with no work/work is its own
+// outcome, its usage is still saved, and the service is still stopped.
+func TestCleanupMarksAMissingCheckout(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	if err := os.Rename(a.checkout, a.checkout+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "outcome", r.Outcome, "no-checkout")
+	want(t, "usage file", a.usageFile(), true)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	if a.running() {
+		t.Errorf("the service still answers after cleanup:\n%s", out)
+	}
+}
+
+// TestCleanupRecordsAServiceDownAtCaptureAsError: a home whose service is
+// down cannot be read. That is error and exit 1, never "no runs", and there
+// is no usage file to mistake for zero usage.
+func TestCleanupRecordsAServiceDownAtCaptureAsError(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	a.assistant(a.root, "service", "stop", "--force")
+	for deadline := time.Now().Add(30 * time.Second); a.running(); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the service never stopped")
+		}
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "service answered at capture", r.ServiceAnswered, false)
+	want(t, "usage file", a.usageFile(), false)
+	if fmt.Sprint(r.Runs.Exit) == "0" || !strings.Contains(out, "runs: exit ") {
+		t.Errorf("runs exit = %v with the service down, and stderr:\n%s", r.Runs.Exit, out)
+	}
+}
+
+// TestCleanupRecordsAFailingRead: a checkout that is not a working copy makes
+// runs fail with the service up. Its exit status is in the record, the stop
+// still runs, and the hook fails.
+func TestCleanupRecordsAFailingRead(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	if err := errors.Join(os.Rename(a.checkout, a.checkout+".moved"), os.Mkdir(a.checkout, 0o755)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "runs exit", r.Runs.Exit, 1)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	if !strings.Contains(out, "runs: exit 1") {
+		t.Errorf("the failed read is not on stderr:\n%s", out)
+	}
+}
+
+// TestCleanupSurfacesAFailingStop: the read succeeds and the stop fails, here
+// because the service went down between the two, which is what the real
+// binary answers a stop with then. The failure is in the record, on stderr,
+// and in the exit status.
+func TestCleanupSurfacesAFailingStop(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	// An assistant ahead of the real one on PATH that, asked to stop, first
+	// stops the service itself and then hands the same stop to the real
+	// binary, so the stop cleanup sees is the real binary's failure.
+	wrap := filepath.Join(a.root, "wrap")
+	script := fmt.Sprintf("#!/bin/sh\ncase \" $* \" in *\" service stop \"*) %[1]s \"$@\" >/dev/null 2>&1;; esac\nexec %[1]s \"$@\"\n", procgroup.ShellQuote(a.bin))
+	if err := os.Mkdir(wrap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.path = wrap + ":" + a.path
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "read")
+	want(t, "stop exit", r.Stop.Exit, 1)
+	if r.Stop.Stderr == "" || !strings.Contains(out, "stop: exit 1") {
+		t.Errorf("the failed stop is not in the record and on stderr: %q\n%s", r.Stop.Stderr, out)
+	}
+}
