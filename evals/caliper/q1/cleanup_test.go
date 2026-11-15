@@ -44,6 +44,7 @@ type attempt struct {
 	t                    *testing.T
 	root, bin, path      string
 	home, work, checkout string
+	env                  []string // added to every command's environment
 }
 
 func newAttempt(t *testing.T) *attempt {
@@ -85,6 +86,7 @@ func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
 	cmd.Env = []string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}
+	cmd.Env = append(cmd.Env, a.env...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -216,5 +218,38 @@ func TestCleanupStillReadsWhenTheUsageFileCannotBeWritten(t *testing.T) {
 	want(t, "service up after cleanup", a.running(), false)
 	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "usage: writing ") || !strings.Contains(out, "usage: writing ") {
 		t.Errorf("errors = %v, want the failed usage write alone, on stderr too:\n%s", r.Errors, out)
+	}
+}
+
+// TestCleanupStopsAndRecordsErrorWhenCaptureRaises injects a fault no call()
+// catches: a sitecustomize on the hook's PYTHONPATH makes the checkout check
+// inside capture() raise, after the usage read and before runs. Nothing the
+// binary prints is faked. The stop must still run and be recorded as its own
+// step, and the outcome must be error (indeterminate), never a quiet no-home
+// or read.
+func TestCleanupStopsAndRecordsErrorWhenCaptureRaises(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	fault := filepath.Join(a.root, "fault")
+	want(t, "fault dir", os.Mkdir(fault, 0o755), nil)
+	want(t, "fault", os.WriteFile(filepath.Join(fault, "sitecustomize.py"), []byte(`import os.path
+_isdir = os.path.isdir
+def isdir(p):
+    if p.endswith(os.path.join("work", "work")):
+        raise RuntimeError("injected fault in capture")
+    return _isdir(p)
+os.path.isdir = isdir
+`), 0o644), nil)
+	a.env = []string{"PYTHONPATH=" + fault}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "usage exit", r.Usage.Exit, 0)
+	want(t, "runs exit (never asked)", r.Runs.Exit, nil)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	a.env = nil
+	want(t, "service up after cleanup", a.running(), false)
+	if !strings.Contains(strings.Join(r.Errors, "\n"), "injected fault in capture") || !strings.Contains(out, "injected fault in capture") {
+		t.Errorf("errors = %v, want the injected fault, on stderr too:\n%s", r.Errors, out)
 	}
 }
