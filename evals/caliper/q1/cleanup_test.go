@@ -126,6 +126,19 @@ func (a *attempt) running() bool {
 	return json.Unmarshal([]byte(a.assistant(a.root, "--json", "service", "status")), &status) == nil && status.Running
 }
 
+// stopped waits until status no longer reports the service running, because a
+// stop exits on Accepted while the outgoing service may still answer its
+// socket. It is false if the service still runs 30s after stopped is called.
+func (a *attempt) stopped() bool {
+	a.t.Helper()
+	for deadline := time.Now().Add(30 * time.Second); a.running(); time.Sleep(100 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			return false
+		}
+	}
+	return true
+}
+
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
@@ -134,9 +147,10 @@ type record struct {
 	Errors, Repositories   []string
 	Usage, Runs, Stop      struct {
 		Cwd, Stderr string
-		Exit        any // a JSON number, or nil when the call never ran
+		Exit        any // a JSON number, or nil when the step is absent or its call raised
 		Output      struct{ Runs []map[string]any }
 	}
+	steps map[string]json.RawMessage // the record's top-level keys, to tell an absent step from exit nil
 }
 
 // cleanup runs the hook as Caliper does and returns its exit code, its
@@ -147,7 +161,7 @@ func (a *attempt) cleanup() (int, string, record) {
 	var r record
 	data, err := os.ReadFile(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+".record.json"))
 	if err == nil {
-		err = json.Unmarshal(data, &r)
+		err = errors.Join(json.Unmarshal(data, &r), json.Unmarshal(data, &r.steps))
 	}
 	if err != nil {
 		a.t.Fatalf("no record after cleanup (exit %d): %v\n%s%s", code, err, out, errs)
@@ -181,7 +195,7 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	want(t, "captured_at parse error", err, nil)
 	want(t, "service answered at capture", r.ServiceAnswered, true)
 	want(t, "stop exit", r.Stop.Exit, 0)
-	want(t, "service up after cleanup", a.running(), false)
+	want(t, "service down after cleanup", a.stopped(), true)
 	want(t, "runs cwd", r.Runs.Cwd, a.checkout)
 	want(t, "runs exit", r.Runs.Exit, 0)
 	want(t, "usage exit", r.Usage.Exit, 0)
@@ -215,7 +229,7 @@ func TestCleanupStillReadsWhenTheUsageFileCannotBeWritten(t *testing.T) {
 		t.Errorf("runs = %v, want the held run", r.Runs.Output.Runs)
 	}
 	want(t, "stop exit", r.Stop.Exit, 0)
-	want(t, "service up after cleanup", a.running(), false)
+	want(t, "service down after cleanup", a.stopped(), true)
 	if len(r.Errors) != 1 || !strings.Contains(r.Errors[0], "usage: writing ") || !strings.Contains(out, "usage: writing ") {
 		t.Errorf("errors = %v, want the failed usage write alone, on stderr too:\n%s", r.Errors, out)
 	}
@@ -248,8 +262,132 @@ os.path.isdir = isdir
 	want(t, "runs exit (never asked)", r.Runs.Exit, nil)
 	want(t, "stop exit", r.Stop.Exit, 0)
 	a.env = nil
-	want(t, "service up after cleanup", a.running(), false)
+	want(t, "service down after cleanup", a.stopped(), true)
 	if !strings.Contains(strings.Join(r.Errors, "\n"), "injected fault in capture") || !strings.Contains(out, "injected fault in capture") {
 		t.Errorf("errors = %v, want the injected fault, on stderr too:\n%s", r.Errors, out)
+	}
+}
+
+// usageFile reports whether cleanup saved a usage read beside the record.
+func (a *attempt) usageFile() bool {
+	_, err := os.Stat(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"))
+	return err == nil
+}
+
+// TestCleanupMarksAnAttemptWithNoHome: no <attempt>/.assistant is a record
+// saying so, not a missing file and not an error, and nothing is stopped.
+func TestCleanupMarksAnAttemptWithNoHome(t *testing.T) {
+	a := newAttempt(t)
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "outcome", r.Outcome, "no-home")
+	want(t, "errors", r.Errors, []string{})
+	if stop, ok := r.steps["stop"]; ok {
+		t.Errorf("a stop step was recorded for an attempt with no home: %s", stop)
+	}
+	if a.usageFile() {
+		t.Errorf("a usage file was written for an attempt with no home:\n%s", out)
+	}
+}
+
+// TestCleanupMarksAMissingCheckout: a home with no work/work is its own
+// outcome, its usage is still saved, and the service is still stopped.
+func TestCleanupMarksAMissingCheckout(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	if err := os.Rename(a.checkout, a.checkout+".moved"); err != nil {
+		t.Fatal(err)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "outcome", r.Outcome, "no-checkout")
+	want(t, "usage file", a.usageFile(), true)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	if !a.stopped() {
+		t.Errorf("the service still runs 30s after cleanup:\n%s", out)
+	}
+}
+
+// TestCleanupRecordsAServiceDownAtCaptureAsError: a home whose service is
+// down cannot be read. That is error and exit 1, never "no runs", and there
+// is no usage file to mistake for zero usage.
+func TestCleanupRecordsAServiceDownAtCaptureAsError(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	a.assistant(a.root, "service", "stop", "--force")
+	if !a.stopped() {
+		t.Fatal("the service still runs 30s after its stop")
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "service answered at capture", r.ServiceAnswered, false)
+	want(t, "usage file", a.usageFile(), false)
+	if fmt.Sprint(r.Runs.Exit) == "0" || !strings.Contains(out, "runs: exit ") {
+		t.Errorf("runs exit = %v with the service down, and stderr:\n%s", r.Runs.Exit, out)
+	}
+}
+
+// TestCleanupRecordsAFailingRead: a checkout that is not a working copy makes
+// runs fail with the service up. Its exit status is in the record, the stop
+// still runs, and the hook fails.
+func TestCleanupRecordsAFailingRead(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	if err := errors.Join(os.Rename(a.checkout, a.checkout+".moved"), os.Mkdir(a.checkout, 0o755)); err != nil {
+		t.Fatal(err)
+	}
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "error")
+	want(t, "runs exit", r.Runs.Exit, 1)
+	want(t, "stop exit", r.Stop.Exit, 0)
+	if !strings.Contains(out, "runs: exit 1") {
+		t.Errorf("the failed read is not on stderr:\n%s", out)
+	}
+}
+
+// TestCleanupSurfacesAFailingStop: the read succeeds and the stop fails, here
+// because the service went down between the two, which is what the real
+// binary answers a stop with then. The failure is in the record, on stderr,
+// and in the exit status.
+func TestCleanupSurfacesAFailingStop(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	// An assistant ahead of the real one on PATH that, asked to stop, first
+	// stops the service itself, then waits until status no longer reports it
+	// running (a stop exits on Accepted while the socket may still answer),
+	// and only then hands the same stop to the real binary, so the stop
+	// cleanup sees is the real binary's answer to a service that is down. A
+	// service still up after at least 30s by the clock (date counts whole
+	// seconds, hence +31) exits 97, which fails the test loudly.
+	wrap := filepath.Join(a.root, "wrap")
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in *" service stop "*)
+	%[1]s "$@" >/dev/null 2>&1
+	end=$(($(date +%%s) + 31))
+	while %[1]s --home %[2]s --json service status 2>/dev/null | grep -q '"running":true'; do
+		[ "$(date +%%s)" -lt "$end" ] || { echo "wrap: the service still runs 30s after its stop" >&2; exit 97; }
+		sleep 0.1
+	done;;
+esac
+exec %[1]s "$@"
+`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home))
+	if err := os.Mkdir(wrap, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.path = wrap + ":" + a.path
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "read")
+	want(t, "stop exit", r.Stop.Exit, 1)
+	if r.Stop.Stderr == "" || !strings.Contains(out, "stop: exit 1") {
+		t.Errorf("the failed stop is not in the record and on stderr: %q\n%s", r.Stop.Stderr, out)
 	}
 }
