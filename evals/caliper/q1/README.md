@@ -226,8 +226,10 @@ A valid row becomes indeterminate when any check fails:
   after the read leaves `outcome` `read` with a `cleanup: ...` line (#923),
   and that is never a gate read. A failed usage read or save, a failed stop,
   or a failed stage read leaves the observation valid. A failed stage read
-  does not make `gate_observation` indeterminate: it is the stage verdict's,
-  where its run is `unread` (rows 2, 3, 5 and 13 of "Stage execution").
+  does not make `gate_observation` indeterminate: the stage verdict's table
+  judges it instead ("Stage execution"). A failed report read is `unread`
+  (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
+  `ran: true`, where `ran` decides (row 4).
 - **This attempt's record.** `schema` 1 or 2, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
