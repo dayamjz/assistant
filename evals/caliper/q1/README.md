@@ -185,7 +185,10 @@ the denominator. So does a record that is not JSON.
   neither is `never-reached`.
 - A failing read with the service up stops cleanly: `error`, stop ok. A
   service down at capture fails its stop too: `error`, stop failed. A raise
-  before the read records no stop: `error`, absent.
+  at the home check, which sits outside `capture()`'s `try`, records no stop:
+  `error`, absent. A raise inside that `try` before the `runs` read still
+  reaches the `finally`, which records the stop: `error`, stop ok, so
+  `cleanup_status` `success` when the stop succeeds.
 
 A valid row becomes indeterminate when any check fails:
 

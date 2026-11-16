@@ -395,8 +395,8 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 
 // TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop: the three
 // error rows. A failing read with the service up stops cleanly; a service
-// down at capture fails its stop too; a raise before the read (the home
-// check) records no stop. Each is indeterminate.
+// down at capture fails its stop too; a raise at the home check, outside
+// capture()'s try, records no stop. Each is indeterminate.
 func TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
