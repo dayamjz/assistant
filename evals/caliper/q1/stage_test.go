@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/journey"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
@@ -28,7 +29,7 @@ type stageVerdict struct {
 	ReviewEstablished *bool `json:"review_established"`
 	EstablishedRuns   []struct {
 		ID          string
-		Established bool `json:"review_established"`
+		Established *bool `json:"review_established"` // null when a not_started finding is in the report
 		From        any
 	} `json:"review_established_runs"`
 	Trouble struct {
@@ -81,6 +82,23 @@ func wantStage(t *testing.T, j judged, verdict string, rows ...int) {
 	if j.StageExecution.Verdict != verdict || fmt.Sprint(got) != fmt.Sprint(rows) {
 		t.Errorf("stage_execution = %q with rows %v, want %q with rows %v: %+v", j.StageExecution.Verdict, got, verdict, rows, j.StageExecution)
 	}
+}
+
+// tri renders a review_established value: true, false or null.
+func tri(v *bool) string {
+	if v == nil {
+		return "null"
+	}
+	return fmt.Sprint(*v)
+}
+
+// establishedRuns is each review-completed run's review_established, by run id.
+func establishedRuns(j judged) map[string]string {
+	got := map[string]string{}
+	for _, r := range j.StageExecution.EstablishedRuns {
+		got[r.ID] = tri(r.Established)
+	}
+	return got
 }
 
 // field walks a decoded JSON document by keys.
@@ -330,8 +348,8 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	r := a.report(a.records(), rev, a.name())
 	j := r.Attempts[0]
 	wantStage(t, j, "review executed", 4)
-	if se := j.StageExecution; se.ReviewEstablished == nil || *se.ReviewEstablished || len(se.EstablishedRuns) != 1 ||
-		se.EstablishedRuns[0].Established || !strings.Contains(fmt.Sprint(se.EstablishedRuns[0].From), "review-not-established") ||
+	if se := j.StageExecution; tri(se.ReviewEstablished) != "false" || len(se.EstablishedRuns) != 1 ||
+		tri(se.EstablishedRuns[0].Established) != "false" || !strings.Contains(fmt.Sprint(se.EstablishedRuns[0].From), "review-not-established") ||
 		se.Runs[0].ReviewExecutions != 1 || se.Trouble.Unread+se.Trouble.ReviewStartedNotCompleted != 0 {
 		t.Errorf("stage_execution = %+v, want review executed, established false from review-not-established, 1 execution, no trouble\n%s", se, out)
 	}
@@ -430,8 +448,8 @@ func TestStageReadsAnEstablishedReview(t *testing.T) {
 	rev := a.built()
 	j := a.judge(rev)
 	wantStage(t, j, "review executed", 4)
-	if se := j.StageExecution; se.ReviewEstablished == nil || !*se.ReviewEstablished || len(se.EstablishedRuns) != 1 ||
-		se.EstablishedRuns[0].ID != id || !se.EstablishedRuns[0].Established {
+	if se := j.StageExecution; tri(se.ReviewEstablished) != "true" || len(se.EstablishedRuns) != 1 ||
+		se.EstablishedRuns[0].ID != id || tri(se.EstablishedRuns[0].Established) != "true" {
 		t.Errorf("stage_execution = %+v, want run %s established", se, id)
 	}
 	for _, found := range j.StageExecution.EstablishedRuns[0].From.([]any) {
@@ -445,6 +463,30 @@ func TestStageReadsAnEstablishedReview(t *testing.T) {
 		report["findings"] = []any{map[string]any{"id": "review-not-established"}}
 	}))).Attempts[0]
 	wantStage(t, j, "cannot tell", 3)
+
+	// The r4 case (labeled edit): the same reviewed report with the usage
+	// ceiling's finding appended in both reads, as internal/pipeline's stage
+	// node appends what a fix round the ceiling refused held. The finding is
+	// the product's own (machine.CeilingHeldFinding). Through the CLI it
+	// needs the ceiling's window to expire between the refused round and the
+	// stage's immediate re-run, since a retry drops the inherited hold, so it
+	// is planted. A reviewer did run here, and the mark cannot say whose it
+	// is: review executed, review_established null, never false.
+	held, err := json.Marshal(machine.CeilingHeldFinding(machine.UsageCeiling{Standing: machine.CeilingReached, Window: "1h"}))
+	var finding map[string]any
+	if err == nil {
+		err = json.Unmarshal(held, &finding)
+	}
+	want(t, "the ceiling's finding", err, nil)
+	want(t, "it is marked not started", finding["not_started"], true)
+	j = a.report(edited, rev, a.copyRecord(edited, a.name(), both(func(m map[string]any) {
+		report := reviewOf(m)["report"].(map[string]any)
+		found, _ := report["findings"].([]any)
+		report["findings"] = append(found, finding)
+	}))).Attempts[0]
+	wantStage(t, j, "review executed", 4)
+	want(t, "established runs, inherited hold", establishedRuns(j), map[string]string{id: "null"})
+	want(t, "attempt review_established, inherited hold", tri(j.StageExecution.ReviewEstablished), "null")
 }
 
 // TestStageFoldsEstablishedAsAny: the first review call fails and the second
@@ -464,14 +506,8 @@ func TestStageFoldsEstablishedAsAny(t *testing.T) {
 	j := a.judge(a.built())
 	wantStage(t, j, "review executed", 4, 4)
 	want(t, "runs", []string{j.StageExecution.Runs[0].ID, j.StageExecution.Runs[1].ID}, []string{second, first})
-	got := map[string]bool{}
-	for _, r := range j.StageExecution.EstablishedRuns {
-		got[r.ID] = r.Established
-	}
-	want(t, "established runs", got, map[string]bool{first: false, second: true})
-	if se := j.StageExecution; se.ReviewEstablished == nil || !*se.ReviewEstablished {
-		t.Errorf("review_established = %v, want true: one run established", se.ReviewEstablished)
-	}
+	want(t, "established runs", establishedRuns(j), map[string]string{first: "false", second: "true"})
+	want(t, "attempt review_established: one run established", tri(j.StageExecution.ReviewEstablished), "true")
 }
 
 // TestStageReadsARunRefusedBeforeAnyStage is case B: a broken trusted
@@ -681,14 +717,18 @@ func TestStageReadsARunHeldAtRebaseAsReviewNotReached(t *testing.T) {
 	}
 }
 
-// TestStageReadsACeilingHeldReviewAsNotEstablished: the operator's usage
-// ceiling refuses the review's agent call, so the review stage completes
-// (ran: true) with the ceiling's own report, the usage-ceiling finding
-// marked not_started, and no reviewer ran. That is review executed and
-// never established. The ceiling is real: run 1's failed review reports the
-// stand-in's usage, which reaches a one-token output ceiling, and run 1 is
-// cancelled, so run 2's review call is the one refused.
-func TestStageReadsACeilingHeldReviewAsNotEstablished(t *testing.T) {
+// TestStageReadsACeilingHeldReviewAsUnknownEstablished is the r3 case: the
+// operator's usage ceiling refuses the review's agent call, so the review
+// stage completes (ran: true) with the ceiling's own report, the
+// usage-ceiling finding marked not_started, and no reviewer ran. That is
+// review executed with review_established null: the report cannot tell this
+// refusal from a hold a refused fix round left (the r4 case, in
+// TestStageReadsAnEstablishedReview), so it is never true and never false.
+// The ceiling is real: run 1's failed review reports the stand-in's usage,
+// which reaches a one-token output ceiling, and run 1 is cancelled, so run
+// 2's review call is the one refused. One run false and one null fold to
+// null for the attempt: unknown is not "none established".
+func TestStageReadsACeilingHeldReviewAsUnknownEstablished(t *testing.T) {
 	a := newAttempt(t)
 	agent := a.scriptAgent(standin.Script{Steps: []standin.Step{
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Failed("the reviewer gave up")},
@@ -710,12 +750,6 @@ func TestStageReadsACeilingHeldReviewAsNotEstablished(t *testing.T) {
 	want(t, "the ceiling's finding, not started", field(ceiling, "not_started"), true)
 	j := a.judge(a.built())
 	wantStage(t, j, "review executed", 4, 4)
-	got := map[string]bool{}
-	for _, r := range j.StageExecution.EstablishedRuns {
-		got[r.ID] = r.Established
-	}
-	want(t, "established runs", got, map[string]bool{first: false, second: false})
-	if se := j.StageExecution; se.ReviewEstablished == nil || *se.ReviewEstablished {
-		t.Errorf("review_established = %v, want false: no reviewer reviewed anything", se.ReviewEstablished)
-	}
+	want(t, "established runs", establishedRuns(j), map[string]string{first: "false", second: "null"})
+	want(t, "attempt review_established", tri(j.StageExecution.ReviewEstablished), "null")
 }

@@ -113,8 +113,7 @@ EXECUTED, CANNOT, NOT_MEASURED = "review executed", "cannot tell", "not measured
 STARTED, NOT_REVIEWED, NO_STAGE = "review started, not completed", "stages executed, review not executed", "no stage executed"
 VERDICTS = (EXECUTED, STARTED, NOT_REVIEWED, NO_STAGE, CANNOT, NOT_MEASURED)
 UNREAD, COMPLETED, RUN_STARTED = "unread", "review-completed", "review-started-not-completed"
-# A review that completed with one of these reviewed nothing (internal/stages/review.go),
-# and so did one whose report carries a not_started finding (not_started below).
+# A review that completed with one of these reviewed nothing (internal/stages/review.go).
 NOT_ESTABLISHED = {"review-not-established", "review-change-too-large", "review-everything-excluded",
                    "review-nothing-changed"}
 
@@ -208,12 +207,14 @@ def classify(rid, entry):
 
 
 def established(entry):
-    """(review_established, what it was decided from) for a review-completed run."""
+    """(review_established, what it was decided from) for a review-completed run:
+    null, never true or false, when a not_started finding is in the report."""
     review = facts(entry["report"])["review"]
     if review["findings"] is None:
         return False, "the review report is absent or not a findings report"
     if review["not_started"]:
-        return False, "a finding stands in for a review that never started: %s" % review["findings"]
+        return None, ("a not-started hold is in the report; the review's own refusal and an "
+                      "inherited fixer hold cannot be told apart")
     return not NOT_ESTABLISHED & set(review["findings"]), review["findings"]
 
 
@@ -242,8 +243,10 @@ def stage_execution(record, observation):
     verdict = next(v for v, holds in ((EXECUTED, COMPLETED in states), (CANNOT, UNREAD in states),
                                       (STARTED, RUN_STARTED in states), (NO_STAGE, set(states) == {"no-stage"}),
                                       (NOT_REVIEWED, True)) if holds)
+    # review_established: any run true; else any run null (unknown, so not false); else false.
     return {"verdict": verdict, "runs": runs, "review_established_runs": decided,
-            "review_established": any(d["review_established"] for d in decided) if decided else None,
+            "review_established": next((v for v in (True, None, False)
+                                        if v in [d["review_established"] for d in decided]), None),
             "trouble": {"unread": states.count(UNREAD), "review_started_not_completed": states.count(RUN_STARTED)}}
 
 

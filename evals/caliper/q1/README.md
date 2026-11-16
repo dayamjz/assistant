@@ -369,21 +369,21 @@ read a missing `review_established` as null):
 - `trouble`: `{unread, review_started_not_completed}`, counted over the
   runs whatever the verdict, so one completed review beside an unread run
   still shows the unread one.
-- `review_established`: `true` when any `review-completed` run established a
-  review, `false` when there are such runs and none did, `null` when the
-  fold's verdict is not `review executed`. A run did not establish one when its
-  review report carries `review-not-established`,
-  `review-change-too-large`, `review-everything-excluded` or
-  `review-nothing-changed`; when it carries any finding marked
-  `not_started`; or when it is absent or not a findings report. The
-  `not_started` rule keys on the mark rather than on an id. The product's
-  `findings.Finding.NotStarted` stands for work that never started, and
-  only the program sets it: the parsers clear it on any agent's report.
-  Today it marks one finding, the usage ceiling's `usage-ceiling`
-  (`internal/machine/ceiling.go`), whose report stands in for a review
-  call the ceiling refused, so no reviewer ran. The mark is one of the
-  compared fields.
-  `review_established_runs` lists each such run with its value and the
+- `review_established`: per run, `false` when its review report carries
+  `review-not-established`, `review-change-too-large`,
+  `review-everything-excluded` or `review-nothing-changed`, or is absent
+  or not a findings report; `null` when the report carries any finding
+  marked `not_started`; `true` otherwise. Per attempt, `true` when any run
+  is `true`, else `null` when any run is `null`, else `false`; and `null`
+  when the fold's verdict is not `review executed`.
+- **Limit: a `not_started` mark makes it unknown, never `true` or `false`.**
+  The mark (`findings.Finding.NotStarted`, set only by the program, today
+  only on the usage ceiling's `usage-ceiling`) is on the report both when
+  the ceiling refused the review itself and when a fix round it refused
+  left the hold that `internal/pipeline`'s stage node appends to a review
+  that then ran, and the report cannot tell the two apart. The mark is one
+  of the compared fields.
+- `review_established_runs` lists each such run with its value and the
   finding ids (or the reason) it was decided from, and each such run also
   carries `review_executions`, the execution rows the report listed, which
   is evidence only: a forced stop drops the row (#928).
@@ -419,7 +419,8 @@ Limits:
   and the four not-established finding ids are copies of
   `internal/pipeline` and `internal/stages/review.go`. The stage names are
   pinned by tests. Of the finding ids only `review-not-established` is
-  (case A), and the `not_started` rule is pinned by a real ceiling refusal.
+  (case A). The `not_started` rule is pinned by a real ceiling refusal and
+  by the ceiling's own finding planted on a reviewed report.
   The node prefixes are not pinned.
 
 **Grader state.** Setup writes lost-work tip SHAs under
