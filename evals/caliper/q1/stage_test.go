@@ -554,7 +554,7 @@ func TestStageReadsASkippedReview(t *testing.T) {
 // log read waits a second through the wrapper, so activity.active_ns moves
 // between the two report reads and nothing compared does, and they agree.
 // This asserts the stage verdict only; gate_observation's
-// started-not-finished is assistant#930's.
+// started-not-finished is TestGateRecordReadsARunningRunAsStartedNotFinished's.
 func TestStageReadsAReviewInFlightAsStartedNotCompleted(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
