@@ -371,6 +371,12 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	wantStage(t, j, "cannot tell")
 }
 
+// afterReview is the stages a run whose review this test is about skips: the
+// subject's own test command, and the fix round its failure starts, depend on
+// what the machine has (go on the attempt's PATH), which no stage verdict here
+// is about.
+const afterReview = "test,document,lint,push,pr,ci"
+
 // TestStageReadsAnEstablishedReview: the reviewer is the scripted stand-in
 // and returns a review with no finding, so the review stage executed and a
 // review was established (row 4, true). A labeled edit adding a
@@ -382,7 +388,7 @@ func TestStageReadsAnEstablishedReview(t *testing.T) {
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
 	}})
 	a.serve()
-	id := a.intent("--skip", "push,pr,ci")
+	id := a.intent("--skip", afterReview)
 	a.cleanup()
 	reviews := 0
 	for _, c := range agent.Calls() {
@@ -423,7 +429,7 @@ func TestStageFoldsEstablishedAsAny(t *testing.T) {
 	a.serve()
 	first := a.intent()
 	a.assistant(a.checkout, "--json", "--cancel="+first)
-	second := a.intent("--skip", "push,pr,ci")
+	second := a.intent("--skip", afterReview)
 	a.cleanup()
 	j := a.judge(a.built())
 	wantStage(t, j, "review executed", 4, 4)
@@ -522,7 +528,7 @@ func TestStageReadsARunRefusedBeforeAnyStage(t *testing.T) {
 func TestStageReadsASkippedReview(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
-	id := a.intent("--skip", "review")
+	id := a.intent("--skip", "review,"+afterReview)
 	a.cleanup()
 	rev := a.built()
 	wantStage(t, a.judge(rev), "stages executed, review not executed", 6)
