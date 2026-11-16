@@ -159,8 +159,9 @@ That is `operationally_failed()`, derived from the field and never stored.
 Such an attempt keeps its observed gate state but is never a clean validated
 landing, and never silently a successful Q1 run.
 
-The mapping table (`TABLE` in `gate_record.py`) maps each `outcome` and stop
-result `cleanup.sh` can write onto the two fields. A stop is `ok` with exit 0,
+The mapping table (`TABLE` in `gate_record.py`) lists the `outcome` and stop
+result pairs `cleanup.sh` is expected to write, and maps each onto the two
+fields. A stop is `ok` with exit 0,
 `failed` with any other exit or with exit null (the call raised), and
 `absent` with no `stop` step.
 
@@ -175,8 +176,8 @@ result `cleanup.sh` can write onto the two fields. A stop is `ok` with exit 0,
 | `error` | failed | indeterminate | `failure` |
 | `error` | absent | indeterminate | `failure` |
 
-Any other pair is indeterminate, because `cleanup.sh` cannot write it, and
-its `cleanup_status` follows the stop. A missing record file is indeterminate
+Any other pair is judged indeterminate, and its `cleanup_status` follows the
+stop. A missing record file is indeterminate
 with `cleanup_status` `failure`: the harness failed, and the attempt stays in
 the denominator. So does a record that is not JSON.
 

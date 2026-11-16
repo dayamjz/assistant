@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -289,27 +291,46 @@ func (a *attempt) recordPending(run store.Run) {
 // awaited before the test ends.
 func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
 	a := newAttempt(t)
-	started, release, exited := filepath.Join(a.root, "started"), filepath.Join(a.root, "release"), filepath.Join(a.root, "exited")
-	// Bounded at 60s by the clock, and it marks its exit, so the test can wait
-	// until no stand-in outlives it.
-	script := fmt.Sprintf("#!/bin/sh\ntrap ': > %[3]s' EXIT\n: > %[1]s\nend=$(($(date +%%s) + 60))\n"+
+	agents, release := filepath.Join(a.root, "agents"), filepath.Join(a.root, "release")
+	want(t, "agents dir", os.Mkdir(agents, 0o755), nil)
+	// Each stand-in names itself by pid in agents and blocks, bounded at 60s by
+	// the clock, until released. The test waits until every named pid is gone,
+	// which holds however it ended: released, or killed with the service's
+	// agents, where a shell such as dash runs no exit trap.
+	script := fmt.Sprintf("#!/bin/sh\n: > %[1]s/$$\nend=$(($(date +%%s) + 60))\n"+
 		"while [ ! -e %[2]s ] && [ \"$(date +%%s)\" -lt \"$end\" ]; do sleep 0.1; done\nexit 1\n",
-		procgroup.ShellQuote(started), procgroup.ShellQuote(release), procgroup.ShellQuote(exited))
+		procgroup.ShellQuote(agents), procgroup.ShellQuote(release))
 	for _, name := range []string{"claude", "cursor"} {
 		want(t, "stand-in "+name, procgroup.WriteProgram(filepath.Join(a.root, "stub", name), []byte(script), 0o755), nil)
+	}
+	started := func() []int {
+		entries, _ := os.ReadDir(agents)
+		pids := make([]int, 0, len(entries))
+		for _, e := range entries {
+			if pid, err := strconv.Atoi(e.Name()); err == nil {
+				pids = append(pids, pid)
+			}
+		}
+		return pids
 	}
 	a.serve()
 	t.Cleanup(func() {
 		_ = os.WriteFile(release, nil, 0o644)
-		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-			if _, err := os.Stat(started); err != nil {
-				return // no stand-in ever started
+		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+			alive := []int{}
+			for _, pid := range started() {
+				if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+					alive = append(alive, pid)
+				}
 			}
-			if _, err := os.Stat(exited); err == nil {
+			if len(alive) == 0 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("stand-in agents %v still run 30s after their release", alive)
 				return
 			}
 		}
-		t.Errorf("the blocking stand-in agent did not exit 30s after its release")
 	})
 	intent := a.command(a.checkout, a.bin, "--home", a.home, "--json", "--intent", "ship the branch")
 	var output strings.Builder // read only once ended is closed
@@ -334,7 +355,7 @@ func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o644); _ = reap() })
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if _, err := os.Stat(started); err == nil {
+		if len(started()) > 0 {
 			break
 		}
 		if time.Now().After(deadline) {

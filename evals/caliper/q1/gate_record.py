@@ -22,10 +22,9 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # Every other line, one this instrument does not know included, is read-path.
 NOT_READ_PATH = ("usage: ", "stop: ")
 
-# The mapping table, one row per cleanup.sh outcome and stop result it can
-# write, onto (gate_observation, cleanup_status). "runs" means valid, with the
-# state the checked runs give. Any other pair is indeterminate, because
-# cleanup.sh cannot write it (it stops in a finally once a home is seen).
+# The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
+# to write, onto (gate_observation, cleanup_status). "runs" means valid, with
+# the state the checked runs give. Any other pair is judged indeterminate.
 TABLE = {
     ("read", "ok"): ("runs", "success"),
     ("read", "failed"): ("runs", "failure"),
