@@ -162,16 +162,23 @@ subprocess.run = run
 // scriptAgent has the service's agent be the scripted stand-in: the claude
 // shim ahead of the exit-1 stubs on PATH, and the home's configuration naming
 // it with the stand-in's arguments, with no fix role, as
-// journey.WriteConfiguration writes it. It is called before serve.
-func (a *attempt) scriptAgent(script standin.Script) *standin.Agent {
+// journey.WriteConfiguration writes it, with the keys in more beside them.
+// It is called before serve.
+func (a *attempt) scriptAgent(script standin.Script, more ...map[string]any) *standin.Agent {
 	a.t.Helper()
 	agent := standin.New(a.t, script)
 	shims, err := journey.Shims()
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	a.configure(map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
-		"roles": map[string]any{"fix": map[string]any{}}})
+	document := map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
+		"roles": map[string]any{"fix": map[string]any{}}}
+	for _, m := range more {
+		for k, v := range m {
+			document[k] = v
+		}
+	}
+	a.configure(document)
 	a.path = shims + ":" + a.path
 	return agent
 }
@@ -671,5 +678,44 @@ func TestStageReadsARunHeldAtRebaseAsReviewNotReached(t *testing.T) {
 	wantStage(t, j, "stages executed, review not executed", 10)
 	if v, ok := a.rawStage()["review_established"]; !ok || v != nil {
 		t.Errorf("review_established = %v (present %v), want null", v, ok)
+	}
+}
+
+// TestStageReadsACeilingHeldReviewAsNotEstablished: the operator's usage
+// ceiling refuses the review's agent call, so the review stage completes
+// (ran: true) with the ceiling's own report, the usage-ceiling finding
+// marked not_started, and no reviewer ran. That is review executed and
+// never established. The ceiling is real: run 1's failed review reports the
+// stand-in's usage, which reaches a one-token output ceiling, and run 1 is
+// cancelled, so run 2's review call is the one refused.
+func TestStageReadsACeilingHeldReviewAsNotEstablished(t *testing.T) {
+	a := newAttempt(t)
+	agent := a.scriptAgent(standin.Script{Steps: []standin.Step{
+		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Failed("the reviewer gave up")},
+	}}, map[string]any{"usage_ceiling": map[string]any{"window": "1h", "output_tokens": 1}})
+	a.serve()
+	first := a.intent()
+	a.assistant(a.checkout, "--json", "--cancel="+first)
+	second := a.intent()
+	a.cleanup()
+	want(t, "reviewer calls", len(agent.Calls()), 1)
+	var ceiling map[string]any
+	if report, _ := reviewOf(a.stageEntries()[second].Report.Output)["report"].(map[string]any); report != nil {
+		for _, f := range report["findings"].([]any) {
+			if f := f.(map[string]any); f["id"] == "usage-ceiling" {
+				ceiling = f
+			}
+		}
+	}
+	want(t, "the ceiling's finding, not started", field(ceiling, "not_started"), true)
+	j := a.judge(a.built())
+	wantStage(t, j, "review executed", 4, 4)
+	got := map[string]bool{}
+	for _, r := range j.StageExecution.EstablishedRuns {
+		got[r.ID] = r.Established
+	}
+	want(t, "established runs", got, map[string]bool{first: false, second: false})
+	if se := j.StageExecution; se.ReviewEstablished == nil || *se.ReviewEstablished {
+		t.Errorf("review_established = %v, want false: no reviewer reviewed anything", se.ReviewEstablished)
 	}
 }

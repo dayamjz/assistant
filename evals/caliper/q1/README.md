@@ -348,9 +348,10 @@ skipped review never reads as started.
 **The consistency window.** The second report read brackets the log reads.
 The fields compared are exactly the ones the table reads (`facts()` in
 `gate_record.py` is both): `record.id`, `record.status`, whether `stages` is
-present, `position`, `activity.stage`, and review's `ran`, `outcome` and
-finding ids. `activity.since` and `activity.active_ns` are not compared, so
-a live run that did not move still agrees. Matching reads are best-effort
+present, `position`, `activity.stage`, and review's `ran`, `outcome`,
+finding ids, and whether a finding is marked `not_started`.
+`activity.since` and `activity.active_ns` are not compared, so a live run
+that did not move still agrees. Matching reads are best-effort
 consistency, not an atomic snapshot: a run that moves and comes back to the
 same compared values between the two reads (ABA) is not caught. A change no
 compared field shows cannot change a row, but an ABA transition can.
@@ -373,7 +374,15 @@ read a missing `review_established` as null):
   fold's verdict is not `review executed`. A run did not establish one when its
   review report carries `review-not-established`,
   `review-change-too-large`, `review-everything-excluded` or
-  `review-nothing-changed`, or is absent or not a findings report.
+  `review-nothing-changed`; when it carries any finding marked
+  `not_started`; or when it is absent or not a findings report. The
+  `not_started` rule keys on the mark rather than on an id. The product's
+  `findings.Finding.NotStarted` stands for work that never started, and
+  only the program sets it: the parsers clear it on any agent's report.
+  Today it marks one finding, the usage ceiling's `usage-ceiling`
+  (`internal/machine/ceiling.go`), whose report stands in for a review
+  call the ceiling refused, so no reviewer ran. The mark is one of the
+  compared fields.
   `review_established_runs` lists each such run with its value and the
   finding ids (or the reason) it was decided from, and each such run also
   carries `review_executions`, the execution rows the report listed, which
@@ -409,8 +418,9 @@ Limits:
 - **Copies of the product's names.** The nine stage names, the node prefixes
   and the four not-established finding ids are copies of
   `internal/pipeline` and `internal/stages/review.go`. The stage names are
-  pinned by tests, and of the finding ids only `review-not-established`
-  (case A); the node prefixes are not.
+  pinned by tests. Of the finding ids only `review-not-established` is
+  (case A), and the `not_started` rule is pinned by a real ceiling refusal.
+  The node prefixes are not pinned.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside

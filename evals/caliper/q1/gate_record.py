@@ -113,7 +113,8 @@ EXECUTED, CANNOT, NOT_MEASURED = "review executed", "cannot tell", "not measured
 STARTED, NOT_REVIEWED, NO_STAGE = "review started, not completed", "stages executed, review not executed", "no stage executed"
 VERDICTS = (EXECUTED, STARTED, NOT_REVIEWED, NO_STAGE, CANNOT, NOT_MEASURED)
 UNREAD, COMPLETED, RUN_STARTED = "unread", "review-completed", "review-started-not-completed"
-# A review that completed with one of these reviewed nothing (internal/stages/review.go).
+# A review that completed with one of these reviewed nothing (internal/stages/review.go),
+# and so did one whose report carries a not_started finding (not_started below).
 NOT_ESTABLISHED = {"review-not-established", "review-change-too-large", "review-everything-excluded",
                    "review-nothing-changed"}
 
@@ -146,6 +147,13 @@ def finding_ids(report):
     return sorted(str(f.get("id", "")) for f in found)
 
 
+def not_started(report):
+    """Whether a finding of the report stands in for work that never started
+    (findings.Finding.NotStarted, which only the program sets: the usage ceiling's)."""
+    found = report.get("findings") if isinstance(report, dict) else None
+    return isinstance(found, list) and any(isinstance(f, dict) and f.get("not_started") is True for f in found)
+
+
 def facts(step):
     """Every field of a run report the table reads, and so every field the
     two reads are compared on (README "Stage execution"), or None unread."""
@@ -156,7 +164,8 @@ def facts(step):
     return {"id": doc["record"].get("id"), "status": doc["record"].get("status"), "stages": "stages" in doc,
             "position": doc.get("position"), "activity": activity.get("stage") if isinstance(activity, dict) else None,
             "review": review and {"ran": review.get("ran"), "outcome": review.get("outcome"),
-                                  "findings": finding_ids(review.get("report"))}}
+                                  "findings": finding_ids(review.get("report")),
+                                  "not_started": not_started(review.get("report"))}}
 
 
 def written(step):
@@ -200,10 +209,12 @@ def classify(rid, entry):
 
 def established(entry):
     """(review_established, what it was decided from) for a review-completed run."""
-    ids = facts(entry["report"])["review"]["findings"]
-    if ids is None:
+    review = facts(entry["report"])["review"]
+    if review["findings"] is None:
         return False, "the review report is absent or not a findings report"
-    return not NOT_ESTABLISHED & set(ids), ids
+    if review["not_started"]:
+        return False, "a finding stands in for a review that never started: %s" % review["findings"]
+    return not NOT_ESTABLISHED & set(review["findings"]), review["findings"]
 
 
 def stage_execution(record, observation):
