@@ -21,12 +21,16 @@ import (
 
 var spec string // this directory, where cleanup.sh and build-subject.sh are
 
-// TestMain runs the tests under standin.RunOwned, so a held stand-in a test
-// starts (standin.HeldWait) ends with this binary (WatchOwner), and the
-// package fails if one still runs once the tests return.
+// TestMain lets this binary act as the scripted agent (standin.Main, then
+// journey.ActAsShim, which refuses an agent call nothing scripted) and as a
+// held process (standin.HeldWait). Every process of this binary the tests
+// start ends with the test binary (standin.WatchOwner), and once the tests
+// return the package fails if any is still running (standin.RunOwned).
+// Nothing here pushes, so no standin.AtTerminal: every run starts with --intent.
 func TestMain(m *testing.M) {
 	standin.WatchOwner()
 	standin.Main()
+	journey.ActAsShim()
 	var err error
 	if spec, err = os.Getwd(); err == nil {
 		if err = standin.RegisterTempTag(); err == nil {
@@ -85,6 +89,13 @@ func newAttempt(t *testing.T) *attempt {
 	return a
 }
 
+// environ is the attempt's whole environment for a command it starts.
+func (a *attempt) environ() []string {
+	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
+		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}, a.env...)
+}
+
 // run starts name in dir with the attempt's environment: exit code, stdout, stderr.
 func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
 	a.t.Helper()
@@ -101,11 +112,7 @@ func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
 // that ended it, so it is told by ctx. A goroutine beside the test may call it.
 func (a *attempt) execute(dir, name string, args ...string) (int, string, string, error) {
 	cmd := procgroup.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Env = []string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
-		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}
-	cmd.Env = append(cmd.Env, a.env...)
+	cmd.Dir, cmd.Env = dir, a.environ()
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -274,6 +281,17 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
+	// The stage evidence (schema 2): the report, the review log alone because
+	// the report has stages, and the report again, each read from the root.
+	want(t, "schema", string(r.steps["schema"]), "2")
+	stages := a.stageEntries()
+	e, ok := stages[started.Record.ID]
+	if len(stages) != 1 || !ok {
+		t.Fatalf("stages = %v, want the one run", stages)
+	}
+	want(t, "reads", []any{e.Report.Exit, len(e.Logs), e.Logs["review"].Exit, e.ReportAfter.Exit}, []any{0, 1, 0, 0})
+	want(t, "read run", []any{field(e.Report.Output, "record", "id"), e.Logs["review"].Output["run"], e.Logs["review"].Output["stage"]},
+		[]any{started.Record.ID, started.Record.ID, "review"})
 }
 
 // TestCleanupStillReadsWhenTheUsageFileCannotBeWritten: a directory where the

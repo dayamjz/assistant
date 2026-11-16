@@ -30,11 +30,16 @@ root, gate = sys.argv[1], sys.argv[2]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
 checkout = os.path.join(root, "work", "work")
-record = {"schema": 1, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+record = {"schema": 2, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
-def call(name, args, cwd, out=None):
-    """Run assistant and record its exit status, stderr and output, never discarded."""
+# pipeline.Order's wire names, review first (README "Stage evidence");
+# stage_test.go pins the list to the product's.
+STAGES = ("review", "intent", "rebase", "test", "document", "lint", "push", "pr", "ci")
+
+def call(name, args, cwd, out=None, into=None, key=None):
+    """Run assistant and record its exit status, stderr and output, never
+    discarded, as into[key] (record[name] by default)."""
     step = {"argv": ["assistant", "--home", home] + args, "cwd": cwd}
     try:
         p = subprocess.run(step["argv"], cwd=cwd, stdin=subprocess.DEVNULL,
@@ -46,7 +51,7 @@ def call(name, args, cwd, out=None):
         step["output"] = json.loads(stdout)
     except ValueError:
         step["output"], step["stdout"] = None, stdout
-    record[name] = step  # stored before the file write below, which may fail
+    (record if into is None else into)[key or name] = step  # stored before the file write below, which may fail
     if step["exit"] != 0:
         record["errors"].append("%s: exit %s: %s" % (
             name, step["exit"], (step["stderr"] or stdout).strip()))
@@ -58,6 +63,22 @@ def call(name, args, cwd, out=None):
         except OSError as e:  # a side file: recorded, and the reads go on
             record["errors"].append("%s: writing %s: %r" % (name, out, e))
     return step
+
+def read_stages(runs):
+    """Per listed run, while the service is up: its report, its review log
+    (all nine logs when the report shows no checkpoint), then the report again."""
+    record["stages"] = {}
+    for run in runs:
+        rid = run.get("id") if isinstance(run, dict) else None
+        if not isinstance(rid, str) or not rid:
+            continue  # gate_record.py judges a runs read with such a run indeterminate
+        entry = record["stages"][rid] = {"logs": {}}
+        first = call("run:" + rid, ["--json", "runs", rid], root, into=entry, key="report")
+        bare = first["exit"] == 0 and isinstance(first["output"], dict) and "stages" not in first["output"]
+        for stage in STAGES if bare else STAGES[:1]:
+            call("log:%s:%s" % (rid, stage), ["--json", "runs", rid, "--log=" + stage], root,
+                 into=entry["logs"], key=stage)
+        call("run-after:" + rid, ["--json", "runs", rid], root, into=entry, key="report_after")
 
 def capture():
     if not os.path.isdir(home):
@@ -79,6 +100,7 @@ def capture():
             if ok:
                 record["repositories"] = sorted({r.get("repository_id") for r in runs or []
                                                  if isinstance(r, dict)}, key=str)
+                read_stages(runs or [])
             elif read["exit"] == 0:
                 record["errors"].append("runs: exit 0, but the output is not a runs document")
     finally:
