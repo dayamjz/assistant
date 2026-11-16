@@ -152,7 +152,9 @@ Each attempt has two fields, never merged:
   it (`id`, `status`, `submitted_head`, `build.revision`, `build.modified`
   and `config_digest`, as `runs` reported them), or `indeterminate`, with a `reason`.
 - `cleanup_status`: `status` `success`, `failure` or `not-attempted`, with the
-  stop's `exit` and `stderr`.
+  stop's `exit` and `stderr`. When there is no record to read a stop from, it
+  is `failure` with `exit` and `stderr` null and a `reason`: `no record file`
+  or `record unreadable`.
 
 An attempt is operationally failed when its `cleanup_status` is `failure`.
 That is `operationally_failed()`, derived from the field and never stored.
@@ -175,6 +177,13 @@ fields. A stop is `ok` with exit 0,
 | `error` | ok | indeterminate | `success` |
 | `error` | failed | indeterminate | `failure` |
 | `error` | absent | indeterminate | `failure` |
+
+A valid row is valid only when the record also passes the checks below,
+which include no read-path error line. A service already down at cleanup still
+answers its status call (exit 0, not running), so it writes no `service: ...`
+line: a `no-checkout` attempt whose service was down stays valid `no-checkout`,
+with `cleanup_status` `failure` from its failed stop. A status call that itself
+fails writes a `service: ...` line and makes any row indeterminate.
 
 Any other pair is judged indeterminate, and its `cleanup_status` follows the
 stop. A missing record file is indeterminate
@@ -214,7 +223,8 @@ The valid states, from the runs:
 - `reached-no-stage`: every run is `pending`, recorded and never started.
 - `started-not-finished`: a run is still `running`, and no run is `held`,
   `passed`, `failed` or `terminated`. The gate started and did not finish,
-  and this is never counted as `ran`.
+  and this is never counted as `ran`. Not covered by a test yet, see
+  assistant#930.
 - `ran`: a run reached a hold or an end status (`held`, `passed`,
   `failed` or `terminated`). It does not mean that a stage executed.
 

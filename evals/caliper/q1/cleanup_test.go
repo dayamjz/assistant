@@ -78,21 +78,15 @@ func newAttempt(t *testing.T) *attempt {
 	return a
 }
 
-// command is name in dir with the attempt's environment, not yet started.
-func (a *attempt) command(dir, name string, args ...string) *exec.Cmd {
+// run starts name in dir with the attempt's environment: exit code, stdout, stderr.
+func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
+	a.t.Helper()
 	cmd := procgroup.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = []string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}
 	cmd.Env = append(cmd.Env, a.env...)
-	return cmd
-}
-
-// run starts name in dir with the attempt's environment: exit code, stdout, stderr.
-func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
-	a.t.Helper()
-	cmd := a.command(dir, name, args...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

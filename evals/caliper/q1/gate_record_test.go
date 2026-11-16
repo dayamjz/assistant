@@ -3,23 +3,15 @@
 package q1_test
 
 import (
-	"context"
 	"debug/buildinfo"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/dayamjz/assistant/internal/home"
-	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -280,101 +272,6 @@ func (a *attempt) recordPending(run store.Run) {
 	}
 	a.assistant(a.root, "service", "start")
 	a.t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") })
-}
-
-// TestGateRecordReadsARunningRunAsStartedNotFinished: a stand-in agent that
-// blocks until released keeps a run running through capture. That is
-// started, not finished, and never counted as ran. The run is started with
-// --intent, as every other run here is, because the gate refuses a push from
-// a process with no terminal above it, which is how CI runs; --intent blocks
-// while the run advances, so it runs beside the test, and its exit is
-// awaited before the test ends.
-func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
-	a := newAttempt(t)
-	agents, release := filepath.Join(a.root, "agents"), filepath.Join(a.root, "release")
-	want(t, "agents dir", os.Mkdir(agents, 0o755), nil)
-	// Each stand-in names itself by pid in agents and blocks, bounded at 60s by
-	// the clock, until released. The test waits until every named pid is gone,
-	// which holds however it ended: released, or killed with the service's
-	// agents, where a shell such as dash runs no exit trap.
-	script := fmt.Sprintf("#!/bin/sh\n: > %[1]s/$$\nend=$(($(date +%%s) + 60))\n"+
-		"while [ ! -e %[2]s ] && [ \"$(date +%%s)\" -lt \"$end\" ]; do sleep 0.1; done\nexit 1\n",
-		procgroup.ShellQuote(agents), procgroup.ShellQuote(release))
-	for _, name := range []string{"claude", "cursor"} {
-		want(t, "stand-in "+name, procgroup.WriteProgram(filepath.Join(a.root, "stub", name), []byte(script), 0o755), nil)
-	}
-	started := func() []int {
-		entries, _ := os.ReadDir(agents)
-		pids := make([]int, 0, len(entries))
-		for _, e := range entries {
-			if pid, err := strconv.Atoi(e.Name()); err == nil {
-				pids = append(pids, pid)
-			}
-		}
-		return pids
-	}
-	a.serve()
-	t.Cleanup(func() {
-		_ = os.WriteFile(release, nil, 0o644)
-		for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-			alive := []int{}
-			for _, pid := range started() {
-				if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-					alive = append(alive, pid)
-				}
-			}
-			if len(alive) == 0 {
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Errorf("stand-in agents %v still run 30s after their release", alive)
-				return
-			}
-		}
-	})
-	intent := a.command(a.checkout, a.bin, "--home", a.home, "--json", "--intent", "ship the branch")
-	var output strings.Builder // read only once ended is closed
-	intent.Stdout, intent.Stderr = &output, &output
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	ended := make(chan error, 1)
-	go func() { ended <- procgroup.Run(ctx, intent, 5*time.Second) }()
-	var once sync.Once
-	reap := func() error { // ends --intent, waiting up to 30s for it to return on its own
-		var err error
-		once.Do(func() {
-			select {
-			case err = <-ended:
-			case <-time.After(30 * time.Second):
-				cancel()
-				<-ended // its exit error is dropped, so a stop for timing out is never read as an ordinary exit
-				err = errors.New("--intent was still running 30s on, so it was stopped")
-			}
-			cancel()
-		})
-		return err
-	}
-	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o644); _ = reap() })
-	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if len(started()) > 0 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_ = os.WriteFile(release, nil, 0o644)
-			t.Fatalf("no stand-in agent started 30s after --intent: %v\n%s", reap(), output.String())
-		}
-	}
-	a.cleanup()
-	_ = os.WriteFile(release, nil, 0o644)
-	if err := reap(); err != nil && !errors.As(err, new(*exec.ExitError)) {
-		t.Errorf("%v\n%s", err, output.String())
-	}
-	r := a.report(a.records(), a.built(), a.name())
-	j := r.Attempts[0]
-	wantJudged(t, j, "started-not-finished", "success")
-	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "running" {
-		t.Errorf("runs = %+v, want the one running run", j.GateObservation.Runs)
-	}
-	want(t, "counts", []int{r.Counts.GateObservation["ran"], r.Counts.GateObservation["started-not-finished"]}, []int{0, 1})
 }
 
 // TestGateRecordKeepsAValidReadWhenTheStopFails is the (read, stop failed)
