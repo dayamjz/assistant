@@ -39,6 +39,7 @@ type judged struct {
 		Status, Reason string
 		Exit, Stderr   any
 	} `json:"cleanup_status"`
+	StageExecution stageVerdict `json:"stage_execution"`
 }
 
 type report struct {
@@ -48,7 +49,13 @@ type report struct {
 		GateObservation        map[string]int `json:"gate_observation"`
 		ValidWithFailedCleanup int            `json:"valid_with_failed_cleanup"`
 	}
-	StageExecution  string   `json:"stage_execution"`
+	StageExecution struct {
+		Verdicts                      map[string]int
+		ReviewExecutedWithTrouble     int            `json:"review_executed_with_trouble"`
+		ReviewEstablished             map[string]int `json:"review_established"`
+		RunsUnread                    int            `json:"runs_unread"`
+		RunsReviewStartedNotCompleted int            `json:"runs_review_started_not_completed"`
+	} `json:"stage_execution"`
 	UnlistedRecords []string `json:"unlisted_records"`
 }
 
@@ -171,7 +178,7 @@ func TestGateRecordReadsAHeldRunAsRan(t *testing.T) {
 	wantJudged(t, j, "ran", "success")
 	want(t, "stop exit", j.CleanupStatus.Exit, 0)
 	want(t, "counts", []int{r.Counts.Attempts, r.Counts.GateObservation["ran"], r.Counts.ValidWithFailedCleanup}, []int{1, 1, 0})
-	want(t, "stage_execution (#926)", r.StageExecution, "not measured")
+	wantStage(t, j, "review executed", 4)
 	if len(j.GateObservation.Runs) != 1 {
 		t.Fatalf("runs = %+v, want the one held run", j.GateObservation.Runs)
 	}
@@ -190,6 +197,7 @@ func TestGateRecordReadsNoRunAsNeverReached(t *testing.T) {
 	j := a.judge(a.built())
 	wantJudged(t, j, "never-reached", "success")
 	want(t, "runs", len(j.GateObservation.Runs), 0)
+	wantStage(t, j, "no stage executed")
 }
 
 // breakTrustedConfig publishes an assistant.json on main that is not JSON, so
@@ -224,6 +232,7 @@ func TestGateRecordReadsAPendingRunAsReachedNoStage(t *testing.T) {
 	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "terminated" {
 		t.Fatalf("donor runs = %+v, want one terminated run", j.GateObservation.Runs)
 	}
+	wantStage(t, j, "no stage executed", 11) // terminated, and the record shows why it is not ran
 	from := donor.stored(j.GateObservation.Runs[0].ID)
 
 	a := newAttempt(t)
@@ -245,6 +254,7 @@ func TestGateRecordReadsAPendingRunAsReachedNoStage(t *testing.T) {
 	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "pending" {
 		t.Errorf("runs = %+v, want the one pending run", j.GateObservation.Runs)
 	}
+	wantStage(t, j, "no stage executed", 11)
 
 	// Two runs in one attempt: the donor's terminated run beside a pending
 	// copy of it is ran, because one run has an end status.
@@ -254,6 +264,7 @@ func TestGateRecordReadsAPendingRunAsReachedNoStage(t *testing.T) {
 	j = donor.judge(rev)
 	wantJudged(t, j, "ran", "success")
 	want(t, "runs", len(j.GateObservation.Runs), 2)
+	wantStage(t, j, "no stage executed", 11, 11)
 }
 
 // recordPending writes run through internal/store while no service runs, so
@@ -407,6 +418,7 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 	j := a.judge(a.built())
 	wantJudged(t, j, "no-home", "not-attempted")
 	want(t, "stop exit", j.CleanupStatus.Exit, nil)
+	wantStage(t, j, "no stage executed")
 
 	for _, failing := range []bool{false, true} {
 		a := newAttempt(t)
@@ -420,7 +432,9 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 			cleanup = "failure"
 		}
 		a.cleanup()
-		wantJudged(t, a.judge(a.built()), "no-checkout", cleanup)
+		j := a.judge(a.built())
+		wantJudged(t, j, "no-checkout", cleanup)
+		wantStage(t, j, "cannot tell")
 	}
 }
 
@@ -438,6 +452,7 @@ func TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop(t *testing.T)
 	j := a.judge(a.built())
 	wantJudged(t, j, "", "success")
 	wantReason(t, j, "cleanup outcome error: runs: exit 1")
+	wantStage(t, j, "cannot tell")
 
 	a = newAttempt(t)
 	a.serve()
@@ -450,6 +465,7 @@ func TestGateRecordTreatsAFailedReadAsIndeterminateWhateverTheStop(t *testing.T)
 	wantJudged(t, j, "", "failure")
 	wantReason(t, j, "cleanup outcome error: ")
 	want(t, "stop exit", j.CleanupStatus.Exit, 1)
+	wantStage(t, j, "cannot tell") // the service down at capture: row 1
 
 	a = newAttempt(t)
 	a.serve()
@@ -468,6 +484,7 @@ os.path.isdir = isdir
 	j = a.judge(a.built())
 	wantJudged(t, j, "", "failure")
 	wantReason(t, j, "cleanup outcome error: cleanup: RuntimeError('injected fault before the read')")
+	wantStage(t, j, "cannot tell")
 }
 
 // TestGateRecordTreatsARaiseAfterTheReadAsIndeterminate (#923): a fault
@@ -492,6 +509,7 @@ builtins.sorted = sorted
 	j := a.judge(a.built())
 	wantJudged(t, j, "", "success")
 	wantReason(t, j, "injected fault after the read")
+	wantStage(t, j, "cannot tell")
 }
 
 // copyRecord writes this attempt's record as name's in dir, edited by edit
@@ -581,7 +599,9 @@ func TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary(t *testing.T) {
 // TestGateRecordCountsEveryNamedAttempt: one denominator over every attempt
 // named, a missing record and a malformed one (hand-written, so malformed)
 // included as indeterminate, the failed cleanup counted beside "ran", and a
-// record nobody named listed rather than dropped.
+// record nobody named listed rather than dropped. The stage verdict counts the
+// same five: the failed-stop attempt's record is edited to schema 1 (labeled
+// edit: a#925's record), which is not measured and keeps its gate state.
 func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 	ran, failed, nohome := newAttempt(t), newAttempt(t), newAttempt(t)
 	ran.serve()
@@ -596,7 +616,8 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 	}
 	nohome.cleanup()
 	dir := filepath.Join(ran.root, "all")
-	names := []string{ran.copyRecord(dir, ran.name(), nil), failed.copyRecord(dir, failed.name(), nil),
+	schemaOne := func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages") }
+	names := []string{ran.copyRecord(dir, ran.name(), nil), failed.copyRecord(dir, failed.name(), schemaOne),
 		nohome.copyRecord(dir, nohome.name(), nil), "never-written", "malformed"}
 	ran.copyRecord(dir, "unlisted", nil)
 	want(t, "malformed", os.WriteFile(filepath.Join(dir, "malformed.record.json"), []byte("{"), 0o644), nil)
@@ -606,6 +627,9 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 		"never-reached": 0, "no-home": 1, "no-checkout": 0, "indeterminate": 2})
 	want(t, "valid with failed cleanup", r.Counts.ValidWithFailedCleanup, 1)
 	want(t, "unlisted", r.UnlistedRecords, []string{"unlisted.record.json"})
+	want(t, "by stage verdict", r.StageExecution.Verdicts, map[string]int{"review executed": 1, "review started, not completed": 0,
+		"stages executed, review not executed": 0, "no stage executed": 1, "cannot tell": 2, "not measured": 1})
+	want(t, "by review_established", r.StageExecution.ReviewEstablished, map[string]int{"true": 0, "false": 1, "null": 4})
 	wantJudged(t, r.Attempts[3], "", "failure")
 	wantReason(t, r.Attempts[3], "no record file")
 	wantJudged(t, r.Attempts[4], "", "failure")
