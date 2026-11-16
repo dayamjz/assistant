@@ -49,27 +49,47 @@ func TestMain(m *testing.M) {
 }
 
 // attempt is one Caliper attempt root: hooks run in <root>/work, the checkout
-// is <root>/work/work, the gate home <root>/.assistant. HOME and TMPDIR are the
-// root, as the agent's HOME is under Caliper, so nothing written leaves it.
+// is <root>/work/work, the gate home <root>/.assistant. HOME is the root, as
+// the agent's HOME is under Caliper, and TMPDIR is the root too unless the
+// attempt is made in an arm's TMPDIR (newAttemptIn), so nothing written leaves it.
 type attempt struct {
 	t                    *testing.T
 	root, bin, path      string
 	home, work, checkout string
+	tmpdir               string   // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
 	env                  []string // added to every command's environment
 }
 
 func newAttempt(t *testing.T) *attempt {
 	t.Helper()
-	bin, err := journey.Binary()
-	root := ""
-	if err == nil {
-		root, err = standin.TempDir("q1")
-	}
+	root, err := standin.TempDir("q1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	a := &attempt{t: t, root: root, bin: bin, home: filepath.Join(root, ".assistant"), work: filepath.Join(root, "work")}
+	return newAttemptAt(t, root, root)
+}
+
+// newAttemptIn makes the attempt root name inside tmpdir, as caliper makes
+// every attempt root of a run inside that run's TMPDIR, which its hooks inherit.
+func newAttemptIn(t *testing.T, tmpdir, name string) *attempt {
+	t.Helper()
+	root := filepath.Join(tmpdir, name)
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return newAttemptAt(t, root, tmpdir)
+}
+
+// newAttemptAt is the attempt at root, an existing directory, with the hooks
+// given tmpdir as TMPDIR.
+func newAttemptAt(t *testing.T, root, tmpdir string) *attempt {
+	t.Helper()
+	bin, err := journey.Binary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &attempt{t: t, root: root, bin: bin, home: filepath.Join(root, ".assistant"), work: filepath.Join(root, "work"), tmpdir: tmpdir}
 	a.checkout = filepath.Join(a.work, "work")
 	stub := filepath.Join(root, "stub")
 	git, err := exec.LookPath("git")
@@ -91,7 +111,7 @@ func newAttempt(t *testing.T) *attempt {
 
 // environ is the attempt's whole environment for a command it starts.
 func (a *attempt) environ() []string {
-	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
+	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.tmpdir, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}, a.env...)
 }
@@ -230,7 +250,7 @@ func (a *attempt) cleanup() (int, string, record) {
 	a.t.Helper()
 	code, out, errs := a.run(a.work, "sh", filepath.Join(spec, "cleanup.sh"))
 	var r record
-	data, err := os.ReadFile(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+".record.json"))
+	data, err := os.ReadFile(filepath.Join(a.tmpdir, "caliper-q1-gate", filepath.Base(a.root)+".record.json"))
 	if err == nil {
 		err = errors.Join(json.Unmarshal(data, &r), json.Unmarshal(data, &r.steps))
 	}
@@ -301,7 +321,7 @@ func TestCleanupStillReadsWhenTheUsageFileCannotBeWritten(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
 	a.assistant(a.checkout, "--json", "--intent", "ship the branch")
-	want(t, "mkdir", os.MkdirAll(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"), 0o755), nil)
+	want(t, "mkdir", os.MkdirAll(filepath.Join(a.tmpdir, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"), 0o755), nil)
 	code, out, r := a.cleanup()
 	want(t, "exit", code, 1)
 	want(t, "outcome", r.Outcome, "read")
@@ -349,7 +369,7 @@ os.path.isdir = isdir
 
 // usageFile reports whether cleanup saved a usage read beside the record.
 func (a *attempt) usageFile() bool {
-	_, err := os.Stat(filepath.Join(a.root, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"))
+	_, err := os.Stat(filepath.Join(a.tmpdir, "caliper-q1-gate", filepath.Base(a.root)+"-usage.json"))
 	return err == nil
 }
 
