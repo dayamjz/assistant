@@ -32,11 +32,12 @@ type armAttempt struct {
 }
 
 type armReport struct {
-	Ablated         []string
-	CaliperAttempts int `json:"caliper_attempts"`
-	Records         int
-	MissingRecords  int `json:"missing_records"`
-	Counts          struct {
+	Ablated            []string
+	CaliperAttempts    int `json:"caliper_attempts"`
+	Records            int
+	MissingRecords     int `json:"missing_records"`
+	RecordsBeyondSaved int `json:"records_beyond_saved"`
+	Counts             struct {
 		GateObservation map[string]int `json:"gate_observation"`
 	}
 	StageExecution struct {
@@ -70,6 +71,12 @@ func armDir(t *testing.T) string {
 // first n attempts (labeled edit: the shape is caliper 0.19.0's own), into dir.
 func result(t *testing.T, dir, from string, n int) string {
 	t.Helper()
+	return editedResult(t, dir, from, n, nil)
+}
+
+// editedResult is result with edit applied to the result's run (labeled edit).
+func editedResult(t *testing.T, dir, from string, n int, edit func(run map[string]any)) string {
+	t.Helper()
 	data, err := os.ReadFile(filepath.Join(spec, from))
 	var doc map[string]any
 	if err == nil {
@@ -81,6 +88,9 @@ func result(t *testing.T, dir, from string, n int) string {
 	task := doc["task_results"].([]any)[0].(map[string]any)
 	task["attempts"] = task["attempts"].([]any)[:n]
 	doc["task_results"] = []any{task}
+	if edit != nil {
+		edit(doc["run"].(map[string]any))
+	}
 	path := filepath.Join(dir, from)
 	if data, err = json.Marshal(doc); err == nil {
 		err = os.WriteFile(path, data, 0o644)
@@ -216,4 +226,27 @@ func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 			t.Errorf("gate_by_arms.py %v: exit %d, want 2\n%s", args, code, out)
 		}
 	}
+}
+
+// TestGateByArmCountsRecordsBeyondSavedOnlyWhenInterrupted: two records
+// against one saved attempt. In a run that was not interrupted nothing
+// explains the extra record, so the report refuses (exit 2). In an
+// interrupted run caliper saves no attempt whose agent a cancellation killed
+// though its cleanup ran, so the extra record is counted as
+// records_beyond_saved, never silently, and stays in the arm.
+func TestGateByArmCountsRecordsBeyondSavedOnlyWhenInterrupted(t *testing.T) {
+	arm := armDir(t)
+	a, b := newAttemptIn(t, arm, "caliper-a1"), newAttemptIn(t, arm, "caliper-a2")
+	a.cleanup()
+	b.cleanup()
+	rev := a.built()
+	whole := result(t, arm, "result-q1-with-skill.json", 1)
+	if code, out, _ := a.byArm(rev, "--arm", "with-skill", arm, whole); code != 2 {
+		t.Errorf("two records, one saved attempt, not interrupted: exit %d, want 2\n%s", code, out)
+	}
+	cut := editedResult(t, arm, "result-q1-with-skill.json", 1, func(run map[string]any) { run["interrupted"] = true })
+	ws := a.arms(rev, "--arm", "with-skill", arm, cut).AsAssigned["with-skill"]
+	want(t, "attempts saved, records, missing, beyond", []int{ws.CaliperAttempts, ws.Records, ws.MissingRecords, ws.RecordsBeyondSaved},
+		[]int{1, 2, 0, 1})
+	want(t, "both records in the arm", ws.Counts.GateObservation["no-home"], 2)
 }

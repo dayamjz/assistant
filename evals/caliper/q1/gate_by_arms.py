@@ -78,6 +78,11 @@ def arm_report(name, tmpdir, result, built):
             refuse("arm %s: record %s names home %s, which is not under this arm's TMPDIR %s" % (name, file, home, tmpdir))
         results.append(gate_record.judge(attempt, path, built))
     found = len(results)
+    # Only an interrupted run explains more records than saved attempts: caliper saves no attempt
+    # whose agent a cancellation killed, though its cleanup ran. Anything else is not this run's.
+    if found > saved and not interrupted:
+        refuse("arm %s: %d records in %s, but %s saved %d attempts and was not interrupted"
+               % (name, found, records, result, saved))
     results += [gate_record.no_record(None) for _ in range(saved - found)]
     stages = gate_record.stage_counts(results)
     established = stages.pop("review_established")
@@ -88,7 +93,7 @@ def arm_report(name, tmpdir, result, built):
         "review_executed": verdicts[gate_record.EXECUTED], "not_measured": verdicts[gate_record.NOT_MEASURED],
         "measured": len(results) - verdicts[gate_record.NOT_MEASURED]}
     return {"ablated": ARMS[name], "caliper_attempts": saved, "interrupted": interrupted, "records": found,
-            "missing_records": len(results) - found, "counts": gate_record.counts(results), "stage_execution": stages,
+            "missing_records": len(results) - found, "records_beyond_saved": max(0, found - saved), "counts": gate_record.counts(results), "stage_execution": stages,
             "attempts": [dict(r, arm=name, stage_execution=unknown(r["stage_execution"])) for r in results]}
 
 

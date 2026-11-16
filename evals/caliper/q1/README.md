@@ -453,17 +453,18 @@ own environment, so `cleanup.sh` writes the record to `DIR/caliper-q1-gate`.
 The report checks the record rather than trusting that: it refuses (exit 2)
 a record whose `home` is not `DIR/<attempt>/.assistant` (a record moved from
 another folder), and a record a hook wrote anywhere else is not in the
-folder, so it shows as a missing record. It also refuses a result whose `run.ablated` is not the arm's (`[]` for
-`with-skill`, `["assistant"]` for `ablated`), one `DIR` for two arms, an arm
-unknown or named twice, a missing `DIR/caliper-q1-gate`, or an unreadable
-result.
+folder, so it shows as a missing record. It also refuses a result whose
+`run.ablated` is not the arm's (`[]` for `with-skill`, `["assistant"]` for
+`ablated`), more records than the result saved attempts when that run was
+not interrupted, one `DIR` for two arms, an arm unknown or named twice, a
+missing `DIR/caliper-q1-gate`, or an unreadable result.
 
 **The report.** One JSON document: `build`, `as_assigned` (one object per
 arm) and `as_run`. Each arm has:
 
 - `ablated`, `interrupted` (from the result), `caliper_attempts` (the
-  attempts the result saved), `records` (record files in the folder) and
-  `missing_records`.
+  attempts the result saved), `records` (record files in the folder),
+  `missing_records` and `records_beyond_saved`.
 - `attempts`: every record, judged by `gate_record.py` (`gate_observation`
   with the run ids, `cleanup_status`, `stage_execution`), plus `arm`. Then
   one entry per missing record, with `attempt` null, judged as a missing
@@ -481,12 +482,15 @@ arm) and `as_run`. Each arm has:
   says a review executed only as far as the stage verdict does.
 
 `missing_records` is `caliper_attempts` minus `records` when that is
-positive, and 0 otherwise. caliper 0.19.0 runs cleanup for every attempt it
-starts and saves no attempt whose agent a cancellation killed
-(`caliper/runner.py` `_run_attempt`), so in an interrupted run
-`records` can exceed `caliper_attempts`, and a missing record can then hide
-behind a cancelled attempt's record: there `missing_records` is a lower
-bound.
+positive, and 0 otherwise; `records_beyond_saved` is `records` minus
+`caliper_attempts` when that is positive, and 0 otherwise. caliper 0.19.0
+runs cleanup for every attempt it starts and saves no attempt whose agent a
+cancellation killed (`caliper/runner.py` `_run_attempt`), so only an
+interrupted run explains more records than saved attempts. There the extra
+records stay in the arm and its denominator, counted as
+`records_beyond_saved`, and a missing record can hide behind a cancelled
+attempt's record, so `missing_records` is a lower bound. A run that was not
+interrupted with more records than saved attempts is refused.
 
 **As run is not measured.** `as_run` is `{"measured": false, "reason": ...}`.
 Results by whether the gate ran need each caliper attempt's task result
@@ -495,6 +499,7 @@ attempt id to join on: an attempt is a task id and a number
 (`caliper/schema/results.py` `AttemptRecord`). The attempt root shows only in
 transcripts and in a failed assert's traceback; a passing assert's output
 is saved as `""`. The report never joins by order, timestamp or transcript.
+Recording an attempt id so the two can be joined is #936.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside
