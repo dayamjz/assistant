@@ -271,7 +271,8 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 // TestGateByArmRefusesAnArmItCannotAssignExactly: a result whose run.ablated
 // is not the arm's, a record whose attempt root is not under the arm's
 // TMPDIR, one DIR for two arms, an arm unknown or named twice, an arm with
-// no records directory, and an unreadable result each refuse (exit 2).
+// no records directory, an unreadable result, and a result that saves one key
+// twice each refuse (exit 2).
 func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 	withSkill, ablated := armDir(t), armDir(t)
 	a, b := newAttemptIn(t, withSkill, "caliper-a1"), newAttemptIn(t, ablated, "caliper-b1")
@@ -285,7 +286,9 @@ func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 	want(t, "mkdir", os.Mkdir(filepath.Join(moved, "caliper-q1-gate"), 0o755), nil)
 	b.copyRecord(filepath.Join(moved, "caliper-q1-gate"), b.name(), nil)
 	empty := armDir(t)
+	twice := keyedResult(t, empty, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}, saved{"task-001", 1, "task_fail"})
 	for _, args := range [][]string{
+		{"--arm", "with-skill", withSkill, twice},
 		{"--arm", "with-skill", withSkill, abResult},
 		{"--arm", "ablated", ablated, wsResult},
 		{"--arm", "ablated", moved, abResult},

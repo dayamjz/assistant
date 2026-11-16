@@ -488,8 +488,10 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
 	code, out, r := a.cleanup()
-	want(t, "exit", code, 0)
-	want(t, "schema, key, errors", []any{string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors}, []any{"3", "task-007", 3, []string{}})
+	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
+		[]any{0, "3", "task-007", 3, []string{}}); t.Failed() {
+		t.Logf("keyed cleanup output:\n%s", out)
+	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
 		a.key = key
 		code, out, r = a.cleanup()

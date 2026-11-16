@@ -88,8 +88,9 @@ def unknown(stage):
 
 
 def arm_report(name, tmpdir, result, built):
-    """One arm: every record its caliper run wrote, judged, plus one cannot-tell
-    attempt for each saved attempt beyond the records, over one denominator."""
+    """One arm: each keyed record its caliper run wrote, judged and joined to the saved
+    attempt its key names, plus one cannot-tell attempt per saved attempt no record
+    names, over one denominator; each record without a key judged beside it."""
     saved, interrupted = saved_attempts(name, result)
     records = os.path.join(tmpdir, "caliper-q1-gate")
     if not os.path.isdir(records):
