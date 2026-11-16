@@ -104,7 +104,7 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (3; #926's records are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (4; #936's records are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
@@ -136,6 +136,19 @@ directory for the write-up. The record holds:
   on.
   `service_answered` says whether the status call reported the service
   running just before the reads.
+
+**Head checks** (#941). When `runs` answered, `head_checks` is a list with
+one entry per listed run, in the order `runs` listed them: `task_id` and
+`caliper_attempt` (the record's key), `run_id`, `submitted_head`, and
+`is_commit`, whether `git cat-file -e` found that sha a commit in the
+checkout. The check is made here, while the checkout exists, because caliper
+0.19.0 removes the attempt root as soon as this hook returns
+(`caliper/runner.py` `_run_attempt`, `caliper/workdir.py`
+`AttemptWorkdir.__exit__`), and `gate_record.py` runs later. It runs with
+`GIT_CEILING_DIRECTORIES` set to the checkout's parent (#927). A head that
+is not 40 lowercase hex digits, or a git that fails to run or times out,
+gives `is_commit` false. A list rather than an object keyed by run, so a
+repeated entry stays visible rather than one silently replacing another.
 
 **Stage evidence** (#926). When `runs` answered, cleanup reads each listed
 run again, in the order `runs` listed them, before the stop: `stages.<run>`
@@ -263,12 +276,17 @@ A valid row becomes indeterminate when any check fails:
   judges it instead ("Stage execution"). A failed report read is `unread`
   (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
   `ran: true`, where `ran` decides (row 4).
-- **This attempt's record.** `schema` 1, 2 or 3, `attempt` the name asked for, `home`
+- **This attempt's record.** `schema` 1, 2, 3 or 4, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
 - **One repository.** The runs name one `repository_id`, never null.
-- **Each run.** A known `status`. `submitted_head` is a full commit id that
-  names a commit in the attempt's checkout (`git cat-file -e`).
+- **Each run.** A known `status`. `submitted_head` is a full commit id, and
+  exactly one `head_checks` entry names the run, with the record's key (a
+  task id that is a non-empty string and an integer attempt number), that
+  same sha, and `is_commit` JSON `true`. There is one entry per run, and
+  `head_checks` is a list of objects. A record without `head_checks` (schema
+  3 and before) has no check for any run, so a run in it is indeterminate.
+  The judge does not open the checkout.
   `build.revision` equals `--revision` and `build.modified` equals
   `--modified`. `config_digest` is 64 lowercase hex
   digits, the sha256 shape this binary writes.
@@ -307,12 +325,18 @@ Limits:
   its first stage, for example under a trusted configuration it cannot
   parse, ends `terminated` and counts as `ran`. Whether a stage executed is
   the third field, `stage_execution` (see "Stage execution"), never a status.
-- **The submitted_head check stops at the checkout** (#927). git is run with
+- **The head check stops at the checkout** (#927). cleanup.sh runs git with
   `GIT_CEILING_DIRECTORIES` set to the checkout's parent, so a checkout whose
   own repository is gone does not find a repository above it, and a commit
   of an enclosing repository does not pass.
-- **The checkout must still exist.** The `submitted_head` check reads the
-  attempt's checkout, so a run whose checkout is gone is indeterminate.
+- **The head check is what capture saw.** It is made while the checkout
+  exists and read later from the record, so a checkout changed or removed
+  after cleanup changes nothing, and a record edited to claim a check passes
+  like any other edited row (see "Consistency checks, not attestation"). A
+  verified head says only that the sha was a commit of the checkout: the
+  run's other checks, and the stage verdict, are judged as before.
+- **A repeated key refuses the record.** A record whose JSON repeats a key
+  in any object is unreadable, so the second copy cannot silently win.
 - **One checkout's runs.** `runs` sees only the checkout's repository (see
   "Gate record").
 

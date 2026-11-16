@@ -34,7 +34,7 @@ checkout = os.path.join(root, "work", "work")
 # patched caliper passes (README "As run"); without it the record says why.
 task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
 keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
-record = {"schema": 3, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+record = {"schema": 4, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 if not keyed:
@@ -88,6 +88,25 @@ def read_stages(runs):
                  into=entry["logs"], key=stage)
         call("run-after:" + rid, ["--json", "runs", rid], root, into=entry, key="report_after")
 
+def check_head(run):
+    """The head check for one listed run (README "Head checks"): whether its submitted_head
+    names a commit in the checkout, asked here because caliper removes the attempt root
+    after this hook. Bound to the attempt key and the run, so gate_record.py can match it."""
+    run = run if isinstance(run, dict) else {}
+    head = run.get("submitted_head")
+    entry = {"task_id": record["task_id"], "caliper_attempt": record["caliper_attempt"],
+             "run_id": run.get("id"), "submitted_head": head, "is_commit": False}
+    if isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(checkout)  # never a repository above it (#927)
+        try:
+            entry["is_commit"] = subprocess.run(["git", "cat-file", "-e", head + "^{commit}"], cwd=checkout,
+                                                env=env, stdin=subprocess.DEVNULL, capture_output=True,
+                                                timeout=60).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # is_commit stays false, which gate_record.py reads as cannot tell
+    return entry
+
 def capture():
     if not os.path.isdir(home):
         record["outcome"] = "no-home"
@@ -108,6 +127,7 @@ def capture():
             if ok:
                 record["repositories"] = sorted({r.get("repository_id") for r in runs or []
                                                  if isinstance(r, dict)}, key=str)
+                record["head_checks"] = [check_head(run) for run in runs or []]
                 read_stages(runs or [])
             elif read["exit"] == 0:
                 record["errors"].append("runs: exit 0, but the output is not a runs document")

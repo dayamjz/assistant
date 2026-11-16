@@ -95,7 +95,8 @@ func (a *attempt) records() string { return filepath.Join(a.tmpdir, "caliper-q1-
 // instrument runs gate_record.py and returns its exit code, stdout and stderr.
 func (a *attempt) instrument(args ...string) (int, string, string) {
 	a.t.Helper()
-	return a.run(a.root, "python3", append([]string{filepath.Join(spec, "gate_record.py")}, args...)...)
+	// From the hooks' TMPDIR, which outlives the attempt root as caliper's does.
+	return a.run(a.tmpdir, "python3", append([]string{filepath.Join(spec, "gate_record.py")}, args...)...)
 }
 
 // report runs the instrument over records for the named attempts, failing
@@ -540,9 +541,9 @@ func (a *attempt) copyRecord(dir, name string, edit func(map[string]any)) string
 // TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary: the same real
 // record is valid, then indeterminate against another revision or modified
 // flag, under
-// another attempt's name, with one field hand-edited (malformed input, which
-// no real home writes, so edited), and once the checkout no longer holds
-// submitted_head.
+// another attempt's name, and with one field hand-edited (malformed input,
+// which no real home writes, so edited). Whether submitted_head is a commit of
+// the checkout is the head check's, which TestGateRecordReadsTheHeadCheckFailClosed covers.
 func TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
@@ -588,15 +589,6 @@ func TestGateRecordChecksTheRunsAgainstTheCheckoutAndTheBinary(t *testing.T) {
 		wantReason(t, j, c.reason)
 	}
 
-	if err := os.Rename(a.checkout, a.checkout+".moved"); err != nil {
-		t.Fatal(err)
-	}
-	if code, _, errs := a.run(a.work, "sh", "-c", "git init -q work && git -C work -c user.name=q1 -c user.email=q1@example.invalid commit -q --allow-empty -m other"); code != 0 {
-		t.Fatalf("another repository at the checkout: exit %d\n%s", code, errs)
-	}
-	j = a.judge(rev)
-	wantJudged(t, j, "", "success")
-	wantReason(t, j, "submitted_head")
 }
 
 // TestGateRecordCountsEveryNamedAttempt: one denominator over every attempt
@@ -659,4 +651,163 @@ func TestGateRecordRefusesWithoutACheckableRevision(t *testing.T) {
 			t.Errorf("gate_record.py %v: exit %d, want 2\n%s", args, code, out)
 		}
 	}
+}
+
+// in is the same attempt reporting to t, a subtest of its own test, so a
+// helper that fails stops the subtest rather than its parent.
+func (a *attempt) in(t *testing.T) *attempt {
+	c := *a
+	c.t = t
+	return &c
+}
+
+// removedAttempt is an attempt made inside its own TMPDIR, as caliper makes
+// one, with a run the gate held and cleanup.sh run on it; then the attempt
+// root is removed, as caliper 0.19.0 removes it when cleanup returns
+// (runner.py _run_attempt, workdir.py AttemptWorkdir.__exit__). Only the
+// record, under the TMPDIR, is left to judge.
+func removedAttempt(t *testing.T) (*attempt, string) {
+	t.Helper()
+	tmpdir, err := standin.TempDir("q1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(tmpdir) })
+	a := newAttemptIn(t, tmpdir, "caliper-r1")
+	a.serve()
+	id := a.startRun()
+	a.cleanup()
+	if !a.stopped() {
+		t.Fatal("the service still runs after cleanup")
+	}
+	if err := os.RemoveAll(a.root); err != nil {
+		t.Fatal(err)
+	}
+	return a, id
+}
+
+// TestGateRecordJudgesARunAfterCaliperRemovesTheAttempt is #941's finding A:
+// the run's submitted_head was checked in the checkout by cleanup.sh while it
+// existed, so the record judges after the attempt root is gone, as every
+// record under run-full.sh is judged. Before the head check moved into
+// cleanup.sh this was indeterminate: the judge asked a checkout that no
+// longer exists.
+func TestGateRecordJudgesARunAfterCaliperRemovesTheAttempt(t *testing.T) {
+	a, id := removedAttempt(t)
+	j := a.judge(a.built())
+	wantJudged(t, j, "ran", "success")
+	wantStage(t, j, "review executed", 4)
+	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].ID != id {
+		t.Fatalf("runs = %+v, want the one held run %s", j.GateObservation.Runs, id)
+	}
+}
+
+// TestGateRecordReadsTheHeadCheckFailClosed: with the checkout gone, nothing
+// but a head check cleanup.sh wrote for exactly this attempt, run and sha can
+// make a run count, and a verified head is not a judged outcome. The first
+// case is real: a head the checkout did not hold at capture (its refs deleted
+// and pruned before cleanup.sh ran) stays cannot tell once the checkout is
+// gone. The rest are hand edits of a real record (malformed input, which
+// cleanup.sh does not write, so edited), each cannot tell.
+func TestGateRecordReadsTheHeadCheckFailClosed(t *testing.T) {
+	t.Run("a head the capture did not find", func(t *testing.T) {
+		tmpdir, err := standin.TempDir("q1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(tmpdir) })
+		a := newAttemptIn(t, tmpdir, "caliper-p1")
+		a.serve()
+		head := a.stored(a.startRun()).SubmittedHead
+		prune := `git checkout -q --detach main && git for-each-ref --contains "$1" --format='%(refname)' | while read -r ref; do git update-ref -d "$ref"; done` +
+			` && git reflog expire --expire=now --all && git -c gc.auto=0 gc -q --prune=now && ! git cat-file -e "$1^{commit}"`
+		if code, _, errs := a.run(a.checkout, "sh", "-c", prune, "prune", head); code != 0 {
+			t.Fatalf("pruning %s from the checkout: exit %d\n%s", head, code, errs)
+		}
+		_, _, r := a.cleanup()
+		want(t, "is_commit at capture", len(r.HeadChecks) == 1 && r.HeadChecks[0]["is_commit"] == false, true)
+		if err := os.RemoveAll(a.root); err != nil {
+			t.Fatal(err)
+		}
+		j := a.judge(a.built())
+		wantJudged(t, j, "", "success")
+		wantReason(t, j, "no head check")
+		wantStage(t, j, "cannot tell")
+	})
+
+	a, id := removedAttempt(t)
+	rev := a.built()
+	edited := filepath.Join(a.tmpdir, "edited")
+	checks := func(rec map[string]any) []any { return rec["head_checks"].([]any) }
+	entry := func(rec map[string]any) map[string]any { return checks(rec)[0].(map[string]any) }
+	clone := func(m map[string]any) map[string]any {
+		c := map[string]any{}
+		for k, v := range m {
+			c[k] = v
+		}
+		return c
+	}
+	other := strings.Repeat("e", 40)
+	for _, c := range []struct {
+		name, reason string
+		edit         func(map[string]any)
+	}{
+		{"no head_checks field", "no head check", func(rec map[string]any) { delete(rec, "head_checks") }},
+		{"a schema 3 record", "no head check", func(rec map[string]any) { rec["schema"] = 3; delete(rec, "head_checks") }},
+		{"no entry", "no head check", func(rec map[string]any) { rec["head_checks"] = []any{} }},
+		{"head_checks not a list", "not a list", func(rec map[string]any) { rec["head_checks"] = entry(rec) }},
+		{"an entry not an object", "not a list", func(rec map[string]any) { rec["head_checks"] = []any{"ok"} }},
+		{"a duplicate entry", "no head check", func(rec map[string]any) { rec["head_checks"] = append(checks(rec), clone(entry(rec))) }},
+		{"an entry for no listed run", "entries for 1 runs", func(rec map[string]any) {
+			extra := clone(entry(rec))
+			extra["run_id"] = "another-run"
+			rec["head_checks"] = append(checks(rec), extra)
+		}},
+		{"another run's entry", "no head check", func(rec map[string]any) { entry(rec)["run_id"] = "another-run" }},
+		{"another sha", "no head check", func(rec map[string]any) { entry(rec)["submitted_head"] = other }},
+		{"another task", "no head check", func(rec map[string]any) { entry(rec)["task_id"] = "task-002" }},
+		{"another attempt number", "no head check", func(rec map[string]any) { entry(rec)["caliper_attempt"] = 2 }},
+		{"an attempt number as a string", "no head check", func(rec map[string]any) { entry(rec)["caliper_attempt"] = "1" }},
+		{"an empty task id", "no head check", func(rec map[string]any) { rec["task_id"], entry(rec)["task_id"] = "", "" }},
+		{"a record with no key", "no head check", func(rec map[string]any) {
+			rec["task_id"], rec["caliper_attempt"] = nil, nil
+			entry(rec)["task_id"], entry(rec)["caliper_attempt"] = nil, nil
+		}},
+		{"is_commit false", "no head check", func(rec map[string]any) { entry(rec)["is_commit"] = false }},
+		{"is_commit a string", "no head check", func(rec map[string]any) { entry(rec)["is_commit"] = "true" }},
+		{"is_commit absent", "no head check", func(rec map[string]any) { delete(entry(rec), "is_commit") }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			a := a.in(t)
+			j := a.report(edited, rev, a.copyRecord(edited, a.name(), c.edit)).Attempts[0]
+			wantJudged(t, j, "", "success")
+			wantReason(t, j, c.reason)
+			wantStage(t, j, "cannot tell")
+		})
+	}
+
+	t.Run("a repeated key in the record", func(t *testing.T) {
+		a := a.in(t)
+		data, err := os.ReadFile(filepath.Join(a.records(), a.name()+".record.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// A second head_checks key that would win last, stating the run verified.
+		doubled := strings.Replace(string(data), "{", `{"head_checks": [], `, 1)
+		if err := errors.Join(os.MkdirAll(edited, 0o755), os.WriteFile(filepath.Join(edited, a.name()+".record.json"), []byte(doubled), 0o644)); err != nil {
+			t.Fatal(err)
+		}
+		j := a.report(edited, rev, a.name()).Attempts[0]
+		wantJudged(t, j, "", "failure")
+		wantReason(t, j, "more than once")
+	})
+
+	t.Run("a verified head with no stage evidence", func(t *testing.T) {
+		a := a.in(t)
+		j := a.report(edited, rev, a.copyRecord(edited, a.name(), func(rec map[string]any) {
+			delete(rec["stages"].(map[string]any), id)
+		})).Attempts[0]
+		wantJudged(t, j, "ran", "success")
+		wantStage(t, j, "cannot tell", 2)
+	})
 }
