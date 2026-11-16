@@ -220,6 +220,10 @@ open first. Operator install and quick-start live in [README.md](README.md).
   a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
   directories, and a scratch directory the product makes for itself, are
   not this.
+- A test's shell that waits to be released waits on `standin.HeldWait`,
+  never on a release-file loop of its own (#432, #440), and `HeldWait`
+  fails the test unless its package's `TestMain` runs `standin.RunOwned`.
+  `.claude/rules/agents-standin.md` owns why.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`
