@@ -10,8 +10,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/procgroup"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -272,6 +275,85 @@ func (a *attempt) recordPending(run store.Run) {
 	}
 	a.assistant(a.root, "service", "start")
 	a.t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") })
+}
+
+// TestGateRecordReadsARunningRunAsStartedNotFinished: a run whose agent is
+// still held when cleanup reads the runs is started-not-finished, never ran.
+// Each stand-in agent waits as standin.HeldWaitIdentified's held process,
+// never a loop of its own (.claude/rules/agents-standin.md), so it ends on
+// the release, with this test binary (TestMain's RunOwned), or with the
+// service stop's signal to its group, whichever comes first, and no shell
+// trap is needed. The run is started with --intent, as every run here is,
+// since the gate refuses a push with no terminal above it, which is how CI
+// runs; --intent blocks while the run advances, so it runs beside the test.
+func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
+	a := newAttempt(t)
+	release, names := filepath.Join(a.root, "release"), []string{"claude", "cursor"}
+	for _, name := range names {
+		script := "#!/bin/sh\n" + standin.HeldWaitIdentified(t, release, a.heldRecord(name)) + "\nexit 1\n"
+		want(t, "stand-in "+name, procgroup.WriteProgram(filepath.Join(a.root, "stub", name), []byte(script), 0o755), nil)
+	}
+	a.serve()
+	ended, output := make(chan struct{}), ""
+	var failed error // set, as output is, before ended is closed
+	go func() {
+		defer close(ended)
+		_, out, errs, err := a.execute(a.checkout, a.bin, "--home", a.home, "--json", "--intent", "ship the branch")
+		output, failed = out+errs, err
+	}()
+	t.Cleanup(func() {
+		// Released, a held stand-in's shell exits 1; the stop ends --intent
+		// and any stand-in still running, even when the test failed before
+		// cleanup, and is execute's so --intent is always awaited.
+		want(t, "release", os.WriteFile(release, nil, 0o644), nil)
+		if _, _, errs, err := a.execute(a.root, a.bin, "--home", a.home, "service", "stop", "--force"); err != nil {
+			t.Errorf("service stop: %v\n%s", err, errs)
+		}
+		<-ended
+		if failed != nil {
+			t.Errorf("--intent: %v\n%s", failed, output)
+		}
+		for _, p := range a.held(names) {
+			if !p.GoneWithin(30 * time.Second) {
+				t.Errorf("held stand-in %v still runs 30s after its release", p)
+			}
+		}
+	})
+	for deadline := time.Now().Add(60 * time.Second); len(a.held(names)) == 0; time.Sleep(50 * time.Millisecond) {
+		select {
+		case <-ended:
+			t.Fatalf("--intent returned before any stand-in agent was held: %v\n%s", failed, output)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no stand-in agent was held 60s after --intent started")
+		}
+	}
+	if _, out, rec := a.cleanup(); rec.Outcome != "read" {
+		t.Fatalf("outcome %q, want read\n%s", rec.Outcome, out)
+	}
+	r := a.report(a.records(), a.built(), a.name())
+	j := r.Attempts[0]
+	wantJudged(t, j, "started-not-finished", "success")
+	if len(j.GateObservation.Runs) != 1 || j.GateObservation.Runs[0].Status != "running" {
+		t.Errorf("runs = %+v, want the one running run", j.GateObservation.Runs)
+	}
+	want(t, "ran, started-not-finished", []int{r.Counts.GateObservation["ran"], r.Counts.GateObservation["started-not-finished"]}, []int{0, 1})
+}
+
+// heldRecord is where the stand-in agent name records its identity once held.
+func (a *attempt) heldRecord(name string) string { return filepath.Join(a.root, name+".held") }
+
+// held is every named stand-in agent that has recorded its identity, as the
+// process it read itself to be, start time included, never a bare pid.
+func (a *attempt) held(names []string) []standin.Process {
+	var ps []standin.Process
+	for _, name := range names {
+		if id, err := standin.ReadHeldIdentity(a.heldRecord(name)); err == nil {
+			ps = append(ps, standin.Process{Identity: id})
+		}
+	}
+	return ps
 }
 
 // TestGateRecordKeepsAValidReadWhenTheStopFails is the (read, stop failed)

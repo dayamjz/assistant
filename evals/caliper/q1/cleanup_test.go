@@ -21,7 +21,12 @@ import (
 
 var spec string // this directory, where cleanup.sh and build-subject.sh are
 
+// TestMain runs the tests under standin.RunOwned, so a held stand-in a test
+// starts (standin.HeldWait) ends with this binary (WatchOwner), and the
+// package fails if one still runs once the tests return.
 func TestMain(m *testing.M) {
+	standin.WatchOwner()
+	standin.Main()
 	var err error
 	if spec, err = os.Getwd(); err == nil {
 		if err = standin.RegisterTempTag(); err == nil {
@@ -32,9 +37,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	code := m.Run()
-	journey.Cleanup()
-	os.Exit(code)
+	os.Exit(standin.RunOwned(func() int {
+		code := m.Run()
+		journey.Cleanup()
+		return code
+	}))
 }
 
 // attempt is one Caliper attempt root: hooks run in <root>/work, the checkout
@@ -81,6 +88,18 @@ func newAttempt(t *testing.T) *attempt {
 // run starts name in dir with the attempt's environment: exit code, stdout, stderr.
 func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
 	a.t.Helper()
+	code, stdout, stderr, err := a.execute(dir, name, args...)
+	if err != nil {
+		a.t.Fatalf("%s %v: %v\n%s", name, args, err, stderr)
+	}
+	return code, stdout, stderr
+}
+
+// execute is run returning, rather than failing the test on, what is not an
+// exit status: a start that failed, output cut short, or the command still
+// running 3 minutes on, which procgroup.Run reports as the status of the kill
+// that ended it, so it is told by ctx. A goroutine beside the test may call it.
+func (a *attempt) execute(dir, name string, args ...string) (int, string, string, error) {
 	cmd := procgroup.Command(name, args...)
 	cmd.Dir = dir
 	cmd.Env = []string{"HOME=" + a.root, "TMPDIR=" + a.root, "PATH=" + a.path,
@@ -93,10 +112,13 @@ func (a *attempt) run(dir, name string, args ...string) (int, string, string) {
 	defer cancel()
 	err := procgroup.Run(ctx, cmd, 5*time.Second)
 	var exit *exec.ExitError
-	if err != nil && !errors.As(err, &exit) {
-		a.t.Fatalf("%s %v: %v\n%s", name, args, err, stderr.String())
+	switch {
+	case ctx.Err() != nil:
+		err = fmt.Errorf("still running 3m on, so it was ended: %w", errors.Join(ctx.Err(), err))
+	case errors.As(err, &exit) && !errors.Is(err, exec.ErrWaitDelay):
+		err = nil // the exit status is the answer
 	}
-	return cmd.ProcessState.ExitCode(), stdout.String(), stderr.String()
+	return cmd.ProcessState.ExitCode(), stdout.String(), stderr.String(), err
 }
 
 // assistant runs the built binary on the home and fails the test unless it exits 0.
