@@ -1,0 +1,95 @@
+caliper-eval 0.19.0 sdist, patched for Q1 (#936): every step gets the attempt's key in the
+saved result as CALIPER_TASK_ID and CALIPER_ATTEMPT; version 0.19.0+q1attemptenv.
+install-caliper.sh applies it; README "As run" owns why.
+
+--- a/caliper/runner.py
++++ b/caliper/runner.py
+@@ -454,3 +454,3 @@
+     record: AttemptRecord | None = None
+-    with AttemptWorkdir(env.spec_path.parent) as workdir:
++    with AttemptWorkdir(env.spec_path.parent, task.id, attempt) as workdir:
+         try:
+--- a/caliper/workdir.py
++++ b/caliper/workdir.py
+@@ -32,2 +32,5 @@
+ SPEC_DIR_ENV = "CALIPER_SPEC_DIR"
++#: The attempt's task id and attempt number: its key in the saved result.
++TASK_ID_ENV = "CALIPER_TASK_ID"
++ATTEMPT_ENV = "CALIPER_ATTEMPT"
+ 
+@@ -82,3 +85,8 @@
+ 
+-    def __init__(self, spec_dir: str | Path) -> None:
++    def __init__(
++        self,
++        spec_dir: str | Path,
++        task_id: str | None = None,
++        attempt: int | None = None,
++    ) -> None:
+         # Absolute, because every step runs in the workdir: a relative spec dir
+@@ -86,2 +94,7 @@
+         self.spec_dir = str(Path(spec_dir).resolve())
++        self.key = (
++            {}
++            if task_id is None or attempt is None
++            else {TASK_ID_ENV: task_id, ATTEMPT_ENV: str(attempt)}
++        )
+         self._root: str | None = None
+@@ -150,2 +163,3 @@
+             cancel.PROCESS_TAG: process_tag,
++            **self.key,
+         }
+--- a/docs/spec-reference.md
++++ b/docs/spec-reference.md
+@@ -440,3 +440,3 @@
+ It's not your spec's directory and not a git repository: a task that needs files
+-or a repo builds them in `setup:`. Hooks and assertions see two environment
++or a repo builds them in `setup:`. Hooks and assertions see these environment
+ variables:
+@@ -447,2 +447,4 @@
+ | `CALIPER_SPEC_DIR` | the directory holding the `.eval.yaml` |
++| `CALIPER_TASK_ID` | the task's id, as the saved result's `task_id` |
++| `CALIPER_ATTEMPT` | the attempt number, as the saved result's `attempt` |
+ 
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -6,3 +6,3 @@
+ name = "caliper-eval"
+-version = "0.19.0"
++version = "0.19.0+q1attemptenv"
+ description = "A lightweight evaluation harness for agent skills"
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -827,3 +827,6 @@
+         assert_script="assert True",
+-        setup=f'echo "$PWD|$CALIPER_WORKDIR|$CALIPER_SPEC_DIR" > {seen}',
++        setup=(
++            'echo "$PWD|$CALIPER_WORKDIR|$CALIPER_SPEC_DIR'
++            f'|$CALIPER_TASK_ID|$CALIPER_ATTEMPT" > {seen}'
++        ),
+     )
+@@ -840,3 +843,3 @@
+ 
+-    pwd, workdir, spec_dir = seen.read_text().strip().split("|")
++    pwd, workdir, spec_dir, task_id, attempt = seen.read_text().strip().split("|")
+     assert Path(pwd).resolve() == Path(workdir).resolve()
+@@ -844,2 +847,3 @@
+     assert Path(spec_dir) == tmp_path
++    assert (task_id, attempt) == ("task-001", "1")
+ 
+--- a/tests/test_workdir.py
++++ b/tests/test_workdir.py
+@@ -48,2 +48,13 @@
+ 
++def test_steps_see_the_attempt_key_when_given(tmp_path) -> None:
++    script = (
++        "import os\n"
++        "assert os.environ['CALIPER_TASK_ID'] == 'task-007'\n"
++        "assert os.environ['CALIPER_ATTEMPT'] == '3'\n"
++    )
++    with AttemptWorkdir(tmp_path, "task-007", 3) as workdir:
++        step = workdir.run_python("assert", script)
++    assert step.ok, step.output
++
++
+ @pytest.mark.skipif(os.name == "nt", reason="POSIX background shell syntax")

@@ -25,13 +25,21 @@ mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
 # One record per attempt (README "Gate record"). Only runs reads from the nested
 # checkout; it needs the live service, so the stop comes last, in a finally.
 exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
-import datetime, json, os, subprocess, sys
+import datetime, json, os, re, subprocess, sys
 root, gate = sys.argv[1], sys.argv[2]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
 checkout = os.path.join(root, "work", "work")
-record = {"schema": 2, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+# The attempt's key in caliper's saved result (task_id, attempt), which only the
+# patched caliper passes (README "As run"); without it the record says why.
+task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
+keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
+record = {"schema": 3, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+          "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
+if not keyed:
+    record["errors"].append("key: CALIPER_TASK_ID %r, CALIPER_ATTEMPT %r: no attempt key; this caliper "
+                            "is not 0.19.0+q1attemptenv (install-caliper.sh)" % (task_id, number))
 
 # pipeline.Order's wire names, review first (README "Stage evidence");
 # stage_test.go pins the list to the product's.

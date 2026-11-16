@@ -22,8 +22,10 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # Error lines that are not on the read path: the usage figure and the stop.
 # Every other line, one this instrument does not know included, is read-path.
 # The per-run stage reads are the stage verdict's to judge, not the gate's.
-NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:")
-SCHEMAS = (1, 2)  # 1 predates the stage capture (#926): its stage verdict is not measured
+# A missing attempt key is gate_by_arms.py's "as run" to judge (#936), not the gate's.
+NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ")
+# 1 predates the stage capture (#926): its stage verdict is not measured. 3 adds the attempt key (#936).
+SCHEMAS = (1, 2, 3)
 
 # The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
 # to write, onto (gate_observation, cleanup_status). "runs" means valid, with
@@ -250,14 +252,14 @@ def stage_execution(record, observation):
             "trouble": {"unread": states.count(UNREAD), "review_started_not_completed": states.count(RUN_STARTED)}}
 
 
-def no_record(attempt):
-    """The result for an attempt with no record file: the harness failed, so
-    cannot tell, never "did not run". gate_by_arms.py uses it for an attempt
-    caliper saved that left no record."""
+def no_record(attempt, reason="no record file"):
+    """The result for an attempt with no record (file): the harness failed, so
+    cannot tell, never "did not run". gate_by_arms.py uses it, with its own
+    reason, for an attempt caliper saved that no record names."""
     return {"attempt": attempt, "cleanup_status": {"status": "failure", "exit": None, "stderr": None,
-                                                   "reason": "no record file"},
-            "gate_observation": indeterminate("no record file: the harness failed"),
-            "stage_execution": {"verdict": CANNOT, "reason": "no record file"}}
+                                                   "reason": reason},
+            "gate_observation": indeterminate(reason + ": the harness failed"),
+            "stage_execution": {"verdict": CANNOT, "reason": reason}}
 
 
 def judge(attempt, path, built):

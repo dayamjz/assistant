@@ -378,7 +378,7 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	_, rawOut, _ := a.instrument(append(rev.args(), "--records", edited, a.name())...)
 	want(t, "decode", json.Unmarshal([]byte(rawOut), &raw), nil)
 	want(t, "schema 1 stage_execution, exactly", raw.Attempts[0].StageExecution, map[string]any{"verdict": "not measured"})
-	for _, unknown := range []any{3, true} { // JSON true is not schema 1
+	for _, unknown := range []any{4, true} { // JSON true is not schema 1
 		j = judgeEdit(func(rec map[string]any) { rec["schema"] = unknown })
 		wantJudged(t, j, "", "success")
 		wantStage(t, j, "cannot tell")

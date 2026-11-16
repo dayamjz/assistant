@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +58,15 @@ type attempt struct {
 	root, bin, path      string
 	home, work, checkout string
 	tmpdir               string   // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
+	key                  []string // the attempt key the patched caliper gives a hook; nil as a stock caliper
 	env                  []string // added to every command's environment
+}
+
+// keyed gives the attempt's hooks the key caliper 0.19.0+q1attemptenv passes:
+// task id and attempt number, as its saved result names the attempt.
+func (a *attempt) keyed(task string, n int) *attempt {
+	a.key = []string{"CALIPER_TASK_ID=" + task, "CALIPER_ATTEMPT=" + strconv.Itoa(n)}
+	return a
 }
 
 func newAttempt(t *testing.T) *attempt {
@@ -106,14 +115,15 @@ func newAttemptAt(t *testing.T, root, tmpdir string) *attempt {
 		t.Fatal(err)
 	}
 	a.path = strings.Join([]string{stub, filepath.Dir(bin), filepath.Dir(git), "/usr/bin:/bin:/usr/sbin:/sbin"}, ":")
-	return a
+	return a.keyed("task-001", 1)
 }
 
 // environ is the attempt's whole environment for a command it starts.
 func (a *attempt) environ() []string {
 	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.tmpdir, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
-		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}, a.env...)
+		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"},
+		append(append([]string{}, a.key...), a.env...)...)
 }
 
 // run starts name in dir with the attempt's environment: exit code, stdout, stderr.
@@ -233,6 +243,8 @@ exec %[1]s "$@"
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
+	TaskID                 any    `json:"task_id"`         // a string, or nil without a key
+	CaliperAttempt         any    `json:"caliper_attempt"` // a JSON number, or nil without a key
 	CapturedAt             string `json:"captured_at"`
 	ServiceAnswered        bool   `json:"service_answered"`
 	Errors, Repositories   []string
@@ -301,9 +313,10 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
-	// The stage evidence (schema 2): the report, the review log alone because
-	// the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "2")
+	// The stage evidence (schema 2, still in 3): the report, the review log alone
+	// because the report has stages, and the report again, each read from the root.
+	want(t, "schema", string(r.steps["schema"]), "3")
+	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	stages := a.stageEntries()
 	e, ok := stages[started.Record.ID]
 	if len(stages) != 1 || !ok {
@@ -463,5 +476,27 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 	want(t, "stop exit", r.Stop.Exit, 1)
 	if r.Stop.Stderr == "" || !strings.Contains(out, "stop: exit 1") {
 		t.Errorf("the failed stop is not in the record and on stderr: %q\n%s", r.Stop.Stderr, out)
+	}
+}
+
+// TestCleanupRecordsTheAttemptKeyOrSaysWhyNot: under the patched caliper the
+// record carries the attempt's key in caliper's saved result (schema 3). Under
+// a stock caliper, which passes no key, and with a key that is not one, the
+// key is null and the record, stderr and exit status say so, never a silent
+// blank. The missing key is not a read-path error: whether the gate ran is
+// still judged (README "As run").
+func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
+	a := newAttempt(t).keyed("task-007", 3)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "schema, key, errors", []any{string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors}, []any{"3", "task-007", 3, []string{}})
+	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
+		a.key = key
+		code, out, r = a.cleanup()
+		want(t, fmt.Sprintf("%v: exit, key", key), []any{code, r.TaskID, r.CaliperAttempt}, []any{1, nil, nil})
+		if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "key: ") || !strings.Contains(out, "0.19.0+q1attemptenv") {
+			t.Errorf("%v: errors = %v, want the missing key alone, on stderr too:\n%s", key, r.Errors, out)
+		}
+		wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
 	}
 }
