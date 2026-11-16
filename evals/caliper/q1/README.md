@@ -219,11 +219,15 @@ the denominator. So does a record that is not JSON.
 
 A valid row becomes indeterminate when any check fails:
 
-- **Read-path errors.** Any `errors` line other than `usage: ...` and
-  `stop: ...` is on the read path: `service`, `runs`, and `cleanup: ...`,
-  which cleanup itself raised. A raise after the read leaves `outcome` `read`
-  with a `cleanup: ...` line (#923), and that is never a gate read. A failed
-  usage read or save, or a failed stop, leaves the observation valid.
+- **Read-path errors.** Any `errors` line other than `usage: ...`,
+  `stop: ...` and the per-run stage reads' `run:<id>: ...`,
+  `log:<id>:<stage>: ...` and `run-after:<id>: ...` is on the read path:
+  `service`, `runs`, and `cleanup: ...`, which cleanup itself raised. A raise
+  after the read leaves `outcome` `read` with a `cleanup: ...` line (#923),
+  and that is never a gate read. A failed usage read or save, a failed stop,
+  or a failed stage read leaves the observation valid. A failed stage read
+  does not make `gate_observation` indeterminate: it is the stage verdict's,
+  where its run is `unread` (rows 2, 3, 5 and 13 of "Stage execution").
 - **This attempt's record.** `schema` 1 or 2, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
@@ -293,8 +297,9 @@ re-review is not counted, and the other eight logs are evidence only for
 - `stages executed, review not executed`: every run's review was skipped or
   not reached.
 - `no stage executed`: every run has no checkpoint and all nine of its logs
-  read unwritten, or the attempt is `no-home` or `never-reached` (with the
-  same caveat as `no-home` above).
+  read unwritten, or the attempt is `no-home` or `never-reached`. For
+  `no-home` this carries `gate_observation`'s caveat: no persisted home was
+  observed, which is not proof that the gate never started elsewhere.
 - `cannot tell`: a read failed, the run moved during capture, the input is
   one the table does not name, the record is missing, unreadable or of an
   unknown schema, `gate_observation` is indeterminate, or `no-checkout`.
