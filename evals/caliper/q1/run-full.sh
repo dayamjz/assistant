@@ -67,8 +67,39 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 # roots there and cleanup.sh writes their gate records to
 # $ARMS/<arm>/caliper-q1-gate, never beside the other arm's
 # (README "Gate verdicts by arm").
-ARMS="$(mktemp -d "${TMPDIR:-/tmp}/caliper-q1-arms.XXXXXX")"
+# An attempt's service listens on <attempt root>/.assistant/socket, so the
+# arms go under Q1_ARMS_ROOT (default /tmp), never $TMPDIR: under macOS's
+# $TMPDIR that path was too long to bind and no with-skill service ever ran
+# (#941). Before any attempt, a service is started at a home as deep as the
+# deepest attempt's (caliper's mkdtemp caliper-XXXXXXXX in the longer arm
+# name); one that does not answer refuses the run and is kept for reading.
+ARMS="$(mktemp -d "${Q1_ARMS_ROOT:-/tmp}/q1-arms.XXXXXX")"
+echo "arms (each arm's TMPDIR): $ARMS" >&2
 mkdir -p "$ARMS/with-skill/caliper-q1-gate" "$ARMS/ablated/caliper-q1-gate"
+probe_root="$(mktemp -d "$ARMS/with-skill/caliper-XXXXXXXX")"
+probe="$probe_root/.assistant"
+if ! assistant --home "$probe" service start >"$ARMS/probe.log" 2>&1; then
+	echo "a service at $probe, an attempt's depth under $ARMS, did not start; set Q1_ARMS_ROOT to a shorter directory (README \"How to run\"):" >&2
+	cat "$ARMS/probe.log" "$probe/logs/service.log" >&2 || true
+	exit 2
+fi
+if ! assistant --home "$probe" service stop --force >>"$ARMS/probe.log" 2>&1; then
+	echo "the probe service at $probe did not accept its stop; see $ARMS/probe.log" >&2
+	exit 2
+fi
+# The stop answers once accepted, so the probe home is removed only once status
+# says the service is down; any other answer waits, then refuses.
+i=0
+until status="$(assistant --home "$probe" --json service status 2>&1)" &&
+	case "$status" in *'"running":false'*) true ;; *) false ;; esac; do
+	i=$((i + 1))
+	if [ "$i" -ge 30 ]; then
+		echo "the probe service at $probe is not reported down 30s after its stop: $status" >&2
+		exit 2
+	fi
+	sleep 1
+done
+rm -rf "${probe_root:?}"
 # A result file left from an earlier run must never be read as this run's.
 rm -f result-q1-with-skill.json result-q1-ablated.json
 

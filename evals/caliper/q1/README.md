@@ -13,9 +13,12 @@ No spec or grader here runs in `make check` or CI. Graders are checked by
 `verify_graders.py` before spending agent runs. The exceptions are
 `cleanup_test.go`, a Go test of `cleanup.sh`, `gate_record_test.go`, a Go
 test of `gate_record.py`, `stage_test.go`, a Go test of both on stage
-evidence, and `gate_by_arms_test.go`, a Go test of `gate_by_arms.py`, which
-`go test ./...` runs against the built binary (see "Gate record", "Gate
-record instrument", "Stage execution" and "Gate verdicts by arm" below).
+evidence, `gate_by_arms_test.go`, a Go test of `gate_by_arms.py`, and
+`runfull_test.go`, a Go test of `run-full.sh` with a stand-in caliper that
+makes one attempt root as caliper does and asks no model, which
+`go test ./...` runs against the built binary (see "How to run", "Gate
+record", "Gate record instrument", "Stage execution" and "Gate verdicts by
+arm" below).
 
 ## How to run
 
@@ -43,8 +46,18 @@ MODEL=claude-code:claude-sonnet-4-5
 `--judge-model`, writes `result-q1-with-skill.json` and
 `result-q1-ablated.json`, then `caliper compare`, then `gate_by_arms.py`
 (see "Gate verdicts by arm"). Each arm runs under a TMPDIR of its own,
-`$ARMS/<arm>` in a fresh `caliper-q1-arms.XXXXXX` directory whose path it
-prints. `Q1_K` sets k for both arms (default 5). It refuses before graders
+`$ARMS/<arm>` in a fresh `q1-arms.XXXXXX` directory under `Q1_ARMS_ROOT`
+(default `/tmp`, never the operator's `$TMPDIR`), whose path it prints. An
+attempt's service listens on `<attempt root>/.assistant/socket`, and a unix
+socket path has a short length limit: under macOS's `$TMPDIR` no with-skill
+service could bind, so every gate-using record read indeterminate (#941).
+Before any attempt, after the graders, it starts and stops a service at a
+home as deep as the deepest attempt's (caliper's `caliper-XXXXXXXX` root in
+the `with-skill` arm), and refuses (exit 2) when that service does not
+answer, keeping that home and its log under `$ARMS`. Then set
+`Q1_ARMS_ROOT` to a shorter directory. The probe proves the depth with this
+binary on this machine and nothing else. `Q1_K` sets k for both arms
+(default 5). It refuses before graders
 when the `caliper` on PATH, asked through the interpreter its script names,
 is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
 attempt key; "As run"), when Claude is not logged in and
