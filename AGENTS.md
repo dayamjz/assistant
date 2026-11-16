@@ -223,7 +223,8 @@ open first. Operator install and quick-start live in [README.md](README.md).
 - A test's shell that waits to be released waits on `standin.HeldWait`,
   never on a release-file loop of its own (#432, #440), and `HeldWait`
   fails the test unless its package's `TestMain` runs `standin.RunOwned`.
-  `.claude/rules/agents-standin.md` owns why.
+  `internal/agents/standin/held_unix.go`'s package comment and `HeldWait`'s
+  doc comment own why.
 - Only `internal/home` spells a path under the home root, except
   `<home>/repos/<id>.git`, which `internal/gate` composes itself. Only
   `internal/managed` writes a service definition or invokes `launchctl`
