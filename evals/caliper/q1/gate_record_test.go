@@ -3,13 +3,16 @@
 package q1_test
 
 import (
+	"context"
 	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,8 +281,12 @@ func (a *attempt) recordPending(run store.Run) {
 }
 
 // TestGateRecordReadsARunningRunAsStartedNotFinished: a stand-in agent that
-// blocks until released keeps the run a push started running through
-// capture. That is started, not finished, and never counted as ran.
+// blocks until released keeps a run running through capture. That is
+// started, not finished, and never counted as ran. The run is started with
+// --intent, as every other run here is, because the gate refuses a push from
+// a process with no terminal above it, which is how CI runs; --intent blocks
+// while the run advances, so it runs beside the test, and its exit is
+// awaited before the test ends.
 func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
 	a := newAttempt(t)
 	started, release, exited := filepath.Join(a.root, "started"), filepath.Join(a.root, "release"), filepath.Join(a.root, "exited")
@@ -304,18 +311,42 @@ func TestGateRecordReadsARunningRunAsStartedNotFinished(t *testing.T) {
 		}
 		t.Errorf("the blocking stand-in agent did not exit 30s after its release")
 	})
-	if code, _, errs := a.run(a.checkout, "git", "push", "assistant", "feature/unlimited"); code != 0 {
-		t.Fatalf("push: exit %d\n%s", code, errs)
+	intent := a.command(a.checkout, a.bin, "--home", a.home, "--json", "--intent", "ship the branch")
+	var output strings.Builder // read only once ended is closed
+	intent.Stdout, intent.Stderr = &output, &output
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ended := make(chan error, 1)
+	go func() { ended <- procgroup.Run(ctx, intent, 5*time.Second) }()
+	var once sync.Once
+	reap := func() error { // ends --intent, waiting up to 30s for it to return on its own
+		var err error
+		once.Do(func() {
+			select {
+			case err = <-ended:
+			case <-time.After(30 * time.Second):
+				cancel()
+				<-ended // its exit error is dropped, so a stop for timing out is never read as an ordinary exit
+				err = errors.New("--intent was still running 30s on, so it was stopped")
+			}
+			cancel()
+		})
+		return err
 	}
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o644); _ = reap() })
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(100 * time.Millisecond) {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("no stand-in agent started 30s after the push")
+			_ = os.WriteFile(release, nil, 0o644)
+			t.Fatalf("no stand-in agent started 30s after --intent: %v\n%s", reap(), output.String())
 		}
 	}
 	a.cleanup()
+	_ = os.WriteFile(release, nil, 0o644)
+	if err := reap(); err != nil && !errors.As(err, new(*exec.ExitError)) {
+		t.Errorf("%v\n%s", err, output.String())
+	}
 	r := a.report(a.records(), a.built(), a.name())
 	j := r.Attempts[0]
 	wantJudged(t, j, "started-not-finished", "success")
