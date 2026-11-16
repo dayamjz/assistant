@@ -498,10 +498,13 @@ func TestStageReadsARunRefusedBeforeAnyStage(t *testing.T) {
 	wantStage(t, a.judge(rev), "cannot tell", 13)
 	want(t, "unplant", os.Remove(planted), nil)
 
-	// The configuration restored on main, and a second run held at review. The
-	// push names the remote's path: cleanup.sh dropped the URL rewrite origin used.
-	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && git -c user.name=q1 -c user.email=q1@example.invalid revert --no-edit HEAD >/dev/null"+
-		" && git push -q ../remote.git main && git checkout -q feature/unlimited"); code != 0 {
+	// The configuration restored on main, and a second run held at review. main
+	// goes back to the commit before the break rather than gaining a revert, so
+	// the branch is still on it and the run's rebase writes no commit, which
+	// needs a committer identity a CI runner does not have. The push names the
+	// remote's path: cleanup.sh dropped the URL rewrite origin used.
+	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && git reset -q --hard HEAD~1"+
+		" && git push -q --force ../remote.git main && git checkout -q feature/unlimited"); code != 0 {
 		t.Fatalf("restoring the trusted configuration: exit %d\n%s", code, errs)
 	}
 	a.restart()
