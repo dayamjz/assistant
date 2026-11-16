@@ -836,6 +836,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		_ = lock.Release()
 		return err
 	}
+	// A socket path too long to bind is refused before anything else is
+	// written, and the log says so with the path, its length and the limit,
+	// rather than leaving the bind to fail at the end with "invalid argument".
+	if err := ipc.CheckSocketPath(o.Home.Socket()); err != nil {
+		return nil, unstarted(err)
+	}
 	instance, err := newInstanceID()
 	if err != nil {
 		return nil, unstarted(err)

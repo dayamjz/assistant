@@ -1358,6 +1358,33 @@ running after its session ended keeps beating, and keeps handouts pinned
 under its lease until the process ends or is replaced. Acknowledge as you
 go, and do not leave a detached `listen` running.
 
+## Choosing where the home lives
+
+The home is `~/.assistant` unless `--home PATH` or `ASSISTANT_HOME` names
+another absolute path. The service listens on a local socket at
+`<home>/socket`, and a local socket's path has a length limit: at most 103
+bytes on macOS and 108 on Linux. A home whose socket path is longer cannot be
+served. `assistant service start` (with or without `--install`) refuses it
+before it launches or installs anything, naming the socket path, its length
+and the limit; a service started in the foreground there writes the same
+refusal to `logs/service.log` and exits; and `assistant service status` reports
+it.
+
+Pick a home whose path is at most 96 bytes on macOS (101 on Linux), so
+`/socket` still fits. The default under your home directory almost always
+does. What usually runs over is a home under macOS's per-user `$TMPDIR`
+(`/var/folders/...`, which is `/private/var/folders/...` once resolved) or
+under a deep scratch directory. For a throwaway home, use a short directory
+such as one under `/tmp`:
+
+```sh
+assistant --home "$(mktemp -d /tmp/assistant.XXXXXX)" service start
+```
+
+The limit counts the path after symbolic links in an existing root are
+resolved, so measure that one (`cd <home> && pwd -P`). A shorter home is a
+new home: its records start empty, and nothing moves over from the old one.
+
 ## Stopping the service
 
 `assistant service stop`, SIGTERM and SIGINT all stop the service the same

@@ -64,8 +64,13 @@ type Client struct {
 	done chan struct{}
 }
 
-// Dial connects to the service listening on a local socket.
+// Dial connects to the service listening on a local socket. A socket path
+// CheckSocketPath refuses is refused with ErrSocketPathTooLong before any
+// dial is made.
 func Dial(ctx context.Context, socket string, cfg ClientConfig) (*Client, error) {
+	if err := CheckSocketPath(socket); err != nil {
+		return nil, err
+	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socket)
 	if err != nil {

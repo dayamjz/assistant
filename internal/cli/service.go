@@ -105,6 +105,9 @@ func startService(ctx context.Context, in *invocation) (any, error) {
 		return nil, in.serveHere(ctx, underManager)
 	}
 	if install {
+		if err := in.startableSocket(); err != nil {
+			return nil, err
+		}
 		if err := in.startableConfiguration(); err != nil {
 			return nil, err
 		}
@@ -113,6 +116,9 @@ func startService(ctx context.Context, in *invocation) (any, error) {
 	if state := in.serviceState(ctx); state.Running {
 		state.Managed = in.managedState()
 		return state, nil
+	}
+	if err := in.startableSocket(); err != nil {
+		return nil, err
 	}
 	if err := in.startableConfiguration(); err != nil {
 		return nil, err
@@ -157,6 +163,31 @@ func (e startConfigurationRefused) Unwrap() error { return e.err }
 func (in *invocation) startableConfiguration() error {
 	if _, err := service.GlobalConfig(in.home.ConfigFile()); err != nil {
 		return startConfigurationRefused{err: err}
+	}
+	return nil
+}
+
+// startSocketRefused is a start refused before anything was launched or
+// installed, because the home's socket path is too long for the service to
+// bind. It reads out as internal/machine's row and then ipc's refusal, which
+// names the path, its length and the limit.
+type startSocketRefused struct{ err error }
+
+// Error is the row, then the refusal.
+func (e startSocketRefused) Error() string {
+	return machine.PhraseStartSocketPathTooLong.String() + " " + e.err.Error()
+}
+
+// Unwrap resolves to ipc.ErrSocketPathTooLong's refusal.
+func (e startSocketRefused) Unwrap() error { return e.err }
+
+// startableSocket refuses a start whose service could not bind the home's
+// socket for its length, so the person who asked is told why here rather
+// than by a service that exits before it answers. The service checks the
+// same path again as it opens.
+func (in *invocation) startableSocket() error {
+	if err := ipc.CheckSocketPath(in.home.Socket()); err != nil {
+		return startSocketRefused{err: err}
 	}
 	return nil
 }
