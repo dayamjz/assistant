@@ -167,17 +167,26 @@ func (a *attempt) scriptAgent(script standin.Script) *standin.Agent {
 	a.t.Helper()
 	agent := standin.New(a.t, script)
 	shims, err := journey.Shims()
-	var h *home.Home
-	if err == nil {
-		h, err = home.Open(a.home)
+	if err != nil {
+		a.t.Fatal(err)
 	}
+	a.configure(map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
+		"roles": map[string]any{"fix": map[string]any{}}})
+	a.path = shims + ":" + a.path
+	return agent
+}
+
+// configure writes the home's configuration document, through internal/home
+// so no home path is spelled here. It is called before serve.
+func (a *attempt) configure(document map[string]any) {
+	a.t.Helper()
+	h, err := home.Open(a.home)
 	if err == nil {
 		err = h.Create()
 	}
 	var body []byte
 	if err == nil {
-		body, err = json.Marshal(map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
-			"roles": map[string]any{"fix": map[string]any{}}})
+		body, err = json.Marshal(document)
 	}
 	if err == nil {
 		err = os.WriteFile(h.ConfigFile(), append(body, '\n'), 0o600)
@@ -185,8 +194,22 @@ func (a *attempt) scriptAgent(script standin.Script) *standin.Agent {
 	if err != nil {
 		a.t.Fatal(err)
 	}
-	a.path = shims + ":" + a.path
-	return agent
+}
+
+// rawStage is this attempt's stage_execution exactly as the instrument wrote
+// it, so a key that is absent is told from one that is null.
+func (a *attempt) rawStage() map[string]any {
+	a.t.Helper()
+	var raw struct {
+		Attempts []struct {
+			StageExecution map[string]any `json:"stage_execution"`
+		}
+	}
+	_, out, errs := a.instrument(append(a.built().args(), "--records", a.records(), a.name())...)
+	if err := json.Unmarshal([]byte(out), &raw); err != nil || len(raw.Attempts) != 1 {
+		a.t.Fatalf("gate_record.py: %v\n%s%s", err, out, errs)
+	}
+	return raw.Attempts[0].StageExecution
 }
 
 // intentHeld starts a run whose review blocks, and returns the file that
@@ -532,6 +555,9 @@ func TestStageReadsASkippedReview(t *testing.T) {
 	a.cleanup()
 	rev := a.built()
 	wantStage(t, a.judge(rev), "stages executed, review not executed", 6)
+	if v, ok := a.rawStage()["review_established"]; !ok || v != nil {
+		t.Errorf("review_established = %v (present %v), want null: the verdict is the fold's, with no completed review", v, ok)
+	}
 
 	a.restart()
 	a.faultRead("argv[-1] == '--log=review'", 1)
@@ -620,4 +646,30 @@ func TestStageFoldsAnUnreadRunBesideACompletedReviewAsTrouble(t *testing.T) {
 	}{1, 0})
 	want(t, "with trouble", r.StageExecution.ReviewExecutedWithTrouble, 1)
 	want(t, "runs unread", r.StageExecution.RunsUnread, 1)
+}
+
+// TestStageReadsARunHeldAtRebaseAsReviewNotReached is row 10: main gains a
+// commit that conflicts with the branch, and with no automatic rebase round
+// (fix_rounds.rebase 0, so no fixer runs) the run is held at its rebase. It
+// has a checkpoint, its position is before review, and the review log is
+// unwritten: stages executed, review not executed.
+func TestStageReadsARunHeldAtRebaseAsReviewNotReached(t *testing.T) {
+	a := newAttempt(t)
+	a.configure(map[string]any{"fix_rounds": map[string]any{"rebase": 0}})
+	a.serve()
+	if code, _, errs := a.run(a.checkout, "sh", "-c", `f=$(git diff --name-only main feature/unlimited | head -n 1) && [ -n "$f" ]`+
+		` && git checkout -q main && echo 'main moved this line' > "$f" && git add -- "$f"`+
+		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm conflicting && git push -q ../remote.git main && git checkout -q feature/unlimited`); code != 0 {
+		t.Fatalf("a conflicting commit on main: exit %d\n%s", code, errs)
+	}
+	id := a.startRun()
+	a.cleanup()
+	e := a.stageEntries()[id]
+	want(t, "first read", []any{e.Report.Output["position"], reviewOf(e.Report.Output)["ran"], e.Logs["review"].Output["written"]},
+		[]any{"hold:rebase", false, false})
+	j := a.judge(a.built())
+	wantStage(t, j, "stages executed, review not executed", 10)
+	if v, ok := a.rawStage()["review_established"]; !ok || v != nil {
+		t.Errorf("review_established = %v (present %v), want null", v, ok)
+	}
 }

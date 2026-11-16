@@ -33,8 +33,8 @@ checkout = os.path.join(root, "work", "work")
 record = {"schema": 2, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 
-# pipeline.Order's wire names, review first (README "Stage evidence"); the
-# cleanup tests pin the list to the product's.
+# pipeline.Order's wire names, review first (README "Stage evidence");
+# stage_test.go pins the list to the product's.
 STAGES = ("review", "intent", "rebase", "test", "document", "lint", "push", "pr", "ci")
 
 def call(name, args, cwd, out=None, into=None, key=None):

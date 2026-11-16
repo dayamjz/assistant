@@ -419,6 +419,9 @@ func TestGateRecordNamesNoHomeAndNoCheckout(t *testing.T) {
 	wantJudged(t, j, "no-home", "not-attempted")
 	want(t, "stop exit", j.CleanupStatus.Exit, nil)
 	wantStage(t, j, "no stage executed")
+	if v, ok := a.rawStage()["review_established"]; ok {
+		t.Errorf("review_established = %v on an attempt-level verdict, want the key absent", v)
+	}
 
 	for _, failing := range []bool{false, true} {
 		a := newAttempt(t)

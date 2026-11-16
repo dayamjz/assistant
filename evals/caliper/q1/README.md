@@ -119,8 +119,10 @@ from the attempt root. A log read returns at most 64 KiB of the log's end,
 and the record keeps it: it is the only copy of an interrupted review's
 trace. Cleanup never starts the service to read: a start resumes a run that
 was in flight and changes what is being read. The stage list in `cleanup.sh`
-is a copy of `pipeline.Order`'s names, and `cleanup_test.go` and
-`stage_test.go` pin it to them.
+is a copy of `pipeline.Order`'s names, and
+`TestStageReadsARunRefusedBeforeAnyStage` in `stage_test.go` pins it to them
+(`cleanup_test.go` checks only that a run with stages gets its review log
+alone).
 
 The `runs` read needs the live service, so it comes before `service stop`.
 It runs from the attempt's checkout and sees only runs of that checkout's
@@ -357,14 +359,18 @@ compared field shows cannot change a row, but an ABA transition can.
 executed`; else any `unread` gives `cannot tell`; else any
 `review-started-not-completed` gives `review started, not completed`; else
 all `no-stage` gives `no stage executed`; else `stages executed, review not
-executed`. Beside the verdict, never folded into it:
+executed`. Beside the verdict, never folded into it (these keys, and `runs`,
+are present only when the verdict comes from the fold; an attempt-level
+verdict, `not measured`, `cannot tell` with a `reason`, or `no stage
+executed` for `no-home` or `never-reached`, has none of them, and the counts
+read a missing `review_established` as null):
 
 - `trouble`: `{unread, review_started_not_completed}`, counted over the
   runs whatever the verdict, so one completed review beside an unread run
   still shows the unread one.
 - `review_established`: `true` when any `review-completed` run established a
   review, `false` when there are such runs and none did, `null` when the
-  verdict is not `review executed`. A run did not establish one when its
+  fold's verdict is not `review executed`. A run did not establish one when its
   review report carries `review-not-established`,
   `review-change-too-large`, `review-everything-excluded` or
   `review-nothing-changed`, or is absent or not a findings report.
@@ -379,26 +385,27 @@ fields, every `ATTEMPT` named; `review_executed_with_trouble`, the
 `review executed` attempts with any trouble, a subset of that count;
 `review_established` counts of `true`, `false` and `null`; and the run
 totals `runs_unread` and `runs_review_started_not_completed` over every
-attempt whatever its verdict. A report over schema 1 records alone says
-`not measured: N` and nothing else non-zero. A rate of stage execution is
+attempt whatever its verdict. A report over N schema 1 records alone says
+`not measured: N` and `review_established` `null: N`, and nothing else
+non-zero. A rate of stage execution is
 stated over the measured attempts only, with `not measured` named beside it.
 
 Limits:
 
 - **A missing log is never "not executed" on its own.** Rows 6 and 10 need
   the report to place the run; row 11 needs the product's no-checkpoint
-  answer and all nine logs read. The one way row 11 can be wrong: a stage
-  began, its best-effort begin write failed, and the run then ended with no
-  checkpoint. The service logs that loss to `service.log`, which rotates, and
-  this instrument does not read it.
+  answer and all nine logs read. A run whose stage began always has a
+  checkpoint, so it never reaches row 11: `graph.Executor.Run` writes a run's
+  first checkpoint before any node body runs (`internal/graph/executor.go`),
+  and the "began" line is written inside the body. A lost begin write
+  matters only beside a checkpoint, at row 9, which reads `unread`.
 - **The service must be up at capture.** A service down at capture is
   `outcome` `error`, so `cannot tell`; the logs on disk are not read.
 - **Consistency checks, not attestation**, as above: the attempt owns its
   home.
-- **Rows 9, 10 and 12 have no test.** Row 9 needs a lost begin write, row
-  10 a run held before review with a checkpoint, row 12 a run read before
-  its first checkpoint. Each is `unread` but row 10, so only row 10 can
-  read a run as not executed untested.
+- **Rows 9 and 12 have no test.** Row 9 needs a lost begin write, row 12 a
+  run read before its first checkpoint. Both read `unread`. Row 10 is
+  tested with a run held at its rebase.
 - **Copies of the product's names.** The nine stage names, the node prefixes
   and the four not-established finding ids are copies of
   `internal/pipeline` and `internal/stages/review.go`. The stage names are
