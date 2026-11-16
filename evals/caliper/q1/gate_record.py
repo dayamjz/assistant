@@ -250,6 +250,16 @@ def stage_execution(record, observation):
             "trouble": {"unread": states.count(UNREAD), "review_started_not_completed": states.count(RUN_STARTED)}}
 
 
+def no_record(attempt):
+    """The result for an attempt with no record file: the harness failed, so
+    cannot tell, never "did not run". gate_by_arms.py uses it for an attempt
+    caliper saved that left no record."""
+    return {"attempt": attempt, "cleanup_status": {"status": "failure", "exit": None, "stderr": None,
+                                                   "reason": "no record file"},
+            "gate_observation": indeterminate("no record file: the harness failed"),
+            "stage_execution": {"verdict": CANNOT, "reason": "no record file"}}
+
+
 def judge(attempt, path, built):
     """One attempt's gate_observation and cleanup_status, from its record."""
     unread = {"status": "failure", "exit": None, "stderr": None}
@@ -257,9 +267,7 @@ def judge(attempt, path, built):
         with open(path) as f:
             record = json.load(f)
     except FileNotFoundError:
-        return {"attempt": attempt, "cleanup_status": dict(unread, reason="no record file"),
-                "gate_observation": indeterminate("no record file: the harness failed"),
-                "stage_execution": {"verdict": CANNOT, "reason": "no record file"}}
+        return no_record(attempt)
     except (OSError, ValueError) as e:
         return {"attempt": attempt, "cleanup_status": dict(unread, reason="record unreadable"),
                 "gate_observation": indeterminate("record unreadable: %r" % e),

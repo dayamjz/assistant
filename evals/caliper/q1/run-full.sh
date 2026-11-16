@@ -23,6 +23,10 @@ if ! command -v caliper >/dev/null 2>&1; then
 	echo "caliper not on PATH; pip install --user 'caliper-eval==0.19.0'" >&2
 	exit 2
 fi
+if ! command -v go >/dev/null 2>&1; then
+	echo "go not on PATH; gate_by_arms.py needs the built binary's vcs stamp" >&2
+	exit 2
+fi
 if ! command -v claude >/dev/null 2>&1; then
 	echo "claude not on PATH; install Claude Code for the pilot backend" >&2
 	exit 2
@@ -51,9 +55,18 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 		git config --global --unset-all "$key" 2>/dev/null || true
 	done
 
+# Each arm runs under a TMPDIR of its own, so caliper makes that arm's attempt
+# roots there and cleanup.sh writes their gate records to
+# $ARMS/<arm>/caliper-q1-gate, never beside the other arm's
+# (README "Gate verdicts by arm").
+ARMS="$(mktemp -d "${TMPDIR:-/tmp}/caliper-q1-arms.XXXXXX")"
+mkdir -p "$ARMS/with-skill/caliper-q1-gate" "$ARMS/ablated/caliper-q1-gate"
+# A result file left from an earlier run must never be read as this run's.
+rm -f result-q1-with-skill.json result-q1-ablated.json
+
 with_rc=0
 echo "running with-skill arm (model=$MODEL)" >&2
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
+TMPDIR="$ARMS/with-skill" caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--output result-q1-with-skill.json || with_rc=$?
 
@@ -67,17 +80,25 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 
 ablated_rc=0
 echo "running ablated arm (model=$MODEL)" >&2
-caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
+TMPDIR="$ARMS/ablated" caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--ablate assistant --output result-q1-ablated.json || ablated_rc=$?
 
+report_rc=0
 if [ -f result-q1-with-skill.json ] && [ -f result-q1-ablated.json ]; then
 	caliper compare result-q1-with-skill.json result-q1-ablated.json || true
+	vcs() { go version -m "$REPO_ROOT/bin/assistant" | sed -n "s/^[[:space:]]*build[[:space:]]*vcs.$1=//p"; }
+	python3 gate_by_arms.py --revision "$(vcs revision)" --modified "$(vcs modified)" \
+		--arm with-skill "$ARMS/with-skill" result-q1-with-skill.json \
+		--arm ablated "$ARMS/ablated" result-q1-ablated.json >"$ARMS/gate-by-arm.json" || report_rc=$?
+else
+	echo "no gate verdicts by arm: an arm wrote no result file" >&2
+	report_rc=1
 fi
 echo "results: result-q1-with-skill.json result-q1-ablated.json" >&2
-echo "collect gate records and usage from \${TMPDIR}/caliper-q1-gate/ into the write-up" >&2
-if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ]; then
-	echo "arm exit status: with-skill=$with_rc ablated=$ablated_rc" >&2
+echo "gate records and usage per arm: $ARMS/<arm>/caliper-q1-gate/; gate verdicts by arm: $ARMS/gate-by-arm.json" >&2
+if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ] || [ "$report_rc" -ne 0 ]; then
+	echo "exit status: with-skill=$with_rc ablated=$ablated_rc gate-by-arm=$report_rc" >&2
 	exit 1
 fi
 

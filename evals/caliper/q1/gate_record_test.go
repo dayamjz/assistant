@@ -90,7 +90,7 @@ func (a *attempt) built() built {
 }
 
 func (a *attempt) name() string    { return filepath.Base(a.root) }
-func (a *attempt) records() string { return filepath.Join(a.root, "caliper-q1-gate") }
+func (a *attempt) records() string { return filepath.Join(a.tmpdir, "caliper-q1-gate") }
 
 // instrument runs gate_record.py and returns its exit code, stdout and stderr.
 func (a *attempt) instrument(args ...string) (int, string, string) {
