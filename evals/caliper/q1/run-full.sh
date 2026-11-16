@@ -4,23 +4,31 @@
 # Full Q1 both arms (issue #287 items 4–5): k = 5, the same pinned
 # backend:model for --model and --judge-model, with and without the
 # assistant skill. MODEL defaults to claude-code:claude-sonnet-4-5
-# (pin explicitly; do not leave the CLI default).
+# (pin explicitly; do not leave the CLI default). Q1_K overrides k.
 #
-# Prerequisites: `make build` at repo root, caliper-eval 0.19.0 on PATH,
+# Prerequisites: `make build` at repo root, install-caliper.sh's caliper
+# (in CALIPER_VENV, the same default as there),
 # Claude Code logged in (ANTHROPIC_API_KEY or `claude auth login`), and
 # provider headroom checked (quota-axi). Graders must pass first.
 set -eu
 cd "$(dirname "$0")"
 MODEL="${1:-claude-code:claude-sonnet-4-5}"
 REPO_ROOT="$(CDPATH= cd -- ../../.. && pwd)"
-export PATH="$REPO_ROOT/bin:${HOME}/.local/bin:${HOME}/.local/node_modules/.bin:${PATH}"
+CALIPER_VENV="${CALIPER_VENV:-$HOME/.local/share/caliper-q1attemptenv}"
+export PATH="$REPO_ROOT/bin:$CALIPER_VENV/bin:${HOME}/.local/bin:${HOME}/.local/node_modules/.bin:${PATH}"
+K="${Q1_K:-5}"
 
 if ! command -v assistant >/dev/null 2>&1; then
 	echo "assistant not on PATH; run make build at the repo root" >&2
 	exit 2
 fi
-if ! command -v caliper >/dev/null 2>&1; then
-	echo "caliper not on PATH; pip install --user 'caliper-eval==0.19.0'" >&2
+# Only the patched caliper passes cleanup.sh the attempt key "as run" joins on
+# (README "As run"). Ask the caliper on PATH through the interpreter it runs on.
+caliper="$(command -v caliper || true)"
+version="$([ -n "$caliper" ] && "$(sed -n '1s/^#!//p' "$caliper")" -c \
+	'import importlib.metadata as m; print(m.version("caliper-eval"))' 2>/dev/null || true)"
+if [ "$version" != 0.19.0+q1attemptenv ]; then
+	echo "caliper on PATH ('$caliper') is caliper-eval '$version', not 0.19.0+q1attemptenv; run ./install-caliper.sh" >&2
 	exit 2
 fi
 if ! command -v go >/dev/null 2>&1; then
@@ -66,7 +74,7 @@ rm -f result-q1-with-skill.json result-q1-ablated.json
 
 with_rc=0
 echo "running with-skill arm (model=$MODEL)" >&2
-TMPDIR="$ARMS/with-skill" caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
+TMPDIR="$ARMS/with-skill" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--output result-q1-with-skill.json || with_rc=$?
 
@@ -80,7 +88,7 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 
 ablated_rc=0
 echo "running ablated arm (model=$MODEL)" >&2
-TMPDIR="$ARMS/ablated" caliper run q1.eval.yaml --k 5 --timeout 1200 --workers 1 \
+TMPDIR="$ARMS/ablated" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
 	--ablate assistant --output result-q1-ablated.json || ablated_rc=$?
 

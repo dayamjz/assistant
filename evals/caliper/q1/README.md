@@ -21,7 +21,10 @@ record instrument", "Stage execution" and "Gate verdicts by arm" below).
 
 ```sh
 make build
-pip install --user 'caliper-eval==0.19.0'   # pinned (plan section 4)
+# caliper-eval 0.19.0 (pinned, plan section 4) with the Q1 attempt-key patch,
+# as 0.19.0+q1attemptenv, into ~/.local/share/caliper-q1attemptenv
+# ("As run"); PYTHON=<a Python 3.10 or later> if python3 is older.
+evals/caliper/q1/install-caliper.sh
 # Claude Code on PATH and logged in (pilot backend). API key auth:
 #   export ANTHROPIC_API_KEY=…
 #   # or: claude auth login
@@ -41,7 +44,10 @@ MODEL=claude-code:claude-sonnet-4-5
 `result-q1-ablated.json`, then `caliper compare`, then `gate_by_arms.py`
 (see "Gate verdicts by arm"). Each arm runs under a TMPDIR of its own,
 `$ARMS/<arm>` in a fresh `caliper-q1-arms.XXXXXX` directory whose path it
-prints. It refuses before graders when Claude is not logged in and
+prints. `Q1_K` sets k for both arms (default 5). It refuses before graders
+when the `caliper` on PATH, asked through the interpreter its script names,
+is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
+attempt key; "As run"), when Claude is not logged in and
 `ANTHROPIC_API_KEY` is unset, or when `go` is not on PATH. Use a
 disposable environment. Caliper's `sandbox:` scans transcripts and runs
 Claude Code with `--dangerously-skip-permissions` under a temporary HOME
@@ -85,11 +91,17 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (2; a#925's records are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (3; #926's records are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
   not always point at a step with a non-zero exit.
+- `task_id` and `caliper_attempt`: the attempt's key in caliper's saved
+  result, from the hook's `CALIPER_TASK_ID` and `CALIPER_ATTEMPT`, which only
+  the patched caliper sets ("As run"). Without a task id and a positive
+  whole attempt number both are null and `errors` has a `key: ...` line
+  naming the patched version, so the hook exits 1: a stock caliper is loud,
+  never a silent blank.
 - `outcome`, exactly one of:
   - `no-home`: the home is missing. Nothing is read or stopped. This means no
     persisted home was observed. It is not proof that the gate never started.
@@ -227,7 +239,8 @@ the denominator. So does a record that is not JSON.
 A valid row becomes indeterminate when any check fails:
 
 - **Read-path errors.** Any `errors` line other than `usage: ...`,
-  `stop: ...` and the per-run stage reads' `run:<id>: ...`,
+  `stop: ...`, `key: ...` (the join's to judge, "As run") and the per-run
+  stage reads' `run:<id>: ...`,
   `log:<id>:<stage>: ...` and `run-after:<id>: ...` is on the read path:
   `service`, `runs`, and `cleanup: ...`, which cleanup itself raised. A raise
   after the read leaves `outcome` `read` with a `cleanup: ...` line (#923),
@@ -237,7 +250,7 @@ A valid row becomes indeterminate when any check fails:
   judges it instead ("Stage execution"). A failed report read is `unread`
   (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
   `ran: true`, where `ran` decides (row 4).
-- **This attempt's record.** `schema` 1 or 2, `attempt` the name asked for, `home`
+- **This attempt's record.** `schema` 1, 2 or 3, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
 - **One repository.** The runs name one `repository_id`, never null.
@@ -430,10 +443,11 @@ Limits:
 
 **Gate verdicts by arm** (#895 scope (a)). `gate_by_arms.py` reports
 `gate_record.py`'s per-attempt verdicts grouped by the arm each attempt was
-assigned. It measures adoption only, whether the gate ran in each arm, never
-efficacy. Beside the records it reads three fields of each arm's caliper
-result (`run.ablated`, `run.interrupted` and how many attempts each task
-saved), and no transcript.
+assigned ("as assigned": adoption, whether the gate ran in each arm), and
+each attempt's task outcome by whether the gate ran ("As run", #936), never
+efficacy. Beside the records it reads of each arm's caliper result only
+`run.ablated`, `run.interrupted`, and each saved attempt's task id, attempt
+number and outcome, and no transcript.
 
 ```sh
 python3 gate_by_arms.py --revision REV --modified MOD \
@@ -455,23 +469,32 @@ a record whose `home` is not `DIR/<attempt>/.assistant` (a record moved from
 another folder), and a record a hook wrote anywhere else is not in the
 folder, so it shows as a missing record. It also refuses a result whose
 `run.ablated` is not the arm's (`[]` for `with-skill`, `["assistant"]` for
-`ablated`), more records than the result saved attempts when that run was
-not interrupted, one `DIR` for two arms, an arm unknown or named twice, a
-missing `DIR/caliper-q1-gate`, or an unreadable result.
+`ablated`), a record whose key that run did not save, or more records than
+it saved attempts, when that run was not interrupted, two records naming
+one key, one `DIR` for two arms, an arm unknown or named twice, a
+missing `DIR/caliper-q1-gate`, or an unreadable result or one that saves a
+key twice.
 
-**The report.** One JSON document: `build`, `as_assigned` (one object per
-arm) and `as_run`. Each arm has:
+**The report.** One JSON document (`schema` 2): `build`, `as_assigned` (one
+object per arm) and `as_run` ("As run"). Each arm has:
 
 - `ablated`, `interrupted` (from the result), `caliper_attempts` (the
   attempts the result saved), `records` (record files in the folder),
   `missing_records` and `records_beyond_saved`.
-- `attempts`: every record, judged by `gate_record.py` (`gate_observation`
-  with the run ids, `cleanup_status`, `stage_execution`), plus `arm`. Then
-  one entry per missing record, with `attempt` null, judged as a missing
-  record file: indeterminate and `cannot tell`, never "did not run".
+- `attempts`: every record with a key, judged by `gate_record.py`
+  (`gate_observation` with the run ids, `cleanup_status`,
+  `stage_execution`), plus `arm`, its key (`task_id`, `caliper_attempt`)
+  and `task_outcome`: the outcome the arm's result saved under that key, or
+  `not saved`. Then one entry per saved attempt no record names, with
+  `attempt` null, its key and outcome, judged as a missing record:
+  indeterminate and `cannot tell`, never "did not run".
+- `records_without_key`: each record with no key (schema 1 or 2, or written
+  under a stock caliper), judged the same, with `task_outcome`
+  `cannot tell`. It names no attempt, so it is beside the denominator, never
+  in it, and the attempt it belongs to is one of the missing ones.
 - `counts` and `stage_execution` as `gate_record.py` computes them, over one
-  denominator: the records plus the missing ones. They are counts of
-  attempts in each state, not a score.
+  denominator, `attempts`: every saved attempt once, plus each record the
+  run did not save. They are counts of attempts in each state, not a score.
 - `review_established` counts are `true`, `false` and `unknown`, and an
   attempt's or run's null `review_established` reads `"unknown"`: a review
   whose establishment the record cannot decide, or no executed review to
@@ -481,25 +504,40 @@ arm) and `as_run`. Each arm has:
   `not_measured` beside it. `cannot tell` attempts are in `measured`. It
   says a review executed only as far as the stage verdict does.
 
-`missing_records` is `caliper_attempts` minus `records` when that is
-positive, and 0 otherwise; `records_beyond_saved` is `records` minus
-`caliper_attempts` when that is positive, and 0 otherwise. caliper 0.19.0
-runs cleanup for every attempt it starts and saves no attempt whose agent a
-cancellation killed (`caliper/runner.py` `_run_attempt`), so only an
-interrupted run explains more records than saved attempts. There the extra
-records stay in the arm and its denominator, counted as
-`records_beyond_saved`, and a missing record can hide behind a cancelled
-attempt's record, so `missing_records` is a lower bound. A run that was not
-interrupted with more records than saved attempts is refused.
+`missing_records` is the saved attempts no record names, and
+`records_beyond_saved` the records whose key the result did not save. Both
+are exact by key. caliper 0.19.0 runs cleanup for every attempt it starts
+and saves no attempt whose agent a cancellation killed
+(`caliper/runner.py` `_run_attempt`), so only an interrupted run explains a
+record it did not save. There such a record stays in the arm and its
+denominator, `task_outcome` `not saved`. A run that was not interrupted
+with such a record, or with more records than saved attempts, is refused.
 
-**As run is not measured.** `as_run` is `{"measured": false, "reason": ...}`.
-Results by whether the gate ran need each caliper attempt's task result
-joined to its gate record, and caliper 0.19.0's saved result names no
-attempt id to join on: an attempt is a task id and a number
-(`caliper/schema/results.py` `AttemptRecord`). The attempt root shows only in
-transcripts and in a failed assert's traceback; a passing assert's output
-is saved as `""`. The report never joins by order, timestamp or transcript.
-Recording an attempt id so the two can be joined is #936.
+**As run** (#936). `as_run` is the gate state by task outcome:
+`by_arm.<arm>` over that arm's `attempts`, and `both_arms` over both. Each
+is an object of every `gate_observation` state (as in `counts`) to an
+object of task outcome to count, where a task outcome is caliper's
+(`pass`, `task_fail`, `infra_error` and so on) or `not saved`. So a saved
+attempt with no record is in the `indeterminate` row under its outcome,
+and a record without a key is in no row (`records_without_key`). It is
+descriptive: whether the gate ran was not randomized.
+
+**Why the join is exact.** caliper 0.19.0's saved result keys every attempt
+by task id and attempt number (`caliper/schema/results.py`,
+`TaskResult.task_id` and `AttemptRecord.attempt`), unique within one run,
+and the arm is the run ("Why the arm is exact"). A stock caliper does not
+tell a hook that key, so `caliper-0.19.0-q1attemptenv.patch` adds it to
+every step's environment as `CALIPER_TASK_ID` and `CALIPER_ATTEMPT`, the
+values its runner holds for the attempt it is running (`runner.py`
+`_run_attempt`), and `cleanup.sh` records them. The patch changes no saved
+result, and it carries caliper's own tests for both lines
+(`tests/test_workdir.py`, `tests/test_runner.py`). `install-caliper.sh`
+downloads the 0.19.0 sdist, refuses one whose sha256 is not the pinned
+one, applies the patch with no fuzz, and installs it as
+`0.19.0+q1attemptenv` into a virtual environment, so the patched copy is
+told from stock by its version; `run-full.sh` refuses any other. The report
+never joins by order, timestamp or transcript: a record joins the saved
+attempt its key names in its own arm's result, or none.
 
 **Grader state.** Setup writes lost-work tip SHAs under
 `$TMPDIR/caliper-q1-grader/<attempt-root>/`, never a `.grader/` beside
