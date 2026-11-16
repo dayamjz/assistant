@@ -223,8 +223,8 @@ The valid states, from the runs:
 - `reached-no-stage`: every run is `pending`, recorded and never started.
 - `started-not-finished`: a run is still `running`, and no run is `held`,
   `passed`, `failed` or `terminated`. The gate started and did not finish,
-  and this is never counted as `ran`. Not covered by a test yet, see
-  assistant#930.
+  and this is never counted as `ran`. Covered by
+  `TestGateRecordReadsARunningRunAsStartedNotFinished`.
 - `ran`: a run reached a hold or an end status (`held`, `passed`,
   `failed` or `terminated`). It does not mean that a stage executed.
 
