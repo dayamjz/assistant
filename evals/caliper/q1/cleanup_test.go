@@ -139,6 +139,48 @@ func (a *attempt) stopped() bool {
 	return true
 }
 
+// fault puts a sitecustomize.py holding code on the hook's PYTHONPATH, so a
+// fault is injected into cleanup.sh's Python while that Python runs unmodified
+// and nothing the binary prints is faked.
+func (a *attempt) fault(code string) {
+	a.t.Helper()
+	dir := filepath.Join(a.root, "fault")
+	if err := errors.Join(os.Mkdir(dir, 0o755), os.WriteFile(filepath.Join(dir, "sitecustomize.py"), []byte(code), 0o644)); err != nil {
+		a.t.Fatal(err)
+	}
+	a.env = []string{"PYTHONPATH=" + dir}
+}
+
+// failStop puts an assistant ahead of the real one on PATH that, asked to
+// stop, first stops the service itself, then waits until status no longer
+// reports it running (a stop exits on Accepted while the socket may still
+// answer), and only then hands the same stop to the real binary, so the stop
+// cleanup sees is the real binary's answer to a service that is down. A
+// service still up after at least 30s by the clock (date counts whole
+// seconds, hence +31) exits 97, which fails the test loudly.
+func (a *attempt) failStop() {
+	a.t.Helper()
+	wrap := filepath.Join(a.root, "wrap")
+	script := fmt.Sprintf(`#!/bin/sh
+case " $* " in *" service stop "*)
+	%[1]s "$@" >/dev/null 2>&1
+	end=$(($(date +%%s) + 31))
+	while %[1]s --home %[2]s --json service status 2>/dev/null | grep -q '"running":true'; do
+		[ "$(date +%%s)" -lt "$end" ] || { echo "wrap: the service still runs 30s after its stop" >&2; exit 97; }
+		sleep 0.1
+	done;;
+esac
+exec %[1]s "$@"
+`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home))
+	if err := os.Mkdir(wrap, 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	a.path = wrap + ":" + a.path
+}
+
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
@@ -244,17 +286,14 @@ func TestCleanupStillReadsWhenTheUsageFileCannotBeWritten(t *testing.T) {
 func TestCleanupStopsAndRecordsErrorWhenCaptureRaises(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
-	fault := filepath.Join(a.root, "fault")
-	want(t, "fault dir", os.Mkdir(fault, 0o755), nil)
-	want(t, "fault", os.WriteFile(filepath.Join(fault, "sitecustomize.py"), []byte(`import os.path
+	a.fault(`import os.path
 _isdir = os.path.isdir
 def isdir(p):
     if p.endswith(os.path.join("work", "work")):
         raise RuntimeError("injected fault in capture")
     return _isdir(p)
 os.path.isdir = isdir
-`), 0o644), nil)
-	a.env = []string{"PYTHONPATH=" + fault}
+`)
 	code, out, r := a.cleanup()
 	want(t, "exit", code, 1)
 	want(t, "outcome", r.Outcome, "error")
@@ -357,32 +396,7 @@ func TestCleanupRecordsAFailingRead(t *testing.T) {
 func TestCleanupSurfacesAFailingStop(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
-	// An assistant ahead of the real one on PATH that, asked to stop, first
-	// stops the service itself, then waits until status no longer reports it
-	// running (a stop exits on Accepted while the socket may still answer),
-	// and only then hands the same stop to the real binary, so the stop
-	// cleanup sees is the real binary's answer to a service that is down. A
-	// service still up after at least 30s by the clock (date counts whole
-	// seconds, hence +31) exits 97, which fails the test loudly.
-	wrap := filepath.Join(a.root, "wrap")
-	script := fmt.Sprintf(`#!/bin/sh
-case " $* " in *" service stop "*)
-	%[1]s "$@" >/dev/null 2>&1
-	end=$(($(date +%%s) + 31))
-	while %[1]s --home %[2]s --json service status 2>/dev/null | grep -q '"running":true'; do
-		[ "$(date +%%s)" -lt "$end" ] || { echo "wrap: the service still runs 30s after its stop" >&2; exit 97; }
-		sleep 0.1
-	done;;
-esac
-exec %[1]s "$@"
-`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home))
-	if err := os.Mkdir(wrap, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	a.path = wrap + ":" + a.path
+	a.failStop()
 	code, out, r := a.cleanup()
 	want(t, "exit", code, 1)
 	want(t, "outcome", r.Outcome, "read")

@@ -28,6 +28,7 @@ sandbox:
     - verify_graders\.py
     - hidden_[^/\s]*\.go\.txt
     - cleanup\.sh
+    - gate_record\.py
 
 tasks:
   - name: defect - ship a branch that relaxes a fail-closed parser
