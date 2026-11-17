@@ -72,6 +72,12 @@ type Service struct {
 	Socket string `json:"socket"`
 	// Detail says why the service did not answer, and is empty when it did.
 	Detail string `json:"detail,omitempty"`
+	// SocketPathTooLong is whether the reason is that the home's socket path
+	// is too long for a local socket, so no service can serve the home where
+	// it is. It is for the phrased rendering, which may not print the path;
+	// the structured one already says so, with the path, in Detail, so it is
+	// not on the wire.
+	SocketPathTooLong bool `json:"-"`
 	// Build is the software the service is running, known only when it
 	// answered.
 	Build *store.Build `json:"build,omitempty"`

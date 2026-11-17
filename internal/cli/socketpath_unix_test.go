@@ -25,8 +25,10 @@ import (
 // the byte the path's terminator takes). The start says so before it
 // launches anything, naming the path, its length, the limit and how to
 // choose another home; a service started in the foreground there refuses and
-// writes the same to its log; and status reports the same rather than the
-// dial's "invalid argument".
+// writes the same to its log; status reports the same rather than the dial's
+// "invalid argument", the plain one as a home no service can serve rather
+// than one nobody started; and a stop's refusal says to choose another home
+// rather than to start a service that would only be refused.
 func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
 	limit := map[string]int{"darwin": 103, "linux": 107}[runtime.GOOS]
 	root, err := standin.TempDir("sock")
@@ -79,6 +81,17 @@ func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
 	if status.Running || !strings.Contains(status.Detail, named) {
 		t.Fatalf("status = %+v, want not running with a detail naming %q", status, named)
 	}
+
+	for _, verb := range [][]string{{"service", "status"}, {"status"}} {
+		got = run(t, h, newSubject(t), verb...)
+		if !strings.Contains(got.stdout, "too long") || strings.Contains(got.stdout, machine.PhraseServiceAbsent.String()) {
+			t.Fatalf("plain %v exited %s and said %q, want why no service can be up rather than that none was started:\n%s", verb, got.code, got.stdout, got.stderr)
+		}
+	}
+	got = run(t, h, "", "service", "stop")
+	if got.code == machine.ExitOK || strings.Contains(got.stderr, "assistant service start") || !strings.Contains(got.stderr, "--home") {
+		t.Fatalf("stop exited %s, want a refusal pointing at another home and not at a start:\n%s", got.code, got.stderr)
+	}
 }
 
 // TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials holds a start
@@ -89,7 +102,8 @@ func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
 // yet created binds one spelling and every later command dials another.
 // A root not yet created under a short link to a long directory, and an
 // existing root that is a short link to one, are refused before anything is
-// launched, naming the long path later commands would dial; before, the
+// launched, and status reports why, each naming the long path later commands
+// would dial; before, the
 // first started a service at the short name that no later command could
 // reach. A long link to an existing short directory is not refused, and its
 // service starts and stops, because what is bound and dialed is the short
@@ -135,6 +149,11 @@ func TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials(t *testing.T) {
 		got := runArgs(t, "", "--home", given, "service", "start")
 		if got.code == machine.ExitOK || !strings.Contains(got.stderr, named) {
 			t.Fatalf("%s: start exited %s, want a refusal naming %q:\n%s%s", name, got.code, named, got.stdout, got.stderr)
+		}
+		got = runArgs(t, "", "--home", given, "--json", "service", "status")
+		var status machine.Service
+		if err := json.Unmarshal([]byte(got.stdout), &status); err != nil || status.Running || !strings.Contains(status.Detail, named) {
+			t.Fatalf("%s: status = %+v (%v), want not running with a detail naming %q", name, status, err, named)
 		}
 	}
 

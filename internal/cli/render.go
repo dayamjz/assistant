@@ -460,11 +460,15 @@ func readOutSupervision(w io.Writer, s *machine.Supervision) {
 // system's service manager, whose definition's path is the structured
 // rendering's. The detail of why one did not is a dial error naming the socket,
 // which is the structured rendering's; assistant doctor is the verb that
-// diagnoses it for a person.
+// diagnoses it for a person. A home no service can serve, because its socket
+// path is too long, reads as that rather than as one nobody started.
 func readOutService(w io.Writer, s machine.Service) {
-	if !s.Running {
+	switch {
+	case !s.Running && s.SocketPathTooLong:
+		writeln(w, machine.PhraseServiceCannotServe)
+	case !s.Running:
 		writeln(w, machine.PhraseServiceAbsent)
-	} else {
+	default:
 		writeln(w, machine.PhraseServiceUp)
 	}
 	if s.Managed != nil {

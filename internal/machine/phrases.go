@@ -1308,6 +1308,13 @@ var (
 		Consequence: "Nothing is validated or watched until one is.",
 		Decision:    "Run assistant service start.",
 	}
+	// PhraseServiceCannotServe is the row for a home no service can be up
+	// for, because its socket path is too long for a local socket.
+	PhraseServiceCannotServe = Phrase{
+		Outcome:     "No service can be up for this home, because its path is too long for this computer to serve it from.",
+		Consequence: "Nothing is validated or watched until a home with a shorter path is used.",
+		Decision:    "Choose a home with a shorter path, with --home or ASSISTANT_HOME; assistant service start names the limit.",
+	}
 	// PhraseGated is the row for a working copy bound to a gate.
 	PhraseGated = Phrase{
 		Outcome:     "This checkout sends its changes through a gate.",
@@ -2144,7 +2151,7 @@ func TablePhrases() []Phrase {
 	out = append(out, keptAnswerRows()...)
 	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
-	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
+	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseServiceCannotServe, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		if name == CheckUpstream {

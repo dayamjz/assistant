@@ -187,9 +187,20 @@ func (e startSocketRefused) Unwrap() error { return e.err }
 // before it answers or that nothing reaches. The service checks the same
 // paths again as it opens.
 func (in *invocation) startableSocket() error {
+	if err := in.socketRefusal(); err != nil {
+		return startSocketRefused{err: err}
+	}
+	return nil
+}
+
+// socketRefusal is ipc's refusal of the first of the home's socket paths
+// (home.Home.SocketPaths) no local socket can be bound or dialed at, and nil
+// when every one of them can, so a start and every dial check the same
+// spellings.
+func (in *invocation) socketRefusal() error {
 	for _, socket := range in.home.SocketPaths() {
 		if err := ipc.CheckSocketPath(socket); err != nil {
-			return startSocketRefused{err: err}
+			return err
 		}
 	}
 	return nil
