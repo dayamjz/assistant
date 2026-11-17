@@ -28,9 +28,12 @@ var ErrRelativeRoot = errors.New("home: the home root must be an absolute path")
 
 // Home is one home root and every path derived from it.
 //
-// It is immutable and safe for concurrent use. Every accessor is a path
-// computed from the root, so asking where something is neither touches the
-// filesystem nor creates anything.
+// It is immutable and safe for concurrent use. Every accessor but one is a
+// path computed from the root, so asking where something is neither touches
+// the filesystem nor creates anything. The one is SocketPaths, which reads
+// the filesystem to resolve the symbolic links in the part of the root that
+// exists, so its answer can change when such a link is retargeted or that
+// part is created; it creates nothing either.
 type Home struct {
 	root string
 }
@@ -98,6 +101,10 @@ func (h *Home) Socket() string { return filepath.Join(h.root, "socket") }
 // appends the rest as it stands; a part that cannot be read for a reason
 // other than not existing leaves the root as it is. A check of the socket
 // path's length checks each of them.
+//
+// Unlike every other accessor here, it reads the filesystem: it resolves
+// those links when it is called, so a link retargeted, or a part of the root
+// created, between two calls can change its answer. It creates nothing.
 func (h *Home) SocketPaths() []string {
 	later := (&Home{root: resolveExisting(h.root)}).Socket()
 	if later == h.Socket() {
