@@ -182,12 +182,15 @@ func (e startSocketRefused) Error() string {
 func (e startSocketRefused) Unwrap() error { return e.err }
 
 // startableSocket refuses a start whose service could not bind the home's
-// socket for its length, so the person who asked is told why here rather
-// than by a service that exits before it answers. The service checks the
-// same path again as it opens.
+// socket for its length, or whose later commands could not dial it, so the
+// person who asked is told why here rather than by a service that exits
+// before it answers or that nothing reaches. The service checks the same
+// paths again as it opens.
 func (in *invocation) startableSocket() error {
-	if err := ipc.CheckSocketPath(in.home.Socket()); err != nil {
-		return startSocketRefused{err: err}
+	for _, socket := range in.home.SocketPaths() {
+		if err := ipc.CheckSocketPath(socket); err != nil {
+			return startSocketRefused{err: err}
+		}
 	}
 	return nil
 }

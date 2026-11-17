@@ -81,17 +81,19 @@ func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
 	}
 }
 
-// TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials holds the
-// check, the bind and every later dial to one string when the home is named
-// through a symbolic link (#946): the limit is on the path a local socket is
-// bound and dialed at, and each process spells that path from the home as
-// internal/home opens it. A root not yet created under a short link to a long
-// directory, and an existing root that is a short link to one, are refused
-// before anything is launched, naming the long path every later command
-// would dial; before, the first started a service at the short name that no
-// later command could reach. A long link to a short directory is not refused,
-// and its service starts and stops, because what is bound and dialed is the
-// short path it resolves to.
+// TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials holds a start
+// to checking every spelling of the socket path that is bound or dialed when
+// the home is named through a symbolic link (#946). The limit is on the
+// string a local socket is bound and dialed at, and internal/home's Open
+// resolves a root's links only once it exists, so a first start on a root not
+// yet created binds one spelling and every later command dials another.
+// A root not yet created under a short link to a long directory, and an
+// existing root that is a short link to one, are refused before anything is
+// launched, naming the long path later commands would dial; before, the
+// first started a service at the short name that no later command could
+// reach. A long link to an existing short directory is not refused, and its
+// service starts and stops, because what is bound and dialed is the short
+// path Open resolves it to.
 func TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	cli.AwaitReadinessUntilTheTestsDeadline(t)

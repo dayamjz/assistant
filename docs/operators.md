@@ -1381,12 +1381,15 @@ such as one under `/tmp`:
 assistant --home "$(mktemp -d /tmp/assistant.XXXXXX)" service start
 ```
 
-The limit counts the socket path with every symbolic link in the home's path
-resolved, as far as that path exists, whether or not the home itself has been
-created yet. So measure the resolved path: `pwd -P` in the home, or in its
-nearest existing parent for a home not created yet. A long link to a short
-directory is fine, and a short link to a long one is not. A shorter home is a
-new home: its records start empty, and nothing moves over from the old one.
+Every later command names the home with the symbolic links in its path
+resolved, so a start checks that name too: the socket path both as you gave
+the home and with its links resolved, as far as the path exists, has to fit.
+Measure the resolved one with `pwd -P` in the home, or in its nearest existing
+parent for a home not created yet. A short link to a long directory does not
+fit. A long link to an existing short home is fine, because the home opens as
+the short path; a long name for a home not created yet does not fit. A
+shorter home is a new home: its records start empty, and nothing moves over
+from the old one.
 
 ## Stopping the service
 

@@ -62,31 +62,18 @@ func Resolve(lookup func(string) string) (string, error) {
 // to exist, because a command that reports on a home that was never created
 // has to be able to say so rather than fail before it can.
 //
-// Symbolic links are resolved in the longest part of the root that exists,
-// and the rest, which does not exist yet, is appended as it stands. Two names
-// for one directory therefore answer as one home rather than as two, and a
-// root opened before it is created names the same home, with the same
-// paths, as it does once it exists. The local socket depends on that: its
-// path's length is checked, bound and dialed as one string, so a first start
-// on a root not yet created must spell the path every later command will.
-// A part that cannot be read for any reason other than not existing leaves
-// the root cleaned and otherwise as given.
+// Symbolic links in a root that exists are resolved, so two names for one
+// directory answer as one home rather than as two. A root that does not exist
+// is cleaned and used as it stands, because there is nothing to resolve.
 func Open(root string) (*Home, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("%w: %q", ErrRelativeRoot, root)
 	}
 	cleaned := filepath.Clean(root)
-	for dir, rest := cleaned, ""; ; {
-		resolved, err := filepath.EvalSymlinks(dir)
-		if err == nil {
-			return &Home{root: filepath.Join(resolved, rest)}, nil
-		}
-		parent := filepath.Dir(dir)
-		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
-			return &Home{root: cleaned}, nil
-		}
-		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		cleaned = resolved
 	}
+	return &Home{root: cleaned}, nil
 }
 
 // Root is the absolute path of the home root.
@@ -101,6 +88,39 @@ func (h *Home) Database() string { return filepath.Join(h.root, "state.db") }
 
 // Socket is the local endpoint the service binds and the command line dials.
 func (h *Home) Socket() string { return filepath.Join(h.root, "socket") }
+
+// SocketPaths is every spelling of Socket a command may bind or dial for
+// this home: Socket itself, and, when it differs, the Socket a command that
+// opens this root once it exists will use. Open resolves symbolic links only
+// in a root that exists, so a first start on a root not yet created under a
+// link binds the first spelling and every later command dials the second.
+// The second resolves the links in the part of the root that exists now and
+// appends the rest as it stands; a part that cannot be read for a reason
+// other than not existing leaves the root as it is. A check of the socket
+// path's length checks each of them.
+func (h *Home) SocketPaths() []string {
+	later := (&Home{root: resolveExisting(h.root)}).Socket()
+	if later == h.Socket() {
+		return []string{later}
+	}
+	return []string{h.Socket(), later}
+}
+
+// resolveExisting is path with the symbolic links in its longest existing
+// part resolved and the rest appended as it stands.
+func resolveExisting(path string) string {
+	for dir, rest := path, ""; ; {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(dir)
+		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
+			return path
+		}
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	}
+}
 
 // LockFile is the file the home's exclusive lock is taken on.
 func (h *Home) LockFile() string { return filepath.Join(h.root, "lock") }
