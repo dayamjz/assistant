@@ -177,7 +177,10 @@ func (a *attempt) serve() {
 	}
 	a.assistant(a.checkout, "--json", "init")
 	a.assistant(a.root, "service", "start")
-	a.t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") }) // a stop after cleanup's fails
+	// A stop after cleanup's fails, but must still run once caliper's removal
+	// of the root is modelled (removedAttempt), so it runs from this package's
+	// directory: --home names the home, and no cwd under the root is needed.
+	a.t.Cleanup(func() { a.run(spec, a.bin, "--home", a.home, "service", "stop", "--force") })
 }
 
 func (a *attempt) running() bool {

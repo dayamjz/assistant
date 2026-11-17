@@ -93,10 +93,15 @@ func (a *attempt) name() string    { return filepath.Base(a.root) }
 func (a *attempt) records() string { return filepath.Join(a.tmpdir, "caliper-q1-gate") }
 
 // instrument runs gate_record.py and returns its exit code, stdout and stderr.
+// It runs as run-full.sh runs it, after caliper removed the attempt root: from
+// the hooks' TMPDIR, which outlives the root, with HOME there too, never the
+// attempt's, so nothing it writes (Apple's python3 keeps its bytecode cache
+// under $HOME/Library/Caches) recreates a removed root.
 func (a *attempt) instrument(args ...string) (int, string, string) {
 	a.t.Helper()
-	// From the hooks' TMPDIR, which outlives the attempt root as caliper's does.
-	return a.run(a.tmpdir, "python3", append([]string{filepath.Join(spec, "gate_record.py")}, args...)...)
+	judge := *a
+	judge.env = append(append([]string{}, a.env...), "HOME="+a.tmpdir) // the last HOME wins (os/exec Cmd.Env)
+	return judge.run(a.tmpdir, "python3", append([]string{filepath.Join(spec, "gate_record.py")}, args...)...)
 }
 
 // report runs the instrument over records for the named attempts, failing
