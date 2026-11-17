@@ -177,7 +177,10 @@ func (a *attempt) serve() {
 	}
 	a.assistant(a.checkout, "--json", "init")
 	a.assistant(a.root, "service", "start")
-	a.t.Cleanup(func() { a.run(a.root, a.bin, "--home", a.home, "service", "stop", "--force") }) // a stop after cleanup's fails
+	// A stop after cleanup's fails, but must still run once caliper's removal
+	// of the root is modelled (removedAttempt), so it runs from this package's
+	// directory: --home names the home, and no cwd under the root is needed.
+	a.t.Cleanup(func() { a.run(spec, a.bin, "--home", a.home, "service", "stop", "--force") })
 }
 
 func (a *attempt) running() bool {
@@ -248,6 +251,7 @@ type record struct {
 	CapturedAt             string `json:"captured_at"`
 	ServiceAnswered        bool   `json:"service_answered"`
 	Errors, Repositories   []string
+	HeadChecks             []map[string]any `json:"head_checks"`
 	Usage, Runs, Stop      struct {
 		Cwd, Stderr string
 		Exit        any // a JSON number, or nil when the step is absent or its call raised
@@ -313,10 +317,14 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
-	// The stage evidence (schema 2, still in 3): the report, the review log alone
+	// The stage evidence (schema 2, still in 4): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "3")
+	want(t, "schema", string(r.steps["schema"]), "4")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
+	// The head check (schema 4), made while the checkout exists: one entry,
+	// bound to the attempt key, the run and its submitted_head.
+	want(t, "head_checks", r.HeadChecks, []map[string]any{{"task_id": "task-001", "caliper_attempt": 1,
+		"run_id": started.Record.ID, "submitted_head": run["submitted_head"], "is_commit": true}})
 	stages := a.stageEntries()
 	e, ok := stages[started.Record.ID]
 	if len(stages) != 1 || !ok {
@@ -480,7 +488,7 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 }
 
 // TestCleanupRecordsTheAttemptKeyOrSaysWhyNot: under the patched caliper the
-// record carries the attempt's key in caliper's saved result (schema 3). Under
+// record carries the attempt's key in caliper's saved result (schema 3 on). Under
 // a stock caliper, which passes no key, and with a key that is not one, the
 // key is null and the record, stderr and exit status say so, never a silent
 // blank. The missing key is not a read-path error: whether the gate ran is
@@ -489,7 +497,7 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "3", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "4", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {

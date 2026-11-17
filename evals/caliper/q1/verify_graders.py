@@ -56,6 +56,7 @@ def build(variant: str, dest: pathlib.Path):
     env = os.environ.copy()
     # Isolate global insteadOf from the operator's HOME.
     env["HOME"] = str(dest / "home")
+    env["Q1_AGENT_HOME"] = env["HOME"]  # not caliper: this HOME is where the agent's git reads
     (dest / "home").mkdir()
     run(["sh", str(SPEC / "build-subject.sh"), variant], cwd=dest, env=env)
 

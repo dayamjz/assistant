@@ -13,8 +13,9 @@
 # The subject's origin is a github.com URL rewritten to the local bare remote
 # (same pattern as internal/service's consentingSubject). A PATH `gh`
 # stand-in lives at evals/caliper/path/ (not beside this script) so which gh
-# does not land next to graders. Global insteadOf is set so the gate bare
-# repo init creates also rewrites.
+# does not land next to graders. The insteadOf rewrite goes in two places:
+# the hook's own global config, for this script's git, and the agent's home
+# (README "Subject remote").
 set -eu
 variant="$1"
 case "$variant" in
@@ -31,18 +32,28 @@ UPSTREAM_URL="https://github.com/dayamjz/caliper-q1.git"
 # pilot already established feature/unlimited.
 BRANCH="feature/unlimited"
 
+# The agent's HOME: caliper 0.19.0 runs the agent with HOME set to the
+# attempt root, the parent of this hook's CALIPER_WORKDIR, and passes it no
+# GIT_CONFIG_GLOBAL, so the agent's git reads only <attempt root>/.gitconfig. Q1_AGENT_HOME names it for a caller that is not
+# caliper (verify_graders.py).
+AGENT_HOME="${Q1_AGENT_HOME:-$(CDPATH= cd -- "${CALIPER_WORKDIR:?caliper sets CALIPER_WORKDIR for every hook; set Q1_AGENT_HOME outside caliper}/.." && pwd)}"
+
 git init -q --bare -b main remote.git
 REMOTE_ABS="$(cd remote.git && pwd)"
-# Every git process in this attempt's HOME — including the gate bare repo
-# assistant init creates — rewrites the recorded upstream to the local remote.
-# Drop any prior rewrite of the same URL first: a dead path from an earlier
-# attempt (or a parallel worker) would otherwise win and make clone/push fail
-# with "does not appear to be a git repository".
+# This script's own git reads the hook's global config: the operator's, or
+# GIT_CONFIG_GLOBAL (a#942 owns that this writes it). Drop any prior rewrite
+# of the same URL first: a dead path from an earlier attempt (or a parallel
+# worker) would otherwise win and make clone/push fail with "does not appear
+# to be a git repository".
 git config --global --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL" 2>/dev/null |
 	while read -r key _; do
 		git config --global --unset-all "$key" 2>/dev/null || true
 	done
 git config --global "url.${REMOTE_ABS}.insteadOf" "$UPSTREAM_URL"
+# The agent's git reads it, assistant init among it: init records origin as
+# git expands it, so the upstream every run fetches from is the local remote.
+# Caliper removes the attempt root, and this file with it, when the attempt ends.
+git config --file "$AGENT_HOME/.gitconfig" "url.${REMOTE_ABS}.insteadOf" "$UPSTREAM_URL"
 
 git init -q -b main seed
 cd seed
@@ -198,8 +209,9 @@ G
 
 git add -A
 git commit -q -m "ship: baseline module"
-# Origin is the github URL so assistant init records a forge repository; the
-# insteadOf rewrite keeps every fetch and push on the local bare remote.
+# Origin is the github URL, as a real checkout's is. assistant init records
+# origin as git expands it, so under the rewrite it records the local remote
+# and a run has no code host (README "Subject remote").
 git remote add origin "$UPSTREAM_URL"
 git push -q origin main
 # assistant init takes the default branch only from refs/remotes/origin/HEAD
