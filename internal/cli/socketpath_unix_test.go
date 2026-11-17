@@ -20,13 +20,14 @@ import (
 
 // TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong is #946 as a person
 // meets it: a home one byte past what a local socket path may be on this
-// platform (macOS 104 bytes with its terminator, Linux 108). The start says
-// so before it launches anything, naming the path, its length, the limit and
-// how to choose another home; a service started in the foreground there
-// refuses and writes the same to its log; and status reports the same
-// rather than the dial's "invalid argument".
+// platform (103 bytes on macOS and 107 on Linux, each the address field less
+// the byte the path's terminator takes). The start says so before it
+// launches anything, naming the path, its length, the limit and how to
+// choose another home; a service started in the foreground there refuses and
+// writes the same to its log; and status reports the same rather than the
+// dial's "invalid argument".
 func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
-	limit := map[string]int{"darwin": 103, "linux": 108}[runtime.GOOS]
+	limit := map[string]int{"darwin": 103, "linux": 107}[runtime.GOOS]
 	root, err := standin.TempDir("sock")
 	if err != nil {
 		t.Fatal(err)

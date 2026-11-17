@@ -3,6 +3,7 @@ package ipc
 import (
 	"errors"
 	"fmt"
+	"syscall"
 )
 
 // ErrSocketPathTooLong is CheckSocketPath's refusal: the socket path is
@@ -13,12 +14,12 @@ import (
 var ErrSocketPathTooLong = errors.New("ipc: the socket path is too long for a local socket")
 
 // MaxSocketPath is the longest socket path, in bytes, that this package lets
-// a local socket be bound or dialed at on this platform: 103 on macOS and the
-// other BSDs, 108 on Linux and Windows. It is derived from the address field
-// Go's syscall package holds the path in (socketpath_*.go), and
+// a local socket be bound or dialed at on this platform: one byte short of
+// the address field Go's syscall package holds the path in, the byte its
+// terminator takes, so 103 on macOS and 107 on Linux.
 // TestMaxSocketPathIsTheLongestPathThatBinds checks on each platform CI runs
 // that a path this long binds and one byte longer does not.
-const MaxSocketPath = maxSocketPath
+const MaxSocketPath = len(syscall.RawSockaddrUnix{}.Path) - 1
 
 // CheckSocketPath refuses a socket path no local socket can use on this
 // platform with ErrSocketPathTooLong, and returns nil for any other path. It

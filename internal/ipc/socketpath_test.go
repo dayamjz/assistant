@@ -38,11 +38,11 @@ func socketPathOfLength(t *testing.T, dir string, n int) string {
 // mechanism rather than to a number this package states: on the platforms
 // the product runs on, a path of exactly that length binds and one byte
 // longer does not, and CheckSocketPath and Dial refuse only the second,
-// naming the path, its length and the limit (#946). The limits are the ones
-// issue #946 names for each platform, macOS 104 bytes with its terminator and
-// Linux 108, written here rather than read from the package.
+// naming the path, its length and the limit (#946). The limits are written
+// here rather than read from the package: an address field of 104 bytes on
+// macOS and 108 on Linux, each less the byte the path's terminator takes.
 func TestMaxSocketPathIsTheLongestPathThatBinds(t *testing.T) {
-	want, ok := map[string]int{"darwin": 103, "linux": 108}[runtime.GOOS]
+	want, ok := map[string]int{"darwin": 103, "linux": 107}[runtime.GOOS]
 	if !ok {
 		t.Skipf("%s is not a platform the product serves a local socket on", runtime.GOOS)
 	}
