@@ -438,11 +438,13 @@ class FirstRunTest(unittest.TestCase):
 
     def test_earlier_runs_all_failed_passes(self):
         """Case (b): every earlier pull_request run failed, at the probe or
-        elsewhere; none is a candidate, so the clone is still on its first run."""
-        runs = listing(pr_run(7, "failure"), pr_run(8, "cancelled"), pr_run(CURRENT, status="in_progress"))
+        elsewhere; none is a candidate, so the clone is still on its first run.
+        A run still in progress (conclusion null), like this one, is no candidate either."""
+        runs = listing(pr_run(7, "failure"), pr_run(8, "cancelled"), pr_run(9, status="in_progress"),
+                       pr_run(CURRENT, status="in_progress"))
         code, out = run_probe(dict(FIRST_RUN, **{ALL_RUNS: runs}))
         self.assertEqual(code, 0, out)
-        self.assertIn("3 pull_request run(s)", out)
+        self.assertIn("4 pull_request run(s)", out)
 
     def test_first_run_not_shown_stays_loud(self):
         cases = {
@@ -453,6 +455,10 @@ class FirstRunTest(unittest.TestCase):
             "no total_count": ({"workflow_runs": [pr_run(CURRENT)]}, CURRENT),
             "run without id": (listing({"conclusion": "failure"}, pr_run(CURRENT)), CURRENT),
             "no --run-id": (FIRST_RUN[ALL_RUNS], None),
+            "run without conclusion": (listing({"id": 7, "status": "completed"}, pr_run(CURRENT)), CURRENT),
+            "conclusion 1": (listing(pr_run(7, 1), pr_run(CURRENT)), CURRENT),
+            "conclusion []": (listing(pr_run(7, []), pr_run(CURRENT)), CURRENT),
+            "conclusion {}": (listing(pr_run(7, {}), pr_run(CURRENT)), CURRENT),
         }
         for name, (answer, run_id) in cases.items():
             with self.subTest(name):
@@ -500,6 +506,9 @@ class FirstRunTest(unittest.TestCase):
             ("actions/runs/100", {"event": ""}, "actions/runs/100"),
             ("actions/jobs/11", {"id": 11}, "actions/jobs/11"),
             (SUCCESS_RUNS, listing({"id": 100}), "newest successful pull_request run"),
+            (f"commits/{NEVER}/check-runs?", {"total_count": 1, "check_runs": [{"id": 12}]},
+             f"commits/{NEVER}/check-runs"),
+            ("actions/jobs/11", {"steps": [{"name": "Test"}]}, "actions/jobs/11"),
         ]
         for route, answer, call in cases:
             with self.subTest(route=route, answer=answer):

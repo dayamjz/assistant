@@ -57,6 +57,16 @@ def field(body, key: str, kind, call: str):
     return value
 
 
+def conclusion(item, call: str):
+    """item's conclusion: a str, or None for one not finished. A missing key
+    or any other value is an APIError naming call, so an incomplete answer
+    never reads as "not success"."""
+    value = item.get("conclusion", ...) if isinstance(item, dict) else ...
+    if value is not None and not isinstance(value, str):
+        raise APIError(f"{call}: expected an object with a conclusion (str or null)")
+    return value
+
+
 def run_id_from_url(html_url: str) -> int | None:
     match = RUN_URL.search(html_url or "")
     return int(match.group(1)) if match else None
@@ -143,7 +153,10 @@ class Client:
             {"check_name": check_name, "status": "completed", "filter": "all", "per_page": "100"}
         )
         call = f"repos/{repo}/commits/{sha}/check-runs"
-        return field(self.get(f"{call}?{query}"), "check_runs", list, call)
+        runs = field(self.get(f"{call}?{query}"), "check_runs", list, call)
+        for run in runs:
+            conclusion(run, call)
+        return runs
 
     def workflow_event(self, repo: str, run_id: int) -> str:
         call = f"repos/{repo}/actions/runs/{run_id}"
@@ -151,7 +164,10 @@ class Client:
 
     def job_steps(self, repo: str, job_id: int):
         call = f"repos/{repo}/actions/jobs/{job_id}"
-        return field(self.get(call), "steps", list, call)
+        steps = field(self.get(call), "steps", list, call)
+        for step in steps:
+            conclusion(step, call)
+        return steps
 
 
 def evaluate(client: Client, repo: str, sha: str, check_name: str, current_run_id: int):
@@ -223,7 +239,7 @@ def first_run(client: Client, repo: str, run_id: int | None) -> str:
     if run_id not in ids:
         raise APIError(f"{call}: this run ({run_id}, from --run-id) is not among its {total} pull_request runs")
     for run in runs:
-        if run.get("conclusion") == "success":
+        if conclusion(run, call) == "success":
             raise APIError(f"{call}: run {run['id']} succeeded but the success listing was empty")
     return (
         f"ci.yml has {total} pull_request run(s), this run {run_id} among them, "
