@@ -47,6 +47,26 @@ class APIError(Exception):
     """A GitHub API read that cannot be used to decide."""
 
 
+def field(body, key: str, kind, call: str):
+    """body[key] when body is an object whose key holds a kind (a str must
+    be non-empty), else APIError naming call: an absent field is never read
+    as an empty answer."""
+    value = body.get(key) if isinstance(body, dict) else None
+    if not isinstance(value, kind) or (kind is str and not value):
+        raise APIError(f"{call}: expected an object with {kind.__name__} {key}")
+    return value
+
+
+def conclusion(item, call: str):
+    """item's conclusion: a str, or None for one not finished. A missing key
+    or any other value is an APIError naming call, so an incomplete answer
+    never reads as "not success"."""
+    value = item.get("conclusion", ...) if isinstance(item, dict) else ...
+    if value is not None and not isinstance(value, str):
+        raise APIError(f"{call}: expected an object with a conclusion (str or null)")
+    return value
+
+
 def run_id_from_url(html_url: str) -> int | None:
     match = RUN_URL.search(html_url or "")
     return int(match.group(1)) if match else None
@@ -132,22 +152,22 @@ class Client:
         query = urllib.parse.urlencode(
             {"check_name": check_name, "status": "completed", "filter": "all", "per_page": "100"}
         )
-        body = self.get(f"repos/{repo}/commits/{sha}/check-runs?{query}")
-        if not isinstance(body, dict):
-            raise APIError(f"repos/{repo}/commits/{sha}/check-runs: expected an object")
-        return body.get("check_runs") or []
+        call = f"repos/{repo}/commits/{sha}/check-runs"
+        runs = field(self.get(f"{call}?{query}"), "check_runs", list, call)
+        for run in runs:
+            conclusion(run, call)
+        return runs
 
     def workflow_event(self, repo: str, run_id: int) -> str:
-        event = self.get(f"repos/{repo}/actions/runs/{run_id}").get("event")
-        if not isinstance(event, str) or not event:
-            raise APIError(f"repos/{repo}/actions/runs/{run_id}: missing event")
-        return event
+        call = f"repos/{repo}/actions/runs/{run_id}"
+        return field(self.get(call), "event", str, call)
 
     def job_steps(self, repo: str, job_id: int):
-        body = self.get(f"repos/{repo}/actions/jobs/{job_id}")
-        if not isinstance(body, dict):
-            raise APIError(f"repos/{repo}/actions/jobs/{job_id}: expected an object")
-        return body.get("steps") or []
+        call = f"repos/{repo}/actions/jobs/{job_id}"
+        steps = field(self.get(call), "steps", list, call)
+        for step in steps:
+            conclusion(step, call)
+        return steps
 
 
 def evaluate(client: Client, repo: str, sha: str, check_name: str, current_run_id: int):
@@ -178,15 +198,53 @@ def write_output(path: str, run: bool, reason: str) -> None:
         out.write(f"reason={reason}\n")
 
 
-def latest_pull_request_head(client: Client, repo: str) -> str:
-    body = client.get(
-        f"repos/{repo}/actions/workflows/ci.yml/runs?"
-        + urllib.parse.urlencode({"event": "pull_request", "status": "success", "per_page": 1})
+def latest_pull_request_head(client: Client, repo: str) -> str | None:
+    """The head of ci.yml's newest successful pull_request run, or None when
+    the readable listing holds none. None is not a first-run state on its
+    own, since a filter that matched nothing would read the same; only
+    first_run may conclude that."""
+    call = f"repos/{repo}/actions/workflows/ci.yml/runs"
+    query = urllib.parse.urlencode({"event": "pull_request", "status": "success", "per_page": 1})
+    runs = field(client.get(f"{call}?{query}"), "workflow_runs", list, call)
+    if not runs:
+        return None
+    return field(runs[0], "head_sha", str, f"{call}: newest successful pull_request run")
+
+
+FIRST_RUN_PAGE = 100
+
+
+def first_run(client: Client, repo: str, run_id: int | None) -> str:
+    """Proof that the repository is in its true first-run state, as the line
+    to print, or APIError naming what could not be shown.
+
+    The true first-run state: no pull_request run of ci.yml has ever
+    concluded success, shown by one read of ci.yml's pull_request runs that
+    is complete (total_count runs, all on this page), lists this run, and
+    holds no run that concluded success. Requiring this run in the listing
+    means an empty answer to a filter that matched nothing cannot pass:
+    the read has to reach at least this workflow run. Earlier runs that all
+    failed, at this probe or anywhere else, are inside the state: none of
+    them is a candidate. Every shortfall is an APIError, so an unreadable
+    API, an absent field, or a listing longer than a page never reaches
+    the state."""
+    call = f"repos/{repo}/actions/workflows/ci.yml/runs"
+    query = urllib.parse.urlencode({"event": "pull_request", "per_page": FIRST_RUN_PAGE})
+    body = client.get(f"{call}?{query}")
+    runs = field(body, "workflow_runs", list, call)
+    total = field(body, "total_count", int, call)
+    if total != len(runs):
+        raise APIError(f"{call}: lists {len(runs)} of {total} pull_request runs, not all of them")
+    ids = [field(run, "id", int, f"{call}: a pull_request run") for run in runs]
+    if run_id not in ids:
+        raise APIError(f"{call}: this run ({run_id}, from --run-id) is not among its {total} pull_request runs")
+    for run in runs:
+        if conclusion(run, call) == "success":
+            raise APIError(f"{call}: run {run['id']} succeeded but the success listing was empty")
+    return (
+        f"ci.yml has {total} pull_request run(s), this run {run_id} among them, "
+        "and none concluded success"
     )
-    runs = body.get("workflow_runs") or []
-    if not runs or not runs[0].get("head_sha"):
-        raise APIError("no successful pull_request CI run to probe against")
-    return runs[0]["head_sha"]
 
 
 def untested_commit(client: Client, repo: str, check_name: str) -> str | None:
@@ -203,8 +261,13 @@ def untested_commit(client: Client, repo: str, check_name: str) -> str | None:
     return None
 
 
-def probe(client: Client, repo: str, check_name: str) -> None:
+def probe(client: Client, repo: str, check_name: str, run_id: int | None = None) -> None:
     tested = latest_pull_request_head(client, repo)
+    if tested is None:
+        # Nothing to probe against; first_run refuses unless it can show why.
+        print(f"prior-check probe: state: first run: {first_run(client, repo, run_id)}")
+        return
+    print(f"prior-check probe: state: candidate {tested}")
     skip, reason = evaluate(client, repo, tested, check_name, current_run_id=0)
     print(f"prior-check probe: already-tested {tested}: skip={skip} ({reason})")
     if not skip:
@@ -237,7 +300,8 @@ def main(argv=None) -> int:
     parser.add_argument("--github-output", metavar="FILE")
     parser.add_argument("--expect", choices=("run", "skip"))
     parser.add_argument("--probe", action="store_true",
-                        help="show one already-tested commit skips and one never-tested runs")
+                        help="show one already-tested commit skips and one never-tested runs, "
+                        "or prove a true first-run state (needs --run-id)")
     parser.add_argument("--event-name", default="")
     parser.add_argument("--ref", default="")
     args = parser.parse_args(argv)
@@ -245,12 +309,12 @@ def main(argv=None) -> int:
     if args.probe:
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
         try:
-            probe(Client(token), args.repo, args.check_name)
+            probe(Client(token), args.repo, args.check_name, args.run_id)
         except APIError as error:
-            # The probe must actually evaluate a commit. An unreadable API
-            # fails loudly so the step cannot go green without checking
-            # either path. The non-probe decision path still fails open
-            # to run=true (#708 delta review).
+            # The probe must evaluate a commit or prove a first-run state.
+            # An unreadable API fails loudly so the step cannot go green
+            # without checking either. The non-probe decision path still
+            # fails open to run=true (#708 delta review).
             print(f"prior-check probe: {error}", file=sys.stderr)
             return 1
         return 0

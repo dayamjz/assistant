@@ -97,14 +97,17 @@ jobs:
       # Both paths against the live API on a pull request (ubuntu only):
       # one commit a PR already tested must skip; one recent commit with
       # no such check must run. The push-to-main path is what skips for
-      # real; this probe is what the pull request shows in its log.
+      # real; this probe is what the pull request shows in its log. With no
+      # successful pull_request run yet (a fresh clone), it passes only on
+      # prior-check.py's proof of that first-run state, which needs this
+      # run's id.
       # Suite steps below require prior.run and not docs_only, so the two
       # skips compose: each hides only what it owns.
       - name: Prior check probe
         if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true' && github.event_name == 'pull_request' && matrix.label == 'ubuntu-latest'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/prior-check.py --repo "$GITHUB_REPOSITORY" --check-name "check (ubuntu-latest)" --probe
+        run: python3 scripts/prior-check.py --repo "$GITHUB_REPOSITORY" --check-name "check (ubuntu-latest)" --run-id "$GITHUB_RUN_ID" --probe
 
       # Go, tmux and tini: what scripts/ci-test.sh runs the suite with.
       - if: steps.prior.outputs.run == 'true' && steps.docs.outputs.docs_only != 'true'
