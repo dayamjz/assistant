@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -225,6 +226,10 @@ func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 // answer, run-full.sh refuses (exit 2) before caliper runs an attempt and says
 // why, rather than letting every gate-using record read indeterminate.
 // TestRunFullStartsTheAgentsServiceUnderALongTMPDIR is its positive control.
+// The why is the start's own refusal, kept in the arms' probe.log: since #946
+// a start refuses a home whose socket path is too long before it launches or
+// creates anything, naming the path, its length and the platform's limit, so
+// there is no probe home or service log to keep.
 func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	r := newFullRun(t)
 	r.run("Q1_ARMS_ROOT=" + r.tmpdir)
@@ -243,12 +248,18 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	if len(arms) != 1 {
 		t.Fatalf("arms directories under Q1_ARMS_ROOT: %v", arms)
 	}
-	logs, _ := filepath.Glob(filepath.Join(arms[0], "with-skill", "caliper-????????", ".assistant", "logs", "service.log"))
-	if len(logs) != 1 {
-		t.Fatalf("the refused probe home is not kept for inspection: %v", logs)
+	roots, _ := filepath.Glob(filepath.Join(arms[0], "with-skill", "caliper-????????"))
+	if len(roots) != 1 {
+		t.Fatalf("the refused probe's root is not kept for inspection: %v", roots)
 	}
-	if log, err := os.ReadFile(logs[0]); err != nil || !strings.Contains(string(log), "could not start") {
-		t.Errorf("the probe's service log does not say it could not start: %v\n%s", err, log)
+	limit, ok := map[string]int{"darwin": 103, "linux": 107}[runtime.GOOS]
+	if !ok {
+		t.Skipf("%s is not a platform the product serves a local socket on", runtime.GOOS)
+	}
+	socket := filepath.Join(roots[0], ".assistant", "socket")
+	named := fmt.Sprintf("%s is %d bytes, and this platform allows at most %d", socket, len(socket), limit)
+	if log, err := os.ReadFile(filepath.Join(arms[0], "probe.log")); err != nil || !strings.Contains(string(log), named) {
+		t.Errorf("the probe's start did not say why it refused, %q (%v):\n%s", named, err, log)
 	}
 }
 
