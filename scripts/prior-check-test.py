@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for prior-check.py, as the check job will run it on a push to main."""
 
+import contextlib
 import http.client
 import importlib.util
 import io
@@ -362,6 +363,149 @@ class MainTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("run=true", text)
         self.assertIn("not read", text)
+
+
+CURRENT = 4242
+SUCCESS_RUNS = "workflows/ci.yml/runs?event=pull_request&status=success&per_page=1"
+ALL_RUNS = "workflows/ci.yml/runs?event=pull_request&per_page=100"
+RUNS_CALL = "repos/dayamjz/assistant/actions/workflows/ci.yml/runs"
+TESTED, NEVER = "a" * 40, "b" * 40
+
+
+def pr_run(run_id, conclusion=None, status="completed"):
+    return {"id": run_id, "event": "pull_request", "status": status,
+            "conclusion": conclusion, "head_sha": f"{run_id:040x}"}
+
+
+def listing(*runs, total=None):
+    return {"total_count": len(runs) if total is None else total, "workflow_runs": list(runs)}
+
+
+FIRST_RUN = {SUCCESS_RUNS: listing(), ALL_RUNS: listing(pr_run(CURRENT, status="in_progress"))}
+CANDIDATE = {
+    SUCCESS_RUNS: listing(dict(pr_run(100, "success"), head_sha=TESTED)),
+    f"commits/{TESTED}/check-runs?": {"total_count": 1, "check_runs": [check_run(100, check_id=11)]},
+    "actions/runs/100": {"event": "pull_request"},
+    "actions/jobs/11": job_with_steps(("Prior check", "success"), ("Test", "success")),
+    "commits?per_page=30": [{"sha": TESTED}, {"sha": NEVER}],
+    f"commits/{NEVER}/check-runs?": {"total_count": 0, "check_runs": []},
+}
+
+
+def run_probe(routes, run_id=CURRENT):
+    """The exit code and output of `prior-check.py --probe` against an API
+    whose answer to a URL containing a route key is that route's value:
+    JSON for a dict or list, a raw body for bytes, an HTTP status for an
+    int, or an exception to raise. Any other URL fails the test."""
+
+    def opener(request, timeout=30):
+        for key, answer in routes.items():
+            if key in request.full_url:
+                if isinstance(answer, int):
+                    raise urllib.error.HTTPError(request.full_url, answer, "x", hdrs=None,
+                                                 fp=io.BytesIO(b'{"message":"x"}'))
+                if isinstance(answer, BaseException):
+                    raise answer
+                return FakeHTTPResponse(answer if isinstance(answer, bytes) else json.dumps(answer))
+        raise AssertionError(f"unexpected request {request.full_url}")
+
+    real = prior_check.Client
+    out = io.StringIO()
+    argv = ["--repo", "dayamjz/assistant", "--check-name", "check (ubuntu-latest)", "--probe"]
+    if run_id is not None:
+        argv += ["--run-id", str(run_id)]
+    with mock.patch.object(prior_check, "Client", lambda token, **k: real(token, opener=opener)), \
+            mock.patch.dict(os.environ, {"GH_TOKEN": "tok"}), \
+            contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        try:
+            code = prior_check.main(argv)
+        except SystemExit as exit_:  # as the interpreter would exit
+            code = exit_.code if isinstance(exit_.code, int) else 1
+            print(exit_.code, file=out)
+    return code, out.getvalue()
+
+
+class FirstRunTest(unittest.TestCase):
+    """#827: the probe passes without a candidate only on a proven first run."""
+
+    def test_fresh_clone_passes(self):
+        """#827 Reproducing: a readable listing with no successful
+        pull_request run made the probe exit 1 before the suite ran."""
+        code, out = run_probe(FIRST_RUN)
+        self.assertEqual(code, 0, out)
+        self.assertIn("state: first run", out)
+        self.assertIn(f"this run {CURRENT}", out)
+
+    def test_earlier_runs_all_failed_passes(self):
+        """Case (b): every earlier pull_request run failed, at the probe or
+        elsewhere; none is a candidate, so the clone is still on its first run."""
+        runs = listing(pr_run(7, "failure"), pr_run(8, "cancelled"), pr_run(CURRENT, status="in_progress"))
+        code, out = run_probe(dict(FIRST_RUN, **{ALL_RUNS: runs}))
+        self.assertEqual(code, 0, out)
+        self.assertIn("3 pull_request run(s)", out)
+
+    def test_first_run_not_shown_stays_loud(self):
+        cases = {
+            "filter matched nothing": (listing(), CURRENT),
+            "this run not listed": (listing(pr_run(7, "failure")), CURRENT),
+            "listing incomplete": (listing(pr_run(CURRENT), total=101), CURRENT),
+            "a run succeeded": (listing(pr_run(7, "success"), pr_run(CURRENT)), CURRENT),
+            "no total_count": ({"workflow_runs": [pr_run(CURRENT)]}, CURRENT),
+            "run without id": (listing({"conclusion": "failure"}, pr_run(CURRENT)), CURRENT),
+            "no --run-id": (FIRST_RUN[ALL_RUNS], None),
+        }
+        for name, (answer, run_id) in cases.items():
+            with self.subTest(name):
+                code, out = run_probe(dict(FIRST_RUN, **{ALL_RUNS: answer}), run_id)
+                self.assertEqual(code, 1, out)
+                self.assertIn(RUNS_CALL, out)
+                self.assertNotIn("state: first run", out)
+
+    def test_unreadable_api_stays_loud(self):
+        """A 5xx, auth error, network error, timeout or parse error is never
+        a first-run state, on either listing read, even when the other read
+        would prove one."""
+        answers = {
+            "500": 500, "502": 502, "401": 401, "403": 403,
+            "network": urllib.error.URLError("connection refused"),
+            "timeout": TimeoutError("timed out"),
+            "truncated": http.client.IncompleteRead(b'{"total_count":'),
+            "malformed JSON": b'{"workflow_runs": [',
+            "runs field missing": {"total_count": 0},
+            "not an object": [],
+        }
+        for route in (SUCCESS_RUNS, ALL_RUNS):
+            for name, answer in answers.items():
+                with self.subTest(route=route, answer=name):
+                    code, out = run_probe(dict(FIRST_RUN, **{route: answer}))
+                    self.assertEqual(code, 1, out)
+                    self.assertIn(RUNS_CALL, out)
+                    self.assertNotIn("state: first run", out)
+
+    def test_candidate_probes_both_paths(self):
+        """This repository's path: a candidate exists, so both paths are
+        probed and the first-run listing is never read."""
+        code, out = run_probe(CANDIDATE)
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"state: candidate {TESTED}", out)
+        self.assertIn(f"already-tested {TESTED}: skip=True", out)
+        self.assertIn(f"never-tested {NEVER}: skip=False", out)
+
+    def test_candidate_absent_field_stays_loud(self):
+        """An absent field is not an empty answer: a never-tested commit
+        whose check runs are unread must not stand in for the run path."""
+        cases = [
+            (f"commits/{NEVER}/check-runs?", {"total_count": 0}, f"commits/{NEVER}/check-runs"),
+            ("actions/runs/100", [], "actions/runs/100"),
+            ("actions/runs/100", {"event": ""}, "actions/runs/100"),
+            ("actions/jobs/11", {"id": 11}, "actions/jobs/11"),
+            (SUCCESS_RUNS, listing({"id": 100}), "newest successful pull_request run"),
+        ]
+        for route, answer, call in cases:
+            with self.subTest(route=route, answer=answer):
+                code, out = run_probe(dict(CANDIDATE, **{route: answer}))
+                self.assertEqual(code, 1, out)
+                self.assertIn(call, out)
 
 
 if __name__ == "__main__":
