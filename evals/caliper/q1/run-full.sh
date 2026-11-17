@@ -52,9 +52,9 @@ python3 verify_graders.py
 caliper validate q1.eval.yaml
 
 # workers=1: build-subject.sh installs a global insteadOf for the subject
-# upstream URL so the gate bare repo rewrites too; two attempts sharing this
-# machine's HOME would race that rewrite. Caliper's attempt HOME isolation
-# does not cover the setup hook's git config --global here.
+# upstream URL for the hook's own git; two attempts sharing this machine's
+# HOME would race that rewrite. Caliper's attempt HOME isolation does not
+# cover the setup hook's git config --global here (README "Subject remote").
 # Clear any leftover rewrite of the subject URL before either arm. A prior
 # crashed run can leave url.*.insteadOf pointing at a deleted remote.git.
 git config --global --get-regexp '^url\..*\.insteadof$' \

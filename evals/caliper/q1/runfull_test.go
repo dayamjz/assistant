@@ -5,6 +5,7 @@ package q1_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,10 +27,16 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // as caliper does. The attempt root is caliper's own call
 // (caliper/workdir.py's tempfile.mkdtemp(prefix="caliper-") in the arm's
 // TMPDIR), and the hooks run in <root>/work with the runner's environment
-// plus the key. In the with-skill arm the agent, whose HOME is the root,
-// inits the checkout and starts the service, which is what a gate-using agent
-// does first. No model is asked. It exits 2 when a hook failed, as caliper
-// does, and writes the result fields gate_by_arms.py reads.
+// plus the key. In the with-skill arm the agent runs with the environment
+// caliper builds for it and nothing else (caliper/harness/base.py
+// _isolated_env: HOME is the root, then PATH and env_passthrough, with
+// claude_code.py's token added). It writes what its git resolves origin to
+// and where the rewrite came from to $Q1_TEST_AGENT, inits the checkout and
+// starts the service, which is what a gate-using agent does first, and, only
+// when init recorded the local remote as the upstream so github.com is never
+// asked, starts a run, which the service fetches that upstream's main for. No
+// model is asked. It exits 2 when a hook failed, as caliper does, and writes
+// the result fields gate_by_arms.py reads.
 const stubCaliper = `
 import json, os, shutil, subprocess, sys, tempfile
 args = sys.argv[1:]
@@ -45,10 +52,31 @@ os.mkdir(work)
 hook = dict(os.environ, CALIPER_WORKDIR=work, CALIPER_SPEC_DIR=spec, CALIPER_TASK_ID="task-001", CALIPER_ATTEMPT="1")
 failed = subprocess.call(["sh", os.path.join(spec, "build-subject.sh"), "benign"], cwd=work, env=hook) != 0
 if not ablated:
-    agent = {k: v for k, v in os.environ.items() if k != "ASSISTANT_HOME"}
-    agent["HOME"] = root
-    subprocess.call(["assistant", "--json", "init"], cwd=os.path.join(work, "work"), env=agent)
+    agent = {"HOME": root, "PATH": os.environ["PATH"]}
+    agent.update({k: os.environ[k] for k in ("LANG", "LC_ALL", "TERM", "TMPDIR", "CLAUDE_CODE_OAUTH_TOKEN") if k in os.environ})
+    checkout = os.path.join(work, "work")
+    def out(argv, cwd=checkout, env=agent):
+        p = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True)
+        return {"exit": p.returncode, "stdout": p.stdout.strip(), "stderr": p.stderr.strip()}
+    seen = {"remote": os.path.realpath(os.path.join(work, "remote.git")),
+            "main": out(["git", "rev-parse", "main"], cwd=os.path.join(work, "remote.git"), env=dict(os.environ))["stdout"],
+            "url": out(["git", "ls-remote", "--get-url", "origin"]),
+            "origins": out(["git", "config", "--show-origin", "--get-regexp", r"^url\."])}
+    # Resolved while the attempt root exists: it is removed below, as caliper removes it.
+    seen["url"]["real"] = os.path.realpath(seen["url"]["stdout"] or "/")
+    seen["origins"]["real"] = [os.path.realpath(line.split("\t")[0].removeprefix("file:"))
+                               for line in seen["origins"]["stdout"].splitlines()]
+    seen["attempt_gitconfig"] = os.path.realpath(os.path.join(root, ".gitconfig"))
+    seen["init"] = out(["assistant", "--json", "init"])
+    try:
+        seen["init"]["upstream"] = os.path.realpath(json.loads(seen["init"]["stdout"])["repository"]["upstream_url"])
+    except (ValueError, KeyError, TypeError):
+        seen["init"]["upstream"] = None
     subprocess.call(["assistant", "service", "start"], cwd=root, env=agent)
+    if seen["init"]["upstream"] == seen["remote"]:
+        seen["intent"] = out(["assistant", "--json", "--intent", "ship the branch"])
+    with open(os.environ["Q1_TEST_AGENT"], "w") as f:
+        json.dump(seen, f)
 failed |= subprocess.call(["sh", os.path.join(spec, "cleanup.sh")], cwd=work, env=hook) != 0
 shutil.rmtree(root)
 with open(args[args.index("--output") + 1], "w") as f:
@@ -65,6 +93,7 @@ sys.exit(2 if failed else 0)
 type fullRun struct {
 	t                           *testing.T
 	root, spec, tmpdir, calls   string
+	agent                       string // what the stand-in agent saw (stubCaliper)
 	env                         []string
 	code                        int
 	stderr, arms, gateByArmFile string
@@ -76,7 +105,7 @@ func newFullRun(t *testing.T) *fullRun {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	r := &fullRun{t: t, root: root, spec: filepath.Join(root, "repo", "evals", "caliper", "q1"), calls: filepath.Join(root, "calls")}
+	r := &fullRun{t: t, root: root, spec: filepath.Join(root, "repo", "evals", "caliper", "q1"), calls: filepath.Join(root, "calls"), agent: filepath.Join(root, "agent.json")}
 	r.tmpdir = filepath.Join(root, "tmp"+strings.Repeat("x", max(0, len(macTMPDIR)-len(root)-4)))
 	bin, err := journey.Binary()
 	must(t, err)
@@ -104,8 +133,11 @@ func newFullRun(t *testing.T) *fullRun {
 	venv := filepath.Join(root, "venv")
 	must(t, procgroup.WriteProgram(filepath.Join(root, "stub", "claude"),
 		[]byte("#!/bin/sh\n[ \"$1 $2\" = 'auth status' ] && echo '{\"loggedIn\": true}'\n"), 0o755))
+	// The subject's fix role names cursor: a stand-in that fails at once, as
+	// cleanup_test.go's, so the gate admits a run and no model is asked.
+	must(t, procgroup.WriteProgram(filepath.Join(root, "stub", "cursor"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
 	must(t, os.WriteFile(filepath.Join(root, "gitconfig"), nil, 0o644))
-	r.env = []string{"HOME=" + filepath.Join(root, "home"), "TMPDIR=" + r.tmpdir, "CALIPER_VENV=" + venv, "Q1_K=1", "Q1_TEST_CALLS=" + r.calls,
+	r.env = []string{"HOME=" + filepath.Join(root, "home"), "TMPDIR=" + r.tmpdir, "CALIPER_VENV=" + venv, "Q1_K=1", "Q1_TEST_CALLS=" + r.calls, "Q1_TEST_AGENT=" + r.agent,
 		"PATH=" + strings.Join([]string{filepath.Join(root, "stub"), filepath.Dir(sh), filepath.Dir(goTool), filepath.Dir(git), filepath.Dir(python), "/usr/bin:/bin:/usr/sbin:/sbin"}, ":"),
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(root, "gitconfig"), "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}
@@ -166,7 +198,8 @@ func (r *fullRun) run(extra ...string) {
 // with-skill attempt's socket path was too long to bind, the service never
 // answered, and the record was indeterminate with caliper exiting 2. Here the
 // with-skill attempt's service answers at cleanup, so its record is judged
-// (never-reached: the agent here pushes nothing), and the run exits 0.
+// (ran: the agent's run is held, its head checked while the checkout existed),
+// and the run exits 0.
 func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 	r := newFullRun(t)
 	r.run()
@@ -179,7 +212,7 @@ func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 	data, err := os.ReadFile(r.gateByArmFile)
 	must(t, err)
 	must(t, json.Unmarshal(data, &report))
-	for arm, state := range map[string]string{"with-skill": "never-reached", "ablated": "no-home"} {
+	for arm, state := range map[string]string{"with-skill": "ran", "ablated": "no-home"} {
 		got := report.AsAssigned[arm].Attempts
 		if len(got) != 1 || got[0].GateObservation.Validity != "valid" || got[0].GateObservation.State != state {
 			t.Errorf("%s attempts = %+v, want one valid %s", arm, got, state)
@@ -218,3 +251,96 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 		t.Errorf("the probe's service log does not say it could not start: %v\n%s", err, log)
 	}
 }
+
+// TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote is #941's finding B.
+// The agent runs with only the environment caliper gives it (stubCaliper),
+// and the operator side with a scratch HOME and GIT_CONFIG_GLOBAL, so nothing
+// here reads or writes the operator's real git configuration. The agent's git
+// resolves origin to the attempt's local remote, from <attempt
+// root>/.gitconfig alone. The service does not read the rewrite: init, run by
+// the agent, records origin as git expands it, so the upstream the run's
+// configuration is fetched from is that remote, and the run resolves its
+// configuration against that remote's main. Before the rewrite
+// was written to the agent's home, origin resolved to github.com and the run
+// was refused fetching main from the upstream (task-003 of the a#945 proof).
+// The operator-side rewrite (a#942's write) is gone after the run.
+func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
+	r := newFullRun(t)
+	r.run()
+	if r.code != 0 || r.arms == "" {
+		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
+	}
+	var seen struct {
+		Remote, Main         string
+		AttemptGitconfig     string `json:"attempt_gitconfig"`
+		URL, Origins, Intent *struct {
+			Exit           int
+			Stdout, Stderr string
+			Real           any // the resolved path, or for origins each file's
+		}
+		Init *struct {
+			Exit     int
+			Stderr   string
+			Upstream *string // upstream_url as init recorded it, resolved
+		}
+	}
+	data, err := os.ReadFile(r.agent)
+	must(t, err)
+	must(t, json.Unmarshal(data, &seen))
+	if seen.URL == nil || seen.URL.Exit != 0 || seen.URL.Stdout == "" {
+		t.Fatalf("the agent's git did not resolve origin: %+v", seen.URL)
+	}
+	if seen.URL.Real != seen.Remote {
+		t.Fatalf("the agent's git resolves origin to %q, want the attempt's remote %q", seen.URL.Stdout, seen.Remote)
+	}
+	if fmt.Sprint(seen.Origins.Real) != fmt.Sprint([]string{seen.AttemptGitconfig}) {
+		t.Errorf("the agent's url config comes from %v, want only the attempt's %s:\n%s", seen.Origins.Real, seen.AttemptGitconfig, seen.Origins.Stdout)
+	}
+	if seen.Init == nil || seen.Init.Upstream == nil || *seen.Init.Upstream != seen.Remote {
+		t.Fatalf("init did not record the attempt's remote %q as the upstream: %+v", seen.Remote, seen.Init)
+	}
+	if seen.Intent == nil || seen.Intent.Exit != 0 {
+		t.Fatalf("the agent's run did not start: %+v", seen.Intent)
+	}
+	var started struct{ Record struct{ ID string } }
+	must(t, json.Unmarshal([]byte(seen.Intent.Stdout), &started))
+	records, err := filepath.Glob(filepath.Join(r.armsWithSkill(), "caliper-q1-gate", "caliper-*.record.json"))
+	must(t, err)
+	if len(records) != 1 {
+		t.Fatalf("with-skill records: %v", records)
+	}
+	var rec struct {
+		Runs struct {
+			Output struct {
+				Runs []struct {
+					ID, Base         string
+					ConfigRejections *[]string `json:"config_rejections"`
+					NoCodeHost       bool      `json:"no_code_host"`
+				}
+			}
+		}
+	}
+	data, err = os.ReadFile(records[0])
+	must(t, err)
+	must(t, json.Unmarshal(data, &rec))
+	runs := rec.Runs.Output.Runs
+	// A known config_rejections is a run whose own configuration resolved, from
+	// main as the service fetched it; base is that main, this attempt's commit.
+	if len(runs) != 1 || runs[0].ID != started.Record.ID || runs[0].ConfigRejections == nil || runs[0].Base != seen.Main {
+		t.Fatalf("runs = %+v, want run %s with its configuration resolved against main %s", runs, started.Record.ID, seen.Main)
+	}
+	// The recorded upstream is a local path, so the run has no code host
+	// (README "Subject remote"): the price of a rewrite init can see.
+	want(t, "no_code_host", runs[0].NoCodeHost, true)
+	cmd := procgroup.Command("git", "config", "--file", filepath.Join(r.root, "gitconfig"), "--get-regexp", `^url\.`)
+	cmd.Env = r.env
+	if out, err := cmd.Output(); len(out) != 0 || err == nil {
+		t.Errorf("the operator-side global config still has a url rewrite: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(r.root, "home", ".gitconfig")); !os.IsNotExist(err) {
+		t.Errorf("the operator HOME got a .gitconfig (GIT_CONFIG_GLOBAL should have taken the write): %v", err)
+	}
+}
+
+// armsWithSkill is the with-skill arm's TMPDIR, where caliper made its attempt root.
+func (r *fullRun) armsWithSkill() string { return filepath.Join(r.arms, "with-skill") }

@@ -79,10 +79,37 @@ moves, note it in the full-run write-up.
 
 **Code host.** `../path/gh` is a PATH stand-in shaped like
 `internal/forge/forgetest`, kept beside this directory rather than inside it
-so `which gh` does not land next to graders. `build-subject.sh` sets a global
-`url.<local-remote>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git`
-(and records that URL as origin), and plants `no_ci` on the trusted document
-so an empty check rollup is green. The stand-in's
+so `which gh` does not land next to graders. `build-subject.sh` records
+`https://github.com/dayamjz/caliper-q1.git` as origin and plants `no_ci` on
+the trusted document so an empty check rollup is green.
+
+**Subject remote** (#941). `build-subject.sh` rewrites that URL to the local
+bare remote with `url.<local-remote>.insteadOf`, in two places:
+
+- **The agent's home**, `<attempt root>/.gitconfig`. Caliper 0.19.0 runs the
+  agent with `HOME` set to the attempt root and only `PATH`, `LANG`,
+  `LC_ALL`, `TERM`, `TMPDIR` and `CLAUDE_CODE_OAUTH_TOKEN` beside it
+  (`caliper/harness/base.py` `_isolated_env`, `claude_code.py`), so the
+  agent's git reads that file and no `GIT_CONFIG_GLOBAL`. The service does
+  not read the rewrite: `assistant init`, which the agent runs, records
+  origin as `git remote get-url` expands it, so the upstream the repository
+  record names, which every run fetches from, is the local remote. So a run
+  has no code host (`no_code_host`): `pr` and `ci` take that path, and the
+  `gh` stand-in is not what a run's pull request goes to. The
+  attempt root is the parent of the hook's
+  `CALIPER_WORKDIR`, and `build-subject.sh` fails without one unless
+  `Q1_AGENT_HOME` names the home instead (`verify_graders.py`). Caliper
+  removes the file with the attempt root.
+- **The hook's global config**, the operator's or `GIT_CONFIG_GLOBAL`, for the
+  hook's own git: hooks run with the caller's whole environment. This is the
+  write a#942 is about, left as it was: it fails where that file is read-only,
+  `cleanup.sh` and `run-full.sh` remove it by URL, and `workers=1` keeps two
+  attempts from racing it. It does not reach the agent.
+
+`TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote` runs the agent with
+caliper's environment and checks that its git takes the rewrite from the
+attempt file alone, that init records the local remote, and that the run the
+service starts resolves its configuration from that remote's main. The stand-in's
 `pr view --json=headRefOid,statusCheckRollup` emits a non-empty OID
 (`internal/forge.GitHub.Checks` refuses an empty one). The shared prompt does
 not coach the stand-in, the rewrite, or an `assistant init` recipe: origin
