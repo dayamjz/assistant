@@ -158,7 +158,11 @@ func TestCIHookBoundsACheckAndRecordsATimeout(t *testing.T) {
 // another attempt or with a verdict its decision contradicts, no setup.json,
 // no evidence at all, a hook changed or removed, and a ref that moved with no
 // accepted check (here fetched into the remote, which runs no hook), and a hook
-// that died before writing its entry. A record
+// that died before writing its entry. So is an accepted entry without the
+// hook's passing archive, extract, go test and go vet of its tip (#953 review):
+// no steps, one missing, one that exited non-zero, steps or a step of the
+// wrong shape, another tip's archive. A real push of a deletion alone, whose
+// entry has no steps, is the control for that: still "ci ran". A record
 // from before schema 5 is not measured. The edits are labeled: each is a shape
 // a cut-short hook, a hand edit or a bypass leaves.
 func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
@@ -190,10 +194,34 @@ func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
 		return string(data)
 	}
 	ci := func(rec map[string]any) map[string]any { return rec["ci_checks"].(map[string]any) }
-	for _, c := range []struct {
+	steps := func(edit func(steps []any) any) func(map[string]any) {
+		return entry(func(e map[string]any) string { e["steps"] = edit(e["steps"].([]any)); return encode(e) })
+	}
+	type edit = struct {
 		what, reason string
 		edit         func(map[string]any)
-	}{
+	}
+	const unchecked = "accepted without a passing archive"
+	stepEdits := []edit{
+		{"an accepted entry with no steps", unchecked, steps(func([]any) any { return []any{} })},
+		{"steps not a list", unchecked, steps(func(s []any) any { return map[string]any{"archive": s[0]} })},
+		{"steps a number", "TypeError", steps(func([]any) any { return 4 })},
+		{"a step that is not one", unchecked, steps(func(s []any) any { s[2] = "go test ./..."; return s })},
+		{"a step's argv not a list", unchecked, steps(func(s []any) any { s[3].(map[string]any)["argv"] = "go vet ./..."; return s })},
+		{"another tip's archive", unchecked, steps(func(s []any) any {
+			argv := s[0].(map[string]any)["argv"].([]any)
+			argv[len(argv)-1] = strings.Repeat("0", 40)
+			return s
+		})},
+		{"an extra step", unchecked, steps(func(s []any) any { return append(s, s[3]) })},
+		{"go vet exit false", unchecked, steps(func(s []any) any { s[3].(map[string]any)["exit"] = false; return s })},
+	}
+	for i, name := range []string{"git archive", "tar -xf", "go test", "go vet"} {
+		stepEdits = append(stepEdits,
+			edit{"no " + name, unchecked, steps(func(s []any) any { return append(s[:i:i], s[i+1:]...) })},
+			edit{name + " exited 1", unchecked, steps(func(s []any) any { s[i].(map[string]any)["exit"] = 1; return s })})
+	}
+	for _, c := range append([]edit{
 		{"an entry not yet written", "push-", entry(func(map[string]any) string { return "" })},
 		{"an entry not yet decided", "not a decided check", entry(func(e map[string]any) string {
 			delete(e, "verdict")
@@ -213,7 +241,7 @@ func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
 		{"no evidence", "CI evidence", func(rec map[string]any) { ci(rec)["files"] = nil }},
 		{"a changed hook", "hook", func(rec map[string]any) { ci(rec)["hook_sha256"] = strings.Repeat("0", 64) }},
 		{"a removed hook", "hook", func(rec map[string]any) { ci(rec)["hook_sha256"] = nil }},
-	} {
+	}, stepEdits...) {
 		dir := filepath.Join(a.tmpdir, "edited")
 		a.copyRecord(dir, a.name(), c.edit)
 		j := a.report(dir, b, a.name()).Attempts[0]
@@ -224,6 +252,15 @@ func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
 	dir := filepath.Join(a.tmpdir, "schema4")
 	a.copyRecord(dir, a.name(), func(rec map[string]any) { rec["schema"] = 4 })
 	want(t, "schema 4", a.report(dir, b, a.name()).Attempts[0].CIExecution.Verdict, "not measured")
+
+	// The control: a push that only deletes builds nothing, so its accepted entry has no steps.
+	if code, _, errs := a.run(a.checkout, "git", "push", "-q", "../remote.git", ":feature/unlimited"); code != 0 {
+		t.Fatalf("the deletion was refused: exit %d\n%s", code, errs)
+	}
+	entries := a.ciEntries()
+	want(t, "the deletion's entry", []any{entries[len(entries)-1]["decision"], entries[len(entries)-1]["steps"]}, []any{"accepted", []any{}})
+	a.cleanup()
+	wantCI(t, a.judge(b), "ci ran", map[string]int{"accepted": 2, "rejected_fail": 0, "rejected_timeout": 0, "rejected_error": 0})
 
 	// A hook that dies before its check writes anything (here its python3 cannot
 	// start) refuses the push and leaves its entry empty: cannot tell, never "not invoked".

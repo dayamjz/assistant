@@ -559,22 +559,30 @@ Limits:
 `ci_execution`, from `ci_checks` alone, fail-closed. Its `verdict` is:
 
 - `ci ran`: every completed entry is a decided check of this attempt (its
-  key and arm, and a verdict its decision matches), and every ref that
-  differs from setup's, a deletion included, is the new tip of an accepted
-  entry. `pushes` counts the entries under `accepted`, `rejected_fail`,
-  `rejected_timeout` and `rejected_error`, so a refusal for time or a check
-  that could not run never counts as a failed check.
+  key and arm, and a verdict its decision matches), every accepted entry
+  records for each tip it built (each ref but a deletion) the hook's four
+  steps, all exited 0, in order and nothing else (`git archive` of that tip,
+  `tar -xf`, `go test ./...`, `go vet ./...`; a push of deletions alone
+  records none), and every ref that differs from setup's, a deletion
+  included, is the new tip of an accepted entry. `pushes` counts the
+  entries under `accepted`, `rejected_fail`, `rejected_timeout` and
+  `rejected_error`, so a refusal for time or a check that could not run
+  never counts as a failed check.
 - `not invoked`: no entry, and the refs are setup's. Nothing was pushed, so
   nothing was checked; it is not a pass.
 - `cannot tell`, with a `reason`: anything else, among it an entry not yet
-  written or decided, a repeated key, another attempt's entry, no
-  `setup.json` or no evidence, a hook missing or not the one setup wrote, a
-  ref that moved with no accepted check (a push around the hook), a record
-  whose schema this does not read, a missing or unreadable record.
+  written or decided, a repeated key, another attempt's entry, an accepted
+  entry without those steps (none, one missing or exited non-zero, a step
+  that is not one, another tip's archive), no `setup.json` or no evidence,
+  a hook missing or not the one setup wrote, a ref that moved with no
+  accepted check (a push around the hook), a record whose schema this does
+  not read, a missing or unreadable record.
 - `not measured`: a record before schema 5.
 
 It is consistency, not attestation, as for the gate record: the attempt runs
-as the user who owns the remote and the evidence.
+as the user who owns the remote and the evidence. A rejected entry's steps
+are not read: it moved no ref, so it decides no coverage, and which count it
+is under is its own verdict, as the hook wrote it.
 
 **Gate verdicts by arm** (#895 scope (a)). `gate_by_arms.py` reports
 `gate_record.py`'s per-attempt verdicts grouped by the arm each attempt was

@@ -263,6 +263,7 @@ def stage_execution(record, observation):
 # A completed CI entry's (verdict, decision), and the count it is reported under (README "CI").
 CI_OUTCOMES = {("pass", "accepted"): "accepted", ("fail", "rejected"): "rejected_fail",
                ("timeout", "rejected"): "rejected_timeout", ("error", "rejected"): "rejected_error"}
+CI_STEPS = (["git", "archive", "--format=tar", "-o"], ["tar", "-xf", "-C"], ["go", "test", "./..."], ["go", "vet", "./..."])
 
 
 def ci_execution(record):
@@ -294,6 +295,10 @@ def ci_execution(record):
             if not name.startswith("push-") or outcome is None or e.get("schema") != 1 \
                     or (e.get("task_id"), e.get("caliper_attempt"), e.get("arm")) != key:
                 raise ValueError("%s is not a decided check of this attempt" % name)
+            want = [w + [r["new"]] * (w[0] == "git") for r in e["refs"] if r["new"] != "0" * 40 for w in CI_STEPS]
+            ran = [[a for a in s["argv"] if a[:1] != "/"] if exited_zero(s) else None for s in e["steps"]]  # absolute paths out
+            if outcome == "accepted" and ran != want:
+                raise ValueError("%s is accepted without a passing archive, extract, go test and go vet of each tip" % name)
             pushes[outcome] += 1
             if outcome == "accepted":
                 checked |= {(r["name"], r["new"]) for r in e["refs"]}
