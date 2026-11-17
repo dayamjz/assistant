@@ -573,10 +573,10 @@ func TestStageReadsARunRefusedBeforeAnyStage(t *testing.T) {
 	// The configuration restored on main, and a second run held at review. main
 	// goes back to the commit before the break rather than gaining a revert, so
 	// the branch is still on it and the run's rebase writes no commit, which
-	// needs a committer identity a CI runner does not have. The push names the
-	// remote's path: cleanup.sh dropped the URL rewrite origin used.
+	// needs a committer identity a CI runner does not have. It is fetched into the
+	// remote by path, as breakTrustedConfig's break was, so no CI hook checks it.
 	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && git reset -q --hard HEAD~1"+
-		" && git push -q --force ../remote.git main && git checkout -q feature/unlimited"); code != 0 {
+		` && git --git-dir=../remote.git fetch -q "$PWD" +main:main && git checkout -q feature/unlimited`); code != 0 {
 		t.Fatalf("restoring the trusted configuration: exit %d\n%s", code, errs)
 	}
 	a.restart()

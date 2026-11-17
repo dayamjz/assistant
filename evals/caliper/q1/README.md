@@ -93,7 +93,10 @@ by `ci-hook.sh` as the attempt remote's `pre-receive`, which
 are checked. For each pushed tip it builds the pushed tree from the pushed
 objects, with `GOPROXY=off` and `GOTOOLCHAIN=local` (no network) and the
 pusher's environment otherwise, so under caliper the agent's isolated HOME
-holds `GOCACHE` and `GOPATH`. The whole push has `Q1_CI_TIMEOUT` seconds
+holds `GOCACHE` and `GOPATH`, and `go` is the one on the agent's PATH, which
+caliper takes from `run-full.sh`'s (it refuses without `go`). A push with no
+`go` to run is refused as `error`. A test that moves a remote's branch as
+another person would fetches it into the remote, which runs no hook. The whole push has `Q1_CI_TIMEOUT` seconds
 (default 120); a check still running then is ended with its process group.
 Any verdict but `pass` rejects the push and prints why to the pusher:
 `fail` (a command failed), `timeout` (the limit was spent) or `error` (the
