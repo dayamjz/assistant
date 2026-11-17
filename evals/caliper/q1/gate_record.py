@@ -22,11 +22,12 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # Error lines that are not on the read path: the usage figure and the stop.
 # Every other line, one this instrument does not know included, is read-path.
 # The per-run stage reads are the stage verdict's to judge, not the gate's.
-# A missing attempt key is gate_by_arms.py's "as run" to judge (#936), not the gate's.
-NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ")
+# A missing attempt key loses the "as run" join (#936) and makes any run cannot tell, since its
+# head check needs the key (#941); the arm is gate_by_arms.py's, and the CI evidence ci_execution's.
+NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ", "arm: ", "ci: ")
 # 1 predates the stage capture (#926): its stage verdict is not measured. 3 adds the attempt key (#936).
-# 4 adds head_checks (#941): a run in a record without them is cannot tell.
-SCHEMAS = (1, 2, 3, 4)
+# 4 adds head_checks (#941): a run in a record without them is cannot tell. 5 adds arm and ci_checks.
+SCHEMAS = (1, 2, 3, 4, 5)
 
 # The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
 # to write, onto (gate_observation, cleanup_status). "runs" means valid, with
@@ -259,6 +260,52 @@ def stage_execution(record, observation):
             "trouble": {"unread": states.count(UNREAD), "review_started_not_completed": states.count(RUN_STARTED)}}
 
 
+# A completed CI entry's (verdict, decision), and the count it is reported under (README "CI").
+CI_OUTCOMES = {("pass", "accepted"): "accepted", ("fail", "rejected"): "rejected_fail",
+               ("timeout", "rejected"): "rejected_timeout", ("error", "rejected"): "rejected_error"}
+
+
+def ci_execution(record):
+    """Whether CI checked every push that moved the attempt's remote (README "CI"), fail-closed:
+    "ci ran" with each push counted under its outcome, "not invoked" when nothing was pushed, and
+    cannot tell for anything the evidence does not show, never a check that did not run."""
+    if schema(record) in (1, 2, 3, 4):
+        return {"verdict": NOT_MEASURED}
+    ci = record.get("ci_checks") if isinstance(record.get("ci_checks"), dict) else {}
+    key = (record.get("task_id"), record.get("caliper_attempt"), record.get("arm"))
+    try:
+        if schema(record) != 5:
+            raise ValueError("schema %r is not one this reads" % (record.get("schema"),))
+        docs = {}
+        for name, text in ci["files"].items():
+            try:
+                docs[name] = json.loads(text, object_pairs_hook=unique)
+            except ValueError as e:
+                raise ValueError("%s is unreadable: %s" % (name, e))
+        setup, now = docs.pop("setup.json"), ci["refs"]
+        if (setup["task_id"], setup["caliper_attempt"], setup["arm"]) != key or not isinstance(key[0], str) \
+                or type(key[1]) is not int or not isinstance(now, dict) or not isinstance(setup["refs"], dict):
+            raise ValueError("setup.json or the refs at capture are not this attempt's")
+        if not isinstance(setup["hook_sha256"], str) or ci.get("hook_sha256") != setup["hook_sha256"]:
+            raise ValueError("the CI hook is missing or not the one setup wrote")
+        pushes, checked = dict.fromkeys(CI_OUTCOMES.values(), 0), set()
+        for name, e in docs.items():
+            outcome = CI_OUTCOMES.get((e.get("verdict"), e.get("decision"))) if isinstance(e, dict) else None
+            if not name.startswith("push-") or outcome is None or e.get("schema") != 1 \
+                    or (e.get("task_id"), e.get("caliper_attempt"), e.get("arm")) != key:
+                raise ValueError("%s is not a decided check of this attempt" % name)
+            pushes[outcome] += 1
+            if outcome == "accepted":
+                checked |= {(r["name"], r["new"]) for r in e["refs"]}
+        moved = {(n, sha) for n, sha in now.items() if setup["refs"].get(n) != sha} | \
+                {(n, "0" * 40) for n in setup["refs"] if n not in now}
+        if moved - checked:
+            raise ValueError("refs moved with no accepted check: %s" % sorted(moved - checked))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        return {"verdict": CANNOT, "reason": "CI evidence: %s" % (e if isinstance(e, ValueError) else repr(e))}
+    return {"verdict": "ci ran" if docs else "not invoked", "pushes": pushes}
+
+
 def unique(pairs):
     """A JSON object whose keys are all distinct; a repeated key would win last, so it is refused."""
     keys = [k for k, _ in pairs]
@@ -274,7 +321,7 @@ def no_record(attempt, reason="no record file"):
     return {"attempt": attempt, "cleanup_status": {"status": "failure", "exit": None, "stderr": None,
                                                    "reason": reason},
             "gate_observation": indeterminate(reason + ": the harness failed"),
-            "stage_execution": {"verdict": CANNOT, "reason": reason}}
+            "stage_execution": {"verdict": CANNOT, "reason": reason}, "ci_execution": {"verdict": CANNOT, "reason": reason}}
 
 
 def judge(attempt, path, built):
@@ -288,7 +335,8 @@ def judge(attempt, path, built):
     except (OSError, ValueError) as e:
         return {"attempt": attempt, "cleanup_status": dict(unread, reason="record unreadable"),
                 "gate_observation": indeterminate("record unreadable: %r" % e),
-                "stage_execution": {"verdict": CANNOT, "reason": "record unreadable"}}
+                "stage_execution": {"verdict": CANNOT, "reason": "record unreadable"},
+                "ci_execution": {"verdict": CANNOT, "reason": "record unreadable"}}
     if not isinstance(record, dict):
         record = {}
     stop = record.get("stop") if isinstance(record.get("stop"), dict) else {}
@@ -315,7 +363,7 @@ def judge(attempt, path, built):
     else:
         observation = {"validity": "valid", "state": gate, "runs": []}
     return {"attempt": attempt, "gate_observation": observation, "cleanup_status": cleanup_status,
-            "stage_execution": stage_execution(record, observation)}
+            "stage_execution": stage_execution(record, observation), "ci_execution": ci_execution(record)}
 
 
 def state(result):

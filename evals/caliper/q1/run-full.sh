@@ -1,10 +1,10 @@
 #!/bin/sh
 # run-full.sh [MODEL]
 #
-# Full Q1 both arms (issue #287 items 4–5): k = 5, the same pinned
-# backend:model for --model and --judge-model, with and without the
-# assistant skill. MODEL defaults to claude-code:claude-sonnet-4-5
-# (pin explicitly; do not leave the CLI default). Q1_K overrides k.
+# Full Q1 (issue #287 items 4–5, row 11 a#896): k = 5 for each arm in README
+# "Arms", the same pinned backend:model for --model and --judge-model. MODEL
+# defaults to claude-code:claude-sonnet-5-5, the owner's pin for row 11; do
+# not leave the CLI default. Q1_K overrides k.
 #
 # Prerequisites: `make build` at repo root, install-caliper.sh's caliper
 # (in CALIPER_VENV, the same default as there),
@@ -12,7 +12,7 @@
 # provider headroom checked (quota-axi). Graders must pass first.
 set -eu
 cd "$(dirname "$0")"
-MODEL="${1:-claude-code:claude-sonnet-4-5}"
+MODEL="${1:-claude-code:claude-sonnet-5-5}"
 REPO_ROOT="$(CDPATH= cd -- ../../.. && pwd)"
 CALIPER_VENV="${CALIPER_VENV:-$HOME/.local/share/caliper-q1attemptenv}"
 export PATH="$REPO_ROOT/bin:$CALIPER_VENV/bin:${HOME}/.local/bin:${HOME}/.local/node_modules/.bin:${PATH}"
@@ -66,7 +66,8 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 # Each arm runs under a TMPDIR of its own, so caliper makes that arm's attempt
 # roots there and cleanup.sh writes their gate records to
 # $ARMS/<arm>/caliper-q1-gate, never beside the other arm's
-# (README "Gate verdicts by arm").
+# (README "Gate verdicts by arm"). Each caliper run gets Q1_ARM, the arm its
+# hooks record (README "Arms").
 # An attempt's service listens on <attempt root>/.assistant/socket, so the
 # arms go under Q1_ARMS_ROOT (default /tmp), never $TMPDIR: under macOS's
 # $TMPDIR that path was too long to bind and no with-skill service ever ran
@@ -75,8 +76,8 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 # name); one that does not answer refuses the run and is kept for reading.
 ARMS="$(mktemp -d "${Q1_ARMS_ROOT:-/tmp}/q1-arms.XXXXXX")"
 echo "arms (each arm's TMPDIR): $ARMS" >&2
-mkdir -p "$ARMS/with-skill/caliper-q1-gate" "$ARMS/ablated/caliper-q1-gate"
-probe_root="$(mktemp -d "$ARMS/with-skill/caliper-XXXXXXXX")"
+mkdir -p "$ARMS/full-gate/caliper-q1-gate" "$ARMS/agent-ci/caliper-q1-gate"
+probe_root="$(mktemp -d "$ARMS/full-gate/caliper-XXXXXXXX")"
 probe="$probe_root/.assistant"
 if ! assistant --home "$probe" service start >"$ARMS/probe.log" 2>&1; then
 	echo "a service at $probe, an attempt's depth under $ARMS, did not start; set Q1_ARMS_ROOT to a shorter directory (README \"How to run\"):" >&2
@@ -101,15 +102,15 @@ until status="$(assistant --home "$probe" --json service status 2>&1)" &&
 done
 rm -rf "${probe_root:?}"
 # A result file left from an earlier run must never be read as this run's.
-rm -f result-q1-with-skill.json result-q1-ablated.json
+rm -f result-q1-full-gate.json result-q1-agent-ci.json
 
 with_rc=0
-echo "running with-skill arm (model=$MODEL)" >&2
-TMPDIR="$ARMS/with-skill" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
+echo "running full-gate arm (model=$MODEL)" >&2
+Q1_ARM=full-gate TMPDIR="$ARMS/full-gate" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--output result-q1-with-skill.json || with_rc=$?
+	--output result-q1-full-gate.json || with_rc=$?
 
-# Same URL clear before the ablated arm: cleanup should have done this, but a
+# Same URL clear before the agent-ci arm: cleanup should have done this, but a
 # mid-arm crash must not poison the second arm.
 git config --global --get-regexp '^url\..*\.insteadof$' \
 	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
@@ -118,26 +119,26 @@ git config --global --get-regexp '^url\..*\.insteadof$' \
 	done
 
 ablated_rc=0
-echo "running ablated arm (model=$MODEL)" >&2
-TMPDIR="$ARMS/ablated" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
+echo "running agent-ci arm (model=$MODEL)" >&2
+Q1_ARM=agent-ci TMPDIR="$ARMS/agent-ci" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
 	--model "$MODEL" --judge-model "$MODEL" \
-	--ablate assistant --output result-q1-ablated.json || ablated_rc=$?
+	--ablate assistant --output result-q1-agent-ci.json || ablated_rc=$?
 
 report_rc=0
-if [ -f result-q1-with-skill.json ] && [ -f result-q1-ablated.json ]; then
-	caliper compare result-q1-with-skill.json result-q1-ablated.json || true
+if [ -f result-q1-full-gate.json ] && [ -f result-q1-agent-ci.json ]; then
+	caliper compare result-q1-full-gate.json result-q1-agent-ci.json || true
 	vcs() { go version -m "$REPO_ROOT/bin/assistant" | sed -n "s/^[[:space:]]*build[[:space:]]*vcs.$1=//p"; }
 	python3 gate_by_arms.py --revision "$(vcs revision)" --modified "$(vcs modified)" \
-		--arm with-skill "$ARMS/with-skill" result-q1-with-skill.json \
-		--arm ablated "$ARMS/ablated" result-q1-ablated.json >"$ARMS/gate-by-arm.json" || report_rc=$?
+		--arm full-gate "$ARMS/full-gate" result-q1-full-gate.json \
+		--arm agent-ci "$ARMS/agent-ci" result-q1-agent-ci.json >"$ARMS/gate-by-arm.json" || report_rc=$?
 else
 	echo "no gate verdicts by arm: an arm wrote no result file" >&2
 	report_rc=1
 fi
-echo "results: result-q1-with-skill.json result-q1-ablated.json" >&2
+echo "results: result-q1-full-gate.json result-q1-agent-ci.json" >&2
 echo "gate records and usage per arm: $ARMS/<arm>/caliper-q1-gate/; gate verdicts by arm: $ARMS/gate-by-arm.json" >&2
 if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ] || [ "$report_rc" -ne 0 ]; then
-	echo "exit status: with-skill=$with_rc ablated=$ablated_rc gate-by-arm=$report_rc" >&2
+	echo "exit status: full-gate=$with_rc agent-ci=$ablated_rc gate-by-arm=$report_rc" >&2
 	exit 1
 fi
 

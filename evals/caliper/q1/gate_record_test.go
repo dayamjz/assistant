@@ -40,6 +40,10 @@ type judged struct {
 		Exit, Stderr   any
 	} `json:"cleanup_status"`
 	StageExecution stageVerdict `json:"stage_execution"`
+	CIExecution    struct {
+		Verdict, Reason string
+		Pushes          map[string]int
+	} `json:"ci_execution"`
 }
 
 type report struct {

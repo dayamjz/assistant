@@ -38,25 +38,28 @@ caliper validate q1.eval.yaml
 # Check provider headroom before a full run:
 #   quota-axi …
 # Pin the under-test and judge models to the same pair; do not leave defaults.
-MODEL=claude-code:claude-sonnet-4-5
+# Row 11's pin (a#896, owner 2026-11-17) is the script's default.
+MODEL=claude-code:claude-sonnet-5-5
 ./run-full.sh "$MODEL"
 ```
 
-`run-full.sh` runs both arms at k = 5 with identical `--model` /
-`--judge-model`, writes `result-q1-with-skill.json` and
-`result-q1-ablated.json`, then `caliper compare`, then `gate_by_arms.py`
-(see "Gate verdicts by arm"). Each arm runs under a TMPDIR of its own,
+`run-full.sh` runs each arm of "Arms" at k = 5 with identical `--model` /
+`--judge-model`, writes `result-q1-<arm>.json` for each, then `caliper
+compare`, then `gate_by_arms.py` (see "Gate verdicts by arm"). It exports
+`Q1_ARM=<arm>` for each arm's caliper run, which its hooks inherit. Token
+figures on Sonnet 5.5 are not comparable with the 2026-10-16 run or the
+a#939 and a#945 k = 1 proofs, which ran Sonnet 4.5. Each arm runs under a TMPDIR of its own,
 `$ARMS/<arm>` in a fresh `q1-arms.XXXXXX` directory under `Q1_ARMS_ROOT`
 (default `/tmp`, never the operator's `$TMPDIR`), whose path it prints. An
 attempt's service listens on `<attempt root>/.assistant/socket`, and a unix
-socket path has a short length limit: under macOS's `$TMPDIR` no with-skill
+socket path has a short length limit: under macOS's `$TMPDIR` no gate-using
 service could bind, so every gate-using record read indeterminate (#941).
 Before any attempt, after the graders, it starts and stops a service at a
 home as deep as the deepest attempt's (caliper's `caliper-XXXXXXXX` root in
-the `with-skill` arm), and refuses (exit 2) when that service does not
+the arm with the longest name), and refuses (exit 2) when that service does not
 answer, keeping that home and its log under `$ARMS`. Then set
 `Q1_ARMS_ROOT` to a shorter directory. The probe proves the depth with this
-binary on this machine and nothing else. `Q1_K` sets k for both arms
+binary on this machine and nothing else. `Q1_K` sets k for every arm
 (default 5). It refuses before graders
 when the `caliper` on PATH, asked through the interpreter its script names,
 is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
@@ -67,6 +70,42 @@ Claude Code with `--dangerously-skip-permissions` under a temporary HOME
 on the operator's machine.
 
 ## Decisions recorded here
+
+**Arms** (row 11, a#896's design note). Every arm has the same tasks,
+prompt, subject, `no-mistakes` neighbour, `assistant` on PATH, and CI (see
+"CI"). `run-full.sh` runs `agent-ci` (the `assistant` skill withheld,
+`--ablate assistant`; the gate used anyway is contamination, which the gate
+record shows per attempt) and `full-gate` (the skill installed). The third
+arm, `agent-ci-review`, comes with its reviewer in a later change; until then
+nothing runs or reports under its name. The CI hook is enforced at the
+remote, like a required check, while the full gate is reached by the agent
+through its skill; the write-up names that asymmetry. `build-subject.sh`
+refuses to set up without `Q1_ARM`, and `cleanup.sh` records it as the
+record's `arm`. Whether to pin the gate's review and fix roles in the
+subject's `assistant.json` is the owner's open question (a#896 Q2): until it
+is answered the fix role is the configuration default, and a write-up says
+which agent it resolved to.
+
+**CI** (row 11). With no code host (a#950), CI is the subject's own
+`commands.test` and `commands.lint`, `go test ./...` and `go vet ./...`, run
+by `ci-hook.sh` as the attempt remote's `pre-receive`, which
+`build-subject.sh` installs after setup's own pushes, so only later pushes
+are checked. For each pushed tip it builds the pushed tree from the pushed
+objects, with `GOPROXY=off` and `GOTOOLCHAIN=local` (no network) and the
+pusher's environment otherwise, so under caliper the agent's isolated HOME
+holds `GOCACHE` and `GOPATH`. The whole push has `Q1_CI_TIMEOUT` seconds
+(default 120); a check still running then is ended with its process group.
+Any verdict but `pass` rejects the push and prints why to the pusher:
+`fail` (a command failed), `timeout` (the limit was spent) or `error` (the
+check could not run). It writes one entry per push to
+`$TMPDIR/caliper-q1-ci/<attempt root>/`: an empty file the moment the hook
+starts, so a hook that dies before its check never reads as no push, then
+the entry whole before the check and again once decided, beside `setup.json`: the attempt key,
+the arm, the remote's refs as setup left them and the hook's sha256. A
+deletion builds nothing. What it misses: pull requests, a check rollup and
+a merge button. `verify_graders.py` checks that CI accepts every family's
+planted branch and refuses a commit whose test fails. A k = 1 calibration
+shows the build under an attempt's isolated HOME before k = 5.
 
 **Neighbour skill.** `q1.eval.yaml` lists `no-mistakes` from
 `kunchenguid/no-mistakes` at ref `1773fc4b465bd154ed225c909eec271ab8fc73d2`
@@ -131,11 +170,18 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (4; #936's records are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (5; a#945's records are 4, with no `arm` or `ci_checks`, #936's are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
   not always point at a step with a non-zero exit.
+- `arm`: the hook's `Q1_ARM`. Unset, it is null and `errors` has an
+  `arm: ...` line, so the hook exits 1. `gate_by_arms.py` checks it.
+- `ci_checks`: the CI evidence as found, for `gate_record.py` to judge
+  (see "CI execution"): `files`, each file in the attempt's CI directory as
+  text, `hook_sha256`, the remote's `pre-receive` now, and `refs`, the
+  remote's refs now. A failed read of any of them is a `ci: ...` line in
+  `errors`, and what it could not read is null.
 - `task_id` and `caliper_attempt`: the attempt's key in caliper's saved
   result, from the hook's `CALIPER_TASK_ID` and `CALIPER_ATTEMPT`, which only
   the patched caliper sets ("As run"). Without a task id and a positive
@@ -292,7 +338,8 @@ the denominator. So does a record that is not JSON.
 A valid row becomes indeterminate when any check fails:
 
 - **Read-path errors.** Any `errors` line other than `usage: ...`,
-  `stop: ...`, `key: ...` (the join's to judge, "As run") and the per-run
+  `stop: ...`, `key: ...` (the join's to judge, "As run"), `arm: ...`
+  (`gate_by_arms.py`'s), `ci: ...` ("CI execution"'s) and the per-run
   stage reads' `run:<id>: ...`,
   `log:<id>:<stage>: ...` and `run-after:<id>: ...` is on the read path:
   `service`, `runs`, and `cleanup: ...`, which cleanup itself raised. A raise
@@ -303,7 +350,7 @@ A valid row becomes indeterminate when any check fails:
   judges it instead ("Stage execution"). A failed report read is `unread`
   (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
   `ran: true`, where `ran` decides (row 4).
-- **This attempt's record.** `schema` 1, 2, 3 or 4, `attempt` the name asked for, `home`
+- **This attempt's record.** `schema` 1 to 5, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
 - **One repository.** The runs name one `repository_id`, never null.
@@ -505,6 +552,27 @@ Limits:
   by the ceiling's own finding planted on a reviewed report.
   The node prefixes are not pinned.
 
+**CI execution** (row 11). Each attempt has a fourth field,
+`ci_execution`, from `ci_checks` alone, fail-closed. Its `verdict` is:
+
+- `ci ran`: every completed entry is a decided check of this attempt (its
+  key and arm, and a verdict its decision matches), and every ref that
+  differs from setup's, a deletion included, is the new tip of an accepted
+  entry. `pushes` counts the entries under `accepted`, `rejected_fail`,
+  `rejected_timeout` and `rejected_error`, so a refusal for time or a check
+  that could not run never counts as a failed check.
+- `not invoked`: no entry, and the refs are setup's. Nothing was pushed, so
+  nothing was checked; it is not a pass.
+- `cannot tell`, with a `reason`: anything else, among it an entry not yet
+  written or decided, a repeated key, another attempt's entry, no
+  `setup.json` or no evidence, a hook missing or not the one setup wrote, a
+  ref that moved with no accepted check (a push around the hook), a record
+  whose schema this does not read, a missing or unreadable record.
+- `not measured`: a record before schema 5.
+
+It is consistency, not attestation, as for the gate record: the attempt runs
+as the user who owns the remote and the evidence.
+
 **Gate verdicts by arm** (#895 scope (a)). `gate_by_arms.py` reports
 `gate_record.py`'s per-attempt verdicts grouped by the arm each attempt was
 assigned ("as assigned": adoption, whether the gate ran in each arm), and
@@ -515,12 +583,12 @@ number and outcome, and no transcript.
 
 ```sh
 python3 gate_by_arms.py --revision REV --modified MOD \
-  --arm with-skill "$ARMS/with-skill" result-q1-with-skill.json \
-  --arm ablated "$ARMS/ablated" result-q1-ablated.json
+  --arm agent-ci "$ARMS/agent-ci" result-q1-agent-ci.json \
+  --arm full-gate "$ARMS/full-gate" result-q1-full-gate.json
 ```
 
 `--revision` and `--modified` are as for `gate_record.py`. Each `--arm` is
-`NAME DIR RESULT`: `with-skill` or `ablated`, the TMPDIR `run-full.sh` gave
+`NAME DIR RESULT`: an arm of "Arms", the TMPDIR `run-full.sh` gave
 that arm's caliper run, and that run's result file.
 
 **Why the arm is exact.** The arm is the caliper run, and the run is the
@@ -532,8 +600,8 @@ The report checks the record rather than trusting that: it refuses (exit 2)
 a record whose `home` is not `DIR/<attempt>/.assistant` (a record moved from
 another folder), and a record a hook wrote anywhere else is not in the
 folder, so it shows as a missing record. It also refuses a result whose
-`run.ablated` is not the arm's (`[]` for `with-skill`, `["assistant"]` for
-`ablated`), a record whose key that run did not save, or more records than
+`run.ablated` is not the arm's (`["assistant"]` for `agent-ci`, `[]` for
+`full-gate`), a schema 5 record whose `arm` is not the arm, a record whose key that run did not save, or more records than
 it saved attempts, when that run was not interrupted, two records naming
 one key, one `DIR` for two arms, an arm unknown or named twice, a
 missing `DIR/caliper-q1-gate`, or an unreadable result or one that saves a

@@ -378,7 +378,7 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	_, rawOut, _ := a.instrument(append(rev.args(), "--records", edited, a.name())...)
 	want(t, "decode", json.Unmarshal([]byte(rawOut), &raw), nil)
 	want(t, "schema 1 stage_execution, exactly", raw.Attempts[0].StageExecution, map[string]any{"verdict": "not measured"})
-	for _, unknown := range []any{5, true} { // JSON true is not schema 1
+	for _, unknown := range []any{6, true} { // JSON true is not schema 1
 		j = judgeEdit(func(rec map[string]any) { rec["schema"] = unknown })
 		wantJudged(t, j, "", "success")
 		wantStage(t, j, "cannot tell")
@@ -692,7 +692,8 @@ func TestStageFoldsAnUnreadRunBesideACompletedReviewAsTrouble(t *testing.T) {
 }
 
 // TestStageReadsARunHeldAtRebaseAsReviewNotReached is row 10: main gains a
-// commit that conflicts with the branch, and with no automatic rebase round
+// commit that conflicts with the branch (fetched into the remote, as a colleague's
+// landing is, so the attempt's CI hook never sees it), and with no automatic rebase round
 // (fix_rounds.rebase 0, so no fixer runs) the run is held at its rebase. It
 // has a checkpoint, its position is before review, and the review log is
 // unwritten: stages executed, review not executed.
@@ -702,7 +703,7 @@ func TestStageReadsARunHeldAtRebaseAsReviewNotReached(t *testing.T) {
 	a.serve()
 	if code, _, errs := a.run(a.checkout, "sh", "-c", `f=$(git diff --name-only main feature/unlimited | head -n 1) && [ -n "$f" ]`+
 		` && git checkout -q main && echo 'main moved this line' > "$f" && git add -- "$f"`+
-		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm conflicting && git push -q ../remote.git main && git checkout -q feature/unlimited`); code != 0 {
+		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm conflicting && git --git-dir=../remote.git fetch -q "$PWD" main:main && git checkout -q feature/unlimited`); code != 0 {
 		t.Fatalf("a conflicting commit on main: exit %d\n%s", code, errs)
 	}
 	id := a.startRun()
