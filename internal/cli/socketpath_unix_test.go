@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 )
@@ -77,5 +78,93 @@ func TestServiceStartRefusesAHomeWhoseSocketPathIsTooLong(t *testing.T) {
 	}
 	if status.Running || !strings.Contains(status.Detail, named) {
 		t.Fatalf("status = %+v, want not running with a detail naming %q", status, named)
+	}
+}
+
+// TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials holds the
+// check, the bind and every later dial to one string when the home is named
+// through a symbolic link (#946): the limit is on the path a local socket is
+// bound and dialed at, and each process spells that path from the home as
+// internal/home opens it. A root not yet created under a short link to a long
+// directory, and an existing root that is a short link to one, are refused
+// before anything is launched, naming the long path every later command
+// would dial; before, the first started a service at the short name that no
+// later command could reach. A long link to a short directory is not refused,
+// and its service starts and stops, because what is bound and dialed is the
+// short path it resolves to.
+func TestTheSocketPathAStartChecksIsTheOneEveryLaterCommandDials(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	cli.AwaitReadinessUntilTheTestsDeadline(t)
+	limit := map[string]int{"darwin": 103, "linux": 107}[runtime.GOOS]
+	base, err := standin.TempDir("sl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	if base, err = filepath.EvalSymlinks(base); err != nil {
+		t.Fatal(err)
+	}
+	// padded is a directory under base whose name brings dir+leaf to n bytes.
+	padded := func(name string, leaf string, n int) string {
+		pad := n - len(base) - len("/") - len(leaf)
+		if pad < 1 {
+			t.Fatalf("%s leaves no room for a %d-byte path", base, n)
+		}
+		return filepath.Join(base, name+strings.Repeat("l", pad-len(name)))
+	}
+	link := func(target, name string) string {
+		at := filepath.Join(base, name)
+		if err := os.Symlink(target, at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	refused := func(name, given, dialed string) {
+		t.Helper()
+		h, err := home.Open(given)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { endServicesOf(t, h) })
+		if len(given)+len("/socket") > limit {
+			t.Fatalf("%s: the name given, %s, is itself too long to show anything", name, given)
+		}
+		named := fmt.Sprintf("%s is %d bytes, and this platform allows at most %d", dialed, len(dialed), limit)
+		got := runArgs(t, "", "--home", given, "service", "start")
+		if got.code == machine.ExitOK || !strings.Contains(got.stderr, named) {
+			t.Fatalf("%s: start exited %s, want a refusal naming %q:\n%s%s", name, got.code, named, got.stdout, got.stderr)
+		}
+	}
+
+	long := padded("a", "/h/socket", limit+1)
+	if err := os.MkdirAll(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	refused("a root not yet created under a short link", filepath.Join(link(long, "s"), "h"), filepath.Join(long, "h", "socket"))
+
+	existing := padded("b", "/socket", limit+1)
+	if err := os.MkdirAll(existing, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	refused("an existing root that is a short link", link(existing, "e"), filepath.Join(existing, "socket"))
+
+	short := filepath.Join(base, "t")
+	if err := os.MkdirAll(short, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	longLink := link(short, filepath.Base(padded("k", "/socket", limit+1)))
+	h, err := home.Open(longLink)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { endServicesOf(t, h) })
+	if len(longLink)+len("/socket") <= limit || h.Socket() != filepath.Join(short, "socket") {
+		t.Fatalf("the long link %s opens as %s, want a name over the limit resolving to %s", longLink, h.Root(), short)
+	}
+	if got := runArgs(t, "", "--home", longLink, "service", "start"); got.code != machine.ExitOK {
+		t.Fatalf("a long link to a short home did not start: exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if got := runArgs(t, "", "--home", longLink, "service", "stop"); got.code != machine.ExitOK {
+		t.Fatalf("stopping it exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 }

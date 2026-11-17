@@ -3,6 +3,7 @@ package home
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -61,18 +62,31 @@ func Resolve(lookup func(string) string) (string, error) {
 // to exist, because a command that reports on a home that was never created
 // has to be able to say so rather than fail before it can.
 //
-// Symbolic links in a root that exists are resolved, so two names for one
-// directory answer as one home rather than as two. A root that does not exist
-// is cleaned and used as it stands, because there is nothing to resolve.
+// Symbolic links are resolved in the longest part of the root that exists,
+// and the rest, which does not exist yet, is appended as it stands. Two names
+// for one directory therefore answer as one home rather than as two, and a
+// root opened before it is created names the same home, with the same
+// paths, as it does once it exists. The local socket depends on that: its
+// path's length is checked, bound and dialed as one string, so a first start
+// on a root not yet created must spell the path every later command will.
+// A part that cannot be read for any reason other than not existing leaves
+// the root cleaned and otherwise as given.
 func Open(root string) (*Home, error) {
 	if !filepath.IsAbs(root) {
 		return nil, fmt.Errorf("%w: %q", ErrRelativeRoot, root)
 	}
 	cleaned := filepath.Clean(root)
-	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
-		cleaned = resolved
+	for dir, rest := cleaned, ""; ; {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return &Home{root: filepath.Join(resolved, rest)}, nil
+		}
+		parent := filepath.Dir(dir)
+		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
+			return &Home{root: cleaned}, nil
+		}
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
 	}
-	return &Home{root: cleaned}, nil
 }
 
 // Root is the absolute path of the home root.
