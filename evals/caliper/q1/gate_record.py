@@ -12,7 +12,7 @@ harness built (`go version -m`). ATTEMPT is an attempt root's basename; every
 one named is reported, so a record file that is missing is reported as the
 harness failing, never dropped.
 """
-import argparse, collections, json, os, re, subprocess, sys
+import argparse, collections, json, os, re, sys
 
 INDETERMINATE = "indeterminate"
 STATES = ("ran", "started-not-finished", "reached-no-stage", "never-reached", "no-home", "no-checkout", INDETERMINATE)
@@ -25,7 +25,8 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # A missing attempt key is gate_by_arms.py's "as run" to judge (#936), not the gate's.
 NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ")
 # 1 predates the stage capture (#926): its stage verdict is not measured. 3 adds the attempt key (#936).
-SCHEMAS = (1, 2, 3)
+# 4 adds head_checks (#941): a run in a record without them is cannot tell.
+SCHEMAS = (1, 2, 3, 4)
 
 # The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
 # to write, onto (gate_observation, cleanup_status). "runs" means valid, with
@@ -58,15 +59,16 @@ def indeterminate(reason):
     return {"validity": INDETERMINATE, "reason": reason}
 
 
-def commit_in(checkout, sha):
-    """Whether sha names a commit in the repository at checkout."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env["GIT_CEILING_DIRECTORIES"] = os.path.dirname(os.path.abspath(checkout))  # never a repository above it (#927)
-    try:
-        return subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"], cwd=checkout, env=env,
-                              stdin=subprocess.DEVNULL, capture_output=True, timeout=60).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+def head_verified(record, checks, rid, head):
+    """Whether cleanup.sh found head a commit of this attempt's checkout for run rid: exactly one
+    head_checks entry names the run, and it carries the record's attempt key, that same sha and
+    is_commit true. Anything else is not verified, and never proof of more than the commit."""
+    key, mine = (record.get("task_id"), record.get("caliper_attempt")), [c for c in checks if c.get("run_id") == rid]
+    if len(mine) != 1 or not isinstance(key[0], str) or not key[0] or type(key[1]) is not int:
         return False
+    c = mine[0]
+    return c.get("task_id") == key[0] and type(c.get("caliper_attempt")) is int and c["caliper_attempt"] == key[1] \
+        and c.get("submitted_head") == head and c.get("is_commit") is True
 
 
 def observe_runs(record, built):
@@ -78,7 +80,9 @@ def observe_runs(record, built):
     runs = doc.get("runs", False) if isinstance(doc, dict) else False  # null is no runs, as cleanup.sh reads it
     if not exited_zero(step) or not isinstance(runs, (list, type(None))):
         return indeterminate("the runs step is not a successful runs document")
-    runs, seen = runs or [], []
+    runs, seen, checks = runs or [], [], record.get("head_checks", [])
+    if not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+        return indeterminate("head_checks is not a list of entries")
     for run in runs:
         build = run.get("build") if isinstance(run, dict) else None
         if not isinstance(build, dict) or not isinstance(run.get("id"), str) or not run["id"]:
@@ -86,8 +90,9 @@ def observe_runs(record, built):
         rid, head = run["id"], run.get("submitted_head")
         if not isinstance(run.get("status"), str) or run["status"] not in STATUSES:
             return indeterminate("run %s: unknown status %r" % (rid, run.get("status")))
-        if not isinstance(head, str) or not HEX40.match(head) or not commit_in(checkout, head):
-            return indeterminate("run %s: submitted_head %r is not a commit in %s" % (rid, head, checkout))
+        if not isinstance(head, str) or not HEX40.match(head) or not head_verified(record, checks, rid, head):
+            return indeterminate("run %s: submitted_head %r has no head check that found it a commit in %s"
+                                 % (rid, head, checkout))
         if build.get("revision") != built["revision"] or build.get("modified") is not built["modified"]:
             return indeterminate("run %s: build.revision %r, build.modified %r is not the built binary's %s, %s" % (
                 rid, build.get("revision"), build.get("modified"), built["revision"], built["modified"]))
@@ -95,6 +100,8 @@ def observe_runs(record, built):
             return indeterminate("run %s: config_digest %r is not a sha256" % (rid, run.get("config_digest")))
         seen.append({"id": rid, "status": run["status"], "submitted_head": head, "config_digest": run["config_digest"],
                      "build": {"revision": build["revision"], "modified": build["modified"]}})
+    if len(checks) != len(runs):
+        return indeterminate("head_checks has %d entries for %d runs" % (len(checks), len(runs)))
     repositories = {r.get("repository_id") if isinstance(r.get("repository_id"), str) else None for r in runs}
     if len(repositories) > 1 or repositories & {None, ""}:
         return indeterminate("the runs name repositories %s, not one" % sorted(map(repr, repositories)))
@@ -252,6 +259,14 @@ def stage_execution(record, observation):
             "trouble": {"unread": states.count(UNREAD), "review_started_not_completed": states.count(RUN_STARTED)}}
 
 
+def unique(pairs):
+    """A JSON object whose keys are all distinct; a repeated key would win last, so it is refused."""
+    keys = [k for k, _ in pairs]
+    if len(set(keys)) != len(keys):
+        raise ValueError("a key appears more than once: %s" % sorted({k for k in keys if keys.count(k) > 1}))
+    return dict(pairs)
+
+
 def no_record(attempt, reason="no record file"):
     """The result for an attempt with no record (file): the harness failed, so
     cannot tell, never "did not run". gate_by_arms.py uses it, with its own
@@ -267,7 +282,7 @@ def judge(attempt, path, built):
     unread = {"status": "failure", "exit": None, "stderr": None}
     try:
         with open(path) as f:
-            record = json.load(f)
+            record = json.load(f, object_pairs_hook=unique)
     except FileNotFoundError:
         return no_record(attempt)
     except (OSError, ValueError) as e:

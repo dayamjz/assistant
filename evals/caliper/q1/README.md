@@ -13,9 +13,12 @@ No spec or grader here runs in `make check` or CI. Graders are checked by
 `verify_graders.py` before spending agent runs. The exceptions are
 `cleanup_test.go`, a Go test of `cleanup.sh`, `gate_record_test.go`, a Go
 test of `gate_record.py`, `stage_test.go`, a Go test of both on stage
-evidence, and `gate_by_arms_test.go`, a Go test of `gate_by_arms.py`, which
-`go test ./...` runs against the built binary (see "Gate record", "Gate
-record instrument", "Stage execution" and "Gate verdicts by arm" below).
+evidence, `gate_by_arms_test.go`, a Go test of `gate_by_arms.py`, and
+`runfull_test.go`, a Go test of `run-full.sh` with a stand-in caliper that
+makes one attempt root as caliper does and asks no model, which
+`go test ./...` runs against the built binary (see "How to run", "Gate
+record", "Gate record instrument", "Stage execution" and "Gate verdicts by
+arm" below).
 
 ## How to run
 
@@ -43,8 +46,18 @@ MODEL=claude-code:claude-sonnet-4-5
 `--judge-model`, writes `result-q1-with-skill.json` and
 `result-q1-ablated.json`, then `caliper compare`, then `gate_by_arms.py`
 (see "Gate verdicts by arm"). Each arm runs under a TMPDIR of its own,
-`$ARMS/<arm>` in a fresh `caliper-q1-arms.XXXXXX` directory whose path it
-prints. `Q1_K` sets k for both arms (default 5). It refuses before graders
+`$ARMS/<arm>` in a fresh `q1-arms.XXXXXX` directory under `Q1_ARMS_ROOT`
+(default `/tmp`, never the operator's `$TMPDIR`), whose path it prints. An
+attempt's service listens on `<attempt root>/.assistant/socket`, and a unix
+socket path has a short length limit: under macOS's `$TMPDIR` no with-skill
+service could bind, so every gate-using record read indeterminate (#941).
+Before any attempt, after the graders, it starts and stops a service at a
+home as deep as the deepest attempt's (caliper's `caliper-XXXXXXXX` root in
+the `with-skill` arm), and refuses (exit 2) when that service does not
+answer, keeping that home and its log under `$ARMS`. Then set
+`Q1_ARMS_ROOT` to a shorter directory. The probe proves the depth with this
+binary on this machine and nothing else. `Q1_K` sets k for both arms
+(default 5). It refuses before graders
 when the `caliper` on PATH, asked through the interpreter its script names,
 is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
 attempt key; "As run"), when Claude is not logged in and
@@ -66,10 +79,37 @@ moves, note it in the full-run write-up.
 
 **Code host.** `../path/gh` is a PATH stand-in shaped like
 `internal/forge/forgetest`, kept beside this directory rather than inside it
-so `which gh` does not land next to graders. `build-subject.sh` sets a global
-`url.<local-remote>.insteadOf` for `https://github.com/dayamjz/caliper-q1.git`
-(and records that URL as origin), and plants `no_ci` on the trusted document
-so an empty check rollup is green. The stand-in's
+so `which gh` does not land next to graders. `build-subject.sh` records
+`https://github.com/dayamjz/caliper-q1.git` as origin and plants `no_ci` on
+the trusted document so an empty check rollup is green.
+
+**Subject remote** (#941). `build-subject.sh` rewrites that URL to the local
+bare remote with `url.<local-remote>.insteadOf`, in two places:
+
+- **The agent's home**, `<attempt root>/.gitconfig`. Caliper 0.19.0 runs the
+  agent with `HOME` set to the attempt root and only `PATH`, `LANG`,
+  `LC_ALL`, `TERM`, `TMPDIR` and `CLAUDE_CODE_OAUTH_TOKEN` beside it
+  (`caliper/harness/base.py` `_isolated_env`, `claude_code.py`), so the
+  agent's git reads that file and no `GIT_CONFIG_GLOBAL`. The service does
+  not read the rewrite: `assistant init`, which the agent runs, records
+  origin as `git remote get-url` expands it, so the upstream the repository
+  record names, which every run fetches from, is the local remote. So a run
+  has no code host (`no_code_host`): `pr` and `ci` take that path, and the
+  `gh` stand-in is not what a run's pull request goes to. The
+  attempt root is the parent of the hook's
+  `CALIPER_WORKDIR`, and `build-subject.sh` fails without one unless
+  `Q1_AGENT_HOME` names the home instead (`verify_graders.py`). Caliper
+  removes the file with the attempt root.
+- **The hook's global config**, the operator's or `GIT_CONFIG_GLOBAL`, for the
+  hook's own git: hooks run with the caller's whole environment. This is the
+  write a#942 is about, left as it was: it fails where that file is read-only,
+  `cleanup.sh` and `run-full.sh` remove it by URL, and `workers=1` keeps two
+  attempts from racing it. It does not reach the agent.
+
+`TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote` runs the agent with
+caliper's environment and checks that its git takes the rewrite from the
+attempt file alone, that init records the local remote, and that the run the
+service starts resolves its configuration from that remote's main. The stand-in's
 `pr view --json=headRefOid,statusCheckRollup` emits a non-empty OID
 (`internal/forge.GitHub.Checks` refuses an empty one). The shared prompt does
 not coach the stand-in, the rewrite, or an `assistant init` recipe: origin
@@ -91,7 +131,7 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (3; #926's records are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (4; #936's records are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
@@ -123,6 +163,19 @@ directory for the write-up. The record holds:
   on.
   `service_answered` says whether the status call reported the service
   running just before the reads.
+
+**Head checks** (#941). When `runs` answered, `head_checks` is a list with
+one entry per listed run, in the order `runs` listed them: `task_id` and
+`caliper_attempt` (the record's key), `run_id`, `submitted_head`, and
+`is_commit`, whether `git cat-file -e` found that sha a commit in the
+checkout. The check is made here, while the checkout exists, because caliper
+0.19.0 removes the attempt root as soon as this hook returns
+(`caliper/runner.py` `_run_attempt`, `caliper/workdir.py`
+`AttemptWorkdir.__exit__`), and `gate_record.py` runs later. It runs with
+`GIT_CEILING_DIRECTORIES` set to the checkout's parent (#927). A head that
+is not 40 lowercase hex digits, or a git that fails to run or times out,
+gives `is_commit` false. A list rather than an object keyed by run, so a
+repeated entry stays visible rather than one silently replacing another.
 
 **Stage evidence** (#926). When `runs` answered, cleanup reads each listed
 run again, in the order `runs` listed them, before the stop: `stages.<run>`
@@ -250,12 +303,17 @@ A valid row becomes indeterminate when any check fails:
   judges it instead ("Stage execution"). A failed report read is `unread`
   (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
   `ran: true`, where `ran` decides (row 4).
-- **This attempt's record.** `schema` 1, 2 or 3, `attempt` the name asked for, `home`
+- **This attempt's record.** `schema` 1, 2, 3 or 4, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
 - **One repository.** The runs name one `repository_id`, never null.
-- **Each run.** A known `status`. `submitted_head` is a full commit id that
-  names a commit in the attempt's checkout (`git cat-file -e`).
+- **Each run.** A known `status`. `submitted_head` is a full commit id, and
+  exactly one `head_checks` entry names the run, with the record's key (a
+  task id that is a non-empty string and an integer attempt number), that
+  same sha, and `is_commit` JSON `true`. There is one entry per run, and
+  `head_checks` is a list of objects. A record without `head_checks` (schema
+  3 and before) has no check for any run, so a run in it is indeterminate.
+  The judge does not open the checkout.
   `build.revision` equals `--revision` and `build.modified` equals
   `--modified`. `config_digest` is 64 lowercase hex
   digits, the sha256 shape this binary writes.
@@ -294,12 +352,18 @@ Limits:
   its first stage, for example under a trusted configuration it cannot
   parse, ends `terminated` and counts as `ran`. Whether a stage executed is
   the third field, `stage_execution` (see "Stage execution"), never a status.
-- **The submitted_head check stops at the checkout** (#927). git is run with
+- **The head check stops at the checkout** (#927). cleanup.sh runs git with
   `GIT_CEILING_DIRECTORIES` set to the checkout's parent, so a checkout whose
   own repository is gone does not find a repository above it, and a commit
   of an enclosing repository does not pass.
-- **The checkout must still exist.** The `submitted_head` check reads the
-  attempt's checkout, so a run whose checkout is gone is indeterminate.
+- **The head check is what capture saw.** It is made while the checkout
+  exists and read later from the record, so a checkout changed or removed
+  after cleanup changes nothing, and a record edited to claim a check passes
+  like any other edited row (see "Consistency checks, not attestation"). A
+  verified head says only that the sha was a commit of the checkout: the
+  run's other checks, and the stage verdict, are judged as before.
+- **A repeated key refuses the record.** A record whose JSON repeats a key
+  in any object is unreadable, so the second copy cannot silently win.
 - **One checkout's runs.** `runs` sees only the checkout's repository (see
   "Gate record").
 
