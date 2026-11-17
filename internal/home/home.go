@@ -3,6 +3,7 @@ package home
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -27,9 +28,12 @@ var ErrRelativeRoot = errors.New("home: the home root must be an absolute path")
 
 // Home is one home root and every path derived from it.
 //
-// It is immutable and safe for concurrent use. Every accessor is a path
-// computed from the root, so asking where something is neither touches the
-// filesystem nor creates anything.
+// It is immutable and safe for concurrent use. Every accessor but one is a
+// path computed from the root, so asking where something is neither touches
+// the filesystem nor creates anything. The one is SocketPaths, which reads
+// the filesystem to resolve the symbolic links in the part of the root that
+// exists, so its answer can change when such a link is retargeted or that
+// part is created; it creates nothing either.
 type Home struct {
 	root string
 }
@@ -87,6 +91,43 @@ func (h *Home) Database() string { return filepath.Join(h.root, "state.db") }
 
 // Socket is the local endpoint the service binds and the command line dials.
 func (h *Home) Socket() string { return filepath.Join(h.root, "socket") }
+
+// SocketPaths is every spelling of Socket a command may bind or dial for
+// this home: Socket itself, and, when it differs, the Socket a command that
+// opens this root once it exists will use. Open resolves symbolic links only
+// in a root that exists, so a first start on a root not yet created under a
+// link binds the first spelling and every later command dials the second.
+// The second resolves the links in the part of the root that exists now and
+// appends the rest as it stands; a part that cannot be read for a reason
+// other than not existing leaves the root as it is. A check of the socket
+// path's length checks each of them.
+//
+// Unlike every other accessor here, it reads the filesystem: it resolves
+// those links when it is called, so a link retargeted, or a part of the root
+// created, between two calls can change its answer. It creates nothing.
+func (h *Home) SocketPaths() []string {
+	later := (&Home{root: resolveExisting(h.root)}).Socket()
+	if later == h.Socket() {
+		return []string{later}
+	}
+	return []string{h.Socket(), later}
+}
+
+// resolveExisting is path with the symbolic links in its longest existing
+// part resolved and the rest appended as it stands.
+func resolveExisting(path string) string {
+	for dir, rest := path, ""; ; {
+		resolved, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			return filepath.Join(resolved, rest)
+		}
+		parent := filepath.Dir(dir)
+		if !errors.Is(err, fs.ErrNotExist) || parent == dir {
+			return path
+		}
+		dir, rest = parent, filepath.Join(filepath.Base(dir), rest)
+	}
+}
 
 // LockFile is the file the home's exclusive lock is taken on.
 func (h *Home) LockFile() string { return filepath.Join(h.root, "lock") }

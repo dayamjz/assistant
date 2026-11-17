@@ -598,7 +598,7 @@ func reportStatus(ctx context.Context, in *invocation) (any, error) {
 func (in *invocation) localStatus(ctx context.Context, working string, cause error) machine.Status {
 	status := machine.Status{
 		Home:    in.home.Root(),
-		Service: machine.Service{Socket: in.home.Socket(), Detail: cause.Error()},
+		Service: in.serviceDown(cause),
 		Branch:  &machine.Branch{WorkingPath: working},
 		Detail:  "the service is not running, so the repository, gate, branch, and run state it owns were not read",
 	}

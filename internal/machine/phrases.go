@@ -1308,6 +1308,13 @@ var (
 		Consequence: "Nothing is validated or watched until one is.",
 		Decision:    "Run assistant service start.",
 	}
+	// PhraseServiceCannotServe is the row for a home no service can be up
+	// for, because its socket path is too long for a local socket.
+	PhraseServiceCannotServe = Phrase{
+		Outcome:     "No service can be up for this home, because its path is too long for this computer to serve it from.",
+		Consequence: "Nothing is validated or watched until a home with a shorter path is used.",
+		Decision:    "Choose a home with a shorter path, with --home or ASSISTANT_HOME; assistant service start names the limit.",
+	}
 	// PhraseGated is the row for a working copy bound to a gate.
 	PhraseGated = Phrase{
 		Outcome:     "This checkout sends its changes through a gate.",
@@ -1811,6 +1818,15 @@ var (
 		Consequence: "Nothing is validated or watched until a service is up.",
 		Decision:    "Correct the file as the refusal after this says, then run assistant service start.",
 	}
+	// PhraseStartSocketPathTooLong is a start refused before anything was
+	// launched, because the home's socket path is longer than a local socket
+	// on this platform allows. The refusal, naming the path, its length and
+	// the limit, is printed after it.
+	PhraseStartSocketPathTooLong = Phrase{
+		Outcome:     "No service was brought up, because this home's path is too long for this computer to serve it from.",
+		Consequence: "Nothing is validated or watched until a service is up.",
+		Decision:    "Choose a home with a shorter path, within the limit the refusal after this names, with --home or ASSISTANT_HOME, then run assistant service start.",
+	}
 )
 
 // LifecyclePhrase is what a person reads about a request to stop or restart
@@ -2135,7 +2151,7 @@ func TablePhrases() []Phrase {
 	out = append(out, keptAnswerRows()...)
 	out = append(out, cleanupRows()...)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseNoticeQueued, PhraseActivity, PhraseUnfamiliarUpdate)
-	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
+	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseServiceCannotServe, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
 	for _, name := range CheckNames() {
 		if name == CheckUpstream {
@@ -2148,7 +2164,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}),
-		LifecyclePhrase(Lifecycle{ConfigurationRefused: true}), PhraseStartConfigurationRefused)
+		LifecyclePhrase(Lifecycle{ConfigurationRefused: true}), PhraseStartConfigurationRefused, PhraseStartSocketPathTooLong)
 	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind,
 		phraseCancelUnknown, phraseCancelEnded)
 	out = append(out, InitPhrase(Init{Created: true}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))

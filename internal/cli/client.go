@@ -20,7 +20,15 @@ var errNoService = errors.New("the background service is not running")
 // connect dials the home's socket. A home whose service is not running gives
 // errNoService, which every verb that needs one reports with the command that
 // starts it.
+//
+// A home whose socket path is too long for a local socket on any spelling a
+// command may dial is refused before any dial, with ipc's refusal under
+// errNoService, so the reason is the length and not a missing socket at the
+// spelling this process holds.
 func (in *invocation) connect(ctx context.Context) (*ipc.Client, error) {
+	if err := in.socketRefusal(); err != nil {
+		return nil, fmt.Errorf("%w at %s: %w", errNoService, in.home.Socket(), err)
+	}
 	client, err := ipc.Dial(ctx, in.home.Socket(), ipc.ClientConfig{Marker: ipc.LocalMarker(in.env.Getenv)})
 	if err != nil {
 		return nil, fmt.Errorf("%w at %s: %w", errNoService, in.home.Socket(), err)
@@ -63,9 +71,16 @@ func (in *invocation) serviceHealth(ctx context.Context) (machine.Health, error)
 func (in *invocation) serviceState(ctx context.Context) machine.Service {
 	health, err := in.serviceHealth(ctx)
 	if err != nil {
-		return machine.Service{Socket: in.home.Socket(), Detail: err.Error()}
+		return in.serviceDown(err)
 	}
 	return in.serviceStateFrom(health)
+}
+
+// serviceDown is what is known about a service that did not answer, for
+// cause, so every answer that reports one says the same.
+func (in *invocation) serviceDown(cause error) machine.Service {
+	return machine.Service{Socket: in.home.Socket(), Detail: cause.Error(),
+		SocketPathTooLong: errors.Is(cause, ipc.ErrSocketPathTooLong)}
 }
 
 // serviceStateFrom is what a readiness answer says about the service, so the
@@ -107,6 +122,8 @@ var nextActions = []struct {
 	// action is what to do about it.
 	action string
 }{
+	{func(err error) bool { return errors.Is(err, ipc.ErrSocketPathTooLong) },
+		"No service can serve this home where it is: choose a home with a shorter path, with --home or ASSISTANT_HOME."},
 	{func(err error) bool { return errors.Is(err, errNoService) },
 		"Start it with: assistant service start"},
 	{func(err error) bool { return errors.Is(err, ipc.ErrContained) },

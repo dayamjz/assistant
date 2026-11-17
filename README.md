@@ -96,6 +96,8 @@ git push assistant YOUR_BRANCH
 assistant watch
 ```
 
+The home (`~/.assistant` unless `--home` or `ASSISTANT_HOME` names another) needs a short enough path for the service's local socket; see [Choosing where the home lives](docs/operators.md#choosing-where-the-home-lives).
+
 Validation covers only committed changes pushed to the `assistant` remote; ordinary pushes to `origin` are **not gated** by Assistant. By default, test, document, and lint commands come from the trusted `assistant.json` on the default branch; without commands, those stages may hold. An operator can explicitly opt out of that default using the trusted-only `allow_pushed_commands` setting, which permits commands from a pushed branch. `init` can suggest commands but does not make an unmerged local config trusted. Assistant does not replace code-host CI or branch protection.
 
 | Command | What it helps you do |
