@@ -16,7 +16,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
-	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -177,44 +176,53 @@ subprocess.run = run
 `, match, nth))
 }
 
-// scriptAgent has the service's agent be the scripted stand-in: the claude
-// shim ahead of the exit-1 stubs on PATH, and the home's configuration naming
-// it with the stand-in's arguments, with no fix role, as
-// journey.WriteConfiguration writes it, with the keys in more beside them.
-// It is called before serve.
+// scriptAgent has every Claude launch of the attempt be the scripted stand-in
+// (claudeStandIn): the service agent, which auto resolves to claude, and the
+// review and fix roles setup pins to it (README "Gate roles"). Any keys in more
+// are added to the home's configuration beside the pin (configure). It is
+// called before serve.
 func (a *attempt) scriptAgent(script standin.Script, more ...map[string]any) *standin.Agent {
 	a.t.Helper()
-	agent := standin.New(a.t, script)
-	shims, err := journey.Shims()
-	if err != nil {
-		a.t.Fatal(err)
-	}
-	document := map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
-		"roles": map[string]any{"fix": map[string]any{}}}
 	for _, m := range more {
-		for k, v := range m {
-			document[k] = v
-		}
+		a.configure(m)
 	}
-	a.configure(document)
-	a.path = shims + ":" + a.path
-	return agent
+	return a.claudeStandIn(script)
 }
 
-// configure writes the home's configuration document, through internal/home
-// so no home path is spelled here. It is called before serve.
+// configure adds document's keys to the home's configuration once setup has
+// written the gate's roles into it: serve appends each key as one line whose
+// value is JSON, which YAML reads as a flow value. A key the pin already sets
+// is a duplicate the service refuses to start on. It is called before serve.
 func (a *attempt) configure(document map[string]any) {
 	a.t.Helper()
+	for k, v := range document {
+		body, err := json.Marshal(v)
+		if err != nil {
+			a.t.Fatal(err)
+		}
+		a.config = append(a.config, k+": "+string(body)+"\n")
+	}
+}
+
+// writeConfig appends what configure was given to the configuration setup
+// wrote, through internal/home so no home path is spelled here. A setup that
+// wrote none (main before the pin) gets a file holding these keys alone.
+func (a *attempt) writeConfig() {
+	a.t.Helper()
+	if len(a.config) == 0 {
+		return
+	}
 	h, err := home.Open(a.home)
 	if err == nil {
 		err = h.Create()
 	}
-	var body []byte
+	var f *os.File
 	if err == nil {
-		body, err = json.Marshal(document)
+		f, err = os.OpenFile(h.ConfigFile(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 	}
 	if err == nil {
-		err = os.WriteFile(h.ConfigFile(), append(body, '\n'), 0o600)
+		_, err = f.WriteString(strings.Join(a.config, ""))
+		err = errors.Join(err, f.Close())
 	}
 	if err != nil {
 		a.t.Fatal(err)

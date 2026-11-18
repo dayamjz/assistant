@@ -81,10 +81,26 @@ nothing runs or reports under its name. The CI hook is enforced at the
 remote, like a required check, while the full gate is reached by the agent
 through its skill; the write-up names that asymmetry. `build-subject.sh`
 refuses to set up without `Q1_ARM`, and `cleanup.sh` records it as the
-record's `arm`. Whether to pin the gate's review and fix roles in the
-subject's `assistant.json` is the owner's open question (a#896 Q2): until it
-is answered the fix role is the configuration default, and a write-up says
-which agent it resolved to.
+record's `arm`.
+
+**Gate roles** (owner ruling, ft#545; temporary). The gate's review and fix
+roles are pinned to Claude, with no fallback. The service reads roles from
+its home's `config.yaml` only, and refuses a run whose repository roles table
+differs (`internal/service`'s `resolveRunDocuments`), so the pin cannot go in
+the subject's `assistant.json`. Without it the fix role is the default,
+`cursor`, and with no Cursor CLI every gated run is refused with "the fix role
+names cursor, which cannot start". `build-subject.sh` copies
+`subject-home-config.yaml` to `<attempt root>/.assistant/config.yaml`, the
+home the agent's `assistant` defaults to under caliper's `HOME`, in every
+arm, and refuses if that home already exists. The pin names no model, so each
+role runs the Claude CLI's own default. `no-home` keeps its meaning: a home
+holding only that file, byte for byte, is read as `no-home` (see "Gate
+record"): a home the product makes holds more than that file, since
+`internal/home`'s `Create` makes the home's directories.
+`TestSetupHomeReadsAsNoHome` checks that the records match and that a home
+the product made, or an edited copy, does not read as `no-home`.
+`TestSetupPinsTheGateReviewAndFixToClaude` shows the refusal without the pin
+and both roles running on Claude with it.
 
 **CI** (row 11). With no code host (a#950), CI is the subject's own
 `commands.test` and `commands.lint`, `go test ./...` and `go vet ./...`, run
@@ -192,7 +208,8 @@ directory for the write-up. The record holds:
   naming the patched version, so the hook exits 1: a stock caliper is loud,
   never a silent blank.
 - `outcome`, exactly one of:
-  - `no-home`: the home is missing. Nothing is read or stopped. This means no
+  - `no-home`: the home is missing, or holds only the configuration setup
+    wrote, unchanged ("Gate roles"). Nothing is read or stopped. This means no
     persisted home was observed. It is not proof that the gate never started.
   - `no-checkout`: the home exists and the checkout does not.
   - `error`: `runs` exited non-zero or did not answer with a runs document,
