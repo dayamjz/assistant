@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -25,12 +26,11 @@ import (
 const operatorMarker = "[q1test]\n\tmarker = operator\n"
 
 // operatorConfig drops GIT_CONFIG_GLOBAL from the run's environment and writes
-// the operator's global config: with homeManager, as a home-manager install
-// does, a link at ~/.config/git/config into a read-only directory (the Mac
-// Studio's, where every setup hook's write failed); otherwise a 0444
-// ~/.gitconfig in a writable HOME, which git rewrites in place, so only the
-// bytes tell. It returns the config's paths for snapshot.
-func (r *fullRun) operatorConfig(homeManager bool, content string) []string {
+// the operator's global config as a 0444 file at rel under the run's HOME:
+// ~/.config/git/config is where the Mac Studio's is. HOME itself stays
+// writable, so git can still replace the file rather than refuse to write it;
+// snapshot's inode is what shows that it did. It returns the file's path.
+func (r *fullRun) operatorConfig(rel, content string) []string {
 	r.t.Helper()
 	env := r.env[:0:0]
 	for _, kv := range r.env {
@@ -39,29 +39,14 @@ func (r *fullRun) operatorConfig(homeManager bool, content string) []string {
 		}
 	}
 	r.env = env
-	home := filepath.Join(r.root, "home")
-	if !homeManager {
-		must(r.t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(content), 0o444))
-		return []string{filepath.Join(home, ".gitconfig")}
-	}
-	store, link := filepath.Join(r.root, "store"), filepath.Join(home, ".config", "git", "config")
-	must(r.t, os.MkdirAll(store, 0o755))
-	must(r.t, os.MkdirAll(filepath.Dir(link), 0o755))
-	must(r.t, os.WriteFile(filepath.Join(store, "git-config"), []byte(content), 0o444))
-	takeWritesOff(r.t, store)
-	must(r.t, os.Symlink(filepath.Join(store, "git-config"), link))
-	return []string{link, filepath.Join(store, "git-config")}
+	file := filepath.Join(r.root, "home", rel)
+	must(r.t, os.MkdirAll(filepath.Dir(file), 0o755))
+	must(r.t, os.WriteFile(file, []byte(content), 0o444))
+	return []string{file}
 }
 
-// takeWritesOff makes dir, a directory, read-only until the test ends, when
-// its write permission is put back so armDir's RemoveAll can empty it.
-func takeWritesOff(t *testing.T, dir string) {
-	t.Helper()
-	must(t, os.Chmod(dir, 0o555))
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
-}
-
-// snapshot is each path's mode, link target and bytes.
+// snapshot is each path's inode, mode, link target and bytes: a file git
+// replaced has a new inode even when its bytes and mode came back.
 func snapshot(t *testing.T, paths []string) []string {
 	t.Helper()
 	var got []string
@@ -71,7 +56,7 @@ func snapshot(t *testing.T, paths []string) []string {
 		target, _ := os.Readlink(p)
 		data, err := os.ReadFile(p)
 		must(t, err)
-		got = append(got, fmt.Sprintf("%s %v -> %q: %q", p, info.Mode(), target, data))
+		got = append(got, fmt.Sprintf("%s inode %d %v -> %q: %q", p, info.Sys().(*syscall.Stat_t).Ino, info.Mode(), target, data))
 	}
 	return got
 }
@@ -112,16 +97,20 @@ func (r *fullRun) wantScratchGone() {
 	}
 }
 
-// TestRunFullLeavesAReadOnlyGlobalConfigAlone is a#942's reproduction: with
-// the operator's global config a link into a read-only directory, every
-// setup hook's git config --global failed, so no attempt ran (the a#939 proof
-// run). Now both arms' setup succeeds, its git reads the operator's config
-// through the run's scratch file and takes the subject rewrite from it, the
-// operator's config is byte for byte as it was, and the scratch file is gone.
+// TestRunFullLeavesAReadOnlyGlobalConfigAlone is a#942 with the operator's
+// global config a read-only (0444) ~/.config/git/config. Every setup hook's
+// git config --global wrote that file: git replaced it (a new inode, its bytes
+// back after cleanup). Where the file cannot be replaced, as behind the Mac
+// Studio's read-only link, the write failed and no attempt ran (the a#939
+// proof run); that shape needs a read-only directory, which this test does
+// not make. Now both arms' setup succeeds, its git reads the operator's
+// config through the run's scratch file and takes the subject rewrite from
+// it, the operator's file is the same file with the same bytes, and the
+// scratch file is gone.
 func TestRunFullLeavesAReadOnlyGlobalConfigAlone(t *testing.T) {
 	r := newFullRun(t)
 	r.standInGraders()
-	real := r.operatorConfig(true, operatorMarker)
+	real := r.operatorConfig(filepath.Join(".config", "git", "config"), operatorMarker)
 	before := snapshot(t, real)
 	hookFile := filepath.Join(r.root, "hooks.jsonl")
 	r.run("Q1_TEST_HOOK=" + hookFile)
@@ -149,7 +138,7 @@ func TestRunFullLeavesTheGlobalConfigAloneWhenARunStops(t *testing.T) {
 		t.Run(stop, func(t *testing.T) {
 			r := newFullRun(t)
 			r.standInGraders()
-			real := r.operatorConfig(false, operatorMarker)
+			real := r.operatorConfig(".gitconfig", operatorMarker)
 			before := snapshot(t, real)
 			hookFile := filepath.Join(r.root, "hooks.jsonl")
 			r.run("Q1_TEST_HOOK="+hookFile, "Q1_TEST_AFTER_SETUP="+stop)
@@ -179,7 +168,7 @@ func TestRunFullRefusesARewriteInTheOperatorsConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			r := newFullRun(t)
 			r.standInGraders()
-			real := r.operatorConfig(false, c.content)
+			real := r.operatorConfig(".gitconfig", c.content)
 			before := snapshot(t, real)
 			r.run()
 			if r.code != 2 || !strings.Contains(r.stderr, c.says) {

@@ -283,10 +283,6 @@ func WellformedWrites(exceptions []WriteException) error {
 // reviewer can see a write that is not that.
 var WriteExceptions = []WriteException{
 	{
-		File: "evals/caliper/q1/runfull_gitconfig_test.go", Function: "takeWritesOff",
-		Why: "Takes the write permission off the directory a read-only global git config links into, and puts it back; the modes are a directory's.",
-	},
-	{
 		File: "internal/agents/standin/tmux.go", Function: "SocketDir",
 		Why: "Makes a test's socket directory owner-only; the mode is a directory's.",
 	},
