@@ -40,6 +40,10 @@ type judged struct {
 		Exit, Stderr, Down any
 	} `json:"cleanup_status"`
 	StageExecution stageVerdict `json:"stage_execution"`
+	CIExecution    struct {
+		Verdict, Reason string
+		Pushes          map[string]int
+	} `json:"ci_execution"`
 }
 
 type report struct {
@@ -208,10 +212,15 @@ func TestGateRecordReadsNoRunAsNeverReached(t *testing.T) {
 
 // breakTrustedConfig publishes an assistant.json on main that is not JSON, so
 // the gate refuses the next run before any stage under P7.
+//
+// The broken main is fetched into the remote rather than pushed, as another
+// person's landing would arrive: it is not the attempt's push, so the remote's
+// CI hook (README "CI") is not asked to check a document that cannot parse.
 func (a *attempt) breakTrustedConfig() {
 	a.t.Helper()
 	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && printf '{' > assistant.json && git add assistant.json"+
-		" && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm broken && git push -q origin main && git checkout -q feature/unlimited"); code != 0 {
+		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm broken && git --git-dir=../remote.git fetch -q "$PWD" main:main`+
+		" && git checkout -q feature/unlimited"); code != 0 {
 		a.t.Fatalf("breaking the trusted configuration: exit %d\n%s", code, errs)
 	}
 }

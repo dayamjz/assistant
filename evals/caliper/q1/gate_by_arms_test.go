@@ -199,14 +199,14 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 	a.serve()
 	id := a.startRun()
 	a.cleanup()
-	b := newAttemptIn(t, ablated, "caliper-b1")
+	b := newAttemptIn(t, ablated, "caliper-b1").inArm("agent-ci")
 	b.cleanup()
 	rev := a.built()
-	args := []string{"--arm", "with-skill", withSkill, result(t, withSkill, "result-q1-with-skill.json", 2),
-		"--arm", "ablated", ablated, result(t, ablated, "result-q1-ablated.json", 1)}
+	args := []string{"--arm", "full-gate", withSkill, result(t, withSkill, "result-q1-with-skill.json", 2),
+		"--arm", "agent-ci", ablated, result(t, ablated, "result-q1-ablated.json", 1)}
 	r := a.arms(rev, args...)
 
-	ws, ab := r.AsAssigned["with-skill"], r.AsAssigned["ablated"]
+	ws, ab := r.AsAssigned["full-gate"], r.AsAssigned["agent-ci"]
 	want(t, "arms", len(r.AsAssigned), 2)
 	want(t, "with-skill attempts, records, missing", []int{ws.CaliperAttempts, ws.Records, ws.MissingRecords}, []int{2, 1, 1})
 	want(t, "with-skill gate", []int{ws.Counts.GateObservation["ran"], ws.Counts.GateObservation["indeterminate"]}, []int{1, 1})
@@ -214,19 +214,19 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 		t.Fatalf("with-skill attempts = %+v, want the record and the missing one", ws.Attempts)
 	}
 	got := ws.Attempts[0]
-	want(t, "attempt, arm, state", []string{got.Attempt, got.Arm, got.GateObservation.State}, []string{a.name(), "with-skill", "ran"})
+	want(t, "attempt, arm, state", []string{got.Attempt, got.Arm, got.GateObservation.State}, []string{a.name(), "full-gate", "ran"})
 	if len(got.GateObservation.Runs) != 1 || got.GateObservation.Runs[0].ID != id {
 		t.Errorf("runs = %+v, want the run %s", got.GateObservation.Runs, id)
 	}
 	missing := ws.Attempts[1]
 	want(t, "missing record", []any{missing.Attempt, missing.Arm, missing.GateObservation.Validity, missing.StageExecution.Verdict,
-		missing.TaskID, missing.CaliperAttempt, missing.TaskOutcome}, []any{"", "with-skill", "indeterminate", "cannot tell", "task-001", 2, "task_fail"})
+		missing.TaskID, missing.CaliperAttempt, missing.TaskOutcome}, []any{"", "full-gate", "indeterminate", "cannot tell", "task-001", 2, "task_fail"})
 	want(t, "with-skill review executed over measured", ws.StageExecution.ReviewExecutedOverMeasured,
 		map[string]int{"review_executed": 1, "not_measured": 0, "measured": 2})
 	want(t, "with-skill review_established", ws.StageExecution.ReviewEstablished, map[string]int{"true": 0, "false": 1, "unknown": 1})
-	want(t, "ablated", []any{ab.Ablated, ab.CaliperAttempts, ab.Records, ab.MissingRecords, ab.Counts.GateObservation["no-home"]},
+	want(t, "agent-ci", []any{ab.Ablated, ab.CaliperAttempts, ab.Records, ab.MissingRecords, ab.Counts.GateObservation["no-home"]},
 		[]any{[]string{"assistant"}, 1, 1, 0, 1})
-	want(t, "ablated attempt", []string{ab.Attempts[0].Attempt, ab.Attempts[0].Arm}, []string{b.name(), "ablated"})
+	want(t, "ablated attempt", []string{ab.Attempts[0].Attempt, ab.Attempts[0].Arm}, []string{b.name(), "agent-ci"})
 	want(t, "ablated review_established", ab.StageExecution.ReviewEstablished, map[string]int{"true": 0, "false": 0, "unknown": 1})
 
 	// Labeled edit: the usage ceiling's not-started finding on both reads of
@@ -243,7 +243,7 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 		found, _ := report["findings"].([]any)
 		report["findings"] = append(found, finding)
 	}))
-	ws = a.arms(rev, args...).AsAssigned["with-skill"]
+	ws = a.arms(rev, args...).AsAssigned["full-gate"]
 	got = ws.Attempts[0]
 	want(t, "verdict", got.StageExecution.Verdict, "review executed")
 	want(t, "attempt review_established", got.StageExecution.ReviewEstablished, "unknown")
@@ -256,7 +256,7 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 	// no key. It names no attempt, so it is listed beside the arm with its
 	// verdicts, and both saved attempts are cannot tell, never did not run.
 	a.copyRecord(a.records(), a.name(), func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages"); delete(rec, "wait_down") })
-	ws = a.arms(rev, args...).AsAssigned["with-skill"]
+	ws = a.arms(rev, args...).AsAssigned["full-gate"]
 	if len(ws.RecordsWithoutKey) != 1 || len(ws.Attempts) != 2 {
 		t.Fatalf("records without key %+v, attempts %+v: want the record beside two saved attempts", ws.RecordsWithoutKey, ws.Attempts)
 	}
@@ -275,12 +275,12 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 // twice each refuse (exit 2).
 func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 	withSkill, ablated := armDir(t), armDir(t)
-	a, b := newAttemptIn(t, withSkill, "caliper-a1"), newAttemptIn(t, ablated, "caliper-b1")
+	a, b := newAttemptIn(t, withSkill, "caliper-a1"), newAttemptIn(t, ablated, "caliper-b1").inArm("agent-ci")
 	a.cleanup()
 	b.cleanup()
 	rev := a.built()
 	wsResult, abResult := result(t, withSkill, "result-q1-with-skill.json", 1), result(t, ablated, "result-q1-ablated.json", 1)
-	good := []string{"--arm", "with-skill", withSkill, wsResult, "--arm", "ablated", ablated, abResult}
+	good := []string{"--arm", "full-gate", withSkill, wsResult, "--arm", "agent-ci", ablated, abResult}
 	a.arms(rev, good...) // the positive control: the same arms, as assigned, answer
 	moved := armDir(t)
 	want(t, "mkdir", os.Mkdir(filepath.Join(moved, "caliper-q1-gate"), 0o755), nil)
@@ -288,15 +288,15 @@ func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 	empty := armDir(t)
 	twice := keyedResult(t, empty, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}, saved{"task-001", 1, "task_fail"})
 	for _, args := range [][]string{
-		{"--arm", "with-skill", withSkill, twice},
-		{"--arm", "with-skill", withSkill, abResult},
-		{"--arm", "ablated", ablated, wsResult},
-		{"--arm", "ablated", moved, abResult},
-		{"--arm", "with-skill", withSkill, wsResult, "--arm", "ablated", withSkill, abResult},
-		{"--arm", "with-skill", withSkill, wsResult, "--arm", "with-skill", ablated, wsResult},
-		{"--arm", "gated", withSkill, wsResult},
-		{"--arm", "with-skill", empty, wsResult},
-		{"--arm", "with-skill", withSkill, filepath.Join(withSkill, "caliper-q1-gate", a.name()+".record.json")},
+		{"--arm", "full-gate", withSkill, twice},
+		{"--arm", "full-gate", withSkill, abResult},
+		{"--arm", "agent-ci", ablated, wsResult},
+		{"--arm", "agent-ci", moved, abResult},
+		{"--arm", "full-gate", withSkill, wsResult, "--arm", "agent-ci", withSkill, abResult},
+		{"--arm", "full-gate", withSkill, wsResult, "--arm", "full-gate", ablated, wsResult},
+		{"--arm", "with-skill", withSkill, wsResult},
+		{"--arm", "full-gate", empty, wsResult},
+		{"--arm", "full-gate", withSkill, filepath.Join(withSkill, "caliper-q1-gate", a.name()+".record.json")},
 	} {
 		if code, out, _ := a.byArm(rev, args...); code != 2 {
 			t.Errorf("gate_by_arms.py %v: exit %d, want 2\n%s", args, code, out)
@@ -318,24 +318,24 @@ func TestGateByArmCountsRecordsBeyondSavedOnlyWhenInterrupted(t *testing.T) {
 	a, b := newAttemptIn(t, arm, "caliper-a1"), newAttemptIn(t, arm, "caliper-a2").keyed("task-001", 3)
 	a.cleanup()
 	b.cleanup()
-	o := newAttemptIn(t, other, "caliper-b1")
+	o := newAttemptIn(t, other, "caliper-b1").inArm("agent-ci")
 	o.cleanup()
 	rev := a.built()
 	two := []saved{{"task-001", 1, "pass"}, {"task-001", 2, "task_fail"}}
 	whole := keyedResult(t, arm, "result-q1-with-skill.json", false, two...)
-	if code, out, _ := a.byArm(rev, "--arm", "with-skill", arm, whole); code != 2 {
+	if code, out, _ := a.byArm(rev, "--arm", "full-gate", arm, whole); code != 2 {
 		t.Errorf("a record the run did not save, not interrupted: exit %d, want 2\n%s", code, out)
 	}
 	cut := keyedResult(t, arm, "result-q1-with-skill.json", true, two...)
 	ablated := keyedResult(t, other, "result-q1-ablated.json", false, saved{"task-001", 1, "task_fail"}, saved{"task-001", 3, "infra_error"})
-	newAttemptIn(t, other, "caliper-b2").keyed("task-001", 3).cleanup()
-	r := a.arms(rev, "--arm", "with-skill", arm, cut, "--arm", "ablated", other, ablated)
-	ws := r.AsAssigned["with-skill"]
+	newAttemptIn(t, other, "caliper-b2").inArm("agent-ci").keyed("task-001", 3).cleanup()
+	r := a.arms(rev, "--arm", "full-gate", arm, cut, "--arm", "agent-ci", other, ablated)
+	ws := r.AsAssigned["full-gate"]
 	want(t, "attempts saved, records, missing, beyond", []int{ws.CaliperAttempts, ws.Records, ws.MissingRecords, ws.RecordsBeyondSaved},
 		[]int{2, 2, 1, 1})
 	want(t, "all three in the arm", ws.Counts.GateObservation["no-home"]+ws.Counts.GateObservation["indeterminate"], 3)
-	want(t, "with-skill as run", r.AsRun.ByArm["with-skill"].cells(), []string{"indeterminate/task_fail=1", "no-home/not saved=1", "no-home/pass=1"})
-	want(t, "ablated as run", r.AsRun.ByArm["ablated"].cells(), []string{"no-home/infra_error=1", "no-home/task_fail=1"})
+	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/task_fail=1", "no-home/not saved=1", "no-home/pass=1"})
+	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"no-home/infra_error=1", "no-home/task_fail=1"})
 }
 
 // TestGateByArmJoinsEachRecordToItsSavedAttemptExactly is the join over both
@@ -351,35 +351,35 @@ func TestGateByArmJoinsEachRecordToItsSavedAttemptExactly(t *testing.T) {
 	a.startRun()
 	a.cleanup()
 	newAttemptIn(t, withSkill, "caliper-a2").keyed("task-001", 1).cleanup()
-	newAttemptIn(t, ablated, "caliper-b1").keyed("task-002", 1).cleanup()
+	newAttemptIn(t, ablated, "caliper-b1").inArm("agent-ci").keyed("task-002", 1).cleanup()
 	rev := a.built()
-	r := a.arms(rev, "--arm", "with-skill", withSkill,
+	r := a.arms(rev, "--arm", "full-gate", withSkill,
 		keyedResult(t, withSkill, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}, saved{"task-002", 1, "task_fail"}),
-		"--arm", "ablated", ablated,
+		"--arm", "agent-ci", ablated,
 		keyedResult(t, ablated, "result-q1-ablated.json", false, saved{"task-001", 1, "infra_error"}, saved{"task-002", 1, "pass"}))
 
-	want(t, "with-skill as run", r.AsRun.ByArm["with-skill"].cells(), []string{"no-home/pass=1", "ran/task_fail=1"})
-	want(t, "ablated as run", r.AsRun.ByArm["ablated"].cells(), []string{"indeterminate/infra_error=1", "no-home/pass=1"})
+	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"no-home/pass=1", "ran/task_fail=1"})
+	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"indeterminate/infra_error=1", "no-home/pass=1"})
 	want(t, "both arms as run", r.AsRun.BothArms.cells(),
 		[]string{"indeterminate/infra_error=1", "no-home/pass=2", "ran/task_fail=1"})
 	for state := range r.AsRun.BothArms {
-		if _, ok := r.AsAssigned["with-skill"].Counts.GateObservation[state]; !ok {
+		if _, ok := r.AsAssigned["full-gate"].Counts.GateObservation[state]; !ok {
 			t.Errorf("as run state %q is not a gate_observation state", state)
 		}
 	}
 	var got []string
-	for _, arm := range []string{"with-skill", "ablated"} {
+	for _, arm := range []string{"full-gate", "agent-ci"} {
 		ar := r.AsAssigned[arm]
-		want(t, arm+" missing, beyond, keyless", []int{ar.MissingRecords, ar.RecordsBeyondSaved, len(ar.RecordsWithoutKey)}, []int{map[string]int{"with-skill": 0, "ablated": 1}[arm], 0, 0})
+		want(t, arm+" missing, beyond, keyless", []int{ar.MissingRecords, ar.RecordsBeyondSaved, len(ar.RecordsWithoutKey)}, []int{map[string]int{"full-gate": 0, "agent-ci": 1}[arm], 0, 0})
 		for _, at := range ar.Attempts {
 			got = append(got, fmt.Sprintf("%s %s %v/%v %s %s", at.Arm, at.Attempt, at.TaskID, at.CaliperAttempt, at.TaskOutcome, at.StageExecution.Verdict))
 		}
 	}
 	want(t, "attempts", got, []string{
-		"with-skill caliper-a1 task-002/1 task_fail review executed",
-		"with-skill caliper-a2 task-001/1 pass no stage executed",
-		"ablated caliper-b1 task-002/1 pass no stage executed",
-		"ablated  task-001/1 infra_error cannot tell"})
+		"full-gate caliper-a1 task-002/1 task_fail review executed",
+		"full-gate caliper-a2 task-001/1 pass no stage executed",
+		"agent-ci caliper-b1 task-002/1 pass no stage executed",
+		"agent-ci  task-001/1 infra_error cannot tell"})
 }
 
 // TestGateByArmRefusesTwoRecordsOfOneAttempt: two records in one arm naming
@@ -393,9 +393,9 @@ func TestGateByArmRefusesTwoRecordsOfOneAttempt(t *testing.T) {
 	b.cleanup()
 	rev := a.built()
 	res := keyedResult(t, arm, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}, saved{"task-001", 2, "pass"})
-	a.arms(rev, "--arm", "with-skill", arm, res) // the positive control
+	a.arms(rev, "--arm", "full-gate", arm, res) // the positive control
 	b.keyed("task-001", 1).cleanup()
-	if code, out, errs := a.byArm(rev, "--arm", "with-skill", arm, res); code != 2 || !strings.Contains(errs, "both name attempt") {
+	if code, out, errs := a.byArm(rev, "--arm", "full-gate", arm, res); code != 2 || !strings.Contains(errs, "both name attempt") {
 		t.Errorf("two records of one attempt: exit %d, want 2 naming both\n%s%s", code, out, errs)
 	}
 }
@@ -416,8 +416,8 @@ func TestGateByArmSetsAsideARecordWithoutAKey(t *testing.T) {
 		rec["schema"], rec["task_id"], rec["caliper_attempt"] = 2, "task-001", 1 // labeled edit: a key a schema 2 record cannot have
 	}} {
 		a.copyRecord(a.records(), a.name(), edit)
-		r := a.arms(rev, "--arm", "with-skill", arm, res)
-		ws := r.AsAssigned["with-skill"]
+		r := a.arms(rev, "--arm", "full-gate", arm, res)
+		ws := r.AsAssigned["full-gate"]
 		if len(ws.RecordsWithoutKey) != 1 || len(ws.Attempts) != 1 {
 			t.Fatalf("records without key %+v, attempts %+v: want one of each", ws.RecordsWithoutKey, ws.Attempts)
 		}
@@ -425,6 +425,25 @@ func TestGateByArmSetsAsideARecordWithoutAKey(t *testing.T) {
 		want(t, "record without key", []any{k.Attempt, k.TaskID, k.TaskOutcome, k.GateObservation.State}, []any{a.name(), nil, "cannot tell", "no-home"})
 		want(t, "its saved attempt", []any{at.Attempt, at.TaskID, at.TaskOutcome, at.GateObservation.Validity}, []any{"", "task-001", "pass", "indeterminate"})
 		want(t, "records, missing", []int{ws.Records, ws.MissingRecords}, []int{1, 1})
-		want(t, "as run", r.AsRun.ByArm["with-skill"].cells(), []string{"indeterminate/pass=1"})
+		want(t, "as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/pass=1"})
+	}
+}
+
+// TestGateByArmRefusesARecordFromAnotherArm: a schema 6 record names the arm
+// its cleanup ran in. In another arm's folder, or with no arm, it is not this
+// arm's attempt, so the report refuses (exit 2) rather than count it there.
+func TestGateByArmRefusesARecordFromAnotherArm(t *testing.T) {
+	arm := armDir(t)
+	a := newAttemptIn(t, arm, "caliper-a1").inArm("agent-ci")
+	a.cleanup()
+	rev := a.built()
+	res := keyedResult(t, arm, "result-q1-ablated.json", false, saved{"task-001", 1, "pass"})
+	a.arms(rev, "--arm", "agent-ci", arm, res) // the positive control
+	for _, other := range []string{"full-gate", ""} {
+		a.arm = other
+		a.cleanup()
+		if code, out, errs := a.byArm(rev, "--arm", "agent-ci", arm, res); code != 2 || !strings.Contains(errs, "was written in arm") {
+			t.Errorf("a record of arm %q: exit %d, want 2 naming its arm\n%s%s", other, code, out, errs)
+		}
 	}
 }

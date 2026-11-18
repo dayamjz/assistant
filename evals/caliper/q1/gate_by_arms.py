@@ -9,15 +9,15 @@ passes cleanup.sh, never by order, timestamp or transcript.
     python3 gate_by_arms.py --revision REV --modified MOD --arm NAME DIR RESULT...
 
 REV and MOD are as gate_record.py takes them. Each --arm is one arm run-full.sh
-ran: NAME (with-skill or ablated), DIR (the TMPDIR its caliper run had, so its
+ran: NAME (agent-ci or full-gate), DIR (the TMPDIR its caliper run had, so its
 records are DIR/caliper-q1-gate) and RESULT (that run's caliper result file).
 """
 import argparse, json, os, sys
 
 import gate_record
 
-# run-full.sh's arms, each with the run.ablated its caliper result must carry.
-ARMS = {"with-skill": [], "ablated": ["assistant"]}
+# run-full.sh's arms (README "Arms"), each with the run.ablated its caliper result must carry.
+ARMS = {"agent-ci": ["assistant"], "full-gate": []}
 # An attempt's task outcome when it is not caliper's: a record with no attempt key,
 # and a record whose key the arm's result did not save.
 NO_KEY, NOT_SAVED = "cannot tell", "not saved"
@@ -64,7 +64,7 @@ def key_of(record):
     """The record's attempt key (task_id, caliper_attempt), or None when it has none:
     schema 1 and 2 predate it, and cleanup.sh under a stock caliper writes nulls."""
     key = (record.get("task_id"), record.get("caliper_attempt"))
-    ok = gate_record.schema(record) in (3, 4, 5) and isinstance(key[0], str) and key[0] and type(key[1]) is int
+    ok = gate_record.schema(record) in (3, 4, 5, 6) and isinstance(key[0], str) and key[0] and type(key[1]) is int
     return key if ok else None
 
 
@@ -103,6 +103,8 @@ def arm_report(name, tmpdir, result, built):
         # The attempt root is <TMPDIR>/<attempt>, made by this arm's caliper run alone.
         if isinstance(home, str) and os.path.realpath(os.path.dirname(os.path.dirname(home))) != os.path.realpath(tmpdir):
             refuse("arm %s: record %s names home %s, which is not under this arm's TMPDIR %s" % (name, file, home, tmpdir))
+        if gate_record.schema(record) == 6 and record.get("arm") != name:  # cleanup.sh's Q1_ARM, from 6 on
+            refuse("arm %s: record %s was written in arm %r" % (name, file, record.get("arm")))
         key, judged = key_of(record), gate_record.judge(attempt, path, built)
         if key is None:  # it names no attempt, so it is listed beside the denominator, never in it
             keyless.append(dict(judged, task_outcome=NO_KEY))

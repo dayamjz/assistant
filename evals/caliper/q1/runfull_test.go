@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,7 +29,7 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // as caliper does. The attempt root is caliper's own call
 // (caliper/workdir.py's tempfile.mkdtemp(prefix="caliper-") in the arm's
 // TMPDIR), and the hooks run in <root>/work with the runner's environment
-// plus the key. In the with-skill arm the agent runs with the environment
+// plus the key. In the full-gate arm the agent runs with the environment
 // caliper builds for it and nothing else (caliper/harness/base.py
 // _isolated_env: HOME is the root, then PATH and env_passthrough, with
 // claude_code.py's token added). It writes what its git resolves origin to
@@ -42,7 +43,7 @@ const stubCaliper = `
 import json, os, shutil, subprocess, sys, tempfile
 args = sys.argv[1:]
 with open(os.environ["Q1_TEST_CALLS"], "a") as f:
-    f.write(" ".join(args[:1]) + "\n")
+    f.write(" ".join(args) + "\n")
 if args[0] != "run":
     sys.exit(0)
 spec = os.path.dirname(os.path.abspath(args[1]))
@@ -162,6 +163,28 @@ func must(t *testing.T, err error) {
 	}
 }
 
+// standInGraders replaces the copy's verify_graders.py with a stand-in that
+// records each call and passes, for a test whose subject is not the graders:
+// the real script builds eight subjects cold (README "CI"), and
+// TestRunFullRunsEachArmUnderItsOwnTMPDIR runs it.
+func (r *fullRun) standInGraders() {
+	r.t.Helper()
+	calls := filepath.Join(r.root, "graders.calls")
+	must(r.t, os.WriteFile(filepath.Join(r.spec, "verify_graders.py"),
+		[]byte("import os\nwith open("+strconv.Quote(calls)+", \"a\") as f:\n    f.write(os.getcwd() + \"\\n\")\n"), 0o644))
+}
+
+// wantGradersCalled checks that run-full.sh ran the copy's verify_graders.py,
+// the stand-in standInGraders wrote, once and from the copy.
+func (r *fullRun) wantGradersCalled() {
+	r.t.Helper()
+	data, err := os.ReadFile(filepath.Join(r.root, "graders.calls"))
+	if err != nil && !os.IsNotExist(err) {
+		r.t.Fatal(err)
+	}
+	want(r.t, "verify_graders.py calls (each its cwd)", string(data), r.spec+"\n")
+}
+
 // command runs a setup step and fails the test unless it exits 0.
 func (r *fullRun) command(dir, name string, args ...string) {
 	r.t.Helper()
@@ -203,17 +226,19 @@ func (r *fullRun) run(extra ...string) {
 // and the run exits 0.
 func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run()
 	if r.code != 0 || r.gateByArmFile == "" {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	var report struct {
 		AsAssigned map[string]struct{ Attempts []armAttempt } `json:"as_assigned"`
 	}
 	data, err := os.ReadFile(r.gateByArmFile)
 	must(t, err)
 	must(t, json.Unmarshal(data, &report))
-	for arm, state := range map[string]string{"with-skill": "ran", "ablated": "no-home"} {
+	for arm, state := range map[string]string{"full-gate": "ran", "agent-ci": "no-home"} {
 		got := report.AsAssigned[arm].Attempts
 		if len(got) != 1 || got[0].GateObservation.Validity != "valid" || got[0].GateObservation.State != state {
 			t.Errorf("%s attempts = %+v, want one valid %s", arm, got, state)
@@ -232,15 +257,17 @@ func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 // there is no probe home or service log to keep.
 func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run("Q1_ARMS_ROOT=" + r.tmpdir)
 	if r.code != 2 || !strings.Contains(r.stderr, "did not start") {
 		t.Fatalf("run-full.sh exit %d, want 2 with the refusal; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	calls, err := os.ReadFile(r.calls)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(calls), "run") {
+	if strings.Contains("\n"+string(calls), "\nrun ") {
 		t.Errorf("caliper was asked to run after the refusal; calls:\n%s", calls)
 	}
 	arms, err := filepath.Glob(filepath.Join(r.tmpdir, "q1-arms.*"))
@@ -248,7 +275,7 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	if len(arms) != 1 {
 		t.Fatalf("arms directories under Q1_ARMS_ROOT: %v", arms)
 	}
-	roots, _ := filepath.Glob(filepath.Join(arms[0], "with-skill", "caliper-????????"))
+	roots, _ := filepath.Glob(filepath.Join(arms[0], "full-gate", "caliper-????????"))
 	if len(roots) != 1 {
 		t.Fatalf("the refused probe's root is not kept for inspection: %v", roots)
 	}
@@ -277,10 +304,12 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 // The operator-side rewrite (a#942's write) is gone after the run.
 func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run()
 	if r.code != 0 || r.arms == "" {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	var seen struct {
 		Remote, Main         string
 		AttemptGitconfig     string `json:"attempt_gitconfig"`
@@ -353,5 +382,64 @@ func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 	}
 }
 
-// armsWithSkill is the with-skill arm's TMPDIR, where caliper made its attempt root.
-func (r *fullRun) armsWithSkill() string { return filepath.Join(r.arms, "with-skill") }
+// armsWithSkill is the full-gate arm's TMPDIR, where caliper made its attempt root.
+func (r *fullRun) armsWithSkill() string { return filepath.Join(r.arms, "full-gate") }
+
+// TestRunFullRunsEachArmUnderItsOwnTMPDIR: run-full.sh runs caliper once per arm
+// of README "Arms", full-gate with the skill and agent-ci with it ablated, each
+// on the owner's pinned model (a#896) and under its own TMPDIR with Q1_ARM set,
+// so each arm's record says its arm, carries the CI evidence its setup wrote
+// (no push, so not invoked), and the report has exactly those arms. It is the
+// one run-full.sh test that runs the real verify_graders.py, which must pass
+// before any arm runs; the others stand it in (standInGraders).
+func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
+	r := newFullRun(t)
+	r.run()
+	if r.code != 0 || r.gateByArmFile == "" {
+		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stderr, "all grader checks passed") {
+		t.Errorf("run-full.sh did not run the real verify_graders.py to its end; output:\n%s", r.stderr)
+	}
+	calls, err := os.ReadFile(r.calls)
+	must(t, err)
+	var runs []string
+	for _, line := range strings.Split(string(calls), "\n") {
+		if strings.HasPrefix(line, "run ") {
+			runs = append(runs, line)
+		}
+	}
+	model := "--model claude-code:claude-sonnet-5-5 --judge-model claude-code:claude-sonnet-5-5"
+	want(t, "caliper runs", runs, []string{
+		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --output result-q1-full-gate.json",
+		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci.json"})
+	var report struct {
+		AsAssigned map[string]struct {
+			Attempts []struct {
+				CIExecution struct{ Verdict string } `json:"ci_execution"`
+			}
+		} `json:"as_assigned"`
+	}
+	data, err := os.ReadFile(r.gateByArmFile)
+	must(t, err)
+	must(t, json.Unmarshal(data, &report))
+	want(t, "report arms", len(report.AsAssigned), 2)
+	for _, arm := range []string{"agent-ci", "full-gate"} {
+		records, err := filepath.Glob(filepath.Join(r.arms, arm, "caliper-q1-gate", "caliper-*.record.json"))
+		must(t, err)
+		var rec struct{ Arm string }
+		if len(records) == 1 {
+			data, err = os.ReadFile(records[0])
+			must(t, err)
+			must(t, json.Unmarshal(data, &rec))
+		}
+		want(t, arm+" records, their arm", []any{len(records), rec.Arm}, []any{1, arm})
+		got := report.AsAssigned[arm].Attempts
+		if len(got) != 1 || got[0].CIExecution.Verdict != "not invoked" {
+			t.Errorf("%s attempts = %+v, want one whose CI was not invoked", arm, got)
+		}
+		if _, err := os.Stat(filepath.Join(r.spec, "result-q1-"+arm+".json")); err != nil {
+			t.Errorf("%s result: %v", arm, err)
+		}
+	}
+}

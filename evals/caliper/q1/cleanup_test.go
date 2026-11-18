@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 	os.Exit(standin.RunOwned(func() int {
 		code := m.Run()
 		journey.Cleanup()
+		if goCache.dir != "" {
+			_ = os.RemoveAll(goCache.dir)
+		}
 		return code
 	}))
 }
@@ -59,6 +62,7 @@ type attempt struct {
 	home, work, checkout string
 	tmpdir               string   // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
 	key                  []string // the attempt key the patched caliper gives a hook; nil as a stock caliper
+	arm                  string   // the hooks' Q1_ARM, as run-full.sh exports it; empty leaves it unset
 	env                  []string // added to every command's environment
 }
 
@@ -66,6 +70,12 @@ type attempt struct {
 // task id and attempt number, as its saved result names the attempt.
 func (a *attempt) keyed(task string, n int) *attempt {
 	a.key = []string{"CALIPER_TASK_ID=" + task, "CALIPER_ATTEMPT=" + strconv.Itoa(n)}
+	return a
+}
+
+// inArm gives the attempt's hooks Q1_ARM=arm, as run-full.sh does for each arm.
+func (a *attempt) inArm(arm string) *attempt {
+	a.arm = arm
 	return a
 }
 
@@ -115,7 +125,7 @@ func newAttemptAt(t *testing.T, root, tmpdir string) *attempt {
 		t.Fatal(err)
 	}
 	a.path = strings.Join([]string{stub, filepath.Dir(bin), filepath.Dir(git), "/usr/bin:/bin:/usr/sbin:/sbin"}, ":")
-	return a.keyed("task-001", 1)
+	return a.keyed("task-001", 1).inArm("full-gate")
 }
 
 // environ is the attempt's whole environment for a command it starts.
@@ -123,7 +133,14 @@ func (a *attempt) environ() []string {
 	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.tmpdir, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"},
-		append(append([]string{}, a.key...), a.env...)...)
+		append(append(a.armEnv(), a.key...), a.env...)...)
+}
+
+func (a *attempt) armEnv() []string {
+	if a.arm == "" {
+		return nil
+	}
+	return []string{"Q1_ARM=" + a.arm}
 }
 
 // run starts name in dir with the attempt's environment: exit code, stdout, stderr.
@@ -286,6 +303,7 @@ exec %[1]s "$@"
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
+	Arm                    any    // Q1_ARM as cleanup.sh read it, or nil when unset
 	TaskID                 any    `json:"task_id"`         // a string, or nil without a key
 	CaliperAttempt         any    `json:"caliper_attempt"` // a JSON number, or nil without a key
 	CapturedAt             string `json:"captured_at"`
@@ -358,9 +376,9 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
-	// The stage evidence (schema 2, still in 4): the report, the review log alone
+	// The stage evidence (schema 2, still in 6): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "5")
+	want(t, "schema", string(r.steps["schema"]), "6")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	// The head check (schema 4), made while the checkout exists: one entry,
 	// bound to the attempt key, the run and its submitted_head.
@@ -536,9 +554,12 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 // still judged (README "As run").
 func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "5", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "6", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
@@ -550,6 +571,34 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 		}
 		wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
 	}
+}
+
+// TestCleanupRecordsTheArmOrSaysWhyNot: setup refuses an attempt with no arm,
+// and the record (schema 6) carries the arm run-full.sh exported for its
+// caliper run. Without Q1_ARM the arm is null and the record, stderr and exit
+// status say so, never a silent blank; whether the gate ran is still judged,
+// since the arm is gate_by_arms.py's to check.
+func TestCleanupRecordsTheArmOrSaysWhyNot(t *testing.T) {
+	a := newAttempt(t).inArm("")
+	code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign")
+	built, _ := os.ReadDir(a.work)
+	want(t, "setup with no arm refused before it builds anything, named",
+		[]any{code != 0, strings.Contains(errs, "Q1_ARM: names the arm of this attempt"), len(built)}, []any{true, true, 0})
+	must(t, os.RemoveAll(a.work))
+	must(t, os.Mkdir(a.work, 0o755))
+	a.arm = "agent-ci"
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
+	code, _, r := a.cleanup()
+	want(t, "exit, arm, errors", []any{code, r.Arm, r.Errors}, []any{0, "agent-ci", []string{}})
+	a.arm = ""
+	code, out, r := a.cleanup()
+	want(t, "unset: exit, arm", []any{code, r.Arm}, []any{1, nil})
+	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "arm: ") || !strings.Contains(out, "Q1_ARM is unset") {
+		t.Errorf("errors = %v, want the missing arm alone, on stderr too:\n%s", r.Errors, out)
+	}
+	wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
 }
 
 // TestCleanupReturnsOnlyOnceTheServiceIsDown: caliper removes the attempt root
