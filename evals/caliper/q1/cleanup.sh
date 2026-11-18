@@ -23,9 +23,10 @@ workdir="${CALIPER_WORKDIR:-.}"
 attempt_root="$(CDPATH= cd -- "$workdir/.." && pwd)"
 mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
 # One record per attempt (README "Gate record"). Only runs reads from the nested
-# checkout; it needs the live service, so the stop comes last, in a finally.
+# checkout; it needs the live service, so the stop comes last, in a finally,
+# which returns only once status reports the service down (wait_down).
 exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
-import datetime, json, os, re, subprocess, sys
+import datetime, json, os, re, subprocess, sys, time
 root, gate = sys.argv[1], sys.argv[2]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
@@ -107,6 +108,34 @@ def check_head(run):
             pass  # is_commit stays false, which gate_record.py reads as cannot tell
     return entry
 
+def wait_down():
+    """After the stop, until status reports the service down: the stop answers once
+    accepted, while the service may still have its database open, and caliper removes
+    the attempt root as soon as this hook returns. Any other answer waits, as
+    run-full.sh's probe does; Q1_STOP_WAIT seconds on (default 30) it is a stop: error."""
+    raw = os.environ.get("Q1_STOP_WAIT", "30")
+    limit = int(raw) if re.fullmatch(r"[1-9][0-9]*", raw, re.ASCII) else 30
+    if str(limit) != raw:
+        record["errors"].append("stop: Q1_STOP_WAIT %r is not a whole number of seconds above 0; "
+                                "waiting 30" % raw)
+    deadline = time.monotonic() + limit
+    while True:
+        try:
+            p = subprocess.run(["assistant", "--home", home, "--json", "service", "status"], cwd=root,
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=max(deadline - time.monotonic(), 1))
+            answer = (p.stdout + p.stderr).strip()
+            doc = json.loads(p.stdout) if p.returncode == 0 else None
+            if isinstance(doc, dict) and doc.get("running") is False:
+                return
+        except (OSError, subprocess.TimeoutExpired, ValueError) as e:
+            answer = repr(e)
+        if time.monotonic() >= deadline:
+            record["errors"].append("stop: the service at %s is not reported down %ds after its stop: %s"
+                                    % (home, limit, answer))
+            return
+        time.sleep(0.2)
+
 def capture():
     if not os.path.isdir(home):
         record["outcome"] = "no-home"
@@ -133,6 +162,7 @@ def capture():
                 record["errors"].append("runs: exit 0, but the output is not a runs document")
     finally:
         call("stop", ["service", "stop", "--force"], root)
+        wait_down()  # even after a failed stop: the root must not go while the service is up
 
 try:
     capture()

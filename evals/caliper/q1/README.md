@@ -209,6 +209,17 @@ does with the attempt is the runner's own contract, and this directory does
 not state it. `run-full.sh` records each arm's exit status and still runs the
 other arm. The service stop runs even when a read raises.
 
+A stop answers once the service accepts it, while the service may still have
+its database open, and caliper removes the attempt root as soon as the hook
+returns (a#953's `state.db-shm`). So after the stop, failed or not, cleanup
+asks `--json service status` until it reports the service down, as
+`run-full.sh`'s probe does, for at most `Q1_STOP_WAIT` seconds (default 30;
+anything but a whole number above 0 is a `stop: ...` line, and 30 is used).
+A service not reported down by then is a `stop: ... is not reported down
+...` line with the last answer, so the hook exits 1. The `stop` step itself
+keeps the stop's own exit, so `gate_record.py`'s `cleanup_status` does not
+see this line: only the record's `errors` and the hook's exit status do.
+
 **Gate record instrument.** `gate_record.py` says, per attempt, whether the
 gate ran, from the saved records alone. It reads no transcript and parses no
 command an attempt typed.
