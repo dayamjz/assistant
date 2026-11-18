@@ -26,8 +26,9 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # head check needs the key (#941); the arm is gate_by_arms.py's, and the CI evidence ci_execution's.
 NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ", "arm: ", "ci: ")
 # 1 predates the stage capture (#926): its stage verdict is not measured. 3 adds the attempt key (#936).
-# 4 adds head_checks (#941): a run in a record without them is cannot tell. 5 adds arm and ci_checks.
-SCHEMAS = (1, 2, 3, 4, 5)
+# 4 adds head_checks (#941): a run in a record without them is cannot tell.
+# 5 adds wait_down (a#956): a stop in a record without it is failed (stop_result). 6 adds arm and ci_checks.
+SCHEMAS = (1, 2, 3, 4, 5, 6)
 
 # The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
 # to write, onto (gate_observation, cleanup_status). "runs" means valid, with
@@ -49,11 +50,18 @@ def exited_zero(step):
     return isinstance(step, dict) and type(step.get("exit")) is int and step["exit"] == 0
 
 
+def wait_down(record):
+    """The record's wait_down when it is an object, else None."""
+    return record["wait_down"] if isinstance(record.get("wait_down"), dict) else None
+
+
 def stop_result(record):
-    """ok, failed or absent: the stop step as cleanup.sh recorded it."""
+    """ok, failed or absent: the stop step as cleanup.sh recorded it. ok needs the stop's
+    exit 0 and wait_down's down true: a service never reported down, or a stop with no
+    wait_down (every record before schema 5), was never confirmed down, so it is failed."""
     if "stop" not in record:
         return "absent"
-    return "ok" if exited_zero(record["stop"]) else "failed"
+    return "ok" if exited_zero(record["stop"]) and (wait_down(record) or {}).get("down") is True else "failed"
 
 
 def indeterminate(reason):
@@ -270,12 +278,12 @@ def ci_execution(record):
     """Whether CI checked every push that moved the attempt's remote (README "CI"), fail-closed:
     "ci ran" with each push counted under its outcome, "not invoked" when nothing was pushed, and
     cannot tell for anything the evidence does not show, never a check that did not run."""
-    if schema(record) in (1, 2, 3, 4):
+    if schema(record) in (1, 2, 3, 4, 5):
         return {"verdict": NOT_MEASURED}
     ci = record.get("ci_checks") if isinstance(record.get("ci_checks"), dict) else {}
     key = (record.get("task_id"), record.get("caliper_attempt"), record.get("arm"))
     try:
-        if schema(record) != 5:
+        if schema(record) != 6:
             raise ValueError("schema %r is not one this reads" % (record.get("schema"),))
         docs = {}
         for name, text in ci["files"].items():
@@ -348,7 +356,8 @@ def judge(attempt, path, built):
     outcome, result = record.get("outcome"), stop_result(record)
     row = (outcome, result) if isinstance(outcome, str) else None
     gate, cleanup = TABLE.get(row, (None, "success" if result == "ok" else "failure"))
-    cleanup_status = {"status": cleanup, "exit": stop.get("exit"), "stderr": stop.get("stderr")}
+    cleanup_status = {"status": cleanup, "exit": stop.get("exit"), "stderr": stop.get("stderr"),
+                      "down": (wait_down(record) or {}).get("down")}
     home, checkout, errors = record.get("home"), record.get("checkout"), record.get("errors")
     if not isinstance(errors, list):
         errors = ["errors is not a list: %r" % (errors,)]

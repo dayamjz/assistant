@@ -173,7 +173,7 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (5; a#945's records are 4, with no `arm` or `ci_checks`, #936's are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (6; a#956's records are 5, with no `arm` or `ci_checks`, #941's are 4, with no `wait_down`, #936's are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
@@ -258,6 +258,17 @@ does with the attempt is the runner's own contract, and this directory does
 not state it. `run-full.sh` records each arm's exit status and still runs the
 other arm. The service stop runs even when a read raises.
 
+A stop answers once the service accepts it, while the service may still have
+its database open, and caliper removes the attempt root as soon as the hook
+returns (a#953's `state.db-shm`). So after the stop, failed or not, cleanup
+asks `--json service status` until it reports the service down, as
+`run-full.sh`'s probe does, for at most 30s. The outcome is its own
+evidence, `wait_down`: `down` (whether status reported the service down)
+and `last_status`, the last answer, beside the `stop` step, which keeps the
+stop's own exit. A service not reported down is also a `stop: ... is not
+reported down ...` line, so the hook exits 1. A raise in the wait leaves no
+`wait_down`.
+
 **Gate record instrument.** `gate_record.py` says, per attempt, whether the
 gate ran, from the saved records alone. It reads no transcript and parses no
 command an attempt typed.
@@ -290,7 +301,7 @@ Each attempt has two fields, never merged:
   it (`id`, `status`, `submitted_head`, `build.revision`, `build.modified`
   and `config_digest`, as `runs` reported them), or `indeterminate`, with a `reason`.
 - `cleanup_status`: `status` `success`, `failure` or `not-attempted`, with the
-  stop's `exit` and `stderr`. When there is no record to read a stop from, it
+  stop's `exit` and `stderr`, and `wait_down`'s `down` (null without one). When there is no record to read a stop from, it
   is `failure` with `exit` and `stderr` null and a `reason`: `no record file`
   or `record unreadable`.
 
@@ -301,9 +312,11 @@ landing, and never silently a successful Q1 run.
 
 The mapping table (`TABLE` in `gate_record.py`) lists the `outcome` and stop
 result pairs `cleanup.sh` is expected to write, and maps each onto the two
-fields. A stop is `ok` with exit 0,
-`failed` with any other exit or with exit null (the call raised), and
-`absent` with no `stop` step.
+fields. A stop is `ok` with exit 0 and a `wait_down` whose `down` is true,
+`failed` with any other exit, with exit null (the call raised), or without
+that `wait_down`, and `absent` with no `stop` step. A stop never confirmed
+down is failed even at exit 0, so fail closed: every record before schema 5
+has no `wait_down`, and its stop judges `failure`.
 
 | `outcome` | stop | `gate_observation` | `cleanup_status` |
 | --- | --- | --- | --- |
@@ -353,7 +366,7 @@ A valid row becomes indeterminate when any check fails:
   judges it instead ("Stage execution"). A failed report read is `unread`
   (rows 2 and 3), and so is a failed log read (rows 5 and 13), except beside
   `ran: true`, where `ran` decides (row 4).
-- **This attempt's record.** `schema` 1 to 5, `attempt` the name asked for, `home`
+- **This attempt's record.** `schema` 1 to 6, `attempt` the name asked for, `home`
   `<attempt>/.assistant` and `checkout` `<attempt>/work/work`. The `runs`
   step was made from that checkout and is a runs document from an exit 0.
 - **One repository.** The runs name one `repository_id`, never null.
@@ -577,7 +590,7 @@ Limits:
   a hook missing or not the one setup wrote, a ref that moved with no
   accepted check (a push around the hook), a record whose schema this does
   not read, a missing or unreadable record.
-- `not measured`: a record before schema 5.
+- `not measured`: a record before schema 6.
 
 It is consistency, not attestation, as for the gate record: the attempt runs
 as the user who owns the remote and the evidence. A rejected entry's steps
@@ -612,7 +625,7 @@ a record whose `home` is not `DIR/<attempt>/.assistant` (a record moved from
 another folder), and a record a hook wrote anywhere else is not in the
 folder, so it shows as a missing record. It also refuses a result whose
 `run.ablated` is not the arm's (`["assistant"]` for `agent-ci`, `[]` for
-`full-gate`), a schema 5 record whose `arm` is not the arm, a record whose key that run did not save, or more records than
+`full-gate`), a schema 6 record whose `arm` is not the arm, a record whose key that run did not save, or more records than
 it saved attempts, when that run was not interrupted, two records naming
 one key, one `DIR` for two arms, an arm unknown or named twice, a
 missing `DIR/caliper-q1-gate`, or an unreadable result or one that saves a

@@ -4,6 +4,7 @@ package q1_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,7 +185,7 @@ func TestCIHookBoundsACheckAndRecordsATimeout(t *testing.T) {
 // no steps, one missing, one that exited non-zero, steps or a step of the
 // wrong shape, another tip's archive. A real push of a deletion alone, whose
 // entry has no steps, is the control for that: still "ci ran". A record
-// from before schema 5 is not measured. The edits are labeled: each is a shape
+// from before schema 6 is not measured. The edits are labeled: each is a shape
 // a cut-short hook, a hand edit or a bypass leaves.
 func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
 	a := ciAttempt(t)
@@ -270,9 +271,12 @@ func TestCleanupReadsCIChecksFailClosed(t *testing.T) {
 			t.Errorf("%s: ci_execution = %+v, want cannot tell naming %q", c.what, j.CIExecution, c.reason)
 		}
 	}
-	dir := filepath.Join(a.tmpdir, "schema4")
-	a.copyRecord(dir, a.name(), func(rec map[string]any) { rec["schema"] = 4 })
-	want(t, "schema 4", a.report(dir, b, a.name()).Attempts[0].CIExecution.Verdict, "not measured")
+	// 5 is a#956's record, with wait_down and no CI evidence, so it is the boundary.
+	for _, s := range []int{4, 5} {
+		dir := filepath.Join(a.tmpdir, fmt.Sprintf("schema%d", s))
+		a.copyRecord(dir, a.name(), func(rec map[string]any) { rec["schema"] = s; delete(rec, "ci_checks"); delete(rec, "arm") })
+		want(t, fmt.Sprintf("schema %d", s), a.report(dir, b, a.name()).Attempts[0].CIExecution.Verdict, "not measured")
+	}
 
 	// The control: a push that only deletes builds nothing, so its accepted entry has no steps.
 	if code, _, errs := a.run(a.checkout, "git", "push", "-q", "../remote.git", ":feature/unlimited"); code != 0 {

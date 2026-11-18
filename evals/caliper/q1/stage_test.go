@@ -368,8 +368,8 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	// Labeled edit: the execution row dropped, as a forced stop drops it (#928); ran alone decides.
 	wantStage(t, judgeEdit(both(func(m map[string]any) { delete(reviewOf(m), "executions") })), "review executed", 4)
 	// Labeled edit: the record as a#925's cleanup.sh wrote it, schema 1 with no stages.
-	j = judgeEdit(func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages") })
-	wantJudged(t, j, "ran", "success")
+	j = judgeEdit(func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages"); delete(rec, "wait_down") })
+	wantJudged(t, j, "ran", "failure")
 	var raw struct {
 		Attempts []struct {
 			StageExecution map[string]any `json:"stage_execution"`
@@ -378,7 +378,7 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	_, rawOut, _ := a.instrument(append(rev.args(), "--records", edited, a.name())...)
 	want(t, "decode", json.Unmarshal([]byte(rawOut), &raw), nil)
 	want(t, "schema 1 stage_execution, exactly", raw.Attempts[0].StageExecution, map[string]any{"verdict": "not measured"})
-	for _, unknown := range []any{6, true} { // JSON true is not schema 1
+	for _, unknown := range []any{7, true} { // JSON true is not schema 1
 		j = judgeEdit(func(rec map[string]any) { rec["schema"] = unknown })
 		wantJudged(t, j, "", "success")
 		wantStage(t, j, "cannot tell")

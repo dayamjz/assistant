@@ -255,7 +255,7 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 	// Labeled edit: the record as a#925's cleanup.sh wrote it (schema 1), with
 	// no key. It names no attempt, so it is listed beside the arm with its
 	// verdicts, and both saved attempts are cannot tell, never did not run.
-	a.copyRecord(a.records(), a.name(), func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages") })
+	a.copyRecord(a.records(), a.name(), func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages"); delete(rec, "wait_down") })
 	ws = a.arms(rev, args...).AsAssigned["full-gate"]
 	if len(ws.RecordsWithoutKey) != 1 || len(ws.Attempts) != 2 {
 		t.Fatalf("records without key %+v, attempts %+v: want the record beside two saved attempts", ws.RecordsWithoutKey, ws.Attempts)
@@ -429,7 +429,7 @@ func TestGateByArmSetsAsideARecordWithoutAKey(t *testing.T) {
 	}
 }
 
-// TestGateByArmRefusesARecordFromAnotherArm: a schema 5 record names the arm
+// TestGateByArmRefusesARecordFromAnotherArm: a schema 6 record names the arm
 // its cleanup ran in. In another arm's folder, or with no arm, it is not this
 // arm's attempt, so the report refuses (exit 2) rather than count it there.
 func TestGateByArmRefusesARecordFromAnotherArm(t *testing.T) {
