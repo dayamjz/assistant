@@ -25,7 +25,7 @@ forwarding harmless.
 Read [Operating the gate](operators.md) for what each command means. This page
 is the order to run them in, and the places this repository is its own special
 case.
-The [shadow pilot pre-registration](evaluations/2026-11-17-gate-shadow-pilot-preregistration.md) freezes how a pilot run with this runbook is compared and judged.
+The draft [shadow pilot pre-registration](evaluations/2026-11-17-gate-shadow-pilot-preregistration.md) proposes how a pilot run with this runbook is compared and judged.
 
 ## What you set up, and why each piece is separate
 

@@ -1,10 +1,10 @@
 # Gate shadow pilot pre-registration, 2026-11-17
 
-**Status: Pre-registration, frozen when merged. Changes after merge need a new PR
-that names what changed and why, before any pilot head runs.** The freeze point
-is the merge commit that adds this file to `main`, which
-`git log --first-parent --diff-filter=A --format=%H main -- docs/evaluations/2026-11-17-gate-shadow-pilot-preregistration.md`
-names. No pilot head has run.
+**Status: Draft, not frozen.** Merging this document is not a freeze point. The
+only freeze point is a later complete protocol that Joel and the voters (#juno,
+#A1, #claude) sign off on before any head is enrolled and before any pilot head
+runs. No earlier version, this one included, counts as one. No pilot head has
+run.
 
 This is step 2 of row 12 of the agreed order (ORDER r2), the a#806 shadow pilot.
 Row 12 (`ft:docs/critique/03-juno-response.md:52`) reads: "At least 10
@@ -12,11 +12,12 @@ representative heads as a pilot floor, not proof, covering clean, real-finding,
 hold, CI-failure, race and recovery cases and live PRs. Per head: gate
 activation, matched, missed and extra findings, stage times and cost. Every
 disagreement gets a ruling (gate right, review right, both, neither) under rules
-frozen before the run. Promotion criteria are written before the run." Step 1, a#827, landed as a#952 (`865db281`). Step 3, the run, has its
-own brief and starts only after Joel and the voters agree this document.
+frozen before the run. Promotion criteria are written before the run." Step 1,
+a#827, landed as a#952 (`865db281`). Step 3, the run, has its own brief and
+starts only after that complete protocol is signed off.
 
 Notation: `a#N` is `dayamjz/assistant`, `ft#N` is `dayamjz/fleet-tools`. A path
-with no repository named is in this repository at the freeze point. A path
+with no repository named is in this repository at this draft's head. A path
 prefixed `ft:` is in the private `dayamjz/fleet-tools` repository at `5b1b73d2`.
 
 ## Terms
@@ -61,7 +62,7 @@ The gate in shadow against the review, on the same head.
   stage is compared with the head's own CI conclusion on this repository, not
   with the review (section 3).
 
-## 2. Adjudication rules (frozen)
+## 2. Adjudication rules (proposed)
 
 ### 2.1 The four-way ruling
 
@@ -171,7 +172,7 @@ reviewer can read it there.
 ## 4. Per-head record schema
 
 One JSON record per head. "Required" is `yes`, `no`, or the cases it applies to.
-`<run>` is the gate run's id. Sources are at the freeze point.
+`<run>` is the gate run's id. Sources are at this draft's head.
 
 | Field | Type | Source | Required |
 | --- | --- | --- | --- |
@@ -303,7 +304,11 @@ must exist before a promotion decision, whatever the pilot shows.
 
 ## 7. Open questions for Joel and the voters
 
-Each must be answered, in this PR or in a new one, before any pilot head runs.
+This draft answers none of these. The complete protocol must answer every
+question here before the freeze. Row 12's rulings are the voters' (Joel, ft#545
+6954624923, answer 4), and anything that feeds section 5's criteria is Joel's.
+Where #A1's full review at `5d38835f` (a#955 comment 6965786742) set a
+requirement, it is quoted as the reviewer's requirement, not as an answer.
 
 1. **Split vote.** When the three voters do not agree, how is a disagreement
    decided? (a) Two of three decide, and a three-way split goes to Joel.
@@ -313,14 +318,22 @@ Each must be answered, in this PR or in a new one, before any pilot head runs.
 2. **A voter who wrote the review.** When the review under comparison is a
    voter's own, does that voter (a) rule as usual, (b) recuse, leaving two
    voters for that head, or (c) recuse and be replaced by Joel for that head?
+   Under (b), how do the two decide when they differ: (i) it goes to Joel,
+   (ii) it is recorded as undecided and counted against the gate, or (iii)
+   something else the voters name? Reviewer's requirement: "define how a
+   two-person panel decides after recusal".
 3. **The mirror's Actions.** Should the mirror (a) keep Actions off, as
-   `docs/dogfood.md` says, and drop the CI-failure case and C6, or (b) turn
-   Actions on now that a#952 landed, at the private repository's billed minutes?
-   Whether a#952's first-run path passes on the mirror is not verified here.
+   `docs/dogfood.md` says, which leaves the CI-failure case unmeasured, or
+   (b) turn Actions on now that a#952 landed, at the private repository's
+   billed minutes? Whether a#952's first-run path passes on the mirror is not
+   verified here. Reviewer's requirement: "preserve the required CI-failure
+   case instead of dropping it to make C6 pass".
 4. **Bases.** Should the operator (a) set the mirror's `main` to each head's
    merge base before pushing it, which moves the mirror's `main` backwards, or
-   (b) keep the mirror current as the runbook says, and accept a
-   `base_mismatch` flag on the heads it affects?
+   (b) keep the mirror current as the runbook says, and flag `base_mismatch` on
+   the heads it affects? Does a flagged head count toward the ten and toward
+   section 5's criteria, and if so how? Reviewer's requirement: "ensure
+   base-mismatched heads do not silently count as comparable".
 5. **Race and recovery.** Does "race" mean (a) a gate-side event, such as a
    second push to the branch while its run is in flight, or `main` moving while
    the run waits on checks (PRD section 5, "A conflict after the push"), or
@@ -339,6 +352,6 @@ Each must be answered, in this PR or in a new one, before any pilot head runs.
    (b) with `--intent` set to the PR's goal sentence?
 9. **Thresholds.** Are C3's zero and C5's one-head allowance the bars Joel wants,
    and should C8 carry a token threshold, or stay report-only?
-10. **Where the records live.** Should the frozen records be committed to
-    (a) `dayamjz/fleet-tools`, beside `reviews/`, or (b) a private repository
+10. **Where the records live.** Should each head's frozen raw files be committed
+    to (a) `dayamjz/fleet-tools`, beside `reviews/`, or (b) a private repository
     of their own?
