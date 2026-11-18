@@ -25,9 +25,9 @@ mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
 # One record per attempt (README "Gate record"). Only runs reads from the nested
 # checkout; it needs the live service, so the stop comes last, in a finally,
 # which returns only once status reports the service down (wait_down).
-exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
+exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" "$(dirname "$0")/subject-home-config.yaml" <<'PY'
 import datetime, hashlib, json, os, re, subprocess, sys, time
-root, gate = sys.argv[1], sys.argv[2]
+root, gate, pinned = sys.argv[1], sys.argv[2], sys.argv[3]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
 checkout = os.path.join(root, "work", "work")
@@ -161,8 +161,16 @@ def ci_checks():
     except (OSError, ValueError, subprocess.SubprocessError) as e:
         record["errors"].append("ci: %r" % e)
 
+def setup_only():
+    """Whether the home holds only the config.yaml build-subject.sh copied in, byte
+    for byte (README "Gate roles"): every command that makes a home makes more."""
+    if os.listdir(home) != ["config.yaml"]:
+        return False
+    with open(os.path.join(home, "config.yaml"), "rb") as found, open(pinned, "rb") as wrote:
+        return found.read() == wrote.read()
+
 def capture():
-    if not os.path.isdir(home):
+    if not os.path.isdir(home) or setup_only():
         record["outcome"] = "no-home"
         return
     try:  # an exception in a read still reaches the stop, then the record

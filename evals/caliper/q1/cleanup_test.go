@@ -64,6 +64,7 @@ type attempt struct {
 	key                  []string // the attempt key the patched caliper gives a hook; nil as a stock caliper
 	arm                  string   // the hooks' Q1_ARM, as run-full.sh exports it; empty leaves it unset
 	env                  []string // added to every command's environment
+	config               []string // lines serve adds to setup's home configuration (configure)
 }
 
 // keyed gives the attempt's hooks the key caliper 0.19.0+q1attemptenv passes:
@@ -185,13 +186,22 @@ func (a *attempt) assistant(dir string, args ...string) string {
 	return out
 }
 
-// serve builds the subject as setup does, then does what the agent does first:
-// init in the checkout and start the service (ready when start returns).
+// serve builds the subject as setup does, adding what configure was given to
+// the home configuration setup wrote, then starts the service as the agent does
+// (start).
 func (a *attempt) serve() {
 	a.t.Helper()
 	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
 		a.t.Fatalf("build-subject: exit %d\n%s", code, errs)
 	}
+	a.writeConfig()
+	a.start()
+}
+
+// start does what the agent does first: init in the checkout and start the
+// service (ready when start returns).
+func (a *attempt) start() {
+	a.t.Helper()
 	a.assistant(a.checkout, "--json", "init")
 	a.assistant(a.root, "service", "start")
 	// A stop after cleanup's fails, but must still run once caliper's removal

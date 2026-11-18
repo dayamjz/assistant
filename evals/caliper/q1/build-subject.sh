@@ -41,6 +41,17 @@ BRANCH="feature/unlimited"
 # caliper (verify_graders.py).
 AGENT_HOME="${Q1_AGENT_HOME:-$(CDPATH= cd -- "${CALIPER_WORKDIR:?caliper sets CALIPER_WORKDIR for every hook; set Q1_AGENT_HOME outside caliper}/.." && pwd)}"
 
+# The gate's review and fix roles, pinned to Claude in the assistant home the
+# agent's HOME defaults to (README "Gate roles"). The home must not exist yet:
+# cleanup.sh reads one holding only this file, unchanged, as no-home, which is
+# true only of a home this script made.
+if [ -e "$AGENT_HOME/.assistant" ] || [ -L "$AGENT_HOME/.assistant" ]; then
+  echo "$AGENT_HOME/.assistant exists before setup; refusing to write the gate's roles into it" >&2
+  exit 2
+fi
+mkdir -m 700 "$AGENT_HOME/.assistant"
+(umask 077 && cp "$SPEC_DIR/subject-home-config.yaml" "$AGENT_HOME/.assistant/config.yaml")
+
 git init -q --bare -b main remote.git
 REMOTE_ABS="$(cd remote.git && pwd)"
 # This script's own git reads the hook's global config: the operator's, or
@@ -203,7 +214,8 @@ func Summary(count int) string {
 }
 G
 
-# The trusted configuration. Whether to pin the gate's roles here is the owner's (a#896 Q2).
+# The trusted configuration. The gate's roles are not here: the service refuses a
+# repository roles table that differs from its home's (README "Gate roles").
 cat > assistant.json <<'G'
 {
   "no_ci": true,
