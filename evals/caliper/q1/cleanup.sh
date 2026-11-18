@@ -35,7 +35,7 @@ checkout = os.path.join(root, "work", "work")
 # patched caliper passes (README "As run"); without it the record says why.
 task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
 keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
-record = {"schema": 4, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+record = {"schema": 5, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 if not keyed:
@@ -112,29 +112,30 @@ def wait_down():
     """After the stop, until status reports the service down: the stop answers once
     accepted, while the service may still have its database open, and caliper removes
     the attempt root as soon as this hook returns. Any other answer waits, as
-    run-full.sh's probe does; Q1_STOP_WAIT seconds on (default 30) it is a stop: error."""
-    raw = os.environ.get("Q1_STOP_WAIT", "30")
-    limit = int(raw) if re.fullmatch(r"[1-9][0-9]*", raw, re.ASCII) else 30
-    if str(limit) != raw:
-        record["errors"].append("stop: Q1_STOP_WAIT %r is not a whole number of seconds above 0; "
-                                "waiting 30" % raw)
-    deadline = time.monotonic() + limit
+    run-full.sh's probe does, for at most 30s. The outcome is its own evidence,
+    wait_down, beside the stop's exit; a service not reported down is a stop: error too."""
+    deadline = time.monotonic() + 30
     while True:
         try:
             p = subprocess.run(["assistant", "--home", home, "--json", "service", "status"], cwd=root,
                                stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                timeout=max(deadline - time.monotonic(), 1))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            answer, doc = repr(e), None
+        else:
             answer = (p.stdout + p.stderr).strip()
-            doc = json.loads(p.stdout) if p.returncode == 0 else None
-            if isinstance(doc, dict) and doc.get("running") is False:
-                return
-        except (OSError, subprocess.TimeoutExpired, ValueError) as e:
-            answer = repr(e)
-        if time.monotonic() >= deadline:
-            record["errors"].append("stop: the service at %s is not reported down %ds after its stop: %s"
-                                    % (home, limit, answer))
-            return
+            try:
+                doc = json.loads(p.stdout) if p.returncode == 0 else None
+            except ValueError:
+                doc = None
+        down = isinstance(doc, dict) and doc.get("running") is False
+        if down or time.monotonic() >= deadline:
+            break
         time.sleep(0.2)
+    record["wait_down"] = {"down": down, "last_status": answer}
+    if not down:
+        record["errors"].append("stop: the service at %s is not reported down 30s after its stop: %s"
+                                % (home, answer))
 
 def capture():
     if not os.path.isdir(home):

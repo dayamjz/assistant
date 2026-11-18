@@ -292,6 +292,7 @@ type record struct {
 	ServiceAnswered        bool   `json:"service_answered"`
 	Errors, Repositories   []string
 	HeadChecks             []map[string]any `json:"head_checks"`
+	WaitDown               map[string]any   `json:"wait_down"`
 	Usage, Runs, Stop      struct {
 		Cwd, Stderr string
 		Exit        any // a JSON number, or nil when the step is absent or its call raised
@@ -359,7 +360,7 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	}
 	// The stage evidence (schema 2, still in 4): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "4")
+	want(t, "schema", string(r.steps["schema"]), "5")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	// The head check (schema 4), made while the checkout exists: one entry,
 	// bound to the attempt key, the run and its submitted_head.
@@ -537,7 +538,7 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "4", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "5", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
@@ -565,6 +566,7 @@ func TestCleanupReturnsOnlyOnceTheServiceIsDown(t *testing.T) {
 	want(t, "errors", r.Errors, []string{})
 	want(t, "stop exit", r.Stop.Exit, 0)
 	want(t, "polls reporting the service running that cleanup never asked", left(), 0)
+	want(t, "wait_down", r.WaitDown["down"], true)
 	want(t, "service running as cleanup returns", a.running(), false)
 	if t.Failed() {
 		t.Logf("cleanup output:\n%s", out)
@@ -572,24 +574,28 @@ func TestCleanupReturnsOnlyOnceTheServiceIsDown(t *testing.T) {
 }
 
 // TestCleanupFailsWhenTheServiceIsNotReportedDown: a service status still
-// reports running Q1_STOP_WAIT seconds after the stop is a stop: error, on
-// stderr and in the exit status, never a quiet success.
+// reports running 30s after the stop is a stop: error, on stderr and in the
+// exit status, and wait_down says so beside the stop's own exit 0, so the
+// judged cleanup_status is failure while the read stays valid, never a quiet
+// success (a#956's review).
 func TestCleanupFailsWhenTheServiceIsNotReportedDown(t *testing.T) {
 	a := newAttempt(t)
 	a.serve()
 	left := a.slowStop(1 << 20)
-	a.env = []string{"Q1_STOP_WAIT=1"}
 	code, out, r := a.cleanup()
 	want(t, "exit", code, 1)
 	want(t, "outcome", r.Outcome, "read")
 	want(t, "stop exit", r.Stop.Exit, 0)
-	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "stop: the service at "+a.home+" is not reported down 1s after its stop: {") ||
-		!strings.Contains(out, "is not reported down 1s") {
+	want(t, "wait_down", r.WaitDown["down"], false)
+	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "stop: the service at "+a.home+" is not reported down 30s after its stop: {") ||
+		!strings.Contains(out, "is not reported down 30s") {
 		t.Errorf("errors = %v, want the service not reported down alone, on stderr too:\n%s", r.Errors, out)
 	}
 	if left() == 1<<20 {
 		t.Error("cleanup never asked status after its stop")
 	}
-	a.env = nil
 	want(t, "service down after cleanup", a.stopped(), true)
+	j := a.judge(a.built())
+	wantJudged(t, j, "never-reached", "failure")
+	want(t, "judged stop exit, down", []any{j.CleanupStatus.Exit, j.CleanupStatus.Down}, []any{0, false})
 }
