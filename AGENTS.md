@@ -220,6 +220,13 @@ open first. Operator install and quick-start live in [README.md](README.md).
   a name that does not parse, are left. Go's `t.TempDir` and `go-build*`
   directories, and a scratch directory the product makes for itself, are
   not this.
+- A home a test, harness or script makes goes under a short root such as
+  `/tmp`, as `standin.TempDir`'s directories do (`tempRoot` says why), not
+  under macOS's per-user `$TMPDIR`: the service refuses a home whose
+  `<home>/socket` is longer than `ipc.MaxSocketPath`, and the Q1 harness's
+  homes there ran over it (`evals/caliper/q1/run-full.sh` says so where it
+  roots them). `docs/operators.md`, "Choosing where the home lives", owns
+  the limits and which spellings of the path are checked.
 - A test's shell that waits to be released waits on `standin.HeldWait`,
   never on a release-file loop of its own (#432, #440), and `HeldWait`
   fails the test unless its package's `TestMain` runs `standin.RunOwned`.
