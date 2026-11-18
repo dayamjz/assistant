@@ -23,9 +23,10 @@ workdir="${CALIPER_WORKDIR:-.}"
 attempt_root="$(CDPATH= cd -- "$workdir/.." && pwd)"
 mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
 # One record per attempt (README "Gate record"). Only runs reads from the nested
-# checkout; it needs the live service, so the stop comes last, in a finally.
+# checkout; it needs the live service, so the stop comes last, in a finally,
+# which returns only once status reports the service down (wait_down).
 exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
-import datetime, json, os, re, subprocess, sys
+import datetime, json, os, re, subprocess, sys, time
 root, gate = sys.argv[1], sys.argv[2]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
@@ -34,7 +35,7 @@ checkout = os.path.join(root, "work", "work")
 # patched caliper passes (README "As run"); without it the record says why.
 task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
 keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
-record = {"schema": 4, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+record = {"schema": 5, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 if not keyed:
@@ -107,6 +108,35 @@ def check_head(run):
             pass  # is_commit stays false, which gate_record.py reads as cannot tell
     return entry
 
+def wait_down():
+    """After the stop, until status reports the service down: the stop answers once
+    accepted, while the service may still have its database open, and caliper removes
+    the attempt root as soon as this hook returns. Any other answer waits, as
+    run-full.sh's probe does, for at most 30s. The outcome is its own evidence,
+    wait_down, beside the stop's exit; a service not reported down is a stop: error too."""
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            p = subprocess.run(["assistant", "--home", home, "--json", "service", "status"], cwd=root,
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=max(deadline - time.monotonic(), 1))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            answer, doc = repr(e), None
+        else:
+            answer = (p.stdout + p.stderr).strip()
+            try:
+                doc = json.loads(p.stdout) if p.returncode == 0 else None
+            except ValueError:
+                doc = None
+        down = isinstance(doc, dict) and doc.get("running") is False
+        if down or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    record["wait_down"] = {"down": down, "last_status": answer}
+    if not down:
+        record["errors"].append("stop: the service at %s is not reported down 30s after its stop: %s"
+                                % (home, answer))
+
 def capture():
     if not os.path.isdir(home):
         record["outcome"] = "no-home"
@@ -133,6 +163,7 @@ def capture():
                 record["errors"].append("runs: exit 0, but the output is not a runs document")
     finally:
         call("stop", ["service", "stop", "--force"], root)
+        wait_down()  # even after a failed stop: the root must not go while the service is up
 
 try:
     capture()

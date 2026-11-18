@@ -243,6 +243,46 @@ exec %[1]s "$@"
 	a.path = wrap + ":" + a.path
 }
 
+// slowStop puts an assistant ahead of the real one on PATH whose stop, like
+// the real one, returns before the service is down, and for longer: it saves
+// the real status answer of the running service, hands the stop to the real
+// binary, and then answers the next polls --json service status calls with
+// that saved answer before handing status to the real binary again. left
+// reports how many of those polls were never asked.
+func (a *attempt) slowStop(polls int) (left func() int) {
+	a.t.Helper()
+	wrap := filepath.Join(a.root, "wrap")
+	script := fmt.Sprintf(`#!/bin/sh
+w=%[3]s
+case " $* " in
+*" service stop "*)
+	%[1]s --home %[2]s --json service status >"$w/up.json"
+	rc=0; %[1]s "$@" || rc=$?
+	echo %[4]d >"$w/left"
+	exit $rc;;
+*" --json service status"*)
+	n=$(cat "$w/left" 2>/dev/null || echo 0)
+	[ "$n" -gt 0 ] && { echo $((n - 1)) >"$w/left"; cat "$w/up.json"; exit 0; };;
+esac
+exec %[1]s "$@"
+`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home), procgroup.ShellQuote(wrap), polls)
+	if err := os.Mkdir(wrap, 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	a.path = wrap + ":" + a.path
+	return func() int {
+		data, err := os.ReadFile(filepath.Join(wrap, "left"))
+		n, perr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err = errors.Join(err, perr); err != nil {
+			a.t.Fatalf("the stand-in's stop never ran: %v", err)
+		}
+		return n
+	}
+}
+
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
@@ -252,6 +292,7 @@ type record struct {
 	ServiceAnswered        bool   `json:"service_answered"`
 	Errors, Repositories   []string
 	HeadChecks             []map[string]any `json:"head_checks"`
+	WaitDown               map[string]any   `json:"wait_down"`
 	Usage, Runs, Stop      struct {
 		Cwd, Stderr string
 		Exit        any // a JSON number, or nil when the step is absent or its call raised
@@ -319,7 +360,7 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	}
 	// The stage evidence (schema 2, still in 4): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "4")
+	want(t, "schema", string(r.steps["schema"]), "5")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	// The head check (schema 4), made while the checkout exists: one entry,
 	// bound to the attempt key, the run and its submitted_head.
@@ -497,7 +538,7 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "4", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "5", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
@@ -509,4 +550,52 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 		}
 		wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
 	}
+}
+
+// TestCleanupReturnsOnlyOnceTheServiceIsDown: caliper removes the attempt root
+// as soon as cleanup returns, so cleanup must not return while the service may
+// still have its database open (a#953's state.db-shm). The stand-in's status
+// still reports the service running for five polls after its stop returns;
+// cleanup asks until status reports it down, and only then returns.
+func TestCleanupReturnsOnlyOnceTheServiceIsDown(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	left := a.slowStop(5)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "errors", r.Errors, []string{})
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "polls reporting the service running that cleanup never asked", left(), 0)
+	want(t, "wait_down", r.WaitDown["down"], true)
+	want(t, "service running as cleanup returns", a.running(), false)
+	if t.Failed() {
+		t.Logf("cleanup output:\n%s", out)
+	}
+}
+
+// TestCleanupFailsWhenTheServiceIsNotReportedDown: a service status still
+// reports running 30s after the stop is a stop: error, on stderr and in the
+// exit status, and wait_down says so beside the stop's own exit 0, so the
+// judged cleanup_status is failure while the read stays valid, never a quiet
+// success (a#956's review).
+func TestCleanupFailsWhenTheServiceIsNotReportedDown(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	left := a.slowStop(1 << 20)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "read")
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "wait_down", r.WaitDown["down"], false)
+	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "stop: the service at "+a.home+" is not reported down 30s after its stop: {") ||
+		!strings.Contains(out, "is not reported down 30s") {
+		t.Errorf("errors = %v, want the service not reported down alone, on stderr too:\n%s", r.Errors, out)
+	}
+	if left() == 1<<20 {
+		t.Error("cleanup never asked status after its stop")
+	}
+	want(t, "service down after cleanup", a.stopped(), true)
+	j := a.judge(a.built())
+	wantJudged(t, j, "never-reached", "failure")
+	want(t, "judged stop exit, down", []any{j.CleanupStatus.Exit, j.CleanupStatus.Down}, []any{0, false})
 }
