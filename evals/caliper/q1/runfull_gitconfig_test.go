@@ -48,10 +48,17 @@ func (r *fullRun) operatorConfig(homeManager bool, content string) []string {
 	must(r.t, os.MkdirAll(store, 0o755))
 	must(r.t, os.MkdirAll(filepath.Dir(link), 0o755))
 	must(r.t, os.WriteFile(filepath.Join(store, "git-config"), []byte(content), 0o444))
-	must(r.t, os.Chmod(store, 0o555))
-	r.t.Cleanup(func() { _ = os.Chmod(store, 0o755) }) // before armDir's RemoveAll
+	takeWritesOff(r.t, store)
 	must(r.t, os.Symlink(filepath.Join(store, "git-config"), link))
 	return []string{link, filepath.Join(store, "git-config")}
+}
+
+// takeWritesOff makes dir, a directory, read-only until the test ends, when
+// its write permission is put back so armDir's RemoveAll can empty it.
+func takeWritesOff(t *testing.T, dir string) {
+	t.Helper()
+	must(t, os.Chmod(dir, 0o555))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 }
 
 // snapshot is each path's mode, link target and bytes.
