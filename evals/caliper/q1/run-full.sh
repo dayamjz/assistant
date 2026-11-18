@@ -11,8 +11,52 @@
 # Claude Code logged in (ANTHROPIC_API_KEY or `claude auth login`), and
 # provider headroom checked (quota-axi). Graders must pass first.
 set -eu
-cd "$(dirname "$0")"
 MODEL="${1:-claude-code:claude-sonnet-5-5}"
+UPSTREAM_URL="https://github.com/dayamjz/caliper-q1.git"
+
+# A run never writes the operator's global git config (a#942): where that is a
+# read-only link, every setup hook failed. Before anything reads or writes git
+# config, GIT_CONFIG_GLOBAL names a scratch file of this run's, which includes
+# the operator's own global config for reading. Caliper runs setup, cleanup and
+# assert with this process's environment (caliper/workdir.py), so their global
+# writes land in the scratch file too; the agent gets an environment of its own
+# (README "Subject remote"). The file is removed on exit, and an interrupt
+# exits through that same trap.
+trap '[ -z "${GITCONFIG:-}" ] || rm -f "$GITCONFIG"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+GITCONFIG="$(mktemp "${TMPDIR:-/tmp}/q1-gitconfig.XXXXXX")"
+if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
+	set -- "$GIT_CONFIG_GLOBAL"
+else
+	set -- "${XDG_CONFIG_HOME:-$HOME/.config}/git/config" "$HOME/.gitconfig"
+fi
+for real; do
+	case "$real" in /*) ;; *) real="$PWD/$real" ;; esac
+	# This git reads no global config: the refusal below reports one it cannot read.
+	[ ! -e "$real" ] || GIT_CONFIG_GLOBAL=/dev/null git config --file "$GITCONFIG" --add include.path "$real"
+done
+export GIT_CONFIG_GLOBAL="$GITCONFIG"
+# A rewrite of the subject URL in the operator's own config, which a run
+# before a#942 could leave there, would win over each attempt's own rewrite.
+# Clearing it would write that config, so refuse instead and name it.
+stale_rc=0
+stale="$(git config --global --includes --show-origin --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL")" || stale_rc=$?
+case "$stale_rc" in
+0)
+	echo "your global git config rewrites $UPSTREAM_URL, which would win over every attempt's rewrite; remove it and rerun:" >&2
+	printf '%s\n' "$stale" >&2
+	exit 2
+	;;
+1) ;;
+*)
+	echo "cannot read your global git config through $GITCONFIG (git config exit $stale_rc)" >&2
+	exit 2
+	;;
+esac
+
+cd "$(dirname "$0")"
 REPO_ROOT="$(CDPATH= cd -- ../../.. && pwd)"
 CALIPER_VENV="${CALIPER_VENV:-$HOME/.local/share/caliper-q1attemptenv}"
 export PATH="$REPO_ROOT/bin:$CALIPER_VENV/bin:${HOME}/.local/bin:${HOME}/.local/node_modules/.bin:${PATH}"
@@ -52,16 +96,9 @@ python3 verify_graders.py
 caliper validate q1.eval.yaml
 
 # workers=1: build-subject.sh installs a global insteadOf for the subject
-# upstream URL for the hook's own git; two attempts sharing this machine's
-# HOME would race that rewrite. Caliper's attempt HOME isolation does not
-# cover the setup hook's git config --global here (README "Subject remote").
-# Clear any leftover rewrite of the subject URL before either arm. A prior
-# crashed run can leave url.*.insteadOf pointing at a deleted remote.git.
-git config --global --get-regexp '^url\..*\.insteadof$' \
-	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
-	while read -r key _; do
-		git config --global --unset-all "$key" 2>/dev/null || true
-	done
+# upstream URL for the hook's own git, in this run's one scratch file, so two
+# concurrent attempts would race that rewrite. Caliper's attempt HOME isolation
+# does not cover the setup hook's git config --global (README "Subject remote").
 
 # Each arm runs under a TMPDIR of its own, so caliper makes that arm's attempt
 # roots there and cleanup.sh writes their gate records to
@@ -110,10 +147,10 @@ Q1_ARM=full-gate TMPDIR="$ARMS/full-gate" caliper run q1.eval.yaml --k "$K" --ti
 	--model "$MODEL" --judge-model "$MODEL" \
 	--output result-q1-full-gate.json || with_rc=$?
 
-# Same URL clear before the agent-ci arm: cleanup should have done this, but a
-# mid-arm crash must not poison the second arm.
-git config --global --get-regexp '^url\..*\.insteadof$' \
-	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
+# Clear the scratch file's rewrite of the subject URL before the agent-ci arm:
+# cleanup should have done this, but a mid-arm crash can leave it pointing at a
+# deleted remote.git, and must not poison the second arm.
+git config --global --get-regexp '^url\..*\.insteadof$' "$UPSTREAM_URL" 2>/dev/null |
 	while read -r key _; do
 		git config --global --unset-all "$key" 2>/dev/null || true
 	done
