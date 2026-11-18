@@ -1,9 +1,16 @@
 # The subject home's config.yaml, which build-subject.sh copies to
 # <attempt root>/.assistant/config.yaml before the agent starts: the gate's
-# review and fix roles pinned to Claude (README "Gate roles"). cleanup.sh
-# reads a home holding only this file, byte for byte, as no-home.
+# review and fix roles pinned to Claude on Sonnet 5.5, the model run-full.sh
+# gives the agent (README "Gate roles"). cleanup.sh reads a home holding only
+# this file, byte for byte, as no-home.
 roles:
   review:
     agent: claude
+    provider: anthropic
+    type: sonnet
+    version: "5.5"
   fix:
     agent: claude
+    provider: anthropic
+    type: sonnet
+    version: "5.5"

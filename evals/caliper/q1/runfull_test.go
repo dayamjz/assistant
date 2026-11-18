@@ -424,7 +424,7 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 			runs = append(runs, line)
 		}
 	}
-	model := "--model claude-code:claude-sonnet-5-5 --judge-model claude-code:claude-sonnet-5-5"
+	model := "--model claude-code:" + rowModel + " --judge-model claude-code:" + rowModel
 	want(t, "caliper runs", runs, []string{
 		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --output result-q1-full-gate.json",
 		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci.json"})
@@ -456,5 +456,64 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(r.spec, "result-q1-"+arm+".json")); err != nil {
 			t.Errorf("%s result: %v", arm, err)
 		}
+	}
+}
+
+// armList is run-full.sh's list of the arms it runs, the one line an arm is
+// added on.
+var armList = regexp.MustCompile(`(?m)^ARM_LIST="([^"\n]*)"$`)
+
+// withArm adds arm to the end of the copy's arm list, as row 11's link 2b adds
+// agent-ci-review.
+func (r *fullRun) withArm(arm string) {
+	r.t.Helper()
+	path := filepath.Join(r.spec, "run-full.sh")
+	data, err := os.ReadFile(path)
+	must(r.t, err)
+	if n := len(armList.FindAllIndex(data, -1)); n != 1 {
+		r.t.Fatalf("run-full.sh has %d arm lists (ARM_LIST=\"...\" lines), want 1", n)
+	}
+	data = armList.ReplaceAll(data, []byte(`ARM_LIST="$1 `+arm+`"`))
+	must(r.t, os.WriteFile(path, data, 0o644))
+}
+
+// TestRunFullRefusesAgentCIReviewWithoutAToken: agent-ci-review's reviewer
+// runs claude -p under a fresh HOME, which only CLAUDE_CODE_OAUTH_TOKEN can
+// authenticate, so with that arm in the list and the variable unset or empty
+// run-full.sh refuses (exit 2), naming the variable, before graders and before
+// caliper or an arm runs. Set to a value that is not a credential, it passes
+// that check without printing the value and stops at the next one: no caliper
+// flags for the arm, which 2b adds with the arm. Without the arm in the list,
+// the other run-full.sh tests run with the variable unset.
+func TestRunFullRefusesAgentCIReviewWithoutAToken(t *testing.T) {
+	const sentinel = "q1-sentinel-not-a-credential"
+	for _, c := range []struct {
+		name, refusal string
+		env           []string
+	}{
+		{"unset", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", nil},
+		{"empty", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", []string{"CLAUDE_CODE_OAUTH_TOKEN="}},
+		{"set", "run-full.sh names no caliper flags for arm 'agent-ci-review'", []string{"CLAUDE_CODE_OAUTH_TOKEN=" + sentinel}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newFullRun(t)
+			r.standInGraders()
+			r.withArm("agent-ci-review")
+			r.run(c.env...)
+			if r.code != 2 || !strings.Contains(r.stderr, c.refusal) {
+				t.Fatalf("run-full.sh exit %d, want 2 with %q; output:\n%s", r.code, c.refusal, r.stderr)
+			}
+			if strings.Contains(r.stderr, sentinel) {
+				t.Errorf("run-full.sh printed the token's value:\n%s", r.stderr)
+			}
+			for _, f := range []string{r.calls, filepath.Join(r.root, "graders.calls")} {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s exists (%v): graders or caliper ran before the refusal", f, err)
+				}
+			}
+			if r.arms != "" {
+				t.Errorf("run-full.sh made the arms directory %s before the refusal", r.arms)
+			}
+		})
 	}
 }
