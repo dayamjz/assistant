@@ -64,7 +64,7 @@ def key_of(record):
     """The record's attempt key (task_id, caliper_attempt), or None when it has none:
     schema 1 and 2 predate it, and cleanup.sh under a stock caliper writes nulls."""
     key = (record.get("task_id"), record.get("caliper_attempt"))
-    ok = gate_record.schema(record) in (3, 4) and isinstance(key[0], str) and key[0] and type(key[1]) is int
+    ok = gate_record.schema(record) in (3, 4, 5) and isinstance(key[0], str) and key[0] and type(key[1]) is int
     return key if ok else None
 
 
