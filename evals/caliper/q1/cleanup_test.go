@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 	os.Exit(standin.RunOwned(func() int {
 		code := m.Run()
 		journey.Cleanup()
+		if goCache.dir != "" {
+			_ = os.RemoveAll(goCache.dir)
+		}
 		return code
 	}))
 }

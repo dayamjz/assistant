@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -162,6 +163,28 @@ func must(t *testing.T, err error) {
 	}
 }
 
+// standInGraders replaces the copy's verify_graders.py with a stand-in that
+// records each call and passes, for a test whose subject is not the graders:
+// the real script builds eight subjects cold (README "CI"), and
+// TestRunFullRunsEachArmUnderItsOwnTMPDIR runs it.
+func (r *fullRun) standInGraders() {
+	r.t.Helper()
+	calls := filepath.Join(r.root, "graders.calls")
+	must(r.t, os.WriteFile(filepath.Join(r.spec, "verify_graders.py"),
+		[]byte("import os\nwith open("+strconv.Quote(calls)+", \"a\") as f:\n    f.write(os.getcwd() + \"\\n\")\n"), 0o644))
+}
+
+// wantGradersCalled checks that run-full.sh ran the copy's verify_graders.py,
+// the stand-in standInGraders wrote, once and from the copy.
+func (r *fullRun) wantGradersCalled() {
+	r.t.Helper()
+	data, err := os.ReadFile(filepath.Join(r.root, "graders.calls"))
+	if err != nil && !os.IsNotExist(err) {
+		r.t.Fatal(err)
+	}
+	want(r.t, "verify_graders.py calls (each its cwd)", string(data), r.spec+"\n")
+}
+
 // command runs a setup step and fails the test unless it exits 0.
 func (r *fullRun) command(dir, name string, args ...string) {
 	r.t.Helper()
@@ -203,10 +226,12 @@ func (r *fullRun) run(extra ...string) {
 // and the run exits 0.
 func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run()
 	if r.code != 0 || r.gateByArmFile == "" {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	var report struct {
 		AsAssigned map[string]struct{ Attempts []armAttempt } `json:"as_assigned"`
 	}
@@ -232,10 +257,12 @@ func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 // there is no probe home or service log to keep.
 func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run("Q1_ARMS_ROOT=" + r.tmpdir)
 	if r.code != 2 || !strings.Contains(r.stderr, "did not start") {
 		t.Fatalf("run-full.sh exit %d, want 2 with the refusal; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	calls, err := os.ReadFile(r.calls)
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
@@ -277,10 +304,12 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 // The operator-side rewrite (a#942's write) is gone after the run.
 func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 	r := newFullRun(t)
+	r.standInGraders()
 	r.run()
 	if r.code != 0 || r.arms == "" {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
 	}
+	r.wantGradersCalled()
 	var seen struct {
 		Remote, Main         string
 		AttemptGitconfig     string `json:"attempt_gitconfig"`
@@ -360,12 +389,17 @@ func (r *fullRun) armsWithSkill() string { return filepath.Join(r.arms, "full-ga
 // of README "Arms", full-gate with the skill and agent-ci with it ablated, each
 // on the owner's pinned model (a#896) and under its own TMPDIR with Q1_ARM set,
 // so each arm's record says its arm, carries the CI evidence its setup wrote
-// (no push, so not invoked), and the report has exactly those arms.
+// (no push, so not invoked), and the report has exactly those arms. It is the
+// one run-full.sh test that runs the real verify_graders.py, which must pass
+// before any arm runs; the others stand it in (standInGraders).
 func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 	r := newFullRun(t)
 	r.run()
 	if r.code != 0 || r.gateByArmFile == "" {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
+	}
+	if !strings.Contains(r.stderr, "all grader checks passed") {
+		t.Errorf("run-full.sh did not run the real verify_graders.py to its end; output:\n%s", r.stderr)
 	}
 	calls, err := os.ReadFile(r.calls)
 	must(t, err)

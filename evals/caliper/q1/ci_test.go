@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,13 +17,33 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
+// goCache is the one Go build cache the hook's go test and go vet share
+// across this package's direct hook tests, made on first use and removed after
+// the tests (TestMain). These tests are about what the hook decides and
+// records, not where go caches: a cold cache under each attempt's own HOME is
+// what verify_graders.py exercises, once per package through run-full.sh
+// (TestRunFullRunsEachArmUnderItsOwnTMPDIR).
+var goCache struct {
+	once sync.Once
+	dir  string
+	err  error
+}
+
+func sharedGoCache(t *testing.T) string {
+	t.Helper()
+	goCache.once.Do(func() { goCache.dir, goCache.err = standin.TempDir("q1-gocache") })
+	must(t, goCache.err)
+	return goCache.dir
+}
+
 // ciAttempt is an attempt whose setup built the benign subject, so its remote
 // has the CI hook (README "CI"), with go on PATH for the hook, as caliper's
-// PATH has it. extra is added to the hooks' environment.
+// PATH has it, and the package's shared GOCACHE. extra is added to the hooks'
+// environment.
 func ciAttempt(t *testing.T, extra ...string) *attempt {
 	t.Helper()
 	a := newAttempt(t)
-	a.env = extra
+	a.env = append([]string{"GOCACHE=" + sharedGoCache(t)}, extra...)
 	goTool, err := exec.LookPath("go")
 	must(t, err)
 	a.path += ":" + filepath.Dir(goTool)
