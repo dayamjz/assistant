@@ -16,7 +16,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/home"
-	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/procgroup"
@@ -177,44 +176,53 @@ subprocess.run = run
 `, match, nth))
 }
 
-// scriptAgent has the service's agent be the scripted stand-in: the claude
-// shim ahead of the exit-1 stubs on PATH, and the home's configuration naming
-// it with the stand-in's arguments, with no fix role, as
-// journey.WriteConfiguration writes it, with the keys in more beside them.
-// It is called before serve.
+// scriptAgent has every Claude launch of the attempt be the scripted stand-in
+// (claudeStandIn): the service agent, which auto resolves to claude, and the
+// review and fix roles setup pins to it (README "Gate roles"). Any keys in more
+// are added to the home's configuration beside the pin (configure). It is
+// called before serve.
 func (a *attempt) scriptAgent(script standin.Script, more ...map[string]any) *standin.Agent {
 	a.t.Helper()
-	agent := standin.New(a.t, script)
-	shims, err := journey.Shims()
-	if err != nil {
-		a.t.Fatal(err)
-	}
-	document := map[string]any{"agent": strings.Join(append([]string{journey.AgentShimName}, agent.Arguments()...), " "),
-		"roles": map[string]any{"fix": map[string]any{}}}
 	for _, m := range more {
-		for k, v := range m {
-			document[k] = v
-		}
+		a.configure(m)
 	}
-	a.configure(document)
-	a.path = shims + ":" + a.path
-	return agent
+	return a.claudeStandIn(script)
 }
 
-// configure writes the home's configuration document, through internal/home
-// so no home path is spelled here. It is called before serve.
+// configure adds document's keys to the home's configuration once setup has
+// written the gate's roles into it: serve appends each key as one line whose
+// value is JSON, which YAML reads as a flow value. A key the pin already sets
+// is a duplicate the service refuses to start on. It is called before serve.
 func (a *attempt) configure(document map[string]any) {
 	a.t.Helper()
+	for k, v := range document {
+		body, err := json.Marshal(v)
+		if err != nil {
+			a.t.Fatal(err)
+		}
+		a.config = append(a.config, k+": "+string(body)+"\n")
+	}
+}
+
+// writeConfig appends what configure was given to the configuration setup
+// wrote, through internal/home so no home path is spelled here. A setup that
+// wrote none (main before the pin) gets a file holding these keys alone.
+func (a *attempt) writeConfig() {
+	a.t.Helper()
+	if len(a.config) == 0 {
+		return
+	}
 	h, err := home.Open(a.home)
 	if err == nil {
 		err = h.Create()
 	}
-	var body []byte
+	var f *os.File
 	if err == nil {
-		body, err = json.Marshal(document)
+		f, err = os.OpenFile(h.ConfigFile(), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 	}
 	if err == nil {
-		err = os.WriteFile(h.ConfigFile(), append(body, '\n'), 0o600)
+		_, err = f.WriteString(strings.Join(a.config, ""))
+		err = errors.Join(err, f.Close())
 	}
 	if err != nil {
 		a.t.Fatal(err)
@@ -368,8 +376,8 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	// Labeled edit: the execution row dropped, as a forced stop drops it (#928); ran alone decides.
 	wantStage(t, judgeEdit(both(func(m map[string]any) { delete(reviewOf(m), "executions") })), "review executed", 4)
 	// Labeled edit: the record as a#925's cleanup.sh wrote it, schema 1 with no stages.
-	j = judgeEdit(func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages") })
-	wantJudged(t, j, "ran", "success")
+	j = judgeEdit(func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages"); delete(rec, "wait_down") })
+	wantJudged(t, j, "ran", "failure")
 	var raw struct {
 		Attempts []struct {
 			StageExecution map[string]any `json:"stage_execution"`
@@ -378,7 +386,7 @@ func TestStageReadsACompletedReviewThatEstablishedNothing(t *testing.T) {
 	_, rawOut, _ := a.instrument(append(rev.args(), "--records", edited, a.name())...)
 	want(t, "decode", json.Unmarshal([]byte(rawOut), &raw), nil)
 	want(t, "schema 1 stage_execution, exactly", raw.Attempts[0].StageExecution, map[string]any{"verdict": "not measured"})
-	for _, unknown := range []any{5, true} { // JSON true is not schema 1
+	for _, unknown := range []any{7, true} { // JSON true is not schema 1
 		j = judgeEdit(func(rec map[string]any) { rec["schema"] = unknown })
 		wantJudged(t, j, "", "success")
 		wantStage(t, j, "cannot tell")
@@ -573,10 +581,10 @@ func TestStageReadsARunRefusedBeforeAnyStage(t *testing.T) {
 	// The configuration restored on main, and a second run held at review. main
 	// goes back to the commit before the break rather than gaining a revert, so
 	// the branch is still on it and the run's rebase writes no commit, which
-	// needs a committer identity a CI runner does not have. The push names the
-	// remote's path: cleanup.sh dropped the URL rewrite origin used.
+	// needs a committer identity a CI runner does not have. It is fetched into the
+	// remote by path, as breakTrustedConfig's break was, so no CI hook checks it.
 	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && git reset -q --hard HEAD~1"+
-		" && git push -q --force ../remote.git main && git checkout -q feature/unlimited"); code != 0 {
+		` && git --git-dir=../remote.git fetch -q "$PWD" +main:main && git checkout -q feature/unlimited`); code != 0 {
 		t.Fatalf("restoring the trusted configuration: exit %d\n%s", code, errs)
 	}
 	a.restart()
@@ -692,7 +700,8 @@ func TestStageFoldsAnUnreadRunBesideACompletedReviewAsTrouble(t *testing.T) {
 }
 
 // TestStageReadsARunHeldAtRebaseAsReviewNotReached is row 10: main gains a
-// commit that conflicts with the branch, and with no automatic rebase round
+// commit that conflicts with the branch (fetched into the remote, as a colleague's
+// landing is, so the attempt's CI hook never sees it), and with no automatic rebase round
 // (fix_rounds.rebase 0, so no fixer runs) the run is held at its rebase. It
 // has a checkpoint, its position is before review, and the review log is
 // unwritten: stages executed, review not executed.
@@ -702,7 +711,7 @@ func TestStageReadsARunHeldAtRebaseAsReviewNotReached(t *testing.T) {
 	a.serve()
 	if code, _, errs := a.run(a.checkout, "sh", "-c", `f=$(git diff --name-only main feature/unlimited | head -n 1) && [ -n "$f" ]`+
 		` && git checkout -q main && echo 'main moved this line' > "$f" && git add -- "$f"`+
-		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm conflicting && git push -q ../remote.git main && git checkout -q feature/unlimited`); code != 0 {
+		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm conflicting && git --git-dir=../remote.git fetch -q "$PWD" main:main && git checkout -q feature/unlimited`); code != 0 {
 		t.Fatalf("a conflicting commit on main: exit %d\n%s", code, errs)
 	}
 	id := a.startRun()

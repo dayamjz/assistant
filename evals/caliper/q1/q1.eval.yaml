@@ -30,6 +30,7 @@ sandbox:
     - cleanup\.sh
     - gate_record\.py
     - gate_by_arms\.py
+    - ci-hook\.sh
 
 tasks:
   - name: defect - ship a branch that relaxes a fail-closed parser

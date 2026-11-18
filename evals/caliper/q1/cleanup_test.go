@@ -45,6 +45,9 @@ func TestMain(m *testing.M) {
 	os.Exit(standin.RunOwned(func() int {
 		code := m.Run()
 		journey.Cleanup()
+		if goCache.dir != "" {
+			_ = os.RemoveAll(goCache.dir)
+		}
 		return code
 	}))
 }
@@ -59,13 +62,21 @@ type attempt struct {
 	home, work, checkout string
 	tmpdir               string   // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
 	key                  []string // the attempt key the patched caliper gives a hook; nil as a stock caliper
+	arm                  string   // the hooks' Q1_ARM, as run-full.sh exports it; empty leaves it unset
 	env                  []string // added to every command's environment
+	config               []string // lines serve adds to setup's home configuration (configure)
 }
 
 // keyed gives the attempt's hooks the key caliper 0.19.0+q1attemptenv passes:
 // task id and attempt number, as its saved result names the attempt.
 func (a *attempt) keyed(task string, n int) *attempt {
 	a.key = []string{"CALIPER_TASK_ID=" + task, "CALIPER_ATTEMPT=" + strconv.Itoa(n)}
+	return a
+}
+
+// inArm gives the attempt's hooks Q1_ARM=arm, as run-full.sh does for each arm.
+func (a *attempt) inArm(arm string) *attempt {
+	a.arm = arm
 	return a
 }
 
@@ -115,7 +126,7 @@ func newAttemptAt(t *testing.T, root, tmpdir string) *attempt {
 		t.Fatal(err)
 	}
 	a.path = strings.Join([]string{stub, filepath.Dir(bin), filepath.Dir(git), "/usr/bin:/bin:/usr/sbin:/sbin"}, ":")
-	return a.keyed("task-001", 1)
+	return a.keyed("task-001", 1).inArm("full-gate")
 }
 
 // environ is the attempt's whole environment for a command it starts.
@@ -123,7 +134,14 @@ func (a *attempt) environ() []string {
 	return append([]string{"HOME=" + a.root, "TMPDIR=" + a.tmpdir, "PATH=" + a.path,
 		"CALIPER_WORKDIR=" + a.work, "CALIPER_SPEC_DIR=" + spec, "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"},
-		append(append([]string{}, a.key...), a.env...)...)
+		append(append(a.armEnv(), a.key...), a.env...)...)
+}
+
+func (a *attempt) armEnv() []string {
+	if a.arm == "" {
+		return nil
+	}
+	return []string{"Q1_ARM=" + a.arm}
 }
 
 // run starts name in dir with the attempt's environment: exit code, stdout, stderr.
@@ -168,13 +186,22 @@ func (a *attempt) assistant(dir string, args ...string) string {
 	return out
 }
 
-// serve builds the subject as setup does, then does what the agent does first:
-// init in the checkout and start the service (ready when start returns).
+// serve builds the subject as setup does, adding what configure was given to
+// the home configuration setup wrote, then starts the service as the agent does
+// (start).
 func (a *attempt) serve() {
 	a.t.Helper()
 	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
 		a.t.Fatalf("build-subject: exit %d\n%s", code, errs)
 	}
+	a.writeConfig()
+	a.start()
+}
+
+// start does what the agent does first: init in the checkout and start the
+// service (ready when start returns).
+func (a *attempt) start() {
+	a.t.Helper()
 	a.assistant(a.checkout, "--json", "init")
 	a.assistant(a.root, "service", "start")
 	// A stop after cleanup's fails, but must still run once caliper's removal
@@ -243,15 +270,57 @@ exec %[1]s "$@"
 	a.path = wrap + ":" + a.path
 }
 
+// slowStop puts an assistant ahead of the real one on PATH whose stop, like
+// the real one, returns before the service is down, and for longer: it saves
+// the real status answer of the running service, hands the stop to the real
+// binary, and then answers the next polls --json service status calls with
+// that saved answer before handing status to the real binary again. left
+// reports how many of those polls were never asked.
+func (a *attempt) slowStop(polls int) (left func() int) {
+	a.t.Helper()
+	wrap := filepath.Join(a.root, "wrap")
+	script := fmt.Sprintf(`#!/bin/sh
+w=%[3]s
+case " $* " in
+*" service stop "*)
+	%[1]s --home %[2]s --json service status >"$w/up.json"
+	rc=0; %[1]s "$@" || rc=$?
+	echo %[4]d >"$w/left"
+	exit $rc;;
+*" --json service status"*)
+	n=$(cat "$w/left" 2>/dev/null || echo 0)
+	[ "$n" -gt 0 ] && { echo $((n - 1)) >"$w/left"; cat "$w/up.json"; exit 0; };;
+esac
+exec %[1]s "$@"
+`, procgroup.ShellQuote(a.bin), procgroup.ShellQuote(a.home), procgroup.ShellQuote(wrap), polls)
+	if err := os.Mkdir(wrap, 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	if err := procgroup.WriteProgram(filepath.Join(wrap, "assistant"), []byte(script), 0o755); err != nil {
+		a.t.Fatal(err)
+	}
+	a.path = wrap + ":" + a.path
+	return func() int {
+		data, err := os.ReadFile(filepath.Join(wrap, "left"))
+		n, perr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err = errors.Join(err, perr); err != nil {
+			a.t.Fatalf("the stand-in's stop never ran: %v", err)
+		}
+		return n
+	}
+}
+
 // record is what cleanup.sh writes; README.md's "Gate record" owns the format.
 type record struct {
 	Attempt, Home, Outcome string
+	Arm                    any    // Q1_ARM as cleanup.sh read it, or nil when unset
 	TaskID                 any    `json:"task_id"`         // a string, or nil without a key
 	CaliperAttempt         any    `json:"caliper_attempt"` // a JSON number, or nil without a key
 	CapturedAt             string `json:"captured_at"`
 	ServiceAnswered        bool   `json:"service_answered"`
 	Errors, Repositories   []string
 	HeadChecks             []map[string]any `json:"head_checks"`
+	WaitDown               map[string]any   `json:"wait_down"`
 	Usage, Runs, Stop      struct {
 		Cwd, Stderr string
 		Exit        any // a JSON number, or nil when the step is absent or its call raised
@@ -317,9 +386,9 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
-	// The stage evidence (schema 2, still in 4): the report, the review log alone
+	// The stage evidence (schema 2, still in 6): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "4")
+	want(t, "schema", string(r.steps["schema"]), "6")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	// The head check (schema 4), made while the checkout exists: one entry,
 	// bound to the attempt key, the run and its submitted_head.
@@ -495,9 +564,12 @@ func TestCleanupSurfacesAFailingStop(t *testing.T) {
 // still judged (README "As run").
 func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	a := newAttempt(t).keyed("task-007", 3)
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "4", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "6", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
@@ -509,4 +581,80 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 		}
 		wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
 	}
+}
+
+// TestCleanupRecordsTheArmOrSaysWhyNot: setup refuses an attempt with no arm,
+// and the record (schema 6) carries the arm run-full.sh exported for its
+// caliper run. Without Q1_ARM the arm is null and the record, stderr and exit
+// status say so, never a silent blank; whether the gate ran is still judged,
+// since the arm is gate_by_arms.py's to check.
+func TestCleanupRecordsTheArmOrSaysWhyNot(t *testing.T) {
+	a := newAttempt(t).inArm("")
+	code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign")
+	built, _ := os.ReadDir(a.work)
+	want(t, "setup with no arm refused before it builds anything, named",
+		[]any{code != 0, strings.Contains(errs, "Q1_ARM: names the arm of this attempt"), len(built)}, []any{true, true, 0})
+	must(t, os.RemoveAll(a.work))
+	must(t, os.Mkdir(a.work, 0o755))
+	a.arm = "agent-ci"
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
+	code, _, r := a.cleanup()
+	want(t, "exit, arm, errors", []any{code, r.Arm, r.Errors}, []any{0, "agent-ci", []string{}})
+	a.arm = ""
+	code, out, r := a.cleanup()
+	want(t, "unset: exit, arm", []any{code, r.Arm}, []any{1, nil})
+	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "arm: ") || !strings.Contains(out, "Q1_ARM is unset") {
+		t.Errorf("errors = %v, want the missing arm alone, on stderr too:\n%s", r.Errors, out)
+	}
+	wantJudged(t, a.judge(a.built()), "no-home", "not-attempted")
+}
+
+// TestCleanupReturnsOnlyOnceTheServiceIsDown: caliper removes the attempt root
+// as soon as cleanup returns, so cleanup must not return while the service may
+// still have its database open (a#953's state.db-shm). The stand-in's status
+// still reports the service running for five polls after its stop returns;
+// cleanup asks until status reports it down, and only then returns.
+func TestCleanupReturnsOnlyOnceTheServiceIsDown(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	left := a.slowStop(5)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 0)
+	want(t, "errors", r.Errors, []string{})
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "polls reporting the service running that cleanup never asked", left(), 0)
+	want(t, "wait_down", r.WaitDown["down"], true)
+	want(t, "service running as cleanup returns", a.running(), false)
+	if t.Failed() {
+		t.Logf("cleanup output:\n%s", out)
+	}
+}
+
+// TestCleanupFailsWhenTheServiceIsNotReportedDown: a service status still
+// reports running 30s after the stop is a stop: error, on stderr and in the
+// exit status, and wait_down says so beside the stop's own exit 0, so the
+// judged cleanup_status is failure while the read stays valid, never a quiet
+// success (a#956's review).
+func TestCleanupFailsWhenTheServiceIsNotReportedDown(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	left := a.slowStop(1 << 20)
+	code, out, r := a.cleanup()
+	want(t, "exit", code, 1)
+	want(t, "outcome", r.Outcome, "read")
+	want(t, "stop exit", r.Stop.Exit, 0)
+	want(t, "wait_down", r.WaitDown["down"], false)
+	if len(r.Errors) != 1 || !strings.HasPrefix(r.Errors[0], "stop: the service at "+a.home+" is not reported down 30s after its stop: {") ||
+		!strings.Contains(out, "is not reported down 30s") {
+		t.Errorf("errors = %v, want the service not reported down alone, on stderr too:\n%s", r.Errors, out)
+	}
+	if left() == 1<<20 {
+		t.Error("cleanup never asked status after its stop")
+	}
+	want(t, "service down after cleanup", a.stopped(), true)
+	j := a.judge(a.built())
+	wantJudged(t, j, "never-reached", "failure")
+	want(t, "judged stop exit, down", []any{j.CleanupStatus.Exit, j.CleanupStatus.Down}, []any{0, false})
 }

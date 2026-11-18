@@ -36,10 +36,14 @@ type judged struct {
 		}
 	} `json:"gate_observation"`
 	CleanupStatus struct {
-		Status, Reason string
-		Exit, Stderr   any
+		Status, Reason     string
+		Exit, Stderr, Down any
 	} `json:"cleanup_status"`
 	StageExecution stageVerdict `json:"stage_execution"`
+	CIExecution    struct {
+		Verdict, Reason string
+		Pushes          map[string]int
+	} `json:"ci_execution"`
 }
 
 type report struct {
@@ -182,7 +186,7 @@ func TestGateRecordReadsAHeldRunAsRan(t *testing.T) {
 	r := a.report(a.records(), rev, a.name())
 	j := r.Attempts[0]
 	wantJudged(t, j, "ran", "success")
-	want(t, "stop exit", j.CleanupStatus.Exit, 0)
+	want(t, "stop exit, down", []any{j.CleanupStatus.Exit, j.CleanupStatus.Down}, []any{0, true})
 	want(t, "counts", []int{r.Counts.Attempts, r.Counts.GateObservation["ran"], r.Counts.ValidWithFailedCleanup}, []int{1, 1, 0})
 	wantStage(t, j, "review executed", 4)
 	if len(j.GateObservation.Runs) != 1 {
@@ -208,10 +212,15 @@ func TestGateRecordReadsNoRunAsNeverReached(t *testing.T) {
 
 // breakTrustedConfig publishes an assistant.json on main that is not JSON, so
 // the gate refuses the next run before any stage under P7.
+//
+// The broken main is fetched into the remote rather than pushed, as another
+// person's landing would arrive: it is not the attempt's push, so the remote's
+// CI hook (README "CI") is not asked to check a document that cannot parse.
 func (a *attempt) breakTrustedConfig() {
 	a.t.Helper()
 	if code, _, errs := a.run(a.checkout, "sh", "-c", "git checkout -q main && printf '{' > assistant.json && git add assistant.json"+
-		" && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm broken && git push -q origin main && git checkout -q feature/unlimited"); code != 0 {
+		` && git -c user.name=q1 -c user.email=q1@example.invalid commit -qm broken && git --git-dir=../remote.git fetch -q "$PWD" main:main`+
+		" && git checkout -q feature/unlimited"); code != 0 {
 		a.t.Fatalf("breaking the trusted configuration: exit %d\n%s", code, errs)
 	}
 }
@@ -616,7 +625,7 @@ func TestGateRecordCountsEveryNamedAttempt(t *testing.T) {
 	}
 	nohome.cleanup()
 	dir := filepath.Join(ran.root, "all")
-	schemaOne := func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages") }
+	schemaOne := func(rec map[string]any) { rec["schema"] = 1; delete(rec, "stages"); delete(rec, "wait_down") }
 	names := []string{ran.copyRecord(dir, ran.name(), nil), failed.copyRecord(dir, failed.name(), schemaOne),
 		nohome.copyRecord(dir, nohome.name(), nil), "never-written", "malformed"}
 	ran.copyRecord(dir, "unlisted", nil)
@@ -758,7 +767,6 @@ func TestGateRecordReadsTheHeadCheckFailClosed(t *testing.T) {
 		edit         func(map[string]any)
 	}{
 		{"no head_checks field", "no head check", func(rec map[string]any) { delete(rec, "head_checks") }},
-		{"a schema 3 record", "no head check", func(rec map[string]any) { rec["schema"] = 3; delete(rec, "head_checks") }},
 		{"no entry", "no head check", func(rec map[string]any) { rec["head_checks"] = []any{} }},
 		{"head_checks not a list", "not a list", func(rec map[string]any) { rec["head_checks"] = entry(rec) }},
 		{"an entry not an object", "not a list", func(rec map[string]any) { rec["head_checks"] = []any{"ok"} }},
@@ -790,6 +798,18 @@ func TestGateRecordReadsTheHeadCheckFailClosed(t *testing.T) {
 			wantStage(t, j, "cannot tell")
 		})
 	}
+	// A schema 3 record has no head check, and no wait_down either, so its stop is failed too.
+	t.Run("a schema 3 record", func(t *testing.T) {
+		a := a.in(t)
+		j := a.report(edited, rev, a.copyRecord(edited, a.name(), func(rec map[string]any) {
+			rec["schema"] = 3
+			delete(rec, "head_checks")
+			delete(rec, "wait_down")
+		})).Attempts[0]
+		wantJudged(t, j, "", "failure")
+		wantReason(t, j, "no head check")
+		wantStage(t, j, "cannot tell")
+	})
 
 	t.Run("a repeated key in the record", func(t *testing.T) {
 		a := a.in(t)
@@ -815,4 +835,33 @@ func TestGateRecordReadsTheHeadCheckFailClosed(t *testing.T) {
 		wantJudged(t, j, "ran", "success")
 		wantStage(t, j, "cannot tell", 2)
 	})
+}
+
+// TestGateRecordFailsACleanupWhoseShutdownIsNotConfirmed: a stop is ok only
+// beside a wait_down that says status reported the service down (a#956's
+// review). Each labeled edit of one real record (a#956's cleanup.sh never
+// writes these, but a record from before schema 5 has no wait_down) keeps
+// the read valid and the stop's exit 0, and is judged failure, fail closed.
+func TestGateRecordFailsACleanupWhoseShutdownIsNotConfirmed(t *testing.T) {
+	a := newAttempt(t)
+	a.serve()
+	a.startRun()
+	a.cleanup()
+	rev, edited := a.built(), filepath.Join(a.tmpdir, "edited")
+	wantJudged(t, a.judge(rev), "ran", "success")
+	for _, c := range []struct {
+		name string
+		edit func(map[string]any)
+		down any
+	}{
+		{"no wait_down", func(rec map[string]any) { delete(rec, "wait_down") }, nil},
+		{"wait_down not an object", func(rec map[string]any) { rec["wait_down"] = true }, nil},
+		{"down false", func(rec map[string]any) { rec["wait_down"] = map[string]any{"down": false, "last_status": ""} }, false},
+		{"down a string", func(rec map[string]any) { rec["wait_down"] = map[string]any{"down": "true", "last_status": ""} }, "true"},
+		{"down absent", func(rec map[string]any) { rec["wait_down"] = map[string]any{"last_status": ""} }, nil},
+	} {
+		j := a.report(edited, rev, a.copyRecord(edited, a.name(), c.edit)).Attempts[0]
+		wantJudged(t, j, "ran", "failure")
+		want(t, c.name+": stop exit, down", []any{j.CleanupStatus.Exit, j.CleanupStatus.Down}, []any{0, c.down})
+	}
 }

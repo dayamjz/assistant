@@ -23,10 +23,11 @@ workdir="${CALIPER_WORKDIR:-.}"
 attempt_root="$(CDPATH= cd -- "$workdir/.." && pwd)"
 mkdir -p "${TMPDIR:-/tmp}/caliper-q1-gate"
 # One record per attempt (README "Gate record"). Only runs reads from the nested
-# checkout; it needs the live service, so the stop comes last, in a finally.
-exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" <<'PY'
-import datetime, json, os, re, subprocess, sys
-root, gate = sys.argv[1], sys.argv[2]
+# checkout; it needs the live service, so the stop comes last, in a finally,
+# which returns only once status reports the service down (wait_down).
+exec python3 - "$attempt_root" "${TMPDIR:-/tmp}/caliper-q1-gate" "$(dirname "$0")/subject-home-config.yaml" <<'PY'
+import datetime, hashlib, json, os, re, subprocess, sys, time
+root, gate, pinned = sys.argv[1], sys.argv[2], sys.argv[3]
 attempt = os.path.basename(root)
 home = os.path.join(root, ".assistant")
 checkout = os.path.join(root, "work", "work")
@@ -34,12 +35,16 @@ checkout = os.path.join(root, "work", "work")
 # patched caliper passes (README "As run"); without it the record says why.
 task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
 keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
-record = {"schema": 4, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+# The arm run-full.sh ran this attempt in (README "Arms"), which gate_by_arms.py checks.
+record = {"schema": 6, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+          "arm": os.environ.get("Q1_ARM") or None,
           "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
 if not keyed:
     record["errors"].append("key: CALIPER_TASK_ID %r, CALIPER_ATTEMPT %r: no attempt key; this caliper "
                             "is not 0.19.0+q1attemptenv (install-caliper.sh)" % (task_id, number))
+if record["arm"] is None:
+    record["errors"].append("arm: Q1_ARM is unset; run-full.sh sets it for each arm")
 
 # pipeline.Order's wire names, review first (README "Stage evidence");
 # stage_test.go pins the list to the product's.
@@ -107,8 +112,65 @@ def check_head(run):
             pass  # is_commit stays false, which gate_record.py reads as cannot tell
     return entry
 
+def wait_down():
+    """After the stop, until status reports the service down: the stop answers once
+    accepted, while the service may still have its database open, and caliper removes
+    the attempt root as soon as this hook returns. Any other answer waits, as
+    run-full.sh's probe does, for at most 30s. The outcome is its own evidence,
+    wait_down, beside the stop's exit; a service not reported down is a stop: error too."""
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            p = subprocess.run(["assistant", "--home", home, "--json", "service", "status"], cwd=root,
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                               timeout=max(deadline - time.monotonic(), 1))
+        except (OSError, subprocess.TimeoutExpired) as e:
+            answer, doc = repr(e), None
+        else:
+            answer = (p.stdout + p.stderr).strip()
+            try:
+                doc = json.loads(p.stdout) if p.returncode == 0 else None
+            except ValueError:
+                doc = None
+        down = isinstance(doc, dict) and doc.get("running") is False
+        if down or time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+    record["wait_down"] = {"down": down, "last_status": answer}
+    if not down:
+        record["errors"].append("stop: the service at %s is not reported down 30s after its stop: %s"
+                                % (home, answer))
+
+def ci_checks():
+    """The CI evidence as found (README "CI"), for gate_record.py to judge: each file
+    build-subject.sh and ci-hook.sh wrote, as text, and the remote's hook and refs now."""
+    found = record["ci_checks"] = {"files": None, "hook_sha256": None, "refs": None}
+    evidence, remote = os.path.join(os.path.dirname(gate), "caliper-q1-ci", attempt), os.path.join(root, "work", "remote.git")
+    try:
+        found["files"] = {}
+        for name in sorted(os.listdir(evidence)):
+            with open(os.path.join(evidence, name)) as f:
+                found["files"][name] = f.read()
+        with open(os.path.join(remote, "hooks", "pre-receive"), "rb") as f:
+            found["hook_sha256"] = hashlib.sha256(f.read()).hexdigest()
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        refs = subprocess.run(["git", "--git-dir", remote, "for-each-ref", "--format=%(refname) %(objectname)"],
+                              env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+                              check=True).stdout.split()
+        found["refs"] = dict(zip(refs[::2], refs[1::2]))
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        record["errors"].append("ci: %r" % e)
+
+def setup_only():
+    """Whether the home holds only the config.yaml build-subject.sh copied in, byte
+    for byte (README "Gate roles"): every command that makes a home makes more."""
+    if os.listdir(home) != ["config.yaml"]:
+        return False
+    with open(os.path.join(home, "config.yaml"), "rb") as found, open(pinned, "rb") as wrote:
+        return found.read() == wrote.read()
+
 def capture():
-    if not os.path.isdir(home):
+    if not os.path.isdir(home) or setup_only():
         record["outcome"] = "no-home"
         return
     try:  # an exception in a read still reaches the stop, then the record
@@ -133,9 +195,11 @@ def capture():
                 record["errors"].append("runs: exit 0, but the output is not a runs document")
     finally:
         call("stop", ["service", "stop", "--force"], root)
+        wait_down()  # even after a failed stop: the root must not go while the service is up
 
 try:
-    capture()
+    capture()  # first: its finally stops the service whatever the CI read does
+    ci_checks()
 except Exception as e:  # still a record: only a missing file means the harness failed
     record.setdefault("outcome", "error")
     record["errors"].append("cleanup: %r" % e)

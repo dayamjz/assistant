@@ -1,0 +1,9 @@
+# The subject home's config.yaml, which build-subject.sh copies to
+# <attempt root>/.assistant/config.yaml before the agent starts: the gate's
+# review and fix roles pinned to Claude (README "Gate roles"). cleanup.sh
+# reads a home holding only this file, byte for byte, as no-home.
+roles:
+  review:
+    agent: claude
+  fix:
+    agent: claude
