@@ -48,6 +48,32 @@ if ! claude auth status 2>/dev/null | grep -q '"loggedIn": true'; then
 	fi
 fi
 
+# The arms of README "Arms" this script runs, in order. Every step below that
+# is per arm reads this list, so an arm is added here and nowhere else, and
+# the checks here run for it before graders.
+ARM_LIST="full-gate agent-ci"
+# arm_flags ARM prints the caliper run flags that make ARM that arm.
+arm_flags() {
+	case "$1" in
+	full-gate) ;;
+	agent-ci) echo "--ablate assistant" ;;
+	*) return 1 ;;
+	esac
+}
+for arm in $ARM_LIST; do
+	# agent-ci-review's reviewer runs claude -p under a fresh HOME, where only
+	# this variable can authenticate it; caliper 0.19.0 passes it from this
+	# environment to the agent (README "Arms"). The value is never printed.
+	if [ "$arm" = agent-ci-review ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+		echo "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty; export it (claude setup-token) to run that arm" >&2
+		exit 2
+	fi
+	if ! arm_flags "$arm" >/dev/null; then
+		echo "run-full.sh names no caliper flags for arm '$arm' (arm_flags)" >&2
+		exit 2
+	fi
+done
+
 python3 verify_graders.py
 caliper validate q1.eval.yaml
 
@@ -55,29 +81,36 @@ caliper validate q1.eval.yaml
 # upstream URL for the hook's own git; two attempts sharing this machine's
 # HOME would race that rewrite. Caliper's attempt HOME isolation does not
 # cover the setup hook's git config --global here (README "Subject remote").
-# Clear any leftover rewrite of the subject URL before either arm. A prior
-# crashed run can leave url.*.insteadOf pointing at a deleted remote.git.
-git config --global --get-regexp '^url\..*\.insteadof$' \
-	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
-	while read -r key _; do
-		git config --global --unset-all "$key" 2>/dev/null || true
-	done
+# clear_rewrites clears any leftover rewrite of the subject URL, before each
+# arm: a prior crashed run, or a mid-arm crash, can leave url.*.insteadOf
+# pointing at a deleted remote.git, which must not poison the next arm.
+clear_rewrites() {
+	git config --global --get-regexp '^url\..*\.insteadof$' \
+		'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
+		while read -r key _; do
+			git config --global --unset-all "$key" 2>/dev/null || true
+		done
+}
 
 # Each arm runs under a TMPDIR of its own, so caliper makes that arm's attempt
 # roots there and cleanup.sh writes their gate records to
-# $ARMS/<arm>/caliper-q1-gate, never beside the other arm's
+# $ARMS/<arm>/caliper-q1-gate, never beside another arm's
 # (README "Gate verdicts by arm"). Each caliper run gets Q1_ARM, the arm its
 # hooks record (README "Arms").
 # An attempt's service listens on <attempt root>/.assistant/socket, so the
 # arms go under Q1_ARMS_ROOT (default /tmp), never $TMPDIR: under macOS's
 # $TMPDIR that path was too long to bind and no with-skill service ever ran
 # (#941). Before any attempt, a service is started at a home as deep as the
-# deepest attempt's (caliper's mkdtemp caliper-XXXXXXXX in the longer arm
+# deepest attempt's (caliper's mkdtemp caliper-XXXXXXXX in the longest arm
 # name); one that does not answer refuses the run and is kept for reading.
 ARMS="$(mktemp -d "${Q1_ARMS_ROOT:-/tmp}/q1-arms.XXXXXX")"
 echo "arms (each arm's TMPDIR): $ARMS" >&2
-mkdir -p "$ARMS/full-gate/caliper-q1-gate" "$ARMS/agent-ci/caliper-q1-gate"
-probe_root="$(mktemp -d "$ARMS/full-gate/caliper-XXXXXXXX")"
+longest=
+for arm in $ARM_LIST; do
+	mkdir -p "$ARMS/$arm/caliper-q1-gate"
+	if [ "${#arm}" -gt "${#longest}" ]; then longest="$arm"; fi
+done
+probe_root="$(mktemp -d "$ARMS/$longest/caliper-XXXXXXXX")"
 probe="$probe_root/.assistant"
 if ! assistant --home "$probe" service start >"$ARMS/probe.log" 2>&1; then
 	echo "a service at $probe, an attempt's depth under $ARMS, did not start; set Q1_ARMS_ROOT to a shorter directory (README \"How to run\"):" >&2
@@ -102,43 +135,50 @@ until status="$(assistant --home "$probe" --json service status 2>&1)" &&
 done
 rm -rf "${probe_root:?}"
 # A result file left from an earlier run must never be read as this run's.
-rm -f result-q1-full-gate.json result-q1-agent-ci.json
+results=
+for arm in $ARM_LIST; do
+	results="$results result-q1-$arm.json"
+done
+rm -f $results # one word per arm
 
-with_rc=0
-echo "running full-gate arm (model=$MODEL)" >&2
-Q1_ARM=full-gate TMPDIR="$ARMS/full-gate" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
-	--model "$MODEL" --judge-model "$MODEL" \
-	--output result-q1-full-gate.json || with_rc=$?
+arm_status=
+failed=0
+for arm in $ARM_LIST; do
+	clear_rewrites
+	echo "running $arm arm (model=$MODEL)" >&2
+	rc=0
+	Q1_ARM="$arm" TMPDIR="$ARMS/$arm" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
+		--model "$MODEL" --judge-model "$MODEL" \
+		$(arm_flags "$arm") --output "result-q1-$arm.json" || rc=$?
+	arm_status="$arm_status $arm=$rc"
+	[ "$rc" -eq 0 ] || failed=1
+done
 
-# Same URL clear before the agent-ci arm: cleanup should have done this, but a
-# mid-arm crash must not poison the second arm.
-git config --global --get-regexp '^url\..*\.insteadof$' \
-	'https://github.com/dayamjz/caliper-q1.git' 2>/dev/null |
-	while read -r key _; do
-		git config --global --unset-all "$key" 2>/dev/null || true
-	done
-
-ablated_rc=0
-echo "running agent-ci arm (model=$MODEL)" >&2
-Q1_ARM=agent-ci TMPDIR="$ARMS/agent-ci" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
-	--model "$MODEL" --judge-model "$MODEL" \
-	--ablate assistant --output result-q1-agent-ci.json || ablated_rc=$?
-
+# The first arm is compared with each other arm, and every arm is reported.
 report_rc=0
-if [ -f result-q1-full-gate.json ] && [ -f result-q1-agent-ci.json ]; then
-	caliper compare result-q1-full-gate.json result-q1-agent-ci.json || true
+set --
+first=
+missing=
+for arm in $ARM_LIST; do
+	[ -f "result-q1-$arm.json" ] || missing=1
+	set -- "$@" --arm "$arm" "$ARMS/$arm" "result-q1-$arm.json"
+	if [ -z "$first" ]; then
+		first="$arm"
+	elif [ -z "$missing" ]; then
+		caliper compare "result-q1-$first.json" "result-q1-$arm.json" || true
+	fi
+done
+if [ -z "$missing" ]; then
 	vcs() { go version -m "$REPO_ROOT/bin/assistant" | sed -n "s/^[[:space:]]*build[[:space:]]*vcs.$1=//p"; }
-	python3 gate_by_arms.py --revision "$(vcs revision)" --modified "$(vcs modified)" \
-		--arm full-gate "$ARMS/full-gate" result-q1-full-gate.json \
-		--arm agent-ci "$ARMS/agent-ci" result-q1-agent-ci.json >"$ARMS/gate-by-arm.json" || report_rc=$?
+	python3 gate_by_arms.py --revision "$(vcs revision)" --modified "$(vcs modified)" "$@" \
+		>"$ARMS/gate-by-arm.json" || report_rc=$?
 else
 	echo "no gate verdicts by arm: an arm wrote no result file" >&2
 	report_rc=1
 fi
-echo "results: result-q1-full-gate.json result-q1-agent-ci.json" >&2
+echo "results:$results" >&2
 echo "gate records and usage per arm: $ARMS/<arm>/caliper-q1-gate/; gate verdicts by arm: $ARMS/gate-by-arm.json" >&2
-if [ "$with_rc" -ne 0 ] || [ "$ablated_rc" -ne 0 ] || [ "$report_rc" -ne 0 ]; then
-	echo "exit status: full-gate=$with_rc agent-ci=$ablated_rc gate-by-arm=$report_rc" >&2
+if [ "$failed" -ne 0 ] || [ "$report_rc" -ne 0 ]; then
+	echo "exit status:$arm_status gate-by-arm=$report_rc" >&2
 	exit 1
 fi
-

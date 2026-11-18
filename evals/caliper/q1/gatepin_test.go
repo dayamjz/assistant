@@ -91,11 +91,36 @@ func marked(agent *standin.Agent) []bool {
 	return got
 }
 
+// rowModel is the model row 11 runs on (owner, ft#545): run-full.sh gives the
+// agent claude-code:<rowModel> (TestRunFullRunsEachArmUnderItsOwnTMPDIR), and
+// setup's pin names the same model for the gate's review and fix roles.
+const rowModel = "claude-sonnet-5-5"
+
+// models is, per stand-in call in arrival order, every value its command line
+// gives --model, as "--model X" or "--model=X", in order: a configured entry's
+// own flags are on that line too, so one it carried would show here.
+func models(agent *standin.Agent) [][]string {
+	var got [][]string
+	for _, c := range agent.Calls() {
+		named := []string{}
+		for i, arg := range c.Args {
+			if v, ok := strings.CutPrefix(arg, "--model="); ok {
+				named = append(named, v)
+			} else if arg == "--model" && i+1 < len(c.Args) {
+				named = append(named, c.Args[i+1])
+			}
+		}
+		got = append(got, named)
+	}
+	return got
+}
+
 // TestSetupPinsTheGateReviewAndFixToClaude: with no Cursor on PATH, in the
 // home setup writes, a run starts, its review runs on Claude under the pinned
 // review role, and the fix round its finding asks for runs on Claude under the
 // pinned fix role, none of them on the service agent, whose entry is marked
-// (markedService). Two controls follow. Without setup's pin the same run is
+// (markedService). Each of those calls names rowModel, the agent's model, as
+// its one --model, so the gate does not run the Claude CLI's own default. Two controls follow. Without setup's pin the same run is
 // refused before it is recorded, because the default fix role names cursor:
 // the refusal a#953 met, so the condition is real. With the fix role alone
 // pinned, the review call carries the mark, so the mark tells a pinned review
@@ -132,6 +157,7 @@ func TestSetupPinsTheGateReviewAndFixToClaude(t *testing.T) {
 	}
 	want(t, "the stand-in's answering steps: review, fix round, review", steps, []int{0, 2, 1})
 	want(t, "calls on the marked service agent", marked(agent), []bool{false, false, false})
+	want(t, "each call's --model values: review, fix round, review", models(agent), [][]string{{rowModel}, {rowModel}, {rowModel}})
 
 	bare := newAttempt(t)
 	bare.noCursor()
