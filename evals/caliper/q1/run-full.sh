@@ -21,8 +21,8 @@ UPSTREAM_URL="https://github.com/dayamjz/caliper-q1.git"
 # assert with this process's environment (caliper/workdir.py), so their global
 # writes land in the scratch file too; the agent gets an environment of its own
 # (README "Subject remote"). The file is removed on exit, and an interrupt
-# exits through that same trap.
-trap '[ -z "${GITCONFIG:-}" ] || rm -f "$GITCONFIG"' EXIT
+# exits through that same trap, which also ends a reviewer process (start_reviewer).
+trap '[ -z "${REVIEWER_PID:-}" ] || stop_reviewer; [ -z "${GITCONFIG:-}" ] || rm -f "$GITCONFIG"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -106,8 +106,9 @@ arm_flags() {
 }
 for arm in $ARM_LIST; do
 	# agent-ci-review's reviewer runs claude -p under a fresh HOME, where only
-	# this variable can authenticate it; caliper 0.19.0 passes it from this
-	# environment to the agent (README "Arms"). The value is never printed.
+	# this token can authenticate it; start_reviewer hands it to the reviewer
+	# process, and caliper 0.19.0 passes it from this environment to the agent
+	# (README "Arms"). The value is never printed.
 	if [ "$arm" = agent-ci-review ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 		echo "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty; export it (claude setup-token) to run that arm" >&2
 		exit 2
@@ -185,15 +186,50 @@ for arm in $ARM_LIST; do
 done
 rm -f $results # one word per arm
 
+# agent-ci-review's review hook runs inside the agent's git push, where
+# Claude Code leaves CLAUDE_CODE_OAUTH_TOKEN out (a#968), so its reviewer runs
+# in a process of this script's (README "Reviewer process"). start_reviewer
+# starts review-server.py with the token on its standard input, from printf,
+# a builtin, and with no token in its environment or argv, and waits until its
+# socket, in a 0700 directory of its own under $ARMS, answers; setup puts
+# Q1_REVIEWER_SOCKET in the hook. stop_reviewer ends it after the arm and on
+# any exit, and removes that directory. One that does not start refuses the run.
+REVIEWER_PID=
+Q1_REVIEWER_SOCKET=
+start_reviewer() {
+	REVIEWER_DIR="$(mktemp -d "$ARMS/reviewer.XXXXXX")"
+	printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" | env -u CLAUDE_CODE_OAUTH_TOKEN TMPDIR="$REVIEWER_DIR" \
+		python3 review-server.py "$REVIEWER_DIR/socket" >"$ARMS/reviewer.log" 2>&1 &
+	REVIEWER_PID=$!
+	i=0
+	until [ -S "$REVIEWER_DIR/socket" ]; do
+		i=$((i + 1))
+		if [ "$i" -gt 100 ] || ! kill -0 "$REVIEWER_PID" 2>/dev/null; then
+			echo "the reviewer process at $REVIEWER_DIR/socket did not start; see $ARMS/reviewer.log" >&2
+			exit 2
+		fi
+		sleep 0.1
+	done
+	Q1_REVIEWER_SOCKET="$REVIEWER_DIR/socket"
+}
+stop_reviewer() {
+	kill "$REVIEWER_PID" 2>/dev/null || true
+	wait "$REVIEWER_PID" 2>/dev/null || true
+	rm -rf "${REVIEWER_DIR:?}"
+	REVIEWER_PID= Q1_REVIEWER_SOCKET=
+}
+
 arm_status=
 failed=0
 for arm in $ARM_LIST; do
 	clear_rewrites
 	echo "running $arm arm (model=$MODEL)" >&2
+	[ "$arm" != agent-ci-review ] || start_reviewer
 	rc=0
-	Q1_ARM="$arm" TMPDIR="$ARMS/$arm" caliper run q1.eval.yaml --k "$K" --timeout 1200 --workers 1 \
-		--model "$MODEL" --judge-model "$MODEL" \
+	Q1_ARM="$arm" Q1_REVIEWER_SOCKET="$Q1_REVIEWER_SOCKET" TMPDIR="$ARMS/$arm" caliper run q1.eval.yaml \
+		--k "$K" --timeout 1200 --workers 1 --model "$MODEL" --judge-model "$MODEL" \
 		$(arm_flags "$arm") --output "result-q1-$arm.json" || rc=$?
+	[ -z "$REVIEWER_PID" ] || stop_reviewer
 	arm_status="$arm_status $arm=$rc"
 	[ "$rc" -eq 0 ] || failed=1
 done

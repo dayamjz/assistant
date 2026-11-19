@@ -1,8 +1,9 @@
-"""review-hook.py DIR LIMIT ROOT ENTRY: the Q1 independent review (README "Review"), run by an agent-ci-review
+"""review-hook.py DIR LIMIT ROOT ENTRY SOCKET: the Q1 independent review (README "Review"), run by an agent-ci-review
 remote's pre-receive on a push CI accepted. Each pushed tip but a deletion gets one fresh `claude --print` of
 main...<tip> with the pushed tree readable, under a new HOME outside ROOT, the agent's HOME, within LIMIT
-seconds. ENTRY, made empty first, becomes the push's entry; anything but an approve rejects the push."""
-import contextlib, datetime, fcntl, json, os, re, shutil, signal, subprocess, sys, tempfile, time
+seconds, which the reviewer process at SOCKET runs (review-server.py): this hook never holds the credential.
+ENTRY, made empty first, becomes the push's entry; anything but an approve rejects the push."""
+import datetime, fcntl, json, os, re, shutil, socket, subprocess, sys, tempfile
 
 BUDGET = 3  # reviews per attempt, whatever each said; past it every push is rejected
 COUNTS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -10,28 +11,13 @@ spec = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, spec)
 sys.dont_write_bytecode = True  # nothing written beside the harness
 from gate_record import unique  # a repeated key is refused, never won last
-evidence, limit, root, path = sys.argv[1], float(sys.argv[2]), os.path.realpath(sys.argv[3]), sys.argv[4]
-token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+evidence, limit, root, path, sock = sys.argv[1], float(sys.argv[2]), os.path.realpath(sys.argv[3]), sys.argv[4], sys.argv[5]
 now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
-# The reviewer's one credential is written nowhere: taken out of all this writes or prints, and out
-# of a text before it is cut, so a cut never leaves a piece of it.
-hide = lambda text: text.replace(token, "[CLAUDE_CODE_OAUTH_TOKEN]") if token else text
 
 def save():
     with open(path + ".tmp", "w") as f:
-        f.write(hide(json.dumps(entry, indent=2, sort_keys=True)))
+        f.write(json.dumps(entry, indent=2, sort_keys=True))
     os.replace(path + ".tmp", path)
-
-def pinned_model():
-    """The gate review role's model, from its pin (README "Gate roles"): claude on anthropic's TYPE
-    VERSION starts as claude-TYPE-VERSION, dots as dashes, as internal/agents' Translate starts it.
-    Any other pin, or a further key that changes how the role starts, is refused."""
-    with open(os.path.join(spec, "subject-home-config.yaml")) as f:
-        block = re.search(r"^  review:\n((?:    .*\n)+)", f.read(), re.M)
-    role = dict(re.findall(r'^    (\w+): "?([^"\n]*?)"?$', block.group(1), re.M)) if block else {}
-    if sorted(role) != ["agent", "provider", "type", "version"] or (role["agent"], role["provider"]) != ("claude", "anthropic"):
-        raise ValueError("the gate's review pin is not claude on one anthropic model: %r" % role)
-    return "claude-%s-%s" % (role["type"], role["version"].replace(".", "-"))
 
 def spent():
     """Reviews this attempt has used: those of every other entry, and one for each entry that cannot
@@ -54,7 +40,7 @@ def answer(out):
     rec["usage"] = {k: usage.get(k) if type(usage.get(k)) is int else None for k in COUNTS} if isinstance(usage, dict) else None
     rec["reported_model"] = sorted(models) if isinstance(models, dict) and models else None
     rec["is_error"] = doc.get("is_error")
-    rec["result"] = hide(text)[-4000:] if isinstance(text, str) else None  # an error too (auth, quota)
+    rec["result"] = text[-4000:] if isinstance(text, str) else None  # an error too (auth, quota)
     if doc.get("is_error") is not False:
         return "failed"
     fenced = re.fullmatch(r"\s*```(?:json)?\n(.*)\n```\s*", text, re.S)
@@ -64,51 +50,50 @@ def answer(out):
     rec["findings"] = said["findings"]
     return said["verdict"]
 
+def ask(request):
+    """The reviewer process's answer to request, or a ValueError that names SOCKET."""
+    if not sock:
+        raise ValueError("no reviewer process: Q1_REVIEWER_SOCKET was unset or empty when setup installed this hook")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(limit + 60)  # past the reviewer's own limit, which it ends at
+            s.connect(sock)
+            s.sendall(json.dumps(request).encode() + b"\n")
+            line = s.makefile("rb").readline()
+    except OSError as e:
+        raise ValueError("the reviewer process at %s does not answer: %r" % (sock, e))
+    got = json.loads(line) if line else {"error": "it ended without answering"}
+    if not isinstance(got, dict) or "error" in got:
+        raise ValueError("the reviewer process at %s started no review: %s" % (sock, got.get("error") if isinstance(got, dict) else got))
+    return got
+
 def review():
     """One review of rec's tip: its verdict, with what ran and what it said recorded on rec."""
     scratch = tempfile.mkdtemp(prefix="q1-review-")
     try:
-        if os.path.commonpath([os.path.realpath(scratch), root]) == root:
-            raise ValueError("its HOME %s would be inside the agent's HOME %s" % (scratch, root))
-        rec["model"] = pinned_model()
-        if not token:
-            raise ValueError("CLAUDE_CODE_OAUTH_TOKEN, the reviewer's only credential, is unset or empty")
-        tree, home, tar = (os.path.join(scratch, n) for n in ("tree", "home", "tree.tar"))
-        os.mkdir(tree), os.mkdir(home)
+        tree, tar = os.path.join(scratch, "tree"), os.path.join(scratch, "tree.tar")
+        os.mkdir(tree)
         run = lambda *a: subprocess.run(a, stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=limit).stdout
         diff = run("git", "diff", "main..." + rec["new"]).decode(errors="replace")
         run("git", "archive", "--format=tar", "-o", tar, rec["new"])
         run("tar", "-xf", tar, "-C", tree)
         with open(os.path.join(spec, "review-prompt.md")) as f:
             prompt = f.read() + "\n```diff\n" + diff + "\n```\n"
-        rec["argv"] = ["claude", "--print", "--output-format", "json", "--model", rec["model"], "--no-session-persistence",
-                       "--tools", "Read,Grep,Glob", "--setting-sources", "user", "--strict-mcp-config"]
-        env = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL") if k in os.environ}
-        env.update(HOME=home, TMPDIR=scratch, CLAUDE_CODE_OAUTH_TOKEN=token)
-        start = time.monotonic()
-        p = subprocess.Popen(rec["argv"], cwd=tree, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, start_new_session=True)
+        got = ask({"tree": tree, "prompt": prompt, "limit": limit, "root": root})
     except (OSError, ValueError, subprocess.SubprocessError) as e:
-        shutil.rmtree(scratch, ignore_errors=True)
         rec["reason"] = str(e) if type(e) is ValueError else repr(e)
         return "cannot-start"
-    try:
-        out, err = p.communicate(prompt.encode(), timeout=limit)
-    except subprocess.TimeoutExpired:
-        out = None
-    with contextlib.suppress(OSError):
-        os.killpg(p.pid, signal.SIGKILL)  # the reviewer's whole group, at its end or at the limit
-    p.wait()
-    rec["duration_seconds"] = round(time.monotonic() - start, 3)
-    shutil.rmtree(scratch, ignore_errors=True)
-    if out is None:
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    rec.update(argv=got["argv"], model=got["model"], duration_seconds=got["duration_seconds"])
+    if got["timeout"]:
         return "timeout"
-    rec["exit"], rec["stderr"] = p.returncode, hide(err.decode(errors="replace"))[-4000:]  # hidden whole, then cut
+    rec["exit"], rec["stderr"] = got["exit"], got["stderr"][-4000:]  # hidden whole by the reviewer process, then cut
     try:
-        verdict = answer(out)
+        verdict = answer(got["stdout"])
     except (ValueError, KeyError, TypeError, AttributeError):
         verdict = "unreadable"
-    return "failed" if p.returncode != 0 else verdict
+    return "failed" if got["exit"] != 0 else verdict
 
 with open(os.path.join(evidence, "setup.json")) as f:
     fcntl.flock(f, fcntl.LOCK_EX)  # one push's reviews at a time, so the budget is counted whole
@@ -137,5 +122,5 @@ if rejected:
     r = rejected[0]
     why = {"budget": "review budget spent: this attempt has had its %d reviews" % BUDGET, "block": json.dumps(r["findings"], indent=2)}
     why = why.get(r["verdict"]) or r.get("reason") or r.get("result") or r.get("stderr") or ""
-    sys.stderr.write(hide("Review rejected this push (%s) of %s:\n%s\n" % (r["verdict"], r["name"], why)))
+    sys.stderr.write("Review rejected this push (%s) of %s:\n%s\n" % (r["verdict"], r["name"], why))
     sys.exit(1)

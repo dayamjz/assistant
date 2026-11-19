@@ -31,7 +31,8 @@ evals/caliper/q1/install-caliper.sh
 # Claude Code on PATH and logged in (pilot backend). API key auth:
 #   export ANTHROPIC_API_KEY=…
 #   # or: claude auth login
-# agent-ci-review's reviewer authenticates with this alone ("Review"):
+# agent-ci-review's reviewer authenticates with this alone, held by the
+# reviewer process run-full.sh starts ("Reviewer process"):
 #   export CLAUDE_CODE_OAUTH_TOKEN=…   # claude setup-token
 export PATH="$HOME/.local/bin:$PWD/bin:$PATH"
 cd evals/caliper/q1
@@ -70,10 +71,11 @@ attempt key; "As run"), when Claude is not logged in and
 there when `CLAUDE_CODE_OAUTH_TOKEN` is unset or empty, naming the variable
 and never printing its value, since `agent-ci-review` is in its arm list
 (`ARM_LIST`, which every per-arm step reads): that arm's reviewer runs
-`claude -p` under a fresh HOME, and caliper 0.19.0 passes the variable from
-this environment to the agent (`caliper/harness/claude_code.py`'s
-`env_passthrough`). The arm is never skipped for want of it: the whole run
-stops before graders. Use a
+`claude -p` under a fresh HOME with the token the reviewer process holds
+("Reviewer process"), which `run-full.sh` starts before that arm, and
+caliper 0.19.0 passes the variable from this environment to the agent
+(`caliper/harness/claude_code.py`'s `env_passthrough`). The arm is never
+skipped for want of it: the whole run stops before graders. Use a
 disposable environment. Caliper's `sandbox:` scans transcripts and runs
 Claude Code with `--dangerously-skip-permissions` under a temporary HOME
 on the operator's machine.
@@ -159,27 +161,35 @@ The reviewer's input is `review-prompt.md` with `git diff main...<tip>` on
 standard input, and the pushed tree (`git archive`, no history) as its
 working directory, with only its `Read`, `Grep` and `Glob` tools, user
 settings only (`--setting-sources user`) and no MCP server
-(`--strict-mcp-config`). Its environment is `PATH`, `LANG` and `LC_ALL`
-from the pusher, a `HOME` it makes new and empty in `TMPDIR` and refuses if
-that is inside the agent's HOME, that `TMPDIR`, and the pusher's
-`CLAUDE_CODE_OAUTH_TOKEN`, its one credential: no `ANTHROPIC_API_KEY`, no
-file copied in, and without the token it does not start. What the CLI does
-inside that environment (whether it also asks the macOS Keychain, say) is
-the CLI's; the hook only controls what it hands over. Given a fake token,
-Claude Code 2.1.322 on the arms' Mac (2026-11-18) failed to authenticate
-(401) rather than review, so it did not fall back to an ambient login
-there; that is one observation of one CLI version, which
-`TestLiveReviewerAuth` rechecks. The token's value is
-replaced by `[CLAUDE_CODE_OAUTH_TOKEN]` in everything the hook writes or
-prints, in a text whole before it is cut to its last 4000 characters, so a
-cut leaves no piece of it; that is an exact-value replacement of the one
-value it handed over, not a credential scrubber.
-`TestLiveReviewerAuth` (the `q1live` tag, run by hand, never in CI; its doc
-comment has the commands) pushes through the real hook to the real CLI
-with a fake token, which must fail to authenticate (a CLI that answered
-would have used an ambient login such as the Keychain), with no token,
-which must not start, and with a real one, which must review. Run it on the
-machine the arms run on before a k = 1 calibration. The new HOME is removed after each review.
+(`--strict-mcp-config`). The hook does not start it: the reviewer process
+does ("Reviewer process"), so the hook never holds the credential. Its
+environment is `PATH`, `LANG` and `LC_ALL` from the reviewer process, a
+`HOME` made new and empty in that process's `TMPDIR` and refused if it is
+inside the agent's HOME, that `TMPDIR`, and
+`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`, naming the pipe the token is
+written to, its one credential: no `CLAUDE_CODE_OAUTH_TOKEN`, no
+`ANTHROPIC_API_KEY`, no file copied in. What the CLI does with what it is
+handed (whether it also asks the macOS Keychain, say) is the CLI's; the
+reviewer process only controls what it hands over. On macOS 27, Claude
+Code 2.1.322 (2026-11-19) reviewed with a real token on that pipe under an
+empty HOME and wrote no file holding it there, and with a fake one failed
+to authenticate (401) rather than review, so it did not fall back to an
+ambient login; that is one observation of one CLI version, which
+`TestLiveReviewerAuth` rechecks. The token's value is replaced by
+`[CLAUDE_CODE_OAUTH_TOKEN]` in the reviewer's output and errors before the
+reviewer process answers, so in all the hook writes or prints, and in a
+text whole before the hook cuts it to its last 4000 characters, so a cut
+leaves no piece of it; that is an exact-value replacement of the one value
+it handed over, not a credential scrubber. `TestLiveReviewerAuth` (the
+`q1live` tag, run by hand, never in CI; its doc comment has the commands)
+pushes through the real hook and a reviewer process to the real CLI with a
+fake token, which must fail to authenticate (a CLI that answered would have
+used an ambient login such as the Keychain), with no reviewer process, which
+must not start, and with a real token, which must review.
+`TestLiveReviewFromAClaudeCodeToolCall`, beside it, pushes from a real
+Claude Code agent's Bash tool call and must be reviewed. Run both on the
+machine the arms run on before a k = 1 calibration. The new HOME is removed
+after each review.
 
 The reviewer answers one JSON object, bare or in one fenced block:
 `verdict` `approve` or `block`, and a `findings` list. Each review records,
@@ -197,14 +207,55 @@ Anything but `approve` rejects the push and prints why to the pusher:
 object in it), `failed` (a non-zero exit or an envelope marked an error, as
 an auth or quota failure answers), `timeout` (still running after
 `Q1_REVIEW_TIMEOUT` seconds, default 90; ended with its process group),
-`cannot-start` (no token, no `claude`, an unreadable pin, a tip that
-cannot be diffed or extracted) or `budget`: an attempt gets 3 reviews, whatever each
+`cannot-start` (no reviewer process configured or answering, or one that
+ended mid-review, each named with its socket; no `claude`, an unreadable
+pin, a tip that cannot be diffed or extracted) or `budget`: an attempt gets 3 reviews, whatever each
 said, and a later push is rejected with "review budget spent". An entry the
 hook cannot read counts as one review, so the bound errs toward fewer.
 These usage counts are the reviewer's recorded token usage, not a cost. A
 k = 1 calibration shows whether 90 s holds inside an agent's push before
 k = 5. What it misses: a reviewer the agent starts itself leaves no entry,
 and the prompt is this directory's, not the product's review prompt.
+
+**Reviewer process** (a#968). The hook runs inside the agent's `git push`,
+a Claude Code Bash tool call, and in Claude Code 2.1.322 such a call's
+environment had no `CLAUDE_CODE_OAUTH_TOKEN` though the agent's own
+`claude` had one (reproduced 2026-11-19), so the hook cannot take the
+token from its environment. `run-full.sh` starts `review-server.py` for
+the `agent-ci-review` arm alone, before that arm's caliper run, outside
+Claude Code. The token reaches it on standard input from `printf`, a shell
+builtin, and is in neither its environment (`env -u`) nor its argv; it
+holds it in memory and hands it to each reviewer on a pipe, so no file
+holds it. It listens on `$ARMS/reviewer.XXXXXX/socket`, a 0700 directory
+of its own, which setup writes into the hook from `Q1_REVIEWER_SOCKET`.
+It serves one review at a time; a request names the pushed tree, the
+prompt, the limit and the agent's HOME, and nothing that chooses the
+program, its model, its HOME or its environment, so a client, the agent
+included, can have a review run but cannot have the token sent back. It
+answers once its socket exists, or `run-full.sh` refuses the run (exit 2)
+naming the socket and `$ARMS/reviewer.log`. After the arm and on any exit
+of `run-full.sh` it is sent SIGTERM, ends a review in flight with its
+process group, removes its socket and the review's HOME, and the directory
+is removed. A hook with no socket, no process answering, or a process that
+ended before answering rejects the push `cannot-start`, naming which, never
+skips the review.
+
+What this does not cover. The agent runs as the operator's user, and a
+same-user `ps eww` lists another process's environment on macOS 27
+(observed 2026-11-19 for `claude` and `python3`). The reviewer process
+keeps the token out of every environment it starts or has, which
+`TestRunFullReviewsAPushThatCarriesNoToken` checks by reading the reviewer
+process's arguments and environment from the kernel, as `ps eww` does
+(not with `ps` itself, which CI's macOS sandbox will not start). The token
+still sits in the environment of the processes the operator exported it
+to: `run-full.sh`, caliper, and the agent's own `claude`, to which caliper
+0.19.0 passes it for the agent's own login (`env_passthrough`); from a
+Claude Code tool call, `ps eww` of that `claude` listed it (2026-11-19).
+So the reviewer's credential is the agent's own, and readable to it by a
+process listing; keeping it out of the agent's view needs a separate
+reviewer token or a change to caliper, neither of which is here. A reviewer
+the agent starts through the socket itself leaves no entry, as one it
+starts on its own does.
 
 **Neighbour skill.** `q1.eval.yaml` lists `no-mistakes` from
 `kunchenguid/no-mistakes` at ref `1773fc4b465bd154ed225c909eec271ab8fc73d2`
@@ -270,7 +321,7 @@ remotes.
 
 **Answer keys.** `sandbox.forbidden_files` marks `check.py`,
 `build-subject.sh`, the hidden tests, `cleanup.sh`, `gate_record.py`,
-`gate_by_arms.py`, the reviewer's `review-hook.py` and `review-prompt.md`,
+`gate_by_arms.py`, the reviewer's `review-hook.py`, `review-server.py` and `review-prompt.md`,
 and related grader files as cheats in
 the transcript scan. Caliper also auto-forbids this YAML.
 

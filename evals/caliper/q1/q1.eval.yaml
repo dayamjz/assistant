@@ -32,6 +32,7 @@ sandbox:
     - gate_by_arms\.py
     - ci-hook\.sh
     - review-hook\.py
+    - review-server\.py
     - review-prompt\.md
 
 tasks:
