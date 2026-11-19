@@ -64,7 +64,13 @@ binary on this machine and nothing else. `Q1_K` sets k for every arm
 when the `caliper` on PATH, asked through the interpreter its script names,
 is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
 attempt key; "As run"), when Claude is not logged in and
-`ANTHROPIC_API_KEY` is unset, or when `go` is not on PATH. Use a
+`ANTHROPIC_API_KEY` is unset, or when `go` is not on PATH. It also refuses
+there when `agent-ci-review` is in its arm list (`ARM_LIST`, which every
+per-arm step reads; the arm is not in it yet) and `CLAUDE_CODE_OAUTH_TOKEN` is
+unset or empty, naming the variable and never printing its value: that arm's
+reviewer runs `claude -p` under a fresh HOME, and caliper 0.19.0 passes the
+variable from this environment to the agent (`caliper/harness/claude_code.py`'s
+`env_passthrough`). Use a
 disposable environment. Caliper's `sandbox:` scans transcripts and runs
 Claude Code with `--dangerously-skip-permissions` under a temporary HOME
 on the operator's machine.
@@ -92,15 +98,19 @@ the subject's `assistant.json`. Without it the fix role is the default,
 names cursor, which cannot start". `build-subject.sh` copies
 `subject-home-config.yaml` to `<attempt root>/.assistant/config.yaml`, the
 home the agent's `assistant` defaults to under caliper's `HOME`, in every
-arm, and refuses if that home already exists. The pin names no model, so each
-role runs the Claude CLI's own default. `no-home` keeps its meaning: a home
+arm, and refuses if that home already exists. Each role names Sonnet 5.5
+(`provider: anthropic`, `type: sonnet`, `version: "5.5"`), which the Claude
+adapter starts as `--model claude-sonnet-5-5` (`internal/agents`'
+`Translate`), the model `run-full.sh` gives the agent, so the gate does not
+run the Claude CLI's own default. `no-home` keeps its meaning: a home
 holding only that file, byte for byte, is read as `no-home` (see "Gate
 record"): a home the product makes holds more than that file, since
 `internal/home`'s `Create` makes the home's directories.
 `TestSetupHomeReadsAsNoHome` checks that the records match and that a home
 the product made, or an edited copy, does not read as `no-home`.
 `TestSetupPinsTheGateReviewAndFixToClaude` shows the refusal without the pin
-and both roles running on Claude with it.
+and both roles running on Claude with it, each call carrying that one
+`--model`.
 
 **CI** (row 11). With no code host (a#950), CI is the subject's own
 `commands.test` and `commands.lint`, `go test ./...` and `go vet ./...`, run
@@ -158,11 +168,21 @@ bare remote with `url.<local-remote>.insteadOf`, in two places:
   `CALIPER_WORKDIR`, and `build-subject.sh` fails without one unless
   `Q1_AGENT_HOME` names the home instead (`verify_graders.py`). Caliper
   removes the file with the attempt root.
-- **The hook's global config**, the operator's or `GIT_CONFIG_GLOBAL`, for the
-  hook's own git: hooks run with the caller's whole environment. This is the
-  write a#942 is about, left as it was: it fails where that file is read-only,
-  `cleanup.sh` and `run-full.sh` remove it by URL, and `workers=1` keeps two
-  attempts from racing it. It does not reach the agent.
+- **The hook's global config**, for the hook's own git: hooks run with the
+  caller's whole environment (`caliper/workdir.py`). Under `run-full.sh` that
+  is a scratch file of the run's (a#942): `run-full.sh` points
+  `GIT_CONFIG_GLOBAL` at it before anything touches git config, it includes
+  the operator's own global config (`GIT_CONFIG_GLOBAL` if set, else
+  `$XDG_CONFIG_HOME/git/config` or `~/.config/git/config`, and
+  `~/.gitconfig`) for reading only, and an exit trap removes it, after a
+  failure or an interrupt too. So a run writes nothing to the operator's
+  config, and a read-only one (a home-manager link) no longer fails every
+  setup. `cleanup.sh`, and `run-full.sh` before each arm, remove the rewrite
+  by URL, and `workers=1` keeps two attempts from racing the one file. A
+  rewrite of the subject URL already in the operator's own config would win
+  over the attempt's, so `run-full.sh` refuses to start and names it rather
+  than clearing it. `verify_graders.py` gives each subject its own
+  `GIT_CONFIG_GLOBAL` beside its `HOME`. None of this reaches the agent.
 
 `TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote` runs the agent with
 caliper's environment and checks that its git takes the rewrite from the

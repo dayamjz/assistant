@@ -38,9 +38,13 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // when init recorded the local remote as the upstream so github.com is never
 // asked, starts a run, which the service fetches that upstream's main for. No
 // model is asked. It exits 2 when a hook failed, as caliper does, and writes
-// the result fields gate_by_arms.py reads.
+// the result fields gate_by_arms.py reads. With Q1_TEST_HOOK set, it appends
+// what the setup hook's git saw to that file once setup returns; with
+// Q1_TEST_AFTER_SETUP set it then stops without cleanup, exiting 3 ("crash")
+// or, for "interrupt", after sending run-full.sh the SIGTERM an operator's
+// kill sends (runfull_gitconfig_test.go).
 const stubCaliper = `
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, shutil, signal, subprocess, sys, tempfile
 args = sys.argv[1:]
 with open(os.environ["Q1_TEST_CALLS"], "a") as f:
     f.write(" ".join(args) + "\n")
@@ -53,6 +57,18 @@ work = os.path.join(root, "work")
 os.mkdir(work)
 hook = dict(os.environ, CALIPER_WORKDIR=work, CALIPER_SPEC_DIR=spec, CALIPER_TASK_ID="task-001", CALIPER_ATTEMPT="1")
 failed = subprocess.call(["sh", os.path.join(spec, "build-subject.sh"), "benign"], cwd=work, env=hook) != 0
+if "Q1_TEST_HOOK" in os.environ:
+    def hook_git(*argv):
+        return subprocess.run(["git", *argv], cwd=work, env=hook, stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
+    with open(os.environ["Q1_TEST_HOOK"], "a") as f:
+        f.write(json.dumps({"global": os.environ.get("GIT_CONFIG_GLOBAL", ""), "marker": hook_git("config", "--get", "q1test.marker"),
+                            "remote": os.path.realpath(os.path.join(work, "remote.git")),
+                            "url": os.path.realpath(hook_git("ls-remote", "--get-url", "https://github.com/dayamjz/caliper-q1.git") or "/")}) + "\n")
+if os.environ.get("Q1_TEST_AFTER_SETUP"):
+    if os.environ["Q1_TEST_AFTER_SETUP"] == "interrupt":
+        os.kill(os.getppid(), signal.SIGTERM)
+    shutil.rmtree(root)
+    sys.exit(3)
 if not ablated:
     agent = {"HOME": root, "PATH": os.environ["PATH"]}
     agent.update({k: os.environ[k] for k in ("LANG", "LC_ALL", "TERM", "TMPDIR", "CLAUDE_CODE_OAUTH_TOKEN") if k in os.environ})
@@ -301,7 +317,8 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 // configuration against that remote's main. Before the rewrite
 // was written to the agent's home, origin resolved to github.com and the run
 // was refused fetching main from the upstream (task-003 of the a#945 proof).
-// The operator-side rewrite (a#942's write) is gone after the run.
+// The operator's own GIT_CONFIG_GLOBAL is only read (a#942): it is as empty
+// after the run as before, and the operator HOME gets no config.
 func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 	r := newFullRun(t)
 	r.standInGraders()
@@ -372,13 +389,11 @@ func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 	// The recorded upstream is a local path, so the run has no code host
 	// (README "Subject remote"): the price of a rewrite init can see.
 	want(t, "no_code_host", runs[0].NoCodeHost, true)
-	cmd := procgroup.Command("git", "config", "--file", filepath.Join(r.root, "gitconfig"), "--get-regexp", `^url\.`)
-	cmd.Env = r.env
-	if out, err := cmd.Output(); len(out) != 0 || err == nil {
-		t.Errorf("the operator-side global config still has a url rewrite: %v\n%s", err, out)
+	if data, err := os.ReadFile(filepath.Join(r.root, "gitconfig")); err != nil || len(data) != 0 {
+		t.Errorf("the operator's GIT_CONFIG_GLOBAL was written: %v\n%s", err, data)
 	}
 	if _, err := os.Stat(filepath.Join(r.root, "home", ".gitconfig")); !os.IsNotExist(err) {
-		t.Errorf("the operator HOME got a .gitconfig (GIT_CONFIG_GLOBAL should have taken the write): %v", err)
+		t.Errorf("the operator HOME got a .gitconfig: %v", err)
 	}
 }
 
@@ -409,7 +424,7 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 			runs = append(runs, line)
 		}
 	}
-	model := "--model claude-code:claude-sonnet-5-5 --judge-model claude-code:claude-sonnet-5-5"
+	model := "--model claude-code:" + rowModel + " --judge-model claude-code:" + rowModel
 	want(t, "caliper runs", runs, []string{
 		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --output result-q1-full-gate.json",
 		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci.json"})
@@ -441,5 +456,64 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(r.spec, "result-q1-"+arm+".json")); err != nil {
 			t.Errorf("%s result: %v", arm, err)
 		}
+	}
+}
+
+// armList is run-full.sh's list of the arms it runs, the one line an arm is
+// added on.
+var armList = regexp.MustCompile(`(?m)^ARM_LIST="([^"\n]*)"$`)
+
+// withArm adds arm to the end of the copy's arm list, as row 11's link 2b adds
+// agent-ci-review.
+func (r *fullRun) withArm(arm string) {
+	r.t.Helper()
+	path := filepath.Join(r.spec, "run-full.sh")
+	data, err := os.ReadFile(path)
+	must(r.t, err)
+	if n := len(armList.FindAllIndex(data, -1)); n != 1 {
+		r.t.Fatalf("run-full.sh has %d arm lists (ARM_LIST=\"...\" lines), want 1", n)
+	}
+	data = armList.ReplaceAll(data, []byte(`ARM_LIST="$1 `+arm+`"`))
+	must(r.t, os.WriteFile(path, data, 0o644))
+}
+
+// TestRunFullRefusesAgentCIReviewWithoutAToken: agent-ci-review's reviewer
+// runs claude -p under a fresh HOME, which only CLAUDE_CODE_OAUTH_TOKEN can
+// authenticate, so with that arm in the list and the variable unset or empty
+// run-full.sh refuses (exit 2), naming the variable, before graders and before
+// caliper or an arm runs. Set to a value that is not a credential, it passes
+// that check without printing the value and stops at the next one: no caliper
+// flags for the arm, which 2b adds with the arm. Without the arm in the list,
+// the other run-full.sh tests run with the variable unset.
+func TestRunFullRefusesAgentCIReviewWithoutAToken(t *testing.T) {
+	const sentinel = "q1-sentinel-not-a-credential"
+	for _, c := range []struct {
+		name, refusal string
+		env           []string
+	}{
+		{"unset", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", nil},
+		{"empty", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", []string{"CLAUDE_CODE_OAUTH_TOKEN="}},
+		{"set", "run-full.sh names no caliper flags for arm 'agent-ci-review'", []string{"CLAUDE_CODE_OAUTH_TOKEN=" + sentinel}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newFullRun(t)
+			r.standInGraders()
+			r.withArm("agent-ci-review")
+			r.run(c.env...)
+			if r.code != 2 || !strings.Contains(r.stderr, c.refusal) {
+				t.Fatalf("run-full.sh exit %d, want 2 with %q; output:\n%s", r.code, c.refusal, r.stderr)
+			}
+			if strings.Contains(r.stderr, sentinel) {
+				t.Errorf("run-full.sh printed the token's value:\n%s", r.stderr)
+			}
+			for _, f := range []string{r.calls, filepath.Join(r.root, "graders.calls")} {
+				if _, err := os.Stat(f); !os.IsNotExist(err) {
+					t.Errorf("%s exists (%v): graders or caliper ran before the refusal", f, err)
+				}
+			}
+			if r.arms != "" {
+				t.Errorf("run-full.sh made the arms directory %s before the refusal", r.arms)
+			}
+		})
 	}
 }
