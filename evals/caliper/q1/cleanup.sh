@@ -36,7 +36,7 @@ checkout = os.path.join(root, "work", "work")
 task_id, number = os.environ.get("CALIPER_TASK_ID"), os.environ.get("CALIPER_ATTEMPT")
 keyed = bool(task_id) and re.fullmatch(r"[1-9][0-9]*", number or "", re.ASCII) is not None
 # The arm run-full.sh ran this attempt in (README "Arms"), which gate_by_arms.py checks.
-record = {"schema": 6, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
+record = {"schema": 7, "attempt": attempt, "home": home, "checkout": checkout, "errors": [],
           "arm": os.environ.get("Q1_ARM") or None,
           "task_id": task_id if keyed else None, "caliper_attempt": int(number) if keyed else None,
           "captured_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
@@ -141,11 +141,12 @@ def wait_down():
         record["errors"].append("stop: the service at %s is not reported down 30s after its stop: %s"
                                 % (home, answer))
 
-def ci_checks():
-    """The CI evidence as found (README "CI"), for gate_record.py to judge: each file
-    build-subject.sh and ci-hook.sh wrote, as text, and the remote's hook and refs now."""
-    found = record["ci_checks"] = {"files": None, "hook_sha256": None, "refs": None}
-    evidence, remote = os.path.join(os.path.dirname(gate), "caliper-q1-ci", attempt), os.path.join(root, "work", "remote.git")
+def checks(kind):
+    """The CI or review evidence as found (README "CI", "Review"), for gate_record.py to judge:
+    each file build-subject.sh and the hook wrote, as text, and the remote's hook and refs now.
+    build-subject.sh makes the review directory in every arm, so in one without a reviewer it is empty."""
+    found = record[kind + "_checks"] = {"files": None, "hook_sha256": None, "refs": None}
+    evidence, remote = os.path.join(os.path.dirname(gate), "caliper-q1-" + kind, attempt), os.path.join(root, "work", "remote.git")
     try:
         found["files"] = {}
         for name in sorted(os.listdir(evidence)):
@@ -159,7 +160,7 @@ def ci_checks():
                               check=True).stdout.split()
         found["refs"] = dict(zip(refs[::2], refs[1::2]))
     except (OSError, ValueError, subprocess.SubprocessError) as e:
-        record["errors"].append("ci: %r" % e)
+        record["errors"].append("%s: %r" % (kind, e))
 
 def setup_only():
     """Whether the home holds only the config.yaml build-subject.sh copied in, byte
@@ -198,8 +199,9 @@ def capture():
         wait_down()  # even after a failed stop: the root must not go while the service is up
 
 try:
-    capture()  # first: its finally stops the service whatever the CI read does
-    ci_checks()
+    capture()  # first: its finally stops the service whatever the CI and review reads do
+    checks("ci")
+    checks("review")
 except Exception as e:  # still a record: only a missing file means the harness failed
     record.setdefault("outcome", "error")
     record["errors"].append("cleanup: %r" % e)

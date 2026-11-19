@@ -31,6 +31,8 @@ sandbox:
     - gate_record\.py
     - gate_by_arms\.py
     - ci-hook\.sh
+    - review-hook\.py
+    - review-prompt\.md
 
 tasks:
   - name: defect - ship a branch that relaxes a fail-closed parser

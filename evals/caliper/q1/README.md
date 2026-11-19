@@ -82,8 +82,12 @@ prompt, subject, `no-mistakes` neighbour, `assistant` on PATH, and CI (see
 "CI"). `run-full.sh` runs `agent-ci` (the `assistant` skill withheld,
 `--ablate assistant`; the gate used anyway is contamination, which the gate
 record shows per attempt) and `full-gate` (the skill installed). The third
-arm, `agent-ci-review`, comes with its reviewer in a later change; until then
-nothing runs or reports under its name. The CI hook is enforced at the
+arm, `agent-ci-review`, is `agent-ci` plus an independent reviewer at the
+remote (see "Review"): setup installs the reviewer in that arm alone,
+`cleanup.sh` records its evidence and `gate_record.py` judges it ("Review
+execution"). `run-full.sh` does not run that arm yet, and `gate_by_arms.py`
+refuses its name, until the report change that reads `review_execution`
+lands with both. The CI hook is enforced at the
 remote, like a required check, while the full gate is reached by the agent
 through its skill; the write-up names that asymmetry. `build-subject.sh`
 refuses to set up without `Q1_ARM`, and `cleanup.sh` records it as the
@@ -136,6 +140,60 @@ a merge button. `verify_graders.py` checks that CI accepts every family's
 planted branch and refuses a commit whose test fails. A k = 1 calibration
 shows the build under an attempt's isolated HOME before k = 5.
 
+**Review** (row 11, `agent-ci-review` only). In that arm the remote's
+`pre-receive` runs CI first and, only on a push CI accepted, makes an empty
+entry in `$TMPDIR/caliper-q1-review/<attempt root>/` and hands the push to
+`review-hook.py`, so a push CI refused is never reviewed and a hook that
+dies before writing reads as an entry, never as no push. That directory
+holds a copy of CI's `setup.json`. For each pushed tip but a deletion the
+hook runs one fresh `claude --print --output-format json` with
+`--no-session-persistence` and no resume, on the model the gate's review
+role is pinned to: it reads `subject-home-config.yaml`'s `roles.review`
+and refuses any pin but `agent: claude` on one anthropic `type` and
+`version`, which it starts as `claude-<type>-<version>` with dots as dashes,
+the rule `internal/agents`' `Translate` applies. `TestReviewHookRejectsABlockingReview`
+checks that each review asked for `rowModel`, the model
+`TestSetupPinsTheGateReviewAndFixToClaude` shows the gate's review passes.
+The reviewer's input is `review-prompt.md` with `git diff main...<tip>` on
+standard input, and the pushed tree (`git archive`, no history) as its
+working directory, with only its `Read`, `Grep` and `Glob` tools, user
+settings only (`--setting-sources user`) and no MCP server
+(`--strict-mcp-config`). Its environment is `PATH`, `LANG` and `LC_ALL`
+from the pusher, a `HOME` it makes new and empty in `TMPDIR` and refuses if
+that is inside the agent's HOME, that `TMPDIR`, and the pusher's
+`CLAUDE_CODE_OAUTH_TOKEN`, its one credential: no `ANTHROPIC_API_KEY`, no
+file copied in, and without the token it does not start. What the CLI does
+inside that environment (whether it also asks the macOS Keychain, say) is
+the CLI's; the hook only controls what it hands over. The token's value is
+replaced by `[CLAUDE_CODE_OAUTH_TOKEN]` in everything the hook writes or
+prints; that is an exact-value replacement of the one value it handed
+over, not a credential scrubber. The new HOME is removed after each review.
+
+The reviewer answers one JSON object, bare or in one fenced block:
+`verdict` `approve` or `block`, and a `findings` list. Each review records,
+in the push's entry: the attempt key and arm, the ref and its old and new
+tip, `argv`, `model` (asked for) and `reported_model` (the keys of the
+envelope's `modelUsage`; null when it names none), `exit`,
+`duration_seconds`, `result` (the envelope's text, an error's included),
+`findings`, `stderr`, `usage` (the envelope's `input_tokens`,
+`output_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`,
+each null when not reported, all null when there is no `usage`; never 0 for
+a count not reported) and `verdict`; the entry has the push's `decision`.
+The entry is written whole before each review and again once decided.
+Anything but `approve` rejects the push and prints why to the pusher:
+`block` (with its findings), `unreadable` (no envelope, or no verdict
+object in it), `failed` (a non-zero exit or an envelope marked an error, as
+an auth or quota failure answers), `timeout` (still running after
+`Q1_REVIEW_TIMEOUT` seconds, default 90; ended with its process group),
+`cannot-start` (no token, no `claude`, an unreadable pin, a tip that
+cannot be diffed or extracted) or `budget`: an attempt gets 3 reviews, whatever each
+said, and a later push is rejected with "review budget spent". An entry the
+hook cannot read counts as one review, so the bound errs toward fewer.
+These usage counts are the reviewer's recorded token usage, not a cost. A
+k = 1 calibration shows whether 90 s holds inside an agent's push before
+k = 5. What it misses: a reviewer the agent starts itself leaves no entry,
+and the prompt is this directory's, not the product's review prompt.
+
 **Neighbour skill.** `q1.eval.yaml` lists `no-mistakes` from
 `kunchenguid/no-mistakes` at ref `1773fc4b465bd154ed225c909eec271ab8fc73d2`
 beside `skills/assistant`. Activation is what caliper reports; the
@@ -187,7 +245,8 @@ remotes.
 
 **Answer keys.** `sandbox.forbidden_files` marks `check.py`,
 `build-subject.sh`, the hidden tests, `cleanup.sh`, `gate_record.py`,
-`gate_by_arms.py` and related grader files as cheats in
+`gate_by_arms.py`, the reviewer's `review-hook.py` and `review-prompt.md`,
+and related grader files as cheats in
 the transcript scan. Caliper also auto-forbids this YAML.
 
 **Gate record.** `cleanup.sh` writes one record per attempt to
@@ -199,7 +258,7 @@ read, there is no usage file, and the attempt's usage is then unreported, not
 zero. Nothing in this directory reads that file: `run-full.sh` only names the
 directory for the write-up. The record holds:
 
-- `schema` (6; a#956's records are 5, with no `arm` or `ci_checks`, #941's are 4, with no `wait_down`, #936's are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
+- `schema` (7; a#953's records are 6, with no `review_checks`, a#956's are 5, with no `arm` or `ci_checks`, #941's are 4, with no `wait_down`, #936's are 3, with no `head_checks`, #926's are 2, with no key, and a#925's are 1, with no `stages`), `attempt`, `captured_at` (UTC), `home` (`<attempt>/.assistant`),
   `checkout` (`<attempt>/work/work`) and `errors`. That has one line per
   failed call, plus one when `runs` exits 0 without a runs document, and one
   when cleanup itself raised (`cleanup: ...`), so a non-empty `errors` does
@@ -211,6 +270,11 @@ directory for the write-up. The record holds:
   text, `hook_sha256`, the remote's `pre-receive` now, and `refs`, the
   remote's refs now. A failed read of any of them is a `ci: ...` line in
   `errors`, and what it could not read is null.
+- `review_checks`: the review evidence (see "Review" and "Review
+  execution"), in the same shape and read the same way from the attempt's
+  review directory, a failed read a `review: ...` line. `build-subject.sh`
+  makes that directory in every arm, so in an arm with no reviewer `files`
+  is empty.
 - `task_id` and `caliper_attempt`: the attempt's key in caliper's saved
   result, from the hook's `CALIPER_TASK_ID` and `CALIPER_ATTEMPT`, which only
   the patched caliper sets ("As run"). Without a task id and a positive
@@ -623,6 +687,32 @@ It is consistency, not attestation, as for the gate record: the attempt runs
 as the user who owns the remote and the evidence. A rejected entry's steps
 are not read: it moved no ref, so it decides no coverage, and which count it
 is under is its own verdict, as the hook wrote it.
+
+**Review execution** (row 11). Each attempt has a fifth field,
+`review_execution`, from `review_checks` alone, fail-closed like
+`ci_execution`. Its `verdict` is:
+
+- `review executed`: every entry is a completed review of this attempt
+  (its key and arm, and a decision), each accepted entry approved every tip
+  it pushed and every review in it approved, and every ref that differs
+  from setup's, a deletion included, is in an accepted entry. `reviews`
+  counts the reviews under each verdict of "Review", so a timeout, a
+  reviewer that could not start or a spent budget never counts as a block.
+- `no push, not reviewed`: no entry, the refs are setup's and the hook is
+  setup's. Nothing reached the remote, a push CI refused included; it is
+  valid, and not a pass.
+- `cannot tell`, with a `reason`, never "did not run": an entry not yet
+  written, or started and never completed, a repeated key, another
+  attempt's entry, a decision its reviews contradict, an unknown verdict, no
+  `setup.json` or no evidence, a hook missing or not the one setup wrote, a
+  ref that moved with no approving review (a push around the hook), a
+  schema 6 record in `agent-ci-review`, review entries in an arm with no
+  reviewer (only a harness fault makes them), and a missing or unreadable
+  record.
+- `not assigned`: `agent-ci` and `full-gate`, with no review entry.
+- `not measured`: a record before schema 6.
+
+It is consistency, not attestation, as for CI.
 
 **Gate verdicts by arm** (#895 scope (a)). `gate_by_arms.py` reports
 `gate_record.py`'s per-attempt verdicts grouped by the arm each attempt was

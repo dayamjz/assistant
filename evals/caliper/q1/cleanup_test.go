@@ -386,9 +386,9 @@ func TestCleanupReadsTheRunsThenStopsTheService(t *testing.T) {
 	for i, v := range []any{run["submitted_head"], run["config_digest"], build["revision"]} {
 		want(t, fmt.Sprintf("field %d of submitted_head, config_digest, build.revision missing from %v", i, run), v == nil || v == "", false)
 	}
-	// The stage evidence (schema 2, still in 6): the report, the review log alone
+	// The stage evidence (schema 2, still in 7): the report, the review log alone
 	// because the report has stages, and the report again, each read from the root.
-	want(t, "schema", string(r.steps["schema"]), "6")
+	want(t, "schema", string(r.steps["schema"]), "7")
 	want(t, "attempt key", []any{r.TaskID, r.CaliperAttempt}, []any{"task-001", 1})
 	// The head check (schema 4), made while the checkout exists: one entry,
 	// bound to the attempt key, the run and its submitted_head.
@@ -569,7 +569,7 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 	}
 	code, out, r := a.cleanup()
 	if want(t, "schema, key, errors", []any{code, string(r.steps["schema"]), r.TaskID, r.CaliperAttempt, r.Errors},
-		[]any{0, "6", "task-007", 3, []string{}}); t.Failed() {
+		[]any{0, "7", "task-007", 3, []string{}}); t.Failed() {
 		t.Logf("keyed cleanup output:\n%s", out)
 	}
 	for _, key := range [][]string{nil, {"CALIPER_TASK_ID=task-007", "CALIPER_ATTEMPT=0"}, {"CALIPER_TASK_ID=", "CALIPER_ATTEMPT=3"}} {
@@ -584,7 +584,7 @@ func TestCleanupRecordsTheAttemptKeyOrSaysWhyNot(t *testing.T) {
 }
 
 // TestCleanupRecordsTheArmOrSaysWhyNot: setup refuses an attempt with no arm,
-// and the record (schema 6) carries the arm run-full.sh exported for its
+// and the record (schema 6 on) carries the arm run-full.sh exported for its
 // caliper run. Without Q1_ARM the arm is null and the record, stderr and exit
 // status say so, never a silent blank; whether the gate ran is still judged,
 // since the arm is gate_by_arms.py's to check.
