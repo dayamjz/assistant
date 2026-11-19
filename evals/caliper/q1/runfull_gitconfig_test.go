@@ -103,7 +103,7 @@ func (r *fullRun) wantScratchGone() {
 // back after cleanup). Where the file cannot be replaced, as behind the Mac
 // Studio's read-only link, the write failed and no attempt ran (the a#939
 // proof run); that shape needs a read-only directory, which this test does
-// not make. Now both arms' setup succeeds, its git reads the operator's
+// not make. Now every arm's setup succeeds, its git reads the operator's
 // config through the run's scratch file and takes the subject rewrite from
 // it, the operator's file is the same file with the same bytes, and the
 // scratch file is gone.
@@ -118,7 +118,7 @@ func TestRunFullLeavesAReadOnlyGlobalConfigAlone(t *testing.T) {
 		t.Fatalf("run-full.sh exit %d, want 0; output:\n%s", r.code, r.stderr)
 	}
 	saw := r.hooks(hookFile)
-	want(t, "setup hooks run (one per arm)", len(saw), 2)
+	want(t, "setup hooks run (one per arm)", len(saw), 3)
 	for _, h := range saw {
 		want(t, "the operator's key as the hook's git reads it", h.Marker, "operator")
 		want(t, "the subject URL as the hook's git rewrites it", h.URL, h.Remote)

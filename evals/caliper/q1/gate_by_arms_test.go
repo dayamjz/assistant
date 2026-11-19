@@ -35,7 +35,16 @@ type armAttempt struct {
 			Established any `json:"review_established"`
 		} `json:"review_established_runs"`
 	} `json:"stage_execution"`
+	CIExecution     verdictOf `json:"ci_execution"`
+	ReviewExecution verdictOf `json:"review_execution"`
+	Contamination   struct {
+		Verdict, Caveat string
+		GateObservation string `json:"gate_observation"`
+	}
 }
+
+// verdictOf is a checker's verdict on one attempt, with its reason when it has one.
+type verdictOf struct{ Verdict, Reason string }
 
 type armReport struct {
 	Ablated            []string
@@ -52,27 +61,43 @@ type armReport struct {
 		ReviewEstablished          map[string]int `json:"review_established"`
 		ReviewExecutedOverMeasured map[string]int `json:"review_executed_over_measured"`
 	} `json:"stage_execution"`
-	Attempts []armAttempt
+	CIExecution     map[string]int `json:"ci_execution"`
+	ReviewExecution map[string]int `json:"review_execution"`
+	Contamination   struct {
+		Counts   map[string]int
+		Attempts []struct {
+			TaskID         string   `json:"task_id"`
+			CaliperAttempt int      `json:"caliper_attempt"`
+			RunIDs         []string `json:"run_ids"`
+			Contamination  struct{ Verdict string }
+		}
+	}
+	JudgeCalls map[string]int `json:"judge_calls"`
+	Attempts   []armAttempt
 }
 
-// asRun is gate state by task outcome; README.md's "As run" owns the format.
-type asRun map[string]map[string]int
+// asRun is gate state, then review execution, by task outcome; README.md's
+// "As run" owns the format.
+type asRun map[string]map[string]map[string]int
 
 type byArm struct {
+	Schema     int
 	AsAssigned map[string]armReport `json:"as_assigned"`
 	AsRun      struct {
-		ByArm    map[string]asRun `json:"by_arm"`
-		BothArms asRun            `json:"both_arms"`
+		ByArm   map[string]asRun `json:"by_arm"`
+		AllArms asRun            `json:"all_arms"`
 	} `json:"as_run"`
 }
 
-// cells is the table's non-empty cells as "state/outcome=n", sorted, so a
-// test states the whole table and an extra cell fails it.
+// cells is the table's non-empty cells as "state/review/outcome=n", sorted, so
+// a test states the whole table and an extra cell fails it.
 func (r asRun) cells() []string {
 	var out []string
-	for state, outcomes := range r {
-		for outcome, n := range outcomes {
-			out = append(out, fmt.Sprintf("%s/%s=%d", state, outcome, n))
+	for state, reviews := range r {
+		for review, outcomes := range reviews {
+			for outcome, n := range outcomes {
+				out = append(out, fmt.Sprintf("%s/%s/%s=%d", state, review, outcome, n))
+			}
 		}
 	}
 	sort.Strings(out)
@@ -271,8 +296,8 @@ func TestGateByArmGroupsEachArmsRecords(t *testing.T) {
 // TestGateByArmRefusesAnArmItCannotAssignExactly: a result whose run.ablated
 // is not the arm's, a record whose attempt root is not under the arm's
 // TMPDIR, one DIR for two arms, an arm unknown or named twice, an arm with
-// no records directory, an unreadable result, and a result that saves one key
-// twice each refuse (exit 2).
+// no records directory, an unreadable result, a result that saves one key
+// twice, and review entries in an arm with no reviewer each refuse (exit 2).
 func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 	withSkill, ablated := armDir(t), armDir(t)
 	a, b := newAttemptIn(t, withSkill, "caliper-a1"), newAttemptIn(t, ablated, "caliper-b1").inArm("agent-ci")
@@ -301,6 +326,14 @@ func TestGateByArmRefusesAnArmItCannotAssignExactly(t *testing.T) {
 		if code, out, _ := a.byArm(rev, args...); code != 2 {
 			t.Errorf("gate_by_arms.py %v: exit %d, want 2\n%s", args, code, out)
 		}
+	}
+	// Labeled edit: review entries in an arm with no reviewer, which only a
+	// harness fault writes, so the report refuses rather than count them.
+	b.copyRecord(b.records(), b.name(), func(rec map[string]any) {
+		rec["review_checks"] = map[string]any{"files": map[string]any{"push-1": "{}"}}
+	})
+	if code, out, errs := a.byArm(rev, "--arm", "agent-ci", ablated, abResult); code != 2 || !strings.Contains(errs, "holds review entries") {
+		t.Errorf("review entries in agent-ci: exit %d, want 2 naming them\n%s%s", code, out, errs)
 	}
 }
 
@@ -334,15 +367,15 @@ func TestGateByArmCountsRecordsBeyondSavedOnlyWhenInterrupted(t *testing.T) {
 	want(t, "attempts saved, records, missing, beyond", []int{ws.CaliperAttempts, ws.Records, ws.MissingRecords, ws.RecordsBeyondSaved},
 		[]int{2, 2, 1, 1})
 	want(t, "all three in the arm", ws.Counts.GateObservation["no-home"]+ws.Counts.GateObservation["indeterminate"], 3)
-	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/task_fail=1", "no-home/not saved=1", "no-home/pass=1"})
-	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"no-home/infra_error=1", "no-home/task_fail=1"})
+	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/not assigned/task_fail=1", "no-home/not assigned/not saved=1", "no-home/not assigned/pass=1"})
+	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"no-home/not assigned/infra_error=1", "no-home/not assigned/task_fail=1"})
 }
 
 // TestGateByArmJoinsEachRecordToItsSavedAttemptExactly is the join over both
 // arms: each record joins the attempt its key names in its own arm's result,
 // whatever order the files and the result list them in, and a saved attempt
 // no record names is cannot tell, never did not run. "As run" is gate state
-// by task outcome per arm and over both, and every attempt says its key.
+// by task outcome per arm and over all arms, and every attempt says its key.
 func TestGateByArmJoinsEachRecordToItsSavedAttemptExactly(t *testing.T) {
 	withSkill, ablated := armDir(t), armDir(t)
 	// File order (a1, a2) is the reverse of key order, so a join by order fails.
@@ -358,11 +391,11 @@ func TestGateByArmJoinsEachRecordToItsSavedAttemptExactly(t *testing.T) {
 		"--arm", "agent-ci", ablated,
 		keyedResult(t, ablated, "result-q1-ablated.json", false, saved{"task-001", 1, "infra_error"}, saved{"task-002", 1, "pass"}))
 
-	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"no-home/pass=1", "ran/task_fail=1"})
-	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"indeterminate/infra_error=1", "no-home/pass=1"})
-	want(t, "both arms as run", r.AsRun.BothArms.cells(),
-		[]string{"indeterminate/infra_error=1", "no-home/pass=2", "ran/task_fail=1"})
-	for state := range r.AsRun.BothArms {
+	want(t, "with-skill as run", r.AsRun.ByArm["full-gate"].cells(), []string{"no-home/not assigned/pass=1", "ran/not assigned/task_fail=1"})
+	want(t, "ablated as run", r.AsRun.ByArm["agent-ci"].cells(), []string{"indeterminate/not assigned/infra_error=1", "no-home/not assigned/pass=1"})
+	want(t, "all arms as run", r.AsRun.AllArms.cells(),
+		[]string{"indeterminate/not assigned/infra_error=1", "no-home/not assigned/pass=2", "ran/not assigned/task_fail=1"})
+	for state := range r.AsRun.AllArms {
 		if _, ok := r.AsAssigned["full-gate"].Counts.GateObservation[state]; !ok {
 			t.Errorf("as run state %q is not a gate_observation state", state)
 		}
@@ -425,7 +458,7 @@ func TestGateByArmSetsAsideARecordWithoutAKey(t *testing.T) {
 		want(t, "record without key", []any{k.Attempt, k.TaskID, k.TaskOutcome, k.GateObservation.State}, []any{a.name(), nil, "cannot tell", "no-home"})
 		want(t, "its saved attempt", []any{at.Attempt, at.TaskID, at.TaskOutcome, at.GateObservation.Validity}, []any{"", "task-001", "pass", "indeterminate"})
 		want(t, "records, missing", []int{ws.Records, ws.MissingRecords}, []int{1, 1})
-		want(t, "as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/pass=1"})
+		want(t, "as run", r.AsRun.ByArm["full-gate"].cells(), []string{"indeterminate/not assigned/pass=1"})
 	}
 }
 
@@ -444,6 +477,239 @@ func TestGateByArmRefusesARecordFromAnotherArm(t *testing.T) {
 		a.cleanup()
 		if code, out, errs := a.byArm(rev, "--arm", "agent-ci", arm, res); code != 2 || !strings.Contains(errs, "was written in arm") {
 			t.Errorf("a record of arm %q: exit %d, want 2 naming its arm\n%s%s", other, code, out, errs)
+		}
+	}
+}
+
+// setUp is an attempt in arm with key (task-001, n) whose setup built the
+// benign subject, so its remote has the arm's hooks, and which then pushed
+// nothing and started no service before its cleanup: gate no-home, CI not
+// invoked, and in agent-ci-review no push, not reviewed.
+func setUp(t *testing.T, dir, name, arm string, n int) *attempt {
+	t.Helper()
+	a := newAttemptIn(t, dir, name).inArm(arm).keyed("task-001", n)
+	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
+		t.Fatalf("build-subject: exit %d\n%s", code, errs)
+	}
+	a.cleanup()
+	return a
+}
+
+// reviewStates is a report's review_execution counts with every state named.
+func reviewStates(executed, noPush, cannot, notAssigned int) map[string]int {
+	return map[string]int{"review executed": executed, "no push, not reviewed": noPush, "cannot tell": cannot, "not assigned": notAssigned}
+}
+
+// TestGateByArmReadsMissingReviewEvidenceAsCannotTell: agent-ci-review
+// assigns a reviewer, so an attempt there whose review evidence is missing is
+// cannot tell, never a review that did not run, in its verdict, the arm's
+// counts and "As run": a record with no review_checks (cleanup could not read
+// the review directory) and one whose setup.json is gone (labeled edits), and
+// a saved attempt no record names. The same record whole is no push, not
+// reviewed (the positive control). agent-ci assigns no reviewer: there every
+// attempt is not assigned, the one no record names included.
+func TestGateByArmReadsMissingReviewEvidenceAsCannotTell(t *testing.T) {
+	arm, other := armDir(t), armDir(t)
+	a := setUp(t, arm, "caliper-r1", "agent-ci-review", 1)
+	setUp(t, other, "caliper-c1", "agent-ci", 1)
+	rev := a.built()
+	two := []saved{{"task-001", 1, "pass"}, {"task-001", 2, "task_fail"}}
+	args := []string{"--arm", "agent-ci-review", arm, keyedResult(t, arm, "result-q1-ablated.json", false, two...),
+		"--arm", "agent-ci", other, keyedResult(t, other, "result-q1-ablated.json", false, two...)}
+	r := a.arms(rev, args...)
+	want(t, "report schema", r.Schema, 3)
+	ar := r.AsAssigned["agent-ci-review"]
+	want(t, "the record whole, and the attempt no record names", []string{ar.Attempts[0].ReviewExecution.Verdict, ar.Attempts[1].ReviewExecution.Verdict},
+		[]string{"no push, not reviewed", "cannot tell"})
+	want(t, "agent-ci assigns no reviewer", r.AsAssigned["agent-ci"].ReviewExecution, reviewStates(0, 0, 0, 2))
+	for _, c := range []struct {
+		what string
+		edit func(map[string]any)
+	}{
+		{"no review_checks", func(rec map[string]any) { delete(rec, "review_checks") }},
+		{"no setup.json", func(rec map[string]any) {
+			delete(rec["review_checks"].(map[string]any)["files"].(map[string]any), "setup.json")
+		}},
+	} {
+		a.cleanup() // the record as cleanup.sh wrote it, then this case's edit
+		a.copyRecord(a.records(), a.name(), c.edit)
+		r = a.arms(rev, args...)
+		ar = r.AsAssigned["agent-ci-review"]
+		if got := ar.Attempts[0].ReviewExecution; got.Verdict != "cannot tell" || !strings.Contains(got.Reason, "review evidence") {
+			t.Errorf("%s: review_execution = %+v, want cannot tell from the review evidence", c.what, got)
+		}
+		want(t, c.what+": review counts", ar.ReviewExecution, reviewStates(0, 0, 2, 0))
+		want(t, c.what+": as run", r.AsRun.ByArm["agent-ci-review"].cells(),
+			[]string{"indeterminate/cannot tell/task_fail=1", "no-home/cannot tell/pass=1"})
+	}
+}
+
+// TestGateByArmNeedsSchema7ForReview: review_checks came with record schema 7
+// (a#964), so in agent-ci-review a record before it cannot show the reviewer
+// ran and is cannot tell, never not measured: schema 6 (arm and CI, no review
+// evidence), 5 and 4 (labeled edits of the same record). Before schema 6 no
+// record shows CI either, and CI is assigned in every arm, so ci_execution is
+// cannot tell too. In agent-ci the schema 5 record's reviewer is not assigned.
+// The schema 7 record is the positive control.
+func TestGateByArmNeedsSchema7ForReview(t *testing.T) {
+	arm, other := armDir(t), armDir(t)
+	a := setUp(t, arm, "caliper-r1", "agent-ci-review", 1)
+	b := setUp(t, other, "caliper-c1", "agent-ci", 1)
+	rev := a.built()
+	one := saved{"task-001", 1, "pass"}
+	args := []string{"--arm", "agent-ci-review", arm, keyedResult(t, arm, "result-q1-ablated.json", false, one),
+		"--arm", "agent-ci", other, keyedResult(t, other, "result-q1-ablated.json", false, one)}
+	got := a.arms(rev, args...).AsAssigned["agent-ci-review"].Attempts[0]
+	want(t, "schema 7", []string{got.ReviewExecution.Verdict, got.CIExecution.Verdict}, []string{"no push, not reviewed", "not invoked"})
+	b.copyRecord(b.records(), b.name(), func(rec map[string]any) {
+		rec["schema"] = 5
+		delete(rec, "arm")
+		delete(rec, "ci_checks")
+		delete(rec, "review_checks")
+	})
+	for _, c := range []struct {
+		schema int
+		ci     string
+	}{{6, "not invoked"}, {5, "cannot tell"}, {4, "cannot tell"}} {
+		schema := c.schema
+		a.cleanup() // the schema 7 record as cleanup.sh wrote it, then this case's edit
+		a.copyRecord(a.records(), a.name(), func(rec map[string]any) {
+			rec["schema"] = schema
+			delete(rec, "review_checks")
+			if schema < 6 {
+				delete(rec, "arm")
+				delete(rec, "ci_checks")
+			}
+			if schema < 5 {
+				delete(rec, "wait_down")
+			}
+		})
+		r := a.arms(rev, args...)
+		got = r.AsAssigned["agent-ci-review"].Attempts[0]
+		want(t, fmt.Sprintf("schema %d in agent-ci-review", schema), []string{got.ReviewExecution.Verdict, got.CIExecution.Verdict},
+			[]string{"cannot tell", c.ci})
+		old := r.AsAssigned["agent-ci"].Attempts[0]
+		want(t, "schema 5 in agent-ci", []string{old.ReviewExecution.Verdict, old.CIExecution.Verdict}, []string{"not assigned", "cannot tell"})
+	}
+}
+
+// TestGateByArmListsContaminationPerAttempt: agent-ci withholds the gate, so
+// each attempt says whether it used the gate anyway, and each contaminated or
+// cannot-tell attempt is listed by its key with its run ids, never folded
+// into a rate. Its attempts: one whose gate ran (contaminated, with the run's
+// id), one never served (no-home: clean, carrying the caveat that no persisted
+// home is not proof the gate never started, and not listed), one whose service
+// was down at cleanup (indeterminate: cannot tell, never clean), and a saved
+// attempt no record names (cannot tell). agent-ci-review withholds the gate
+// too, so its attempt no record names is listed; full-gate does not, so its
+// attempt is not withheld and nothing is listed.
+func TestGateByArmListsContaminationPerAttempt(t *testing.T) {
+	ci, review, full := armDir(t), armDir(t), armDir(t)
+	ran := newAttemptIn(t, ci, "caliper-a1").inArm("agent-ci").keyed("task-001", 1)
+	ran.serve()
+	id := ran.startRun()
+	ran.cleanup()
+	newAttemptIn(t, ci, "caliper-a2").inArm("agent-ci").keyed("task-001", 2).cleanup()
+	down := newAttemptIn(t, ci, "caliper-a3").inArm("agent-ci").keyed("task-001", 3)
+	down.serve()
+	down.assistant(down.root, "service", "stop", "--force")
+	if !down.stopped() {
+		t.Fatal("the service still runs 30s after its stop")
+	}
+	down.cleanup()
+	want(t, "mkdir", os.Mkdir(filepath.Join(review, "caliper-q1-gate"), 0o755), nil)
+	newAttemptIn(t, full, "caliper-f1").keyed("task-001", 1).cleanup()
+	rev := ran.built()
+	r := ran.arms(rev,
+		"--arm", "agent-ci", ci, keyedResult(t, ci, "result-q1-ablated.json", false,
+			saved{"task-001", 1, "pass"}, saved{"task-001", 2, "pass"}, saved{"task-001", 3, "task_fail"}, saved{"task-001", 4, "infra_error"}),
+		"--arm", "agent-ci-review", review, keyedResult(t, review, "result-q1-ablated.json", false, saved{"task-001", 1, "pass"}),
+		"--arm", "full-gate", full, keyedResult(t, full, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}))
+	listed := func(arm string) []string {
+		var got []string
+		for _, at := range r.AsAssigned[arm].Contamination.Attempts {
+			got = append(got, fmt.Sprintf("%s/%d %s %v", at.TaskID, at.CaliperAttempt, at.Contamination.Verdict, at.RunIDs))
+		}
+		return got
+	}
+	counts := func(contaminated, cannot, clean, notWithheld int) map[string]int {
+		return map[string]int{"contaminated": contaminated, "cannot tell": cannot, "clean": clean, "not withheld": notWithheld}
+	}
+	ac := r.AsAssigned["agent-ci"]
+	want(t, "agent-ci listed", listed("agent-ci"), []string{"task-001/1 contaminated [" + id + "]", "task-001/3 cannot tell []", "task-001/4 cannot tell []"})
+	want(t, "agent-ci counts", ac.Contamination.Counts, counts(1, 2, 1, 0))
+	clean := ac.Attempts[1].Contamination
+	want(t, "the no-home attempt", []any{clean.Verdict, clean.GateObservation, strings.Contains(clean.Caveat, "not proof that the gate never started")},
+		[]any{"clean", "no-home", true})
+	want(t, "the down attempt", []string{ac.Attempts[2].GateObservation.Validity, ac.Attempts[2].Contamination.Verdict}, []string{"indeterminate", "cannot tell"})
+	want(t, "agent-ci-review listed", listed("agent-ci-review"), []string{"task-001/1 cannot tell []"})
+	want(t, "full-gate", []any{listed("full-gate"), r.AsAssigned["full-gate"].Contamination.Counts}, []any{[]string(nil), counts(0, 0, 0, 1)})
+}
+
+// TestGateByArmAsRunSeparatesTheCheckers: "As run" rows are what checked the
+// attempt, the gate's state and then the reviewer's, so two attempts of
+// agent-ci-review with one gate state (no-home) and one task outcome are in two
+// cells when one push was reviewed and approved and the other attempt pushed
+// nothing. A saved attempt no record names is cannot tell for both, agent-ci's
+// attempt is not assigned a reviewer, and each gate state names every review
+// state. The arm also counts its CI and review verdicts.
+func TestGateByArmAsRunSeparatesTheCheckers(t *testing.T) {
+	a, _, _ := reviewArm(t, standin.Script{Steps: []standin.Step{{Reply: standin.Text(approve)}}})
+	if code, errs := a.push(); code != 0 {
+		t.Fatalf("the approved push was refused: exit %d\n%s", code, errs)
+	}
+	a.cleanup()
+	setUp(t, a.tmpdir, "caliper-r2", "agent-ci-review", 2)
+	other := armDir(t)
+	setUp(t, other, "caliper-c1", "agent-ci", 1)
+	r := a.arms(a.built(),
+		"--arm", "agent-ci-review", a.tmpdir, keyedResult(t, a.tmpdir, "result-q1-ablated.json", false,
+			saved{"task-001", 1, "pass"}, saved{"task-001", 2, "pass"}, saved{"task-001", 3, "infra_error"}),
+		"--arm", "agent-ci", other, keyedResult(t, other, "result-q1-ablated.json", false, saved{"task-001", 1, "pass"}))
+	reviewed := []string{"indeterminate/cannot tell/infra_error=1", "no-home/no push, not reviewed/pass=1", "no-home/review executed/pass=1"}
+	want(t, "agent-ci-review as run", r.AsRun.ByArm["agent-ci-review"].cells(), reviewed)
+	want(t, "all arms as run", r.AsRun.AllArms.cells(), append(reviewed[:2:2], "no-home/not assigned/pass=1", reviewed[2]))
+	for state, reviews := range r.AsRun.AllArms {
+		want(t, state+"'s review states", len(reviews), 4)
+	}
+	ar := r.AsAssigned["agent-ci-review"]
+	want(t, "review counts", ar.ReviewExecution, reviewStates(1, 1, 1, 0))
+	want(t, "CI counts", ar.CIExecution, map[string]int{"ci ran": 1, "not invoked": 1, "cannot tell": 1})
+}
+
+// TestGateByArmCountsJudgeCallsOnlyWhereRecorded: an attempt has a judge call
+// when caliper recorded its judge_seconds; null is no call recorded, counted
+// apart and never as a call measured at 0 s. A saved attempt with no
+// judge_seconds, or one that is not a number or null, is not a caliper 0.19.0
+// attempt, so the result is refused (exit 2).
+func TestGateByArmCountsJudgeCallsOnlyWhereRecorded(t *testing.T) {
+	arm := armDir(t)
+	a := newAttemptIn(t, arm, "caliper-a1")
+	a.cleanup()
+	rev := a.built()
+	res := keyedResult(t, arm, "result-q1-with-skill.json", false, saved{"task-001", 1, "pass"}, saved{"task-001", 2, "pass"})
+	judged := func(edit func(second map[string]any)) {
+		data, err := os.ReadFile(res)
+		var doc map[string]any
+		if err == nil {
+			err = json.Unmarshal(data, &doc)
+		}
+		must(t, err)
+		edit(doc["task_results"].([]any)[0].(map[string]any)["attempts"].([]any)[1].(map[string]any))
+		data, err = json.Marshal(doc)
+		must(t, err)
+		must(t, os.WriteFile(res, data, 0o644))
+	}
+	judged(func(second map[string]any) { second["judge_seconds"] = 12.5 })
+	want(t, "judge calls", a.arms(rev, "--arm", "full-gate", arm, res).AsAssigned["full-gate"].JudgeCalls,
+		map[string]int{"attempts_with_a_call": 1, "attempts_none_recorded": 1})
+	for what, edit := range map[string]func(map[string]any){
+		"missing": func(second map[string]any) { delete(second, "judge_seconds") },
+		"boolean": func(second map[string]any) { second["judge_seconds"] = true },
+	} {
+		judged(edit)
+		if code, out, errs := a.byArm(rev, "--arm", "full-gate", arm, res); code != 2 || !strings.Contains(errs, "judge_seconds") {
+			t.Errorf("judge_seconds %s: exit %d, want 2 naming it\n%s%s", what, code, out, errs)
 		}
 	}
 }

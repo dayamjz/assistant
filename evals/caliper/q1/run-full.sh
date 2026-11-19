@@ -93,14 +93,14 @@ if ! claude auth status 2>/dev/null | grep -q '"loggedIn": true'; then
 fi
 
 # The arms of README "Arms" this script runs, in order. Every step below that
-# is per arm reads this list, so an arm is added here and nowhere else, and
-# the checks here run for it before graders.
-ARM_LIST="full-gate agent-ci"
+# is per arm reads this list, and the checks here run for each arm before
+# graders: an arm arm_flags does not name is refused, never run as another.
+ARM_LIST="full-gate agent-ci agent-ci-review"
 # arm_flags ARM prints the caliper run flags that make ARM that arm.
 arm_flags() {
 	case "$1" in
 	full-gate) ;;
-	agent-ci) echo "--ablate assistant" ;;
+	agent-ci | agent-ci-review) echo "--ablate assistant" ;;
 	*) return 1 ;;
 	esac
 }
