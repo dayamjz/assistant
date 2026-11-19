@@ -14,7 +14,8 @@
 # (same pattern as internal/service's consentingSubject). A PATH `gh`
 # stand-in lives at evals/caliper/path/ (not beside this script) so which gh
 # does not land next to graders. The insteadOf rewrite goes in two places:
-# the hook's own global config, for this script's git, and the agent's home
+# the hook's own global config, for this script's git (under run-full.sh, that
+# run's scratch file, never the operator's: a#942), and the agent's home
 # (README "Subject remote").
 set -eu
 variant="$1"
@@ -54,8 +55,9 @@ mkdir -m 700 "$AGENT_HOME/.assistant"
 
 git init -q --bare -b main remote.git
 REMOTE_ABS="$(cd remote.git && pwd)"
-# This script's own git reads the hook's global config: the operator's, or
-# GIT_CONFIG_GLOBAL (a#942 owns that this writes it). Drop any prior rewrite
+# This script's own git reads the hook's global config, GIT_CONFIG_GLOBAL:
+# run-full.sh's scratch file (a#942), verify_graders.py's per-subject file, or
+# else the caller's own global config. Drop any prior rewrite
 # of the same URL first: a dead path from an earlier attempt (or a parallel
 # worker) would otherwise win and make clone/push fail with "does not appear
 # to be a git repository".
