@@ -55,7 +55,8 @@ func (f *firstLine) Write(p []byte) (int, error) {
 
 // startReviewer starts review-server.py as run-full.sh's start_reviewer does:
 // token on its standard input and in neither its environment nor its argv,
-// a 0700 TMPDIR of its own holding its socket, a request log outside it, and
+// a TMPDIR of its own holding its socket (0700, as os.MkdirTemp makes it, as
+// mktemp -d does in run-full.sh), a request log outside it, and
 // env, where PATH names the claude it runs. It returns once the socket answers. The test's cleanup
 // stops it (stop), so every test that starts one checks its teardown.
 func startReviewer(t *testing.T, token string, env ...string) *reviewer {
@@ -63,7 +64,6 @@ func startReviewer(t *testing.T, token string, env ...string) *reviewer {
 	dir, err := standin.TempDir("q1-rev")
 	must(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir); _ = os.Remove(dir + ".requests.jsonl") })
-	must(t, os.Chmod(dir, 0o700))
 	r := &reviewer{t: t, dir: dir, log: dir + ".requests.jsonl", done: make(chan error, 1)}
 	line := make(chan string, 1)
 	cmd := procgroup.Command("python3", filepath.Join(spec, "review-server.py"), r.socket(), r.log)
