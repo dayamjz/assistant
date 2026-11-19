@@ -31,6 +31,8 @@ evals/caliper/q1/install-caliper.sh
 # Claude Code on PATH and logged in (pilot backend). API key auth:
 #   export ANTHROPIC_API_KEY=…
 #   # or: claude auth login
+# agent-ci-review's reviewer authenticates with this alone ("Review"):
+#   export CLAUDE_CODE_OAUTH_TOKEN=…   # claude setup-token
 export PATH="$HOME/.local/bin:$PWD/bin:$PATH"
 cd evals/caliper/q1
 python3 verify_graders.py
@@ -65,12 +67,13 @@ when the `caliper` on PATH, asked through the interpreter its script names,
 is not caliper-eval `0.19.0+q1attemptenv` (a stock caliper passes no
 attempt key; "As run"), when Claude is not logged in and
 `ANTHROPIC_API_KEY` is unset, or when `go` is not on PATH. It also refuses
-there when `agent-ci-review` is in its arm list (`ARM_LIST`, which every
-per-arm step reads; the arm is not in it yet) and `CLAUDE_CODE_OAUTH_TOKEN` is
-unset or empty, naming the variable and never printing its value: that arm's
-reviewer runs `claude -p` under a fresh HOME, and caliper 0.19.0 passes the
-variable from this environment to the agent (`caliper/harness/claude_code.py`'s
-`env_passthrough`). Use a
+there when `CLAUDE_CODE_OAUTH_TOKEN` is unset or empty, naming the variable
+and never printing its value, since `agent-ci-review` is in its arm list
+(`ARM_LIST`, which every per-arm step reads): that arm's reviewer runs
+`claude -p` under a fresh HOME, and caliper 0.19.0 passes the variable from
+this environment to the agent (`caliper/harness/claude_code.py`'s
+`env_passthrough`). The arm is never skipped for want of it: the whole run
+stops before graders. Use a
 disposable environment. Caliper's `sandbox:` scans transcripts and runs
 Claude Code with `--dangerously-skip-permissions` under a temporary HOME
 on the operator's machine.
@@ -79,15 +82,13 @@ on the operator's machine.
 
 **Arms** (row 11, a#896's design note). Every arm has the same tasks,
 prompt, subject, `no-mistakes` neighbour, `assistant` on PATH, and CI (see
-"CI"). `run-full.sh` runs `agent-ci` (the `assistant` skill withheld,
-`--ablate assistant`; the gate used anyway is contamination, which the gate
-record shows per attempt) and `full-gate` (the skill installed). The third
-arm, `agent-ci-review`, is `agent-ci` plus an independent reviewer at the
-remote (see "Review"): setup installs the reviewer in that arm alone,
-`cleanup.sh` records its evidence and `gate_record.py` judges it ("Review
-execution"). `run-full.sh` does not run that arm yet, and `gate_by_arms.py`
-refuses its name, until the report change that reads `review_execution`
-lands with both. The CI hook is enforced at the
+"CI"). `run-full.sh` runs three arms: `full-gate` (the skill installed),
+`agent-ci` (the `assistant` skill withheld, `--ablate assistant`; the gate
+used anyway is contamination, which "Gate verdicts by arm" lists per attempt)
+and `agent-ci-review`, which is `agent-ci` plus an independent reviewer at
+the remote (see "Review"): setup installs the reviewer in that arm alone,
+`cleanup.sh` records its evidence, `gate_record.py` judges it ("Review
+execution") and `gate_by_arms.py` reports it per arm. The CI hook is enforced at the
 remote, like a required check, while the full gate is reached by the agent
 through its skill; the write-up names that asymmetry. `build-subject.sh`
 refuses to set up without `Q1_ARM`, and `cleanup.sh` records it as the
@@ -232,7 +233,10 @@ bare remote with `url.<local-remote>.insteadOf`, in two places:
   origin as `git remote get-url` expands it, so the upstream the repository
   record names, which every run fetches from, is the local remote. So a run
   has no code host (`no_code_host`): `pr` and `ci` take that path, and the
-  `gh` stand-in is not what a run's pull request goes to. The
+  `gh` stand-in is not what a run's pull request goes to. So no Q1 run,
+  k = 5 and rows 11 and 12 included, measures the gate's code-host path,
+  and a `review executed` here never covers it; measuring it again is a
+  separate decision ([#950](https://github.com/dayamjz/assistant/issues/950)). The
   attempt root is the parent of the hook's
   `CALIPER_WORKDIR`, and `build-subject.sh` fails without one unless
   `Q1_AGENT_HOME` names the home instead (`verify_graders.py`). Caliper
@@ -733,20 +737,23 @@ is under is its own verdict, as the hook wrote it.
 - `not assigned`: `agent-ci` and `full-gate`, with no review entry.
 - `not measured`: a record before schema 6.
 
-It is consistency, not attestation, as for CI.
+It is consistency, not attestation, as for CI. `gate_by_arms.py` knows each
+attempt's arm, so its report reads both fields by what the arm assigns
+("Gate verdicts by arm"), not as `gate_record.py` alone can.
 
-**Gate verdicts by arm** (#895 scope (a)). `gate_by_arms.py` reports
+**Gate verdicts by arm** (#895 scope (a), row 11). `gate_by_arms.py` reports
 `gate_record.py`'s per-attempt verdicts grouped by the arm each attempt was
-assigned ("as assigned": adoption, whether the gate ran in each arm), and
-each attempt's task outcome by whether the gate ran ("As run", #936), never
-efficacy. Beside the records it reads of each arm's caliper result only
-`run.ablated`, `run.interrupted`, and each saved attempt's task id, attempt
-number and outcome, and no transcript.
+assigned ("as assigned": what ran in each arm, the gate, CI and the
+reviewer), and each attempt's task outcome by what checked it ("As run",
+#936), never efficacy. Beside the records it reads of each arm's caliper
+result only `run.ablated`, `run.interrupted`, and each saved attempt's task
+id, attempt number, outcome and `judge_seconds`, and no transcript.
 
 ```sh
 python3 gate_by_arms.py --revision REV --modified MOD \
+  --arm full-gate "$ARMS/full-gate" result-q1-full-gate.json \
   --arm agent-ci "$ARMS/agent-ci" result-q1-agent-ci.json \
-  --arm full-gate "$ARMS/full-gate" result-q1-full-gate.json
+  --arm agent-ci-review "$ARMS/agent-ci-review" result-q1-agent-ci-review.json
 ```
 
 `--revision` and `--modified` are as for `gate_record.py`. Each `--arm` is
@@ -762,15 +769,23 @@ The report checks the record rather than trusting that: it refuses (exit 2)
 a record whose `home` is not `DIR/<attempt>/.assistant` (a record moved from
 another folder), and a record a hook wrote anywhere else is not in the
 folder, so it shows as a missing record. It also refuses a result whose
-`run.ablated` is not the arm's (`["assistant"]` for `agent-ci`, `[]` for
-`full-gate`), a schema 6 record whose `arm` is not the arm, a record whose key that run did not save, or more records than
+`run.ablated` is not the arm's (`["assistant"]` for `agent-ci` and
+`agent-ci-review`, `[]` for `full-gate`), a schema 6 or 7 record whose `arm`
+is not the arm, a record holding review entries in an arm with no reviewer
+(only a harness fault writes one), a saved attempt without a
+`judge_seconds` that is a number or null, a record whose key that run did not save, or more records than
 it saved attempts, when that run was not interrupted, two records naming
 one key, one `DIR` for two arms, an arm unknown or named twice, a
 missing `DIR/caliper-q1-gate`, or an unreadable result or one that saves a
 key twice.
 
-**The report.** One JSON document (`schema` 2): `build`, `as_assigned` (one
-object per arm) and `as_run` ("As run"). Each arm has:
+Two arms carry the same `run.ablated`, so the result alone cannot tell
+`agent-ci` from `agent-ci-review`: the `DIR` and the record's `arm` do.
+
+**The report.** One JSON document (`schema` 3; 2 had no `ci_execution`,
+`review_execution`, `contamination` or `judge_calls`, and its `as_run` was by
+gate state alone over `both_arms`): `build`, `as_assigned` (one object per
+arm) and `as_run` ("As run"). Each arm has:
 
 - `ablated`, `interrupted` (from the result), `caliper_attempts` (the
   attempts the result saved), `records` (record files in the folder),
@@ -781,7 +796,9 @@ object per arm) and `as_run` ("As run"). Each arm has:
   and `task_outcome`: the outcome the arm's result saved under that key, or
   `not saved`. Then one entry per saved attempt no record names, with
   `attempt` null, its key and outcome, judged as a missing record:
-  indeterminate and `cannot tell`, never "did not run".
+  indeterminate and `cannot tell`, never "did not run". Each attempt's
+  `ci_execution` and `review_execution` are as the arm assigns them (below),
+  and each has `contamination` (below).
 - `records_without_key`: each record with no key (schema 1 or 2, or written
   under a stock caliper), judged the same, with `task_outcome`
   `cannot tell`. It names no attempt, so it is beside the denominator, never
@@ -797,6 +814,34 @@ object per arm) and `as_run` ("As run"). Each arm has:
   `measured`, the attempts whose stage verdict is not `not measured`, with
   `not_measured` beside it. `cannot tell` attempts are in `measured`. It
   says a review executed only as far as the stage verdict does.
+- `ci_execution` and `review_execution`: each verdict's count of attempts,
+  every verdict named. Every arm assigns CI, so an attempt's `ci_execution`
+  is `ci ran`, `not invoked` or `cannot tell`: a record from before CI's
+  evidence (`gate_record.py`'s `not measured`) cannot show the check ran, so
+  it is `cannot tell`, with a `reason`. In `agent-ci-review`, which assigns
+  the reviewer, `review_execution` is `review executed`, `no push, not
+  reviewed` or `cannot tell` on the same rule, so a record before schema 7,
+  which added `review_checks`, is `cannot tell`, never "did not run". In
+  `agent-ci` and `full-gate` it is `not assigned` for every attempt, a
+  missing or unreadable record included: the arm decides that, and those
+  records' review entries are the one place the refusal above cannot look.
+- `contamination`: `counts` of each attempt's verdict, and `attempts`, each
+  contaminated or `cannot tell` attempt by `task_id`, `caliper_attempt`,
+  `attempt` and the `run_ids` its gate observation lists, never a bare
+  rate. In `agent-ci` and `agent-ci-review`, which withhold the gate, an
+  attempt is `contaminated` when its gate observation is `ran`,
+  `started-not-finished` or `reached-no-stage`, or its stage verdict is
+  `review executed` or `review started, not completed`; else `clean` when
+  the observation is `no-home` or `never-reached` and the stage verdict is
+  not `cannot tell`, `no-home` carrying its `caveat` that no persisted home
+  was observed, which is not proof that the gate never started; else
+  `cannot tell` (indeterminate, `no-checkout`, or a stage verdict of
+  `cannot tell`). In `full-gate` every attempt is `not withheld`: there the
+  gate observation is adoption, in `counts`. The verdict carries the
+  `gate_observation` state and `stage_execution` verdict it was read from.
+- `judge_calls`: `attempts_with_a_call`, the saved attempts whose
+  `judge_seconds` caliper recorded, and `attempts_none_recorded`, those
+  where it is null: no judge call recorded, never a call measured at 0 s.
 
 `missing_records` is the saved attempts no record names, and
 `records_beyond_saved` the records whose key the result did not save. Both
@@ -807,14 +852,22 @@ record it did not save. There such a record stays in the arm and its
 denominator, `task_outcome` `not saved`. A run that was not interrupted
 with such a record, or with more records than saved attempts, is refused.
 
-**As run** (#936). `as_run` is the gate state by task outcome:
-`by_arm.<arm>` over that arm's `attempts`, and `both_arms` over both. Each
-is an object of every `gate_observation` state (as in `counts`) to an
-object of task outcome to count, where a task outcome is caliper's
-(`pass`, `task_fail`, `infra_error` and so on) or `not saved`. So a saved
-attempt with no record is in the `indeterminate` row under its outcome,
-and a record without a key is in no row (`records_without_key`). It is
-descriptive: whether the gate ran was not randomized.
+**As run** (#936). `as_run` is what checked each attempt by its task
+outcome: `by_arm.<arm>` over that arm's `attempts`, and `all_arms` over
+every arm (schema 2's `both_arms` is gone: with three arms "both" would
+misname it, and two keys would state one table twice). Each is an object of
+every `gate_observation` state (as in `counts`) to an object of every
+`review_execution` verdict of the report (`review executed`, `no push, not
+reviewed`, `cannot tell`, `not assigned`) to an object of task outcome to
+count, where a task outcome is caliper's (`pass`, `task_fail`,
+`infra_error` and so on) or `not saved`. So the two checkers stay apart: an
+attempt the gate never reached is in a different cell when the reviewer
+approved its push than when it pushed nothing. A saved attempt with no
+record is in the `indeterminate` row, under `cannot tell` in
+`agent-ci-review` and `not assigned` elsewhere, and a record without a key
+is in no row (`records_without_key`). CI, which every arm assigns, is
+counted per arm in `ci_execution` rather than made a third key. It is
+descriptive: what checked an attempt was not randomized.
 
 **Why the join is exact.** caliper 0.19.0's saved result keys every attempt
 by task id and attempt number (`caliper/schema/results.py`,

@@ -99,7 +99,7 @@ failed |= subprocess.call(["sh", os.path.join(spec, "cleanup.sh")], cwd=work, en
 shutil.rmtree(root)
 with open(args[args.index("--output") + 1], "w") as f:
     json.dump({"run": {"ablated": ablated, "interrupted": False},
-               "task_results": [{"task_id": "task-001", "attempts": [{"attempt": 1, "outcome": "pass"}]}]}, f)
+               "task_results": [{"task_id": "task-001", "attempts": [{"attempt": 1, "outcome": "pass", "judge_seconds": None}]}]}, f)
 sys.exit(2 if failed else 0)
 `
 
@@ -107,7 +107,8 @@ sys.exit(2 if failed else 0)
 // files at <repo>/evals/caliper/q1 (so the committed results it rewrites are
 // the copy's), the built binary at <repo>/bin/assistant, the stand-in caliper
 // in a real virtual environment whose metadata says 0.19.0+q1attemptenv (the
-// version run-full.sh asks the interpreter of), and a claude that is logged in.
+// version run-full.sh asks the interpreter of), a claude that is logged in, and
+// fullRunToken as CLAUDE_CODE_OAUTH_TOKEN, which agent-ci-review needs to run.
 type fullRun struct {
 	t                           *testing.T
 	root, spec, tmpdir, calls   string
@@ -116,6 +117,10 @@ type fullRun struct {
 	code                        int
 	stderr, arms, gateByArmFile string
 }
+
+// fullRunToken is every fullRun's CLAUDE_CODE_OAUTH_TOKEN: not a credential,
+// so a test can look for its value where run-full.sh must never print it.
+const fullRunToken = "q1-sentinel-not-a-credential"
 
 func newFullRun(t *testing.T) *fullRun {
 	t.Helper()
@@ -156,6 +161,7 @@ func newFullRun(t *testing.T) *fullRun {
 	must(t, procgroup.WriteProgram(filepath.Join(root, "stub", "cursor"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
 	must(t, os.WriteFile(filepath.Join(root, "gitconfig"), nil, 0o644))
 	r.env = []string{"HOME=" + filepath.Join(root, "home"), "TMPDIR=" + r.tmpdir, "CALIPER_VENV=" + venv, "Q1_K=1", "Q1_TEST_CALLS=" + r.calls, "Q1_TEST_AGENT=" + r.agent,
+		"CLAUDE_CODE_OAUTH_TOKEN=" + fullRunToken,
 		"PATH=" + strings.Join([]string{filepath.Join(root, "stub"), filepath.Dir(sh), filepath.Dir(goTool), filepath.Dir(git), filepath.Dir(python), "/usr/bin:/bin:/usr/sbin:/sbin"}, ":"),
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(root, "gitconfig"), "GIT_CONFIG_COUNT=2",
 		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0", "GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false"}
@@ -182,7 +188,7 @@ func must(t *testing.T, err error) {
 // standInGraders replaces the copy's verify_graders.py with a stand-in that
 // records each call and passes, for a test whose subject is not the graders:
 // the real script builds eight subjects cold (README "CI"), and
-// TestRunFullRunsEachArmUnderItsOwnTMPDIR runs it.
+// TestRunFullRunsThreeArmsEachUnderItsOwnTMPDIR runs it.
 func (r *fullRun) standInGraders() {
 	r.t.Helper()
 	calls := filepath.Join(r.root, "graders.calls")
@@ -254,7 +260,7 @@ func TestRunFullStartsTheAgentsServiceUnderALongTMPDIR(t *testing.T) {
 	data, err := os.ReadFile(r.gateByArmFile)
 	must(t, err)
 	must(t, json.Unmarshal(data, &report))
-	for arm, state := range map[string]string{"full-gate": "ran", "agent-ci": "no-home"} {
+	for arm, state := range map[string]string{"full-gate": "ran", "agent-ci": "no-home", "agent-ci-review": "no-home"} {
 		got := report.AsAssigned[arm].Attempts
 		if len(got) != 1 || got[0].GateObservation.Validity != "valid" || got[0].GateObservation.State != state {
 			t.Errorf("%s attempts = %+v, want one valid %s", arm, got, state)
@@ -291,7 +297,7 @@ func TestRunFullRefusesArmsWhereAServiceCannotListen(t *testing.T) {
 	if len(arms) != 1 {
 		t.Fatalf("arms directories under Q1_ARMS_ROOT: %v", arms)
 	}
-	roots, _ := filepath.Glob(filepath.Join(arms[0], "full-gate", "caliper-????????"))
+	roots, _ := filepath.Glob(filepath.Join(arms[0], "agent-ci-review", "caliper-????????")) // the arm with the longest name
 	if len(roots) != 1 {
 		t.Fatalf("the refused probe's root is not kept for inspection: %v", roots)
 	}
@@ -400,14 +406,17 @@ func TestRunFullGivesTheAgentAndItsServiceTheSubjectRemote(t *testing.T) {
 // armsWithSkill is the full-gate arm's TMPDIR, where caliper made its attempt root.
 func (r *fullRun) armsWithSkill() string { return filepath.Join(r.arms, "full-gate") }
 
-// TestRunFullRunsEachArmUnderItsOwnTMPDIR: run-full.sh runs caliper once per arm
-// of README "Arms", full-gate with the skill and agent-ci with it ablated, each
-// on the owner's pinned model (a#896) and under its own TMPDIR with Q1_ARM set,
-// so each arm's record says its arm, carries the CI evidence its setup wrote
-// (no push, so not invoked), and the report has exactly those arms. It is the
-// one run-full.sh test that runs the real verify_graders.py, which must pass
-// before any arm runs; the others stand it in (standInGraders).
-func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
+// TestRunFullRunsThreeArmsEachUnderItsOwnTMPDIR: run-full.sh runs caliper once
+// per arm of README "Arms", full-gate with the skill, agent-ci and
+// agent-ci-review with it ablated, each on the owner's pinned model (a#896) and
+// under its own TMPDIR with Q1_ARM set, so each arm's record says its arm,
+// carries the CI evidence its setup wrote (no push, so not invoked), and the
+// report (schema 3) has exactly those arms, with a reviewer in agent-ci-review
+// alone (no push, not reviewed) and not assigned elsewhere. The token
+// agent-ci-review needs is never printed. It is the one run-full.sh test that
+// runs the real verify_graders.py, which must pass before any arm runs; the
+// others stand it in (standInGraders).
+func TestRunFullRunsThreeArmsEachUnderItsOwnTMPDIR(t *testing.T) {
 	r := newFullRun(t)
 	r.run()
 	if r.code != 0 || r.gateByArmFile == "" {
@@ -427,19 +436,25 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 	model := "--model claude-code:" + rowModel + " --judge-model claude-code:" + rowModel
 	want(t, "caliper runs", runs, []string{
 		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --output result-q1-full-gate.json",
-		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci.json"})
+		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci.json",
+		"run q1.eval.yaml --k 1 --timeout 1200 --workers 1 " + model + " --ablate assistant --output result-q1-agent-ci-review.json"})
+	if strings.Contains(r.stderr, fullRunToken) {
+		t.Errorf("run-full.sh printed the token's value:\n%s", r.stderr)
+	}
 	var report struct {
+		Schema     int
 		AsAssigned map[string]struct {
 			Attempts []struct {
-				CIExecution struct{ Verdict string } `json:"ci_execution"`
+				CIExecution     struct{ Verdict string } `json:"ci_execution"`
+				ReviewExecution struct{ Verdict string } `json:"review_execution"`
 			}
 		} `json:"as_assigned"`
 	}
 	data, err := os.ReadFile(r.gateByArmFile)
 	must(t, err)
 	must(t, json.Unmarshal(data, &report))
-	want(t, "report arms", len(report.AsAssigned), 2)
-	for _, arm := range []string{"agent-ci", "full-gate"} {
+	want(t, "report schema, arms", []int{report.Schema, len(report.AsAssigned)}, []int{3, 3})
+	for arm, review := range map[string]string{"agent-ci": "not assigned", "agent-ci-review": "no push, not reviewed", "full-gate": "not assigned"} {
 		records, err := filepath.Glob(filepath.Join(r.arms, arm, "caliper-q1-gate", "caliper-*.record.json"))
 		must(t, err)
 		var rec struct{ Arm string }
@@ -450,8 +465,8 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 		}
 		want(t, arm+" records, their arm", []any{len(records), rec.Arm}, []any{1, arm})
 		got := report.AsAssigned[arm].Attempts
-		if len(got) != 1 || got[0].CIExecution.Verdict != "not invoked" {
-			t.Errorf("%s attempts = %+v, want one whose CI was not invoked", arm, got)
+		if len(got) != 1 || got[0].CIExecution.Verdict != "not invoked" || got[0].ReviewExecution.Verdict != review {
+			t.Errorf("%s attempts = %+v, want one whose CI was not invoked and review %s", arm, got, review)
 		}
 		if _, err := os.Stat(filepath.Join(r.spec, "result-q1-"+arm+".json")); err != nil {
 			t.Errorf("%s result: %v", arm, err)
@@ -459,52 +474,23 @@ func TestRunFullRunsEachArmUnderItsOwnTMPDIR(t *testing.T) {
 	}
 }
 
-// armList is run-full.sh's list of the arms it runs, the one line an arm is
-// added on.
-var armList = regexp.MustCompile(`(?m)^ARM_LIST="([^"\n]*)"$`)
-
-// withArm adds arm to the end of the copy's arm list, as row 11's link 2b adds
-// agent-ci-review.
-func (r *fullRun) withArm(arm string) {
-	r.t.Helper()
-	path := filepath.Join(r.spec, "run-full.sh")
-	data, err := os.ReadFile(path)
-	must(r.t, err)
-	if n := len(armList.FindAllIndex(data, -1)); n != 1 {
-		r.t.Fatalf("run-full.sh has %d arm lists (ARM_LIST=\"...\" lines), want 1", n)
-	}
-	data = armList.ReplaceAll(data, []byte(`ARM_LIST="$1 `+arm+`"`))
-	must(r.t, os.WriteFile(path, data, 0o644))
-}
-
-// TestRunFullRefusesAgentCIReviewWithoutAToken: agent-ci-review's reviewer
-// runs claude -p under a fresh HOME, which only CLAUDE_CODE_OAUTH_TOKEN can
-// authenticate, so with that arm in the list and the variable unset or empty
-// run-full.sh refuses (exit 2), naming the variable, before graders and before
-// caliper or an arm runs. Set to a value that is not a credential, it passes
-// that check without printing the value and stops at the next one: no caliper
-// flags for the arm, which 2b adds with the arm. Without the arm in the list,
-// the other run-full.sh tests run with the variable unset.
+// TestRunFullRefusesAgentCIReviewWithoutAToken: agent-ci-review, which is in
+// run-full.sh's arm list, has a reviewer that runs claude -p under a fresh
+// HOME, which only CLAUDE_CODE_OAUTH_TOKEN can authenticate, so with that
+// variable unset or empty run-full.sh refuses (exit 2), naming the variable,
+// before graders and before caliper or any arm runs: the arm is never skipped
+// and never run without it. TestRunFullRunsThreeArmsEachUnderItsOwnTMPDIR,
+// with the variable set, is the positive control.
 func TestRunFullRefusesAgentCIReviewWithoutAToken(t *testing.T) {
-	const sentinel = "q1-sentinel-not-a-credential"
-	for _, c := range []struct {
-		name, refusal string
-		env           []string
-	}{
-		{"unset", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", nil},
-		{"empty", "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty", []string{"CLAUDE_CODE_OAUTH_TOKEN="}},
-		{"set", "run-full.sh names no caliper flags for arm 'agent-ci-review'", []string{"CLAUDE_CODE_OAUTH_TOKEN=" + sentinel}},
-	} {
-		t.Run(c.name, func(t *testing.T) {
+	const refusal = "arm agent-ci-review needs CLAUDE_CODE_OAUTH_TOKEN, which is unset or empty"
+	for name, env := range map[string][]string{"unset": nil, "empty": {"CLAUDE_CODE_OAUTH_TOKEN="}} {
+		t.Run(name, func(t *testing.T) {
 			r := newFullRun(t)
 			r.standInGraders()
-			r.withArm("agent-ci-review")
-			r.run(c.env...)
-			if r.code != 2 || !strings.Contains(r.stderr, c.refusal) {
-				t.Fatalf("run-full.sh exit %d, want 2 with %q; output:\n%s", r.code, c.refusal, r.stderr)
-			}
-			if strings.Contains(r.stderr, sentinel) {
-				t.Errorf("run-full.sh printed the token's value:\n%s", r.stderr)
+			r.env = without(r.env, "CLAUDE_CODE_OAUTH_TOKEN=")
+			r.run(env...)
+			if r.code != 2 || !strings.Contains(r.stderr, refusal) {
+				t.Fatalf("run-full.sh exit %d, want 2 with %q; output:\n%s", r.code, refusal, r.stderr)
 			}
 			for _, f := range []string{r.calls, filepath.Join(r.root, "graders.calls")} {
 				if _, err := os.Stat(f); !os.IsNotExist(err) {
