@@ -23,12 +23,13 @@ HEX40, HEX64 = re.compile(r"[0-9a-f]{40}\Z"), re.compile(r"[0-9a-f]{64}\Z")
 # Every other line, one this instrument does not know included, is read-path.
 # The per-run stage reads are the stage verdict's to judge, not the gate's.
 # A missing attempt key loses the "as run" join (#936) and makes any run cannot tell, since its
-# head check needs the key (#941); the arm is gate_by_arms.py's, and the CI evidence ci_execution's.
-NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ", "arm: ", "ci: ")
+# head check needs the key (#941); the arm is gate_by_arms.py's, the CI and review evidence their verdicts'.
+NOT_READ_PATH = ("usage: ", "stop: ", "run:", "log:", "run-after:", "key: ", "arm: ", "ci: ", "review: ")
 # 1 predates the stage capture (#926): its stage verdict is not measured. 3 adds the attempt key (#936).
 # 4 adds head_checks (#941): a run in a record without them is cannot tell.
 # 5 adds wait_down (a#956): a stop in a record without it is failed (stop_result). 6 adds arm and ci_checks.
-SCHEMAS = (1, 2, 3, 4, 5, 6)
+# 7 adds review_checks.
+SCHEMAS = (1, 2, 3, 4, 5, 6, 7)
 
 # The mapping table: the (outcome, stop result) pairs cleanup.sh is expected
 # to write, onto (gate_observation, cleanup_status). "runs" means valid, with
@@ -272,6 +273,29 @@ def stage_execution(record, observation):
 CI_OUTCOMES = {("pass", "accepted"): "accepted", ("fail", "rejected"): "rejected_fail",
                ("timeout", "rejected"): "rejected_timeout", ("error", "rejected"): "rejected_error"}
 CI_STEPS = (["git", "archive", "--format=tar", "-o"], ["tar", "-xf", "-C"], ["go", "test", "./..."], ["go", "vet", "./..."])
+# What a review entry's review can say (README "Review execution"), each counted apart.
+REVIEW_VERDICTS = ("approve", "block", "unreadable", "failed", "timeout", "cannot-start", "budget")
+
+
+def hook_evidence(record, field, what):
+    """A hook's entries parsed, the refs moved since setup and the attempt's key (README "CI", "Review"),
+    once setup.json is this attempt's and the hook the one setup wrote; anything else raises."""
+    found = record.get(field) if isinstance(record.get(field), dict) else {}
+    key, docs = (record.get("task_id"), record.get("caliper_attempt"), record.get("arm")), {}
+    for name, text in found["files"].items():
+        try:
+            docs[name] = json.loads(text, object_pairs_hook=unique)
+        except ValueError as e:
+            raise ValueError("%s is unreadable: %s" % (name, e))
+    setup, now = docs.pop("setup.json"), found["refs"]
+    if (setup["task_id"], setup["caliper_attempt"], setup["arm"]) != key or not isinstance(key[0], str) \
+            or type(key[1]) is not int or not isinstance(now, dict) or not isinstance(setup["refs"], dict):
+        raise ValueError("setup.json or the refs at capture are not this attempt's")
+    if not isinstance(setup["hook_sha256"], str) or found.get("hook_sha256") != setup["hook_sha256"]:
+        raise ValueError("the %s hook is missing or not the one setup wrote" % what)
+    moved = {(n, sha) for n, sha in now.items() if setup["refs"].get(n) != sha} | \
+            {(n, "0" * 40) for n in setup["refs"] if n not in now}
+    return docs, moved, key
 
 
 def ci_execution(record):
@@ -280,23 +304,10 @@ def ci_execution(record):
     cannot tell for anything the evidence does not show, never a check that did not run."""
     if schema(record) in (1, 2, 3, 4, 5):
         return {"verdict": NOT_MEASURED}
-    ci = record.get("ci_checks") if isinstance(record.get("ci_checks"), dict) else {}
-    key = (record.get("task_id"), record.get("caliper_attempt"), record.get("arm"))
     try:
-        if schema(record) != 6:
+        if schema(record) not in (6, 7):
             raise ValueError("schema %r is not one this reads" % (record.get("schema"),))
-        docs = {}
-        for name, text in ci["files"].items():
-            try:
-                docs[name] = json.loads(text, object_pairs_hook=unique)
-            except ValueError as e:
-                raise ValueError("%s is unreadable: %s" % (name, e))
-        setup, now = docs.pop("setup.json"), ci["refs"]
-        if (setup["task_id"], setup["caliper_attempt"], setup["arm"]) != key or not isinstance(key[0], str) \
-                or type(key[1]) is not int or not isinstance(now, dict) or not isinstance(setup["refs"], dict):
-            raise ValueError("setup.json or the refs at capture are not this attempt's")
-        if not isinstance(setup["hook_sha256"], str) or ci.get("hook_sha256") != setup["hook_sha256"]:
-            raise ValueError("the CI hook is missing or not the one setup wrote")
+        docs, moved, key = hook_evidence(record, "ci_checks", "CI")
         pushes, checked = dict.fromkeys(CI_OUTCOMES.values(), 0), set()
         for name, e in docs.items():
             outcome = CI_OUTCOMES.get((e.get("verdict"), e.get("decision"))) if isinstance(e, dict) else None
@@ -310,13 +321,42 @@ def ci_execution(record):
             pushes[outcome] += 1
             if outcome == "accepted":
                 checked |= {(r["name"], r["new"]) for r in e["refs"]}
-        moved = {(n, sha) for n, sha in now.items() if setup["refs"].get(n) != sha} | \
-                {(n, "0" * 40) for n in setup["refs"] if n not in now}
         if moved - checked:
             raise ValueError("refs moved with no accepted check: %s" % sorted(moved - checked))
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         return {"verdict": CANNOT, "reason": "CI evidence: %s" % (e if isinstance(e, ValueError) else repr(e))}
     return {"verdict": "ci ran" if docs else "not invoked", "pushes": pushes}
+
+
+def review_execution(record):
+    """Whether the reviewer approved every push that moved the attempt's remote (README "Review
+    execution"): "review executed" with each review counted under its verdict, "no push, not
+    reviewed", "not assigned" in an arm with no reviewer, and else cannot tell, as for CI."""
+    if schema(record) in (1, 2, 3, 4, 5):
+        return {"verdict": NOT_MEASURED}
+    try:
+        if record.get("arm") != "agent-ci-review" and not (record.get("review_checks") or {}).get("files"):
+            return {"verdict": "not assigned"}
+        if schema(record) != 7 or record.get("arm") != "agent-ci-review":
+            raise ValueError("a schema %r record of arm %r holds no review entries" % (record.get("schema"), record.get("arm")))
+        docs, moved, key = hook_evidence(record, "review_checks", "review")
+        reviews, approved = dict.fromkeys(REVIEW_VERDICTS, 0), set()
+        for name, e in docs.items():
+            if not name.startswith("push-") or e.get("schema") != 1 or e.get("decision") not in ("accepted", "rejected") \
+                    or (e.get("task_id"), e.get("caliper_attempt"), e.get("arm")) != key:
+                raise ValueError("%s is not a completed review of this attempt" % name)
+            tips = {(r["name"], r["new"]) for r in e["refs"] if r["new"] != "0" * 40}
+            approves = {(r["name"], r["new"]) for r in e["reviews"] if r["verdict"] == "approve"}
+            if (e["decision"] == "accepted") != (tips <= approves and len(approves) == len(e["reviews"])):
+                raise ValueError("%s's decision is not its reviews'" % name)
+            for r in e["reviews"]:
+                reviews[r["verdict"]] += 1
+            approved |= {(r["name"], r["new"]) for r in e["refs"]} if e["decision"] == "accepted" else set()
+        if moved - approved:
+            raise ValueError("refs moved with no approving review: %s" % sorted(moved - approved))
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        return {"verdict": CANNOT, "reason": "review evidence: %s" % (e if isinstance(e, ValueError) else repr(e))}
+    return {"verdict": "review executed" if docs else "no push, not reviewed", "reviews": reviews}
 
 
 def unique(pairs):
@@ -334,7 +374,8 @@ def no_record(attempt, reason="no record file"):
     return {"attempt": attempt, "cleanup_status": {"status": "failure", "exit": None, "stderr": None,
                                                    "reason": reason},
             "gate_observation": indeterminate(reason + ": the harness failed"),
-            "stage_execution": {"verdict": CANNOT, "reason": reason}, "ci_execution": {"verdict": CANNOT, "reason": reason}}
+            "stage_execution": {"verdict": CANNOT, "reason": reason}, "ci_execution": {"verdict": CANNOT, "reason": reason},
+            "review_execution": {"verdict": CANNOT, "reason": reason}}
 
 
 def judge(attempt, path, built):
@@ -349,7 +390,8 @@ def judge(attempt, path, built):
         return {"attempt": attempt, "cleanup_status": dict(unread, reason="record unreadable"),
                 "gate_observation": indeterminate("record unreadable: %r" % e),
                 "stage_execution": {"verdict": CANNOT, "reason": "record unreadable"},
-                "ci_execution": {"verdict": CANNOT, "reason": "record unreadable"}}
+                "ci_execution": {"verdict": CANNOT, "reason": "record unreadable"},
+                "review_execution": {"verdict": CANNOT, "reason": "record unreadable"}}
     if not isinstance(record, dict):
         record = {}
     stop = record.get("stop") if isinstance(record.get("stop"), dict) else {}
@@ -377,7 +419,8 @@ def judge(attempt, path, built):
     else:
         observation = {"validity": "valid", "state": gate, "runs": []}
     return {"attempt": attempt, "gate_observation": observation, "cleanup_status": cleanup_status,
-            "stage_execution": stage_execution(record, observation), "ci_execution": ci_execution(record)}
+            "stage_execution": stage_execution(record, observation), "ci_execution": ci_execution(record),
+            "review_execution": review_execution(record)}
 
 
 def state(result):

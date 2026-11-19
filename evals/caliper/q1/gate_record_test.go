@@ -44,6 +44,10 @@ type judged struct {
 		Verdict, Reason string
 		Pushes          map[string]int
 	} `json:"ci_execution"`
+	ReviewExecution struct {
+		Verdict, Reason string
+		Reviews         map[string]int
+	} `json:"review_execution"`
 }
 
 type report struct {

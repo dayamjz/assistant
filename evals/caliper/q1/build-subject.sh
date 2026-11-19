@@ -571,6 +571,21 @@ mkdir -p "$CI_DIR"
 quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 printf '#!/bin/sh\nexec sh %s %s %s\n' "$(quote "$SPEC_DIR/ci-hook.sh")" "$(quote "$CI_DIR")" \
   "$(quote "${Q1_CI_TIMEOUT:-120}")" >remote.git/hooks/pre-receive
+# In agent-ci-review alone, a push CI accepted then goes to review-hook.py (README "Review"),
+# into an entry made empty first, beside the same setup.json. Q1_REVIEW_TIMEOUT bounds a review.
+# Every arm has the directory, so one with no reviewer reads as no entries, never as no evidence.
+REVIEW_DIR="${TMPDIR:-/tmp}/caliper-q1-review/$ATTEMPT_KEY"
+rm -rf "$REVIEW_DIR" && mkdir -p "$REVIEW_DIR"
+if [ "$Q1_ARM" = agent-ci-review ]; then
+  cat >remote.git/hooks/pre-receive <<EOF
+#!/bin/sh
+refs="\$(cat)"
+printf '%s\n' "\$refs" | sh $(quote "$SPEC_DIR/ci-hook.sh") $(quote "$CI_DIR") $(quote "${Q1_CI_TIMEOUT:-120}") || exit 1
+entry="\$(mktemp $(quote "$REVIEW_DIR")/push-XXXXXXXX)" || exit 1
+printf '%s\n' "\$refs" | exec python3 $(quote "$SPEC_DIR/review-hook.py") $(quote "$REVIEW_DIR") \\
+  $(quote "${Q1_REVIEW_TIMEOUT:-90}") $(quote "$AGENT_HOME") "\$entry"
+EOF
+fi
 chmod +x remote.git/hooks/pre-receive
 python3 - "$CI_DIR/setup.json" remote.git <<'PY'
 import hashlib, json, os, subprocess, sys
@@ -584,6 +599,7 @@ with open(out, "w") as f:
     json.dump({"task_id": os.environ.get("CALIPER_TASK_ID"), "caliper_attempt": int(n) if n.isdigit() else None,
                "arm": os.environ["Q1_ARM"], "refs": dict(zip(refs[::2], refs[1::2])), "hook_sha256": digest}, f)
 PY
+[ "$Q1_ARM" != agent-ci-review ] || cp "$CI_DIR/setup.json" "$REVIEW_DIR/setup.json"
 
 # Retain the local feature branch without cloning it from the remote.
 mv seed work

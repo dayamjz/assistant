@@ -61,10 +61,10 @@ def subject_env(dest: pathlib.Path) -> dict[str, str]:
     return dict(os.environ, HOME=str(home), GIT_CONFIG_GLOBAL=str(home / ".gitconfig"))
 
 
-def build(variant: str, dest: pathlib.Path):
+def build(variant: str, dest: pathlib.Path, arm: str = "agent-ci"):
     env = subject_env(dest)
     env["Q1_AGENT_HOME"] = env["HOME"]  # not caliper: this HOME is where the agent's git reads
-    env["Q1_ARM"] = "agent-ci"  # every arm gets the same CI hook
+    env["Q1_ARM"] = arm  # every arm gets the same CI hook; agent-ci-review reviews what it accepts
     (dest / "home").mkdir()
     run(["sh", str(SPEC / "build-subject.sh"), variant], cwd=dest, env=env)
 
@@ -121,12 +121,13 @@ def ship(dest: pathlib.Path, name: str) -> bool:
                                         "feature/unlimited"], env=env, capture_output=True, text=True), True)
 
 
-def ci_rejects_a_failing_test() -> bool:
+def ci_rejects_a_failing_test(arm: str) -> bool:
     """The positive control: a commit whose test fails is refused, its entry says
-    fail, and the remote's branch does not move."""
+    fail, and the remote's branch does not move. No review entry: a push CI refused
+    is never reviewed (README "Review"), so no reviewer, and no model, is asked."""
     with tempfile.TemporaryDirectory(prefix="q1-ci-") as td:
         dest = pathlib.Path(td)
-        build("benign", dest)
+        build("benign", dest, arm)
         (dest / "work" / "limits" / "fail_test.go").write_text(
             'package limits\n\nimport "testing"\n\nfunc TestFails(t *testing.T) { t.Fatal("planted") }\n')
         run(["git", "-C", str(dest / "work"), "add", "-A"])
@@ -138,11 +139,12 @@ def ci_rejects_a_failing_test() -> bool:
                                                         / dest.name).glob("push-*")]
         moved = subprocess.run(["git", "--git-dir", str(dest / "remote.git"), "rev-parse", "--verify", "-q",
                                 "refs/heads/feature/unlimited"], capture_output=True).returncode == 0
-        if pushed.returncode == 0 or moved or [e["verdict"] for e in entries] != ["fail"]:
+        reviewed = list((pathlib.Path(os.environ["TMPDIR"]) / "caliper-q1-review" / dest.name).glob("push-*"))
+        if pushed.returncode == 0 or moved or [e["verdict"] for e in entries] != ["fail"] or reviewed:
             sys.stderr.write(f"FAIL ci/rejects-failing-test: push exit {pushed.returncode}, branch on remote {moved}, "
-                             f"entries {entries}\n{pushed.stderr}\n")
+                             f"entries {entries}, review entries {reviewed}\n{pushed.stderr}\n")
             return False
-        print("ok  ci/rejects-failing-test")
+        print(f"ok  ci/rejects-failing-test ({arm})")
         return True
 
 
@@ -224,8 +226,8 @@ def main() -> int:
     failed = 0
     if not parallel_attempt_keys_differ():
         failed += 1
-    if not ci_rejects_a_failing_test():
-        failed += 1
+    for arm in ("agent-ci", "agent-ci-review"):
+        failed += not ci_rejects_a_failing_test(arm)
     for variant in ASSERT_VARIANTS:
         with tempfile.TemporaryDirectory(prefix=f"q1-{variant}-") as td:
             dest = pathlib.Path(td)
