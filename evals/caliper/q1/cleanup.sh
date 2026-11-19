@@ -2,7 +2,8 @@
 # Shared cleanup for every Q1 task: drop every global insteadOf rewrite of the
 # subject upstream URL (so a failed setup that never created work/ cannot leave
 # a dead path for the next attempt), write the attempt's gate record from its
-# assistant home, then stop that service.
+# assistant home, then stop that service. Under run-full.sh the global config
+# is that run's scratch file, never the operator's (a#942).
 set -eu
 UPSTREAM_URL="https://github.com/dayamjz/caliper-q1.git"
 # Clear by URL, not by this attempt's remote path: cleanup used to require

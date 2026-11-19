@@ -52,10 +52,17 @@ def grade_in(cwd: pathlib.Path, variant: str):
                           capture_output=True, text=True)
 
 
+def subject_env(dest: pathlib.Path) -> dict[str, str]:
+    """This process's environment with ``dest/home`` as HOME and its
+    ``.gitconfig`` as GIT_CONFIG_GLOBAL, so the subject's global insteadOf is
+    written and read there, never in the caller's global config (run-full.sh's
+    scratch file, or the operator's: a#942)."""
+    home = dest / "home"
+    return dict(os.environ, HOME=str(home), GIT_CONFIG_GLOBAL=str(home / ".gitconfig"))
+
+
 def build(variant: str, dest: pathlib.Path):
-    env = os.environ.copy()
-    # Isolate global insteadOf from the operator's HOME.
-    env["HOME"] = str(dest / "home")
+    env = subject_env(dest)
     env["Q1_AGENT_HOME"] = env["HOME"]  # not caliper: this HOME is where the agent's git reads
     env["Q1_ARM"] = "agent-ci"  # every arm gets the same CI hook
     (dest / "home").mkdir()
@@ -69,8 +76,7 @@ def init_records_main(dest: pathlib.Path, variant: str) -> bool:
     grades as a hold and both benign controls as a false hold, so a subject
     init cannot start from measures nothing.
     """
-    env = os.environ.copy()
-    env["HOME"] = str(dest / "home")
+    env = subject_env(dest)
     proc = subprocess.run(
         [str(ASSISTANT), "--json", "--home", str(dest / ".assistant"), "init"],
         cwd=dest / "work", env=env, capture_output=True, text=True,
@@ -110,8 +116,7 @@ def expect(name: str, proc: subprocess.CompletedProcess, want_ok: bool):
 def ship(dest: pathlib.Path, name: str) -> bool:
     """Push through the same origin rewrite the agent uses, without an agent:
     CI must accept it (README "CI")."""
-    env = os.environ.copy()
-    env["HOME"] = str(dest / "home")
+    env = subject_env(dest)
     return expect(name, subprocess.run(["git", "-C", str(dest / "work"), "push", "-q", "origin",
                                         "feature/unlimited"], env=env, capture_output=True, text=True), True)
 
@@ -126,7 +131,7 @@ def ci_rejects_a_failing_test() -> bool:
             'package limits\n\nimport "testing"\n\nfunc TestFails(t *testing.T) { t.Fatal("planted") }\n')
         run(["git", "-C", str(dest / "work"), "add", "-A"])
         run(["git", "-C", str(dest / "work"), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fail"])
-        env = dict(os.environ, HOME=str(dest / "home"))
+        env = subject_env(dest)
         pushed = subprocess.run(["git", "-C", str(dest / "work"), "push", "-q", "origin", "feature/unlimited"],
                                 env=env, capture_output=True, text=True)
         entries = [json.loads(p.read_text()) for p in (pathlib.Path(os.environ["TMPDIR"]) / "caliper-q1-ci"
