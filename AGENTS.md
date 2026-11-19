@@ -115,8 +115,9 @@ open first. Operator install and quick-start live in [README.md](README.md).
   `.golangci.yml` is a schema v2 config that a v1 binary rejects before it
   lints anything; the pinned release is in `.github/workflows/ci.yml`, and
   `make lint-guard-test` drives those refusals. `make vet` also vets
-  `internal/judge` under the `judgelive` tag. CI runs `GOOS=windows go vet
-  ./...` as well, so Windows-tagged sources have to keep building.
+  `internal/judge` under the `judgelive` tag and `evals/caliper/q1` under
+  `q1live`. CI runs `GOOS=windows go vet ./...` as well, so Windows-tagged
+  sources have to keep building.
 - CI's test step is `bash scripts/ci-test.sh`, the race suite under the leak
   check (`scripts/leak-check.py`), so a package that leaves a process or temp
   entry behind fails CI even when `make check` passes. `CI_TEST_PACKAGES`,
