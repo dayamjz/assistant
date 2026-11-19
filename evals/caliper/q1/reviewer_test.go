@@ -5,8 +5,10 @@ package q1_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,6 +26,7 @@ import (
 type reviewer struct {
 	t       *testing.T
 	dir     string // its TMPDIR, the directory its socket is in
+	log     string // its request log, beside dir as run-full.sh keeps it outside
 	pid     int    // 0 until its socket answers
 	done    chan error
 	cancel  context.CancelFunc
@@ -52,18 +55,18 @@ func (f *firstLine) Write(p []byte) (int, error) {
 
 // startReviewer starts review-server.py as run-full.sh's start_reviewer does:
 // token on its standard input and in neither its environment nor its argv,
-// a 0700 TMPDIR of its own holding its socket, and env, where PATH names the
-// claude it runs. It returns once the socket answers. The test's cleanup
+// a 0700 TMPDIR of its own holding its socket, a request log outside it, and
+// env, where PATH names the claude it runs. It returns once the socket answers. The test's cleanup
 // stops it (stop), so every test that starts one checks its teardown.
 func startReviewer(t *testing.T, token string, env ...string) *reviewer {
 	t.Helper()
 	dir, err := standin.TempDir("q1-rev")
 	must(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Cleanup(func() { _ = os.RemoveAll(dir); _ = os.Remove(dir + ".requests.jsonl") })
 	must(t, os.Chmod(dir, 0o700))
-	r := &reviewer{t: t, dir: dir, done: make(chan error, 1)}
+	r := &reviewer{t: t, dir: dir, log: dir + ".requests.jsonl", done: make(chan error, 1)}
 	line := make(chan string, 1)
-	cmd := procgroup.Command("python3", filepath.Join(spec, "review-server.py"), r.socket())
+	cmd := procgroup.Command("python3", filepath.Join(spec, "review-server.py"), r.socket(), r.log)
 	cmd.Env = append([]string{"TMPDIR=" + dir}, env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = strings.NewReader(token), &firstLine{line: line}, &r.stderr
 	var ctx context.Context
@@ -194,4 +197,62 @@ func TestReviewHookWithoutItsReviewerProcessCannotStart(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ask sends the reviewer process one request as any client on the machine
+// can, the agent included, and returns its answer line.
+func (r *reviewer) ask(t *testing.T, request map[string]any) string {
+	t.Helper()
+	conn, err := net.Dial("unix", r.socket())
+	must(t, err)
+	defer func() { _ = conn.Close() }()
+	data, err := json.Marshal(request)
+	must(t, err)
+	_, err = conn.Write(append(data, '\n'))
+	must(t, err)
+	answer, err := io.ReadAll(conn)
+	must(t, err)
+	return string(answer)
+}
+
+// requestsChecked is reviewer_requests.py on the reviewer process's log and the
+// attempt's arm: its exit and what it printed.
+func (a *attempt) requestsChecked() (int, map[string]any) {
+	a.t.Helper()
+	code, out, errs := a.run(a.root, "python3", filepath.Join(spec, "reviewer_requests.py"), a.reviewer.log,
+		filepath.Join(a.tmpdir, "caliper-q1-review"))
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		a.t.Fatalf("reviewer_requests.py: exit %d, %v\n%s%s", code, err, out, errs)
+	}
+	return code, got
+}
+
+// TestReviewerRequestsFlagAnAttemptThatAskedTheReviewerItself (coordinator,
+// a#971): the agent runs as the operator's user and its hook names the
+// socket, so it can have the reviewer review something before it pushes. Each
+// request the reviewer process accepts is logged, and reviewer_requests.py
+// holds the log against the hooks' entries. A push the hook reviewed is one
+// request and one hook review, which passes (the positive control); one more
+// request naming the attempt's HOME, sent straight to the socket, makes that
+// attempt contaminated and the check exit 1; and one naming no attempt is
+// counted apart, and fails it too.
+func TestReviewerRequestsFlagAnAttemptThatAskedTheReviewerItself(t *testing.T) {
+	a, agent, _ := reviewArm(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text(approve)}}})
+	if code, errs := a.push(); code != 0 {
+		t.Fatalf("the approved push was refused: exit %d\n%s", code, errs)
+	}
+	code, got := a.requestsChecked()
+	want(t, "after the hook's one review: exit, report", []any{code, got}, []any{0, map[string]any{
+		"attempts":     map[string]any{a.name(): map[string]any{"requests": 1.0, "hook_reviews": 1.0}},
+		"contaminated": []any{}, "unlogged": []any{}, "requests_naming_no_attempt": 0.0}})
+	answer := a.reviewer.ask(t, map[string]any{"tree": a.checkout, "prompt": "is this ready?", "limit": 30, "root": a.root})
+	want(t, "the direct request was reviewed: answer holds argv, reviewer calls", []any{strings.Contains(answer, `"argv"`),
+		len(agent.Calls())}, []any{true, 2})
+	code, got = a.requestsChecked()
+	want(t, "after a request no hook made: exit, contaminated, counts", []any{code, got["contaminated"], got["attempts"]},
+		[]any{1, []any{a.name()}, map[string]any{a.name(): map[string]any{"requests": 2.0, "hook_reviews": 1.0}}})
+	a.reviewer.ask(t, map[string]any{"root": "/elsewhere"})
+	code, got = a.requestsChecked()
+	want(t, "after a request naming no attempt: exit, its count", []any{code, got["requests_naming_no_attempt"]}, []any{1, 1.0})
 }

@@ -48,7 +48,9 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // Code tool call has (caliper's agent environment without
 // CLAUDE_CODE_OAUTH_TOKEN, a#968, and GOCACHE when the runner has one), and
 // appends to that file the arm, the Q1_REVIEWER_SOCKET its hooks got, the
-// push's exit and stderr, and the reviews its review entries hold.
+// push's exit and stderr, and the reviews its review entries hold. With
+// Q1_TEST_ORACLE set too, the agent first sends that socket a request of its
+// own, naming its HOME, as an agent using the reviewer before it pushes.
 const stubCaliper = `
 import glob, json, os, shutil, signal, subprocess, sys, tempfile
 args = sys.argv[1:]
@@ -104,6 +106,12 @@ if not ablated:
 if ablated and os.environ.get("Q1_TEST_PUSH"):
     agent = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "GOCACHE") if k in os.environ}
     agent["HOME"] = root
+    if os.environ.get("Q1_TEST_ORACLE") and os.environ.get("Q1_REVIEWER_SOCKET"):
+        import socket
+        with socket.socket(socket.AF_UNIX) as s:
+            s.connect(os.environ["Q1_REVIEWER_SOCKET"])
+            s.sendall(json.dumps({"tree": work, "prompt": "is this ready?", "limit": 30, "root": root}).encode() + b"\n")
+            s.makefile("rb").readline()
     p = subprocess.run(["git", "push", "-q", "origin", "feature/unlimited"], cwd=os.path.join(work, "work"), env=agent,
                        stdin=subprocess.DEVNULL, capture_output=True, text=True)
     reviews = []
@@ -586,6 +594,34 @@ func TestRunFullReviewsAPushThatCarriesNoToken(t *testing.T) {
 	if strings.Contains(r.stderr+string(log), fullRunToken) {
 		t.Errorf("run-full.sh printed or logged the token's value")
 	}
+	var requests struct {
+		Attempts     map[string]map[string]int
+		Contaminated []string
+	}
+	data, err = os.ReadFile(filepath.Join(r.arms, "reviewer-requests.json"))
+	must(t, err)
+	must(t, json.Unmarshal(data, &requests))
+	for _, counts := range requests.Attempts {
+		want(t, "the attempt's reviewer requests, its hook's reviews", []int{counts["requests"], counts["hook_reviews"]}, []int{1, 1})
+	}
+	want(t, "attempts checked, contaminated", []any{len(requests.Attempts), requests.Contaminated}, []any{1, []string{}})
+}
+
+// TestRunFullFailsAnArmWhoseAgentAskedTheReviewerItself (coordinator, a#971):
+// when the agent sends the reviewer process a request of its own before it
+// pushes, run-full.sh says so, keeps the check's report, and fails the arm,
+// so a contaminated attempt is never read as a clean one.
+func TestRunFullFailsAnArmWhoseAgentAskedTheReviewerItself(t *testing.T) {
+	r := newFullRun(t)
+	r.standInGraders()
+	r.run("Q1_TEST_PUSH="+filepath.Join(r.root, "pushes"), "Q1_TEST_ORACLE=1", "GOCACHE="+sharedGoCache(t))
+	data, err := os.ReadFile(filepath.Join(r.arms, "reviewer-requests.json"))
+	must(t, err)
+	var requests struct{ Contaminated []string }
+	must(t, json.Unmarshal(data, &requests))
+	want(t, "exit, named, arm status, contaminated attempts", []any{r.code,
+		strings.Contains(r.stderr, "reviewer requests no hook made, or unreadable: "+filepath.Join(r.arms, "reviewer-requests.json")),
+		strings.Contains(r.stderr, "agent-ci-review=1"), len(requests.Contaminated)}, []any{1, true, true, 1})
 }
 
 // TestRunFullRefusesWhenItsReviewerProcessDoesNotStart: a reviewer process

@@ -240,6 +240,24 @@ is removed. A hook with no socket, no process answering, or a process that
 ended before answering rejects the push `cannot-start`, naming which, never
 skips the review.
 
+**Reviewer requests** (coordinator, a#971). The hook names the socket and
+the agent runs as the same user, so an agent can have the reviewer review
+its change before it pushes, which contaminates that attempt. The reviewer
+process appends one line per connection it accepts, a hook's or not, to
+`$ARMS/reviewer-requests.jsonl`: when, and the agent HOME the request named.
+Each review the hook sent to the socket is marked `asked` in its entry.
+After the arm, `reviewer_requests.py` holds the two against each other per
+attempt, by the basename of the HOME named, and writes
+`$ARMS/reviewer-requests.json`: each attempt's requests and hook reviews,
+`contaminated` (more requests than its hooks made), `unlogged` (fewer), and
+`requests_naming_no_attempt`. Any contaminated attempt or request naming no
+attempt makes `run-full.sh` print the report's path and fail that arm (its
+exit is 1). What it cannot do: a request's HOME is what its client said,
+so an agent naming another attempt's HOME, or none, moves the blame or
+leaves it unassigned, though the request is still counted as extra; and
+the log and the entries are the agent's user's files, so an agent that
+edits them can hide a request, as it could edit any evidence here.
+
 What this does not cover. The agent runs as the operator's user, and a
 same-user `ps eww` lists another process's environment on macOS 27
 (observed 2026-11-19 for `claude` and `python3`). The reviewer process
@@ -253,9 +271,9 @@ to: `run-full.sh`, caliper, and the agent's own `claude`, to which caliper
 Claude Code tool call, `ps eww` of that `claude` listed it (2026-11-19).
 So the reviewer's credential is the agent's own, and readable to it by a
 process listing; keeping it out of the agent's view needs a separate
-reviewer token or a change to caliper, neither of which is here. A reviewer
-the agent starts through the socket itself leaves no entry, as one it
-starts on its own does.
+reviewer token or a change to caliper, neither of which is here. A review
+the agent asks for through the socket leaves no entry, and is counted as
+above; one it runs on its own, with its own `claude`, is in no log here.
 
 **Neighbour skill.** `q1.eval.yaml` lists `no-mistakes` from
 `kunchenguid/no-mistakes` at ref `1773fc4b465bd154ed225c909eec271ab8fc73d2`

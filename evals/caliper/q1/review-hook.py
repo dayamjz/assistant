@@ -58,6 +58,7 @@ def ask(request):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(limit + 60)  # past the reviewer's own limit, which it ends at
             s.connect(sock)
+            rec["asked"] = True  # one request the reviewer process logs is this hook's (reviewer_requests.py)
             s.sendall(json.dumps(request).encode() + b"\n")
             line = s.makefile("rb").readline()
     except OSError as e:
@@ -106,7 +107,7 @@ with open(os.path.join(evidence, "setup.json")) as f:
     for ref in entry["refs"]:
         if ref["new"] == "0" * 40:
             continue  # a deletion has no tree to review
-        rec = dict(ref, argv=None, model=None, exit=None, is_error=None, duration_seconds=None, result=None, findings=None,
+        rec = dict(ref, asked=False, argv=None, model=None, exit=None, is_error=None, duration_seconds=None, result=None, findings=None,
                    usage=None, reported_model=None, verdict="budget" if used >= BUDGET else None)
         entry["reviews"].append(rec)
         if rec["verdict"] is None:

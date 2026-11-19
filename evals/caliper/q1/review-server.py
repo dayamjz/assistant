@@ -1,14 +1,16 @@
-"""review-server.py SOCKET: the agent-ci-review reviewer process (README "Reviewer process", a#968). run-full.sh starts
+"""review-server.py SOCKET REQUESTS: the agent-ci-review reviewer process (README "Reviewer process", a#968). run-full.sh starts
 one per arm, outside Claude Code, whose tool calls run without CLAUDE_CODE_OAUTH_TOKEN, so the review hook an agent's
 push runs never has it. It reads the token from standard input, never from its environment or argv, holds it in memory
 only, and hands it to each reviewer on a pipe (CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR), never in an environment or a
 file. review-hook.py asks it for one review at a time on SOCKET: the pushed tree, the prompt, the limit and the agent's
 HOME. A request chooses no program, model, HOME or environment, so a client can have a review and never the token; the
-answer is what ran and what it said, the token's value replaced in both. Once SOCKET answers it prints its pid. SIGTERM,
+answer is what ran and what it said, the token's value replaced in both. Every connection it accepts, whoever made it,
+appends one line to REQUESTS: when, and the agent HOME it named (null when it named none), which reviewer_requests.py
+holds against the hooks' entries (README "Reviewer process"). Once SOCKET answers it prints its pid. SIGTERM,
 SIGINT or SIGHUP ends a review in flight with its process group, removes its HOME and SOCKET, and exits."""
 import contextlib, json, os, re, shutil, signal, socket, subprocess, sys, tempfile, time
 
-spec, path = os.path.dirname(os.path.abspath(__file__)), sys.argv[1]
+spec, path, requests = os.path.dirname(os.path.abspath(__file__)), sys.argv[1], sys.argv[2]
 token = sys.stdin.read().strip()
 hide = lambda text: text.replace(token, "[CLAUDE_CODE_OAUTH_TOKEN]")
 
@@ -60,7 +62,7 @@ def run(req, scratch):
 def review(conn):
     """Answers the one request conn carries."""
     conn.settimeout(30)  # a client that sends nothing holds no later review up for long
-    scratch = tempfile.mkdtemp(prefix="q1-review-")
+    scratch, req = tempfile.mkdtemp(prefix="q1-review-"), None
     try:
         req = json.loads(conn.makefile("rb").readline())
         conn.settimeout(None)
@@ -69,6 +71,8 @@ def review(conn):
         reply = {"error": str(e) if type(e) is ValueError else repr(e)}
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+        with open(requests, "a") as f:  # a log that cannot be written ends this process, so the gap is loud
+            f.write(json.dumps({"at": time.time(), "root": req.get("root") if isinstance(req, dict) else None}) + "\n")
     with contextlib.suppress(OSError):
         conn.sendall(json.dumps(reply).encode() + b"\n")
 

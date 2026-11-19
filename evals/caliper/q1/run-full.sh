@@ -199,7 +199,7 @@ Q1_REVIEWER_SOCKET=
 start_reviewer() {
 	REVIEWER_DIR="$(mktemp -d "$ARMS/reviewer.XXXXXX")"
 	printf '%s' "$CLAUDE_CODE_OAUTH_TOKEN" | env -u CLAUDE_CODE_OAUTH_TOKEN TMPDIR="$REVIEWER_DIR" \
-		python3 review-server.py "$REVIEWER_DIR/socket" >"$ARMS/reviewer.log" 2>&1 &
+		python3 review-server.py "$REVIEWER_DIR/socket" "$ARMS/reviewer-requests.jsonl" >"$ARMS/reviewer.log" 2>&1 &
 	REVIEWER_PID=$!
 	i=0
 	until [ -S "$REVIEWER_DIR/socket" ]; do
@@ -229,7 +229,12 @@ for arm in $ARM_LIST; do
 	Q1_ARM="$arm" Q1_REVIEWER_SOCKET="$Q1_REVIEWER_SOCKET" TMPDIR="$ARMS/$arm" caliper run q1.eval.yaml \
 		--k "$K" --timeout 1200 --workers 1 --model "$MODEL" --judge-model "$MODEL" \
 		$(arm_flags "$arm") --output "result-q1-$arm.json" || rc=$?
-	[ -z "$REVIEWER_PID" ] || stop_reviewer
+	if [ -n "$REVIEWER_PID" ]; then
+		stop_reviewer
+		# A request no hook made is the agent using the reviewer itself: that attempt is contaminated.
+		python3 reviewer_requests.py "$ARMS/reviewer-requests.jsonl" "$ARMS/$arm/caliper-q1-review" \
+			>"$ARMS/reviewer-requests.json" || { echo "reviewer requests no hook made, or unreadable: $ARMS/reviewer-requests.json" >&2; rc=1; }
+	fi
 	arm_status="$arm_status $arm=$rc"
 	[ "$rc" -eq 0 ] || failed=1
 done
