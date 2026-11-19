@@ -354,10 +354,10 @@ func TestReviewHookWritesOneKeyedEntryPerPush(t *testing.T) {
 		r := e["reviews"].([]any)[0].(map[string]any)
 		argv, _ := r["argv"].([]any)
 		got := []any{e["schema"], e["task_id"], e["caliper_attempt"], e["arm"], e["decision"], len(e["reviews"].([]any)),
-			r["name"], r["old"], r["new"], fmt.Sprint(argv[:2]), r["model"], r["exit"], r["duration_seconds"].(float64) > 0,
+			r["name"], r["old"], r["new"], fmt.Sprint(argv[:2]), r["model"], r["exit"], r["is_error"], r["duration_seconds"].(float64) > 0,
 			r["verdict"], r["findings"], r["usage"], r["reported_model"]}
 		want(t, fmt.Sprintf("entry %d", i), got, []any{1.0, "task-001", 1.0, "agent-ci-review", "accepted", 1,
-			"refs/heads/feature/unlimited", tips[i][0], tips[i][1], "[claude --print]", rowModel, 0.0, true,
+			"refs/heads/feature/unlimited", tips[i][0], tips[i][1], "[claude --print]", rowModel, 0.0, false, true,
 			"approve", []any{}, usage[i], nil})
 	}
 	left, err := filepath.Glob(filepath.Join(a.tmpdir, "caliper-q1-review", a.name(), "*.tmp"))
@@ -617,4 +617,46 @@ func TestReviewHookReadsTheRecordedCLIReply(t *testing.T) {
 	want(t, "read from the recorded reply", []any{r["verdict"], r["reported_model"], r["usage"], r["exit"]},
 		[]any{"approve", []any{rowModel}, map[string]any{"input_tokens": 2.0, "output_tokens": 18.0,
 			"cache_read_input_tokens": 11382.0, "cache_creation_input_tokens": 23274.0}, 0.0})
+}
+
+// TestReviewHookHidesTheTokenBeforeTruncating (#A1, a#964 6996847130): the
+// hook keeps the last 4000 characters of a reviewer's result and of its
+// stderr, so the token is hidden in the whole text before the cut: here both
+// end in the token and then filler that puts the cut inside it. No 8-character
+// piece of the token reaches what the pusher is told, the cleanup output, or
+// any file under the arm's TMPDIR. The positive control: what was kept is the
+// cut (4000 characters, the filler at its end).
+func TestReviewHookHidesTheTokenBeforeTruncating(t *testing.T) {
+	const token = "Zq7Kx9Wm3Pv8Rt2Ny6Bh4Jd5Lf1Gc0Ts" // no 8-character piece of it is anything the harness writes
+	tail := strings.Repeat("y", 4000-len(token)/2)
+	said := "the token is " + token + tail
+	a, _, _ := reviewArm(t, standin.Script{Steps: []standin.Step{{Reply: standin.Text(said).WithStderr(said)}}},
+		"CLAUDE_CODE_OAUTH_TOKEN="+token) // the last value wins (os/exec Cmd.Env)
+	code, errs := a.push()
+	want(t, "unreadable push refused", []any{code != 0, strings.Contains(errs, "Review rejected this push (unreadable)")}, []any{true, true})
+	_, out, _ := a.cleanup()
+	r := a.reviewEntries()[0]["reviews"].([]any)[0].(map[string]any)
+	for _, kept := range []string{r["result"].(string), r["stderr"].(string)} {
+		want(t, "kept is the cut", []any{len(kept), strings.HasSuffix(kept, tail)}, []any{4000, true})
+	}
+	pieces := func(where, text string) {
+		for i := 0; i+8 <= len(token); i++ {
+			if strings.Contains(text, token[i:i+8]) {
+				t.Errorf("%s holds %q, a piece of the token", where, token[i:i+8])
+				return
+			}
+		}
+	}
+	pieces("what the pusher is told", errs)
+	pieces("the cleanup output", out)
+	must(t, filepath.WalkDir(a.tmpdir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || d.Type()&fs.ModeSymlink != 0 {
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err == nil {
+			pieces(p, string(data))
+		}
+		return err
+	}))
 }

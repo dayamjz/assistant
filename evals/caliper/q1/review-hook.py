@@ -13,7 +13,8 @@ from gate_record import unique  # a repeated key is refused, never won last
 evidence, limit, root, path = sys.argv[1], float(sys.argv[2]), os.path.realpath(sys.argv[3]), sys.argv[4]
 token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
 now = lambda: datetime.datetime.now(datetime.timezone.utc).isoformat()
-# The reviewer's one credential is written nowhere: taken out of all this writes or prints.
+# The reviewer's one credential is written nowhere: taken out of all this writes or prints, and out
+# of a text before it is cut, so a cut never leaves a piece of it.
 hide = lambda text: text.replace(token, "[CLAUDE_CODE_OAUTH_TOKEN]") if token else text
 
 def save():
@@ -52,7 +53,8 @@ def answer(out):
     usage, models, text = doc.get("usage"), doc.get("modelUsage"), doc.get("result")
     rec["usage"] = {k: usage.get(k) if type(usage.get(k)) is int else None for k in COUNTS} if isinstance(usage, dict) else None
     rec["reported_model"] = sorted(models) if isinstance(models, dict) and models else None
-    rec["result"] = text[-4000:] if isinstance(text, str) else None  # an error too (auth, quota)
+    rec["is_error"] = doc.get("is_error")
+    rec["result"] = hide(text)[-4000:] if isinstance(text, str) else None  # an error too (auth, quota)
     if doc.get("is_error") is not False:
         return "failed"
     fenced = re.fullmatch(r"\s*```(?:json)?\n(.*)\n```\s*", text, re.S)
@@ -101,7 +103,7 @@ def review():
     shutil.rmtree(scratch, ignore_errors=True)
     if out is None:
         return "timeout"
-    rec["exit"], rec["stderr"] = p.returncode, err.decode(errors="replace")[-4000:]
+    rec["exit"], rec["stderr"] = p.returncode, hide(err.decode(errors="replace"))[-4000:]  # hidden whole, then cut
     try:
         verdict = answer(out)
     except (ValueError, KeyError, TypeError, AttributeError):
@@ -119,7 +121,7 @@ with open(os.path.join(evidence, "setup.json")) as f:
     for ref in entry["refs"]:
         if ref["new"] == "0" * 40:
             continue  # a deletion has no tree to review
-        rec = dict(ref, argv=None, model=None, exit=None, duration_seconds=None, result=None, findings=None,
+        rec = dict(ref, argv=None, model=None, exit=None, is_error=None, duration_seconds=None, result=None, findings=None,
                    usage=None, reported_model=None, verdict="budget" if used >= BUDGET else None)
         entry["reviews"].append(rec)
         if rec["verdict"] is None:

@@ -164,16 +164,27 @@ that is inside the agent's HOME, that `TMPDIR`, and the pusher's
 `CLAUDE_CODE_OAUTH_TOKEN`, its one credential: no `ANTHROPIC_API_KEY`, no
 file copied in, and without the token it does not start. What the CLI does
 inside that environment (whether it also asks the macOS Keychain, say) is
-the CLI's; the hook only controls what it hands over. The token's value is
+the CLI's; the hook only controls what it hands over. Given a fake token,
+Claude Code 2.1.322 on the arms' Mac (2026-11-18) failed to authenticate
+(401) rather than review, so it did not fall back to an ambient login
+there; that is one observation of one CLI version, which
+`TestLiveReviewerAuth` rechecks. The token's value is
 replaced by `[CLAUDE_CODE_OAUTH_TOKEN]` in everything the hook writes or
-prints; that is an exact-value replacement of the one value it handed
-over, not a credential scrubber. The new HOME is removed after each review.
+prints, in a text whole before it is cut to its last 4000 characters, so a
+cut leaves no piece of it; that is an exact-value replacement of the one
+value it handed over, not a credential scrubber.
+`TestLiveReviewerAuth` (the `q1live` tag, run by hand, never in CI; its doc
+comment has the commands) pushes through the real hook to the real CLI
+with a fake token, which must fail to authenticate (a CLI that answered
+would have used an ambient login such as the Keychain), with no token,
+which must not start, and with a real one, which must review. Run it on the
+machine the arms run on before a k = 1 calibration. The new HOME is removed after each review.
 
 The reviewer answers one JSON object, bare or in one fenced block:
 `verdict` `approve` or `block`, and a `findings` list. Each review records,
 in the push's entry: the attempt key and arm, the ref and its old and new
 tip, `argv`, `model` (asked for) and `reported_model` (the keys of the
-envelope's `modelUsage`; null when it names none), `exit`,
+envelope's `modelUsage`; null when it names none), `exit`, `is_error`,
 `duration_seconds`, `result` (the envelope's text, an error's included),
 `findings`, `stderr`, `usage` (the envelope's `input_tokens`,
 `output_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`,
