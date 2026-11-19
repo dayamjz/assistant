@@ -257,9 +257,11 @@ After the arm, `reviewer_requests.py` holds the two against each other per
 attempt, by the basename of the HOME named, and writes
 `$ARMS/reviewer-requests.json`: each attempt's requests and hook reviews,
 `contaminated` (more requests than its hooks made), `unlogged` (fewer), and
-`requests_naming_no_attempt`. Any contaminated attempt or request naming no
-attempt makes `run-full.sh` print the report's path and fail that arm (its
-exit is 1). What it cannot do: a request's HOME is what its client said,
+`requests_naming_no_attempt`. Any contaminated attempt, unlogged attempt
+or request naming no attempt makes `run-full.sh` print the report's path and
+fail that arm (its exit is 1): an unlogged attempt is missing evidence (a
+review the hook sent that the log does not hold, as a process that ended
+between accepting and logging leaves), so it is indeterminate, never clean. What it cannot do: a request's HOME is what its client said,
 so an agent naming another attempt's HOME, or none, moves the blame or
 leaves it unassigned, though the request is still counted as extra; and
 the log and the entries are the agent's user's files, so an agent that

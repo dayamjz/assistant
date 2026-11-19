@@ -221,7 +221,13 @@ func (r *reviewer) ask(t *testing.T, request map[string]any) string {
 // attempt's arm: its exit and what it printed.
 func (a *attempt) requestsChecked() (int, map[string]any) {
 	a.t.Helper()
-	code, out, errs := a.run(a.root, "python3", filepath.Join(spec, "reviewer_requests.py"), a.reviewer.log,
+	return a.requestsCheckedIn(a.reviewer.log)
+}
+
+// requestsCheckedIn is requestsChecked reading the request log at log.
+func (a *attempt) requestsCheckedIn(log string) (int, map[string]any) {
+	a.t.Helper()
+	code, out, errs := a.run(a.root, "python3", filepath.Join(spec, "reviewer_requests.py"), log,
 		filepath.Join(a.tmpdir, "caliper-q1-review"))
 	var got map[string]any
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
@@ -238,7 +244,9 @@ func (a *attempt) requestsChecked() (int, map[string]any) {
 // request and one hook review, which passes (the positive control); one more
 // request naming the attempt's HOME, sent straight to the socket, makes that
 // attempt contaminated and the check exit 1; and one naming no attempt is
-// counted apart, and fails it too.
+// counted apart, and fails it too. A hook review with no request in the log
+// (#A1, a#971: read here against an empty log) is unlogged, which is missing
+// evidence, never clean, so it fails the check as well.
 func TestReviewerRequestsFlagAnAttemptThatAskedTheReviewerItself(t *testing.T) {
 	a, agent, _ := reviewArm(t, standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: standin.Text(approve)}}})
 	if code, errs := a.push(); code != 0 {
@@ -257,6 +265,11 @@ func TestReviewerRequestsFlagAnAttemptThatAskedTheReviewerItself(t *testing.T) {
 	a.reviewer.ask(t, map[string]any{"root": "/elsewhere"})
 	code, got = a.requestsChecked()
 	want(t, "after a request naming no attempt: exit, its count", []any{code, got["requests_naming_no_attempt"]}, []any{1, 1.0})
+	empty := filepath.Join(a.tmpdir, "empty-requests.jsonl")
+	must(t, os.WriteFile(empty, nil, 0o644))
+	code, got = a.requestsCheckedIn(empty)
+	want(t, "a hook review the log does not hold: exit, unlogged, contaminated", []any{code, got["unlogged"], got["contaminated"]},
+		[]any{1, []any{a.name()}, []any{}})
 }
 
 // TestEveryHarnessScriptInPythonIsForbiddenToTheAgent (#juno, a#971): every

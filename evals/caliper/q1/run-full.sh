@@ -237,9 +237,10 @@ for arm in $ARM_LIST; do
 			rc=1
 		fi
 		stop_reviewer
-		# A request no hook made is the agent using the reviewer itself: that attempt is contaminated.
+		# A request no hook made is the agent using the reviewer itself (contaminated); a hook review
+		# the log lacks is missing evidence (unlogged). Either fails the arm: only an exact match is clean.
 		python3 reviewer_requests.py "$ARMS/reviewer-requests.jsonl" "$ARMS/$arm/caliper-q1-review" \
-			>"$ARMS/reviewer-requests.json" || { echo "reviewer requests no hook made, or unreadable: $ARMS/reviewer-requests.json" >&2; rc=1; }
+			>"$ARMS/reviewer-requests.json" || { echo "reviewer requests that do not match the hooks' reviews, or unreadable: $ARMS/reviewer-requests.json" >&2; rc=1; }
 	fi
 	arm_status="$arm_status $arm=$rc"
 	[ "$rc" -eq 0 ] || failed=1

@@ -2,8 +2,9 @@
 hooks' review entries under REVIEWS, one directory per attempt (README "Reviewer process"). Each request names the
 agent HOME it came for, whose basename is the attempt's directory; each review a hook recorded as asked is one of them.
 Prints, as JSON, the requests and hook reviews per attempt, the attempts with more requests than their hooks made
-(contaminated: the agent asked the reviewer itself), those with fewer (a request not logged), and the requests that
-name no attempt. Exits 1 when any request is beyond a hook's or names no attempt, or either side cannot be read.
+(contaminated: the agent asked the reviewer itself), those with fewer (unlogged: missing evidence, which cannot be
+read as clean), and the requests that name no attempt. Exits 1 when any of the three is nonempty, or either side
+cannot be read, so only an exact match passes.
 A request's HOME is what its client said, so a request blamed on another attempt is still an extra one."""
 import collections, glob, json, os, sys
 
@@ -27,4 +28,4 @@ out = {"attempts": {a: {"requests": requests[a], "hook_reviews": asked[a]} for a
        "contaminated": [a for a in attempts if requests[a] > asked[a]],
        "unlogged": [a for a in attempts if requests[a] < asked[a]], "requests_naming_no_attempt": nameless}
 json.dump(out, sys.stdout, indent=2, sort_keys=True)
-sys.exit(1 if out["contaminated"] or nameless else 0)
+sys.exit(1 if out["contaminated"] or out["unlogged"] or nameless else 0)

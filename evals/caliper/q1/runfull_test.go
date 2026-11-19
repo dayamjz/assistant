@@ -53,7 +53,9 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // own, naming its HOME, as an agent using the reviewer before it pushes. With
 // Q1_TEST_KILL_REVIEWER set, in the arm that has a reviewer process, it ends
 // that process with SIGKILL, its pid read from reviewer.log beside the arm's
-// TMPDIR, and waits until it is gone.
+// TMPDIR, and waits until it is gone. With Q1_TEST_UNLOG set, once the push
+// returns it empties the reviewer process's request log beside that TMPDIR,
+// as a log that lost the hook's request.
 const stubCaliper = `
 import glob, json, os, shutil, signal, subprocess, sys, tempfile, time
 args = sys.argv[1:]
@@ -127,6 +129,8 @@ if ablated and os.environ.get("Q1_TEST_PUSH"):
     for name in glob.glob(os.path.join(os.environ["TMPDIR"], "caliper-q1-review", os.path.basename(root), "push-*")):
         with open(name) as f:
             reviews += json.load(f)["reviews"]
+    if os.environ.get("Q1_TEST_UNLOG"):
+        open(os.path.join(os.path.dirname(os.environ["TMPDIR"]), "reviewer-requests.jsonl"), "w").close()
     with open(os.environ["Q1_TEST_PUSH"], "a") as f:
         f.write(json.dumps({"arm": os.environ["Q1_ARM"], "socket": os.environ.get("Q1_REVIEWER_SOCKET"),
                             "exit": p.returncode, "stderr": p.stderr, "reviews": reviews}) + "\n")
@@ -629,7 +633,7 @@ func TestRunFullFailsAnArmWhoseAgentAskedTheReviewerItself(t *testing.T) {
 	var requests struct{ Contaminated []string }
 	must(t, json.Unmarshal(data, &requests))
 	want(t, "exit, named, arm status, contaminated attempts", []any{r.code,
-		strings.Contains(r.stderr, "reviewer requests no hook made, or unreadable: "+filepath.Join(r.arms, "reviewer-requests.json")),
+		strings.Contains(r.stderr, "reviewer requests that do not match the hooks' reviews, or unreadable: "+filepath.Join(r.arms, "reviewer-requests.json")),
 		strings.Contains(r.stderr, "agent-ci-review=1"), len(requests.Contaminated)}, []any{1, true, true, 1})
 }
 
@@ -665,4 +669,21 @@ func TestRunFullFailsAnArmWhoseReviewerProcessEndedEarly(t *testing.T) {
 		strings.Contains(r.stderr, "the reviewer process ended before the arm did"), strings.Contains(r.stderr, "agent-ci-review=1"),
 		strings.Contains(r.stderr, "agent-ci=0"), left},
 		[]any{1, true, true, true, []string{filepath.Join(r.arms, "reviewer.log")}})
+}
+
+// TestRunFullFailsAnArmWhoseHookReviewTheLogDoesNotHold (#A1, a#971): a
+// review the hook sent to the reviewer process with no request in that
+// process's log is missing evidence. run-full.sh reports it as unlogged and
+// fails the arm, so such an attempt is never read as a clean one.
+func TestRunFullFailsAnArmWhoseHookReviewTheLogDoesNotHold(t *testing.T) {
+	r := newFullRun(t)
+	r.standInGraders()
+	r.run("Q1_TEST_PUSH="+filepath.Join(r.root, "pushes"), "Q1_TEST_UNLOG=1", "GOCACHE="+sharedGoCache(t))
+	data, err := os.ReadFile(filepath.Join(r.arms, "reviewer-requests.json"))
+	must(t, err)
+	var requests struct{ Unlogged, Contaminated []string }
+	must(t, json.Unmarshal(data, &requests))
+	want(t, "exit, named, arm status, unlogged and contaminated attempts", []any{r.code,
+		strings.Contains(r.stderr, "reviewer requests that do not match the hooks' reviews, or unreadable: "+filepath.Join(r.arms, "reviewer-requests.json")),
+		strings.Contains(r.stderr, "agent-ci-review=1"), len(requests.Unlogged), len(requests.Contaminated)}, []any{1, true, true, 1, 0})
 }
