@@ -228,17 +228,24 @@ builtin, and is in neither its environment (`env -u`) nor its argv; it
 holds it in memory and hands it to each reviewer on a pipe, so no file
 holds it. It listens on `$ARMS/reviewer.XXXXXX/socket`, a 0700 directory
 of its own, which setup writes into the hook from `Q1_REVIEWER_SOCKET`.
-It serves one review at a time; a request names the pushed tree, the
-prompt, the limit and the agent's HOME, and nothing that chooses the
-program, its model, its HOME or its environment, so a client, the agent
-included, can have a review run but cannot have the token sent back. It
+It serves one request at a time; a request names the reviewer's working
+directory, the prompt, the limit and the agent's HOME, and nothing that
+chooses the program, its model, its HOME or its environment, so a client
+cannot have the token sent back. It is not only a review service: since
+the client picks the directory and the prompt, any client on the machine,
+the agent included, gets a Claude run on the reviewer's credential for any
+prompt, with Read, Grep and Glob over any directory it names. That use is
+what "Reviewer requests" counts. It
 answers once its socket exists, or `run-full.sh` refuses the run (exit 2)
 naming the socket and `$ARMS/reviewer.log`. After the arm and on any exit
 of `run-full.sh` it is sent SIGTERM, ends a review in flight with its
 process group, removes its socket and the review's HOME, and the directory
 is removed. A hook with no socket, no process answering, or a process that
 ended before answering rejects the push `cannot-start`, naming which, never
-skips the review.
+skips the review. A process that ended before its arm did, by a crash or a
+same-user kill, left every later push of the arm unreviewed: `run-full.sh`
+finds it gone (`kill -0`) before stopping it, says so naming
+`$ARMS/reviewer.log`, and fails that arm (exit 1).
 
 **Reviewer requests** (coordinator, a#971). The hook names the socket and
 the agent runs as the same user, so an agent can have the reviewer review
@@ -256,7 +263,11 @@ exit is 1). What it cannot do: a request's HOME is what its client said,
 so an agent naming another attempt's HOME, or none, moves the blame or
 leaves it unassigned, though the request is still counted as extra; and
 the log and the entries are the agent's user's files, so an agent that
-edits them can hide a request, as it could edit any evidence here.
+edits them can hide a request, as it could edit any evidence here. So a
+contaminated attempt is evidence that the agent used the reviewer, and a
+clean reconciliation is only the absence of that evidence, not proof that
+it did not: a review the agent runs with its own `claude`, or a log it
+edited, leaves none.
 
 What this does not cover. The agent runs as the operator's user, and a
 same-user `ps eww` lists another process's environment on macOS 27

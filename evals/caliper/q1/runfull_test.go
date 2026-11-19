@@ -50,9 +50,12 @@ const macTMPDIR = "/private/var/folders/k7/1sy1vmfs5qvb036nk10kr8480000gn/T"
 // appends to that file the arm, the Q1_REVIEWER_SOCKET its hooks got, the
 // push's exit and stderr, and the reviews its review entries hold. With
 // Q1_TEST_ORACLE set too, the agent first sends that socket a request of its
-// own, naming its HOME, as an agent using the reviewer before it pushes.
+// own, naming its HOME, as an agent using the reviewer before it pushes. With
+// Q1_TEST_KILL_REVIEWER set, in the arm that has a reviewer process, it ends
+// that process with SIGKILL, its pid read from reviewer.log beside the arm's
+// TMPDIR, and waits until it is gone.
 const stubCaliper = `
-import glob, json, os, shutil, signal, subprocess, sys, tempfile
+import glob, json, os, shutil, signal, subprocess, sys, tempfile, time
 args = sys.argv[1:]
 with open(os.environ["Q1_TEST_CALLS"], "a") as f:
     f.write(" ".join(args) + "\n")
@@ -103,6 +106,12 @@ if not ablated:
         seen["intent"] = out(["assistant", "--json", "--intent", "ship the branch"])
     with open(os.environ["Q1_TEST_AGENT"], "w") as f:
         json.dump(seen, f)
+if os.environ.get("Q1_TEST_KILL_REVIEWER") and os.environ.get("Q1_REVIEWER_SOCKET"):
+    with open(os.path.join(os.path.dirname(os.environ["TMPDIR"]), "reviewer.log")) as f:
+        pid = int(f.readline())
+    os.kill(pid, signal.SIGKILL)
+    while os.path.exists("/proc/%d" % pid) or subprocess.call(["kill", "-0", str(pid)], stderr=subprocess.DEVNULL) == 0:
+        time.sleep(0.05)
 if ablated and os.environ.get("Q1_TEST_PUSH"):
     agent = {k: os.environ[k] for k in ("PATH", "LANG", "LC_ALL", "TERM", "TMPDIR", "GOCACHE") if k in os.environ}
     agent["HOME"] = root
@@ -640,4 +649,20 @@ func TestRunFullRefusesWhenItsReviewerProcessDoesNotStart(t *testing.T) {
 		regexp.MustCompile(`the reviewer process at \S+/reviewer\.\w+/socket did not start; see \S+/reviewer\.log`).MatchString(r.stderr),
 		strings.Contains(string(calls), "result-q1-agent-ci-review.json"), left},
 		[]any{2, true, false, []string{filepath.Join(r.arms, "reviewer.log")}})
+}
+
+// TestRunFullFailsAnArmWhoseReviewerProcessEndedEarly (#juno, a#971): a
+// reviewer process that ended before its arm did, by a crash or by a
+// same-user kill, left every later push of the arm unreviewed, so run-full.sh
+// says so and fails the arm, still removing the process's directory.
+func TestRunFullFailsAnArmWhoseReviewerProcessEndedEarly(t *testing.T) {
+	r := newFullRun(t)
+	r.standInGraders()
+	r.run("Q1_TEST_KILL_REVIEWER=1")
+	left, err := filepath.Glob(filepath.Join(r.arms, "reviewer.*"))
+	must(t, err)
+	want(t, "exit, named, arm status, directories left", []any{r.code,
+		strings.Contains(r.stderr, "the reviewer process ended before the arm did"), strings.Contains(r.stderr, "agent-ci-review=1"),
+		strings.Contains(r.stderr, "agent-ci=0"), left},
+		[]any{1, true, true, true, []string{filepath.Join(r.arms, "reviewer.log")}})
 }

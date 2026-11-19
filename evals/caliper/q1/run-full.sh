@@ -230,6 +230,12 @@ for arm in $ARM_LIST; do
 		--k "$K" --timeout 1200 --workers 1 --model "$MODEL" --judge-model "$MODEL" \
 		$(arm_flags "$arm") --output "result-q1-$arm.json" || rc=$?
 	if [ -n "$REVIEWER_PID" ]; then
+		# One that ended mid-arm, by a crash or a same-user kill, left every later push unreviewed.
+		# The shell has reaped it by now (it waited on caliper), so kill -0 does not see a zombie.
+		if ! kill -0 "$REVIEWER_PID" 2>/dev/null; then
+			echo "the reviewer process ended before the arm did, so pushes after that were not reviewed; see $ARMS/reviewer.log" >&2
+			rc=1
+		fi
 		stop_reviewer
 		# A request no hook made is the agent using the reviewer itself: that attempt is contaminated.
 		python3 reviewer_requests.py "$ARMS/reviewer-requests.jsonl" "$ARMS/$arm/caliper-q1-review" \

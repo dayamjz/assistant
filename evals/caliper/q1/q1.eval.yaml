@@ -33,6 +33,7 @@ sandbox:
     - ci-hook\.sh
     - review-hook\.py
     - review-server\.py
+    - reviewer_requests\.py
     - review-prompt\.md
 
 tasks:

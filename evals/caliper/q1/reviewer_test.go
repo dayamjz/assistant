@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/procgroup"
+	"go.yaml.in/yaml/v3"
 )
 
 // reviewer is one review-server.py process (README "Reviewer process") a
@@ -255,4 +257,40 @@ func TestReviewerRequestsFlagAnAttemptThatAskedTheReviewerItself(t *testing.T) {
 	a.reviewer.ask(t, map[string]any{"root": "/elsewhere"})
 	code, got = a.requestsChecked()
 	want(t, "after a request naming no attempt: exit, its count", []any{code, got["requests_naming_no_attempt"]}, []any{1, 1.0})
+}
+
+// TestEveryHarnessScriptInPythonIsForbiddenToTheAgent (#juno, a#971): every
+// .py in this directory is grader or harness internals (the graders, the gate
+// record, the review hook, the reviewer process, the request check), so an
+// attempt whose transcript names one is reading an answer key, and
+// q1.eval.yaml's sandbox.forbidden_files must match each name. The negative
+// control: run-full.sh, the operator's script, matches no pattern, so the
+// patterns are not a match-all.
+func TestEveryHarnessScriptInPythonIsForbiddenToTheAgent(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(spec, "q1.eval.yaml"))
+	must(t, err)
+	var eval struct {
+		Sandbox struct {
+			Forbidden []string `yaml:"forbidden_files"`
+		}
+	}
+	must(t, yaml.Unmarshal(data, &eval))
+	forbidden := func(name string) bool {
+		for _, p := range eval.Sandbox.Forbidden {
+			if regexp.MustCompile(p).MatchString(name) {
+				return true
+			}
+		}
+		return false
+	}
+	scripts, err := filepath.Glob(filepath.Join(spec, "*.py"))
+	must(t, err)
+	var open []string
+	for _, s := range scripts {
+		if !forbidden(filepath.Base(s)) {
+			open = append(open, filepath.Base(s))
+		}
+	}
+	want(t, "scripts, unforbidden ones, run-full.sh forbidden", []any{len(scripts) > 5, open, forbidden("run-full.sh")},
+		[]any{true, []string(nil), false})
 }
