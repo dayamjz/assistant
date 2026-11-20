@@ -111,6 +111,12 @@ open first. Operator install and quick-start live in [README.md](README.md).
 - One package is `go test -race ./internal/graph`, one test is
   `go test -race -run 'TestName$' ./internal/graph`. Leave `-race` on: both CI
   platforms run with it, so a test that passes only without it fails elsewhere.
+  One package's tests are not all a change in it can fail:
+  `internal/procgroup/guard` (starters and program writes),
+  `internal/agents/standin` (`os.MkdirTemp` in tests) and
+  `internal/principles` (citations) read every package in the module, so
+  `go test -race ./internal/procgroup/guard ./internal/agents/standin
+  ./internal/principles` runs those checks over your change too.
 - `make lint` refuses unless golangci-lint v2 is on PATH, because
   `.golangci.yml` is a schema v2 config that a v1 binary rejects before it
   lints anything; the pinned release is in `.github/workflows/ci.yml`, and
