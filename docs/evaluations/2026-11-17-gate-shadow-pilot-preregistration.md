@@ -1,10 +1,12 @@
 # Gate shadow pilot pre-registration, 2026-11-17
 
 **Status: Draft, not frozen.** This text is the complete protocol, apart from
-the items section 7.11 lists as still open. It freezes only when Joel and the
-voters (#juno, #A1, #claude) each sign this exact text at a named commit, and
-that commit is the freeze point. Merging it is not a freeze point. Nothing is
-enrolled and no shadow run happens before then. No pilot head has run.
+what section 7.12 lists as still open. Every item the draft's section 7.11
+listed as open has an owner ruling, and section 7.11 owns those rulings. The
+text freezes only when Joel and the voters (#juno, #A1, #claude) each sign this
+exact text at a named commit, and that commit is the freeze point. Merging it is
+not a freeze point. Nothing is enrolled and no shadow run happens before then.
+No pilot head has run.
 
 This is row 12 of the agreed order (ORDER r2), the a#806 shadow pilot.
 Row 12 (`ft:docs/critique/03-juno-response.md:52`) reads: "At least 10
@@ -14,15 +16,18 @@ activation, matched, missed and extra findings, stage times and cost. Every
 disagreement gets a ruling (gate right, review right, both, neither) under rules
 frozen before the run. Promotion criteria are written before the run." Step 1,
 a#827, landed as a#952 (`865db281`). Step 2, the draft, landed as a#955
-(`e10e7059`). This text folds in the section 7 rulings. Step 3, the run, has its
-own brief and starts only after this protocol is signed.
+(`e10e7059`). This text folds in the section 7 rulings and the owner rulings on
+the items the draft left open (section 7.11). Step 3, the run, has its own brief
+and starts only after this protocol is signed.
 
 Notation: `a#N` is `dayamjz/assistant`, `ft#N` is `dayamjz/fleet-tools`. A path
 with no repository named is in this repository at this draft's head. A path
 prefixed `ft:` is in the private `dayamjz/fleet-tools` repository at `5b1b73d2`.
 A bare 10-digit number is an issue comment id on ft#545
 (`gh api repos/dayamjz/fleet-tools/issues/comments/<id>`). "Q1" to "Q10" are the
-questions of section 7.
+questions of section 7. "Item 1" to "item 11" are the items the draft's section
+7.11 listed as open (a#958), ruled in section 7.11; an item of ORDER r2 is always
+named with "ORDER r2".
 
 ## Terms
 
@@ -34,8 +39,11 @@ questions of section 7.
 - **Voters:** #juno, #A1 and #claude. **Collator:** whoever prepares a head's
   blinded packet. **Operator:** whoever drives the gate run. **Manifest:** the
   enrollment list of section 3.
-- **Compared head:** a head with a review, that is not `base_mismatch` and not
-  adjudication pending. Section 5's criteria count compared heads.
+- **Compared head:** a head with a review, that is not `base_mismatch`, not
+  adjudication pending, and not excluded by the pin check (section 3). Section
+  5's criteria count compared heads.
+- **Reduced-voter head:** a head on which two voters recuse, so that the
+  remaining eligible voter and Joel's seat rule it (section 2.5).
 - A **hold** waits on a person (`docs/prd.md:120`). A **park** is a bound
   stopping a run.
 
@@ -54,11 +62,20 @@ The gate in shadow against the review, on the same head.
   (`ft:landing-check.sh:13-16`), and its verdict is what
   `ft:review-findings.py --verdict` prints. A delta verdict is not the review.
   When a head has several full verdicts, the last line in `.verdicts` is the
-  review.
-- **A planted head's review (Q6).** A planted head gets a blinded full review of
-  the exact commit, outside a PR, by a reviewer who is not a voter. The reviewer
-  is not shown the planted truth. The review is kept in the pilot records
-  (Q10), apart from `.verdicts`, and creates no landing eligibility.
+  review. Live PRs are reviewed by Codex per the framework (`ft:roles.json`);
+  #A1, a voter, reviewing PRs was a one-off (section 7.11, the live-PR row). A
+  live head a voter did review still gets that voter's recusal (section 2.5).
+- **A planted head's review (Q6, item 5, item 9).** A planted head gets a
+  blinded full review of the exact commit, outside a PR, by Codex, the non-voter
+  reviewer. The reviewer is not shown the planted truth. The review uses the
+  same review template, severity rubric and full-head identity as a live head's
+  review, and its record is produced through a documented comparable review
+  adapter, never a hand-written or fabricated `.verdicts` line. Before
+  enrollment the adapter is tested against at least one known full-verdict
+  record, and it refuses to produce a record when a field is missing. If no
+  non-voter reviewer is available, the planted-head part does not run, and no
+  voter stands in. The review is kept apart from `.verdicts` and creates no
+  landing eligibility. Where its record is kept is section 7.12's first item.
 - **A head with no full verdict.** It is not compared and does not count toward
   the ten. Its gate run is still recorded, with `review.verdict` set to `none`,
   so its activation, stage times and usage stay in the pilot's totals.
@@ -75,7 +92,7 @@ The gate in shadow against the review, on the same head.
 
 Sections 2.1 to 2.4 are unchanged from the draft. No section 7 question ruled
 on them, and signing this text adopts them as written. Section 2.5 carries Q1
-and Q2.
+and Q2 and the owner rulings on items 1, 2 and 6 (section 7.11).
 
 ### 2.1 The four-way ruling
 
@@ -165,21 +182,39 @@ evidence. Severity is ruled separately from the four-way ruling. When the
 voters assign different severities, the item is held at the higher severity
 until the voters reconcile or Joel rules.
 
+**A three-way split where Joel holds a seat (item 6).** When Joel holds a
+recused voter's seat and all three rulings differ, Joel's vote decides.
+
 **Recusal (Q2).** A voter recuses from a head's gate-versus-review
 disagreements when either holds:
 
 - the voter wrote the compared review; or
 - the voter's model family ran the gate's review or fix stage on that head.
 
-Recusals are pre-registered per head, from the stage model the gate run
-actually used, before any result is read. They are recorded in the head's
-`recusals[]`. Joel takes a recused voter's seat. If independence still cannot
-be met, the head is adjudication pending and is not a compared head. No panel
-of two breaks a tie.
+Joel takes a recused voter's seat. With the gate's review and fix stages pinned
+to Claude (section 7, the pin), #claude recuses from gate-versus-review
+disagreements on every head whose review or fix stage ran on Claude, and Joel
+takes that seat.
 
-With the gate's review and fix stages pinned to Claude (section 7, the pin),
-#claude recuses from gate-versus-review disagreements on every head whose
-review or fix stage ran on Claude, and Joel takes that seat.
+**When a recusal is registered (item 2).** Reviewer-based recusals are
+registered at enrollment. Stage-model recusals are registered by the collator
+from the run's own record, after the run and before anyone reads a result or
+opens the blinded packet. Each records its time and source in the head's
+`recusals[]`. A conflict found later means exclusion and re-adjudication, never
+a quiet edit.
+
+**Two recusals on one head (item 1).** On a reduced-voter head the remaining
+eligible voter rules with Joel in the second seat. Joel gives his own recorded
+ruling and is never an automatic tie-break. Every disagreement on a
+reduced-voter head goes to Joel with both sides' arguments set out, and he rules
+after weighing them, even where his seat would otherwise decide. If the two
+split, Joel's ruling controls, the head is labeled owner-decided (the item's
+`decided[].how` is `joel`), and the split stays on record. If Joel cannot take
+part, the head is adjudication pending and is not a compared head.
+Reduced-voter heads are marked in their record (`reduced_voter`, section 4),
+and the report gives C1 both with and without them (section 5). No disagreement
+is settled by an automatic tie-break. Any other head on which independence
+still cannot be met is adjudication pending (Q2).
 
 ## 3. Case mix, at least 10 heads
 
@@ -197,12 +232,25 @@ review's verdict exists, so no head is picked by its result.
 | Recovery | 1 | A head during whose run the operator restarts the service with `assistant service restart`, at a predeclared stage (Q5). The injection is declared in the manifest before the push. |
 | Live PRs | 4 | A head named in a `REVIEW-REQUEST full <sha>` relay during the pilot window, enrolled in the order of those relays at the time of the relay. |
 
+**The two C4 candidates (7042280221).** Both are enrolled as planted
+real-finding heads:
+
+- (a) a real defect that the agent's own intent calls deliberate, with the
+  intent text fixed in the manifest;
+- (b) a fake-shape-like defect.
+
+Each one's construction, expected failure mode and scoring rule are written
+down before the freeze (section 7.12). Both are reported separately as
+challenge coverage, not as live-head prevalence. Codex reviews them as the
+non-voter (section 1).
+
 **Marking planted and replayed heads apart from live PRs.** The manifest records
 each head's `provenance`: `live`, `replayed` or `planted`. Every head is pushed to
 the gate as `shadow/h<NN>`, where `NN` is its enrollment number, rather than
 `shadow/pr-<number>` (`docs/dogfood.md:275`). Nothing in the commit, its message
 or the branch name says how a head was made, so neither the gate's agent nor a
-reviewer can read it there.
+reviewer can read it there. Planted heads go to the mirror only, never to this
+repository's remote (item 5).
 
 **What the manifest records before each push.** These entries are written
 before the head is pushed, so every check below rests on facts recorded
@@ -213,25 +261,43 @@ beforehand:
   then checks that `git merge-base` of the mirror's `main` and the head returns
   the base, and that the head's patch-id against the base matches the reviewed
   diff. If either check fails, the head is `base_mismatch`: it is left out of
-  C1, C3, C5 and C7, and its activation and usage are still reported.
+  C1, C3, C5 and C7, and its activation and usage are still reported. Each case
+  runs with a fresh branch/mirror state and explicit provenance (item 9).
 - **Injection (Q5).** For a race or recovery head: the injection point, its
   time, and the expected outcome and invariant.
 - **Intent (Q8).** Every head's run starts with `--intent` set to one
   predeclared goal sentence, identical across cases (`docs/dogfood.md:301-316`).
-  The manifest holds the sentence's sha256.
+  The manifest holds the sentence's sha256. The intent-start path is verified
+  to still exercise the same required stages (item 9).
+- **The stage-model pin (item 3).** The operator writes the shadow home's
+  `config.yaml` with the same roles pin as
+  `evals/caliper/q1/subject-home-config.yaml`, never from repository config,
+  because `roles` is of trust class `TrustCommands`. The file's sha256 goes in
+  the manifest before the run.
 - **Configuration (Q7).** The `fix_rounds.review` the run uses and which run
   set the head belongs to (below).
 
-**Run sets (Q7).** The primary comparison runs at `fix_rounds.review: 0` in the
-home's `config.yaml`, so every review finding goes to a hold and the first
-report survives for adjudication. That is not the configuration that ships
-(`docs/prd.md:3432` defaults it to 1), and the report says so. One extra run at
-the default of 1 is approved. It is reported apart from the primary comparison
-and never pooled with it.
+**The pin check (item 3).** Each head's actual stage model is checked against
+its run record (`gate.stage_models[]`, section 4), not only against the
+configuration. A pin mismatch, missing stage evidence or untrusted
+configuration means the head is not a compared head, and it stays in the
+exclusion count. Section 4 reads the stage model through a usage window, so a
+head whose window does not hold only its own run's calls has no stage evidence
+(section 6).
 
-**The mirror's Actions (Q3).** Actions with billed minutes go on only on the
-isolated private mirror, and only after a#952's first-run path is proven there,
-as part of step 3. Until then the mirror's Actions stay off.
+**Run sets (Q7, item 4).** The primary comparison runs at
+`fix_rounds.review: 0` in the home's `config.yaml`, so every review finding goes
+to a hold and the first report survives for adjudication. That is not the
+configuration that ships (`docs/prd.md:3432` defaults it to 1), and the report
+says so. One extra run at the default of 1 is approved. It is reported apart
+from the primary comparison and never pooled with it. It covers every compared
+head. A subset is allowed only if Joel names it in the manifest before any
+outcome exists, with the denominator published up front.
+
+**The mirror's Actions (Q3, item 9).** Actions with billed minutes go on only on
+the isolated private mirror, and only after a#952's first-run path is proven
+there, as part of step 3, with budget and permissions recorded. Until then the
+mirror's Actions stay off.
 
 ## 4. Per-head record schema
 
@@ -251,6 +317,7 @@ One JSON record per head. "Required" is `yes`, `no`, or the cases it applies to.
 | `base_check` | {merge_base, patch_id_head, patch_id_reviewed, base_mismatch} | the operator's checks before the push (section 3) | yes |
 | `injection` | {kind, point, time, expected} | manifest, before the push (section 3) | race, recovery |
 | `intent_sha256` | 64-hex | manifest: the sha256 of the goal sentence (section 3) | yes |
+| `roles_pin_sha256` | 64-hex | manifest, before the run: the sha256 of the shadow home's `config.yaml` that carries the stage-model pin (section 3) | yes |
 | `run_set`, `fix_rounds_review` | `primary` or `default-1`, integer | manifest (section 3) | yes |
 | `gate.run` | string | `assistant --json runs`: `record.id` (`internal/store/run.go:54`) whose `record.submitted_head` (`:61`) is the head | yes |
 | `gate.activated` | bool | true exactly when `gate.run` exists | yes |
@@ -275,20 +342,21 @@ One JSON record per head. "Required" is `yes`, `no`, or the cases it applies to.
 | `review.findings[]` | list of {severity, location, title} | `ft:review-findings.py` on the review file (`ft:review-findings.py:10-18`) | when a review exists |
 | `review.block_present` | bool | false when that command prints its `NO_BLOCK` line (`ft:review-findings.py:261`) | when a review exists |
 | `review.record_commit` | 40-hex | the fleet-tools commit the review files were copied from | when a review exists |
-| `recusals[]` | list of {voter, reason, stage_model, seat_taken_by, registered_at} | `reason` is `wrote-review` or `model-family`; registered before any result is read (section 2.5) | when a voter recuses |
-| `adjudication` | `compared`, `pending`, `base_mismatch` or `not-compared` | `pending` when independence cannot be met (section 2.5); `not-compared` when there is no full verdict (section 1) | yes |
+| `recusals[]` | list of {voter, reason, stage_model, seat_taken_by, registered_at, source} | `reason` is `wrote-review` (registered at enrollment) or `model-family` (registered by the collator from the run's own record, after the run and before anyone reads a result or opens the blinded packet); `source` is what the recusal was registered from (section 2.5) | when a voter recuses |
+| `reduced_voter` | bool | true when two voters recuse on the head (section 2.5) | yes |
+| `adjudication` | `compared`, `pending`, `base_mismatch` or `not-compared` | `pending` when independence cannot be met (section 2.5); `not-compared` when there is no full verdict (section 1) or the pin check fails (section 3) | yes |
 | `frozen_commit`, `raw[]` | 40-hex, list of {file, sha256} | the freeze commit (section 2.3) | yes |
 | `items[]` | list of {item, kind, gate_id, review_index, order} | collator; `kind` is `matched`, `missed`, `extra`, `hold-not-made` or `pass-refused` | yes |
 | `planted_match` | gate finding id or null | collator, split by any voter as a match is (section 2.2) | planted |
 | `outcome_rulings[]` | list of {voter, ruled_at, correct, reason} | each voter: whether `gate.outcome` and `gate.reason` are right under PRD sections 5 and 11, and whether the manifest's `injection.expected` held | race, recovery |
 | `rulings[]` | list of {item, voter, ruled_at, ruling, severity, reason, evidence, posted} | each voter, one row per item; `posted` is the comment URL or file the ruling was recorded in | per disagreement |
-| `decided[]` | list of {item, ruling, severity, how} | from `rulings[]` by section 2.5; `how` is `unanimous`, `two-of-three` or `joel`, and a severity still held at the higher value says so | per disagreement |
+| `decided[]` | list of {item, ruling, severity, how} | from `rulings[]` by section 2.5; `how` is `unanimous`, `two-of-three` or `joel` (a three-way split, or a split on a reduced-voter head), and a severity still held at the higher value says so | per disagreement |
 
 **Example record.** Illustrative scenario: every value is invented to show the
 shape, and no token count or time here was measured. Token counts are shown
-unreported, which is not the same as zero. It omits `recusals[]` and
-`gate.stage_models[]`, since how a head with two recusals is ruled is still open
-(section 7.11).
+unreported, which is not the same as zero. The head's review stage ran on
+Claude, so #claude recuses and Joel takes that seat (section 2.5); Codex
+wrote the review, so no other voter recuses and the head is not reduced-voter.
 
 ```json
 {"head_id": "h07", "head": "<40-hex>", "case": "live", "provenance": "live",
@@ -296,12 +364,16 @@ unreported, which is not the same as zero. It omits `recusals[]` and
  "mirror_reset": "<40-hex>", "mirror_main_after_reset": "<40-hex>",
  "base_check": {"merge_base": "<40-hex>", "patch_id_head": "<40-hex>",
   "patch_id_reviewed": "<40-hex>", "base_mismatch": false},
- "intent_sha256": "<64-hex>", "run_set": "primary", "fix_rounds_review": 0,
- "adjudication": "compared",
+ "intent_sha256": "<64-hex>", "roles_pin_sha256": "<64-hex>",
+ "run_set": "primary", "fix_rounds_review": 0,
+ "recusals": [{"voter": "#claude", "reason": "model-family", "stage_model": "claude <model>",
+  "seat_taken_by": "Joel", "registered_at": "2026-11-20T17:20:00Z", "source": "gate.stage_models[]"}],
+ "reduced_voter": false, "adjudication": "compared",
  "gate": {"run": "<run>", "activated": true, "base": "<40-hex>", "reviewed_revision": "<40-hex>",
   "outcome": "checks-passed", "reason": "", "park": null, "checks_basis": "no-ci-declaration", "dollars": null,
   "stages": [{"stage": "review", "outcome": "approved", "ran": true, "skip_reason": "",
    "times": [{"started": "2026-11-20T17:04:00Z", "ended": "2026-11-20T17:11:30Z"}]}],
+  "stage_models": [{"stage": "review", "agent": "claude", "model": "<model>"}],
   "holds": [{"stage": "review", "findings": ["F1"], "captured_at": "2026-11-20T17:11:41Z"}],
   "answers": [{"stage": "review", "answer": "approved", "time": "2026-11-20T17:14:02Z"}],
   "findings": [{"id": "F1", "severity": "warning", "action": "ask",
@@ -311,7 +383,7 @@ unreported, which is not the same as zero. It omits `recusals[]` and
    "output": {"total": null, "reported": 0, "unreported": 1}}],
   "usage_scope": {"covers": ["stage-agent-calls", "jev-compaction-stats"],
    "excludes": ["worker-turns", "price"]}},
- "review": {"head": "<40-hex>", "kind": "full", "reviewer": "#A1", "verdict": "APPROVE",
+ "review": {"head": "<40-hex>", "kind": "full", "reviewer": "Codex", "verdict": "APPROVE",
   "findings": [], "block_present": true, "record_commit": "<40-hex>"},
  "frozen_commit": "<40-hex>", "raw": [{"file": "gate-run.json", "sha256": "<64-hex>"}],
  "items": [{"item": "I1", "kind": "extra", "gate_id": "F1", "review_index": null, "order": "A=gate"},
@@ -325,24 +397,30 @@ unreported, which is not the same as zero. It omits `recusals[]` and
 
 ## 5. Promotion criteria
 
-**C3, C5 and C8 are Joel's ruling (Q9).** C1, C2, C4, C6 and C7 are the
-draft's proposals: Joel has not ruled on them, and they stay proposed until he
-signs or changes them. Each criterion is computed from section 4's fields over
-the compared heads of the primary run set (section 3). The default-1 run is
-reported apart and decides nothing here.
+**Every criterion is Joel's ruling.** C3, C5 and C8 are his Q9 ruling. C1, C2,
+C4, C6 and C7 he ruled "Sign all as written" (item 7, 6987480649), so their
+rows below are the draft's (a#958) unchanged. C8's completeness condition he
+ruled "Report only, no gate" (item 8, 6987480649). Each criterion is computed
+from section 4's fields over the compared heads of the primary run set (section
+3). The default-1 run is reported apart and decides nothing here.
 
 | # | Status | Criterion | Pass when |
 | --- | --- | --- | --- |
-| C1 | proposed | Sample | At least 10 compared heads, with every case in section 3 at its minimum. A `base_mismatch` or adjudication-pending head does not count. |
-| C2 | proposed | Activation | `gate.activated` is true for every enrolled head. |
+| C1 | ruled (item 7) | Sample | At least 10 compared heads, with every case in section 3 at its minimum. A `base_mismatch` or adjudication-pending head does not count. |
+| C2 | ruled (item 7) | Activation | `gate.activated` is true for every enrolled head. |
 | C3 | ruled (Q9) | No missed real blocker | Zero: no `missed` or `pass-refused` item is decided `review right` with severity `blocker`. |
-| C4 | proposed | Planted defects found | Every planted real-finding and hold head has a non-null `planted_match`. |
+| C4 | ruled (item 7) | Planted defects found | Every planted real-finding and hold head has a non-null `planted_match`. |
 | C5 | ruled (Q9) | Few false holds | Zero false holds on clean heads, and at most one across the rest. A false hold is a head with a `hold-not-made` item decided `review right` with severity `not-real`. |
-| C6 | proposed | CI failure seen | Every CI-failure head's `gate.checks_basis` is `live-checks` and its checks stage did not pass. |
-| C7 | proposed | Race and recovery | Every race and recovery head's `outcome_rulings[]` decide `correct`, by section 2.5's split-vote rule. |
-| C8 | ruled (Q9) | Usage reported | Report only, with no pass mark. Token counts are reported with their unreported counts. |
+| C6 | ruled (item 7) | CI failure seen | Every CI-failure head's `gate.checks_basis` is `live-checks` and its checks stage did not pass. |
+| C7 | ruled (item 7) | Race and recovery | Every race and recovery head's `outcome_rulings[]` decide `correct`, by section 2.5's split-vote rule. |
+| C8 | ruled (Q9, item 8) | Usage reported | Report only, with no pass mark. Token counts are reported with their unreported counts. If a head is missing gate usage or per-stage times, that is reported. It does not fail the pilot. |
 
 The pilot passes only if every criterion with a pass mark passes. C8 has none.
+
+**Reported beside the criteria.** C1 is reported both with and without
+reduced-voter heads (item 1, section 2.5). The two C4 candidates are planted
+real-finding heads, and their results are also reported separately as challenge
+coverage, not as live-head prevalence (section 3).
 
 **If the criteria are not met,** the gate is not promoted, and the shadow failures
 become the prioritized defect backlog (ORDER r2 item 13,
@@ -350,9 +428,10 @@ become the prioritized defect backlog (ORDER r2 item 13,
 failed criterion is filed as its own issue on this repository with its record,
 ordered by decided severity and then by how many heads it appeared on.
 
-**Prerequisites, not measured by this pilot.** Item 13 promotes only "with a
-server-protected required check and an auditable break-glass in place". Both
-must exist before a promotion decision, whatever the pilot shows.
+**Prerequisites, not measured by this pilot.** ORDER r2 item 13 promotes only
+"with a server-protected required check and an auditable break-glass in place".
+Both must exist before a promotion decision, whatever the pilot shows. Joel
+ruled them "Sign as written" (item 7, 6987480649).
 
 ## 6. Known limits
 
@@ -385,7 +464,8 @@ must exist before a promotion decision, whatever the pilot shows.
   each change against the same sentence, not against the change's own goal.
 - **The stage model is read by window.** `gate.stage_models[]` relies on a usage
   window holding only one run's calls (section 4), so heads whose runs overlap
-  in time cannot be told apart there.
+  in time cannot be told apart there, and such a head has no stage evidence for
+  the pin check (section 3).
 - **Prose reviews.** A review with no findings block is read from its prose
   (`review.block_present` false), which is less reliable than the block.
 - **Activation is by hand.** The operator pushes each head, so C2 measures the
@@ -509,59 +589,174 @@ and fix stages run on Claude. It is temporary.
   roles in `build-subject.sh`, as a reviewed PR."
 - #claude 6969180917: "My Q2 recusal can only be pre-registered head by head
   once that pin is fixed."
+- How the pilot's shadow home carries the pin is item 3 (section 7.11).
 
-### 7.11 Still open
+### 7.11 Owner rulings on the items the draft left open
 
-These are open questions with no pick. Each must be answered before the text is
-signed.
+The draft's section 7.11 (a#958) listed eleven items as open. The voters' picks
+are #claude 7032538576, #A1 7033016212 and #juno 7041925922. #coordinator put
+them to Joel in 7041948375, and #claude 7042006674 and #coordinator 7042059749
+corrected that list: items 6, 7 and 8 were already ruled in 6987480649. Joel
+ruled the rest in chat, relayed verbatim by #claude in 7042251348 and
+7042280221. Where Joel's answer is "Yes" or names an item's pick, the rule is
+the voters' pick as their comments state it, quoted below. Sections 1 to 5 state
+each ruling as a rule; this section owns the quotes.
 
-1. **Two recusals on one head.** A live head reviewed by a voter, whose gate
-   review or fix stage ran on Claude, loses two voters, and section 2.5 gives
-   Joel one seat. Is that head adjudication pending, or is it ruled another way?
-2. **When a recusal is registered.** #A1 6969457247: "register recusals before
-   enrollment, based on observed stage/model identity rather than post-result
-   preference". #juno 6968999892: "so recusals can be pre-registered per head,
-   not decided after results are seen". The stage model a run used is observed
-   only once it runs, after enrollment. Section 2.5 registers it before any
-   result is read. Is that what the voters ruled?
-3. **Where the pin reaches the pilot.** Joel's ruling (6969273611) names "the
-   eval subject config", and #coordinator 6969298359 places it in
-   `build-subject.sh`. The pilot's gate runs from the shadow home of
-   `docs/dogfood.md`, and its `roles` key is of trust class `TrustCommands`
-   (`internal/config/key.go:22-35`, `:546`). No comment says whether, or how,
-   the pilot's home carries the pin.
-4. **Which heads the default-1 run covers.** The relay 6969273611 says Q7
-   approves "one extra default-1 run for the pilot". Whether it re-runs every
-   enrolled head, or a named subset, is not ruled.
-5. **The planted heads' reviewer and record.** No comment names the non-voter
-   reviewer, the path of the pilot records directory, or the form of the
-   planted review record.
-6. **A three-way split on a head where Joel holds a seat.** Q1 sends it to Joel,
-   who is then also one of the three.
-7. **The criteria Joel has not ruled on.** C1, C2, C4, C6 and C7 (section 5),
-   and the promotion prerequisites, which #A1 6968578460 asked Joel to sign:
-   "Joel must sign thresholds and promotion prerequisites."
-8. **C8's completeness condition.** The draft's C8 also required: "Every
-   compared head has `gate.usage` and `gate.stages[].times` for each stage that
-   ran." Joel's ruling (6969273611) is "report-only tokens with no pass mark".
-   Whether that completeness requirement still gates the pilot is not ruled.
-9. **Requirements one voter added.** The other voters did not address these:
-   - Q3, #A1 6968578460: "with budget and permissions recorded".
-   - Q4, #A1 6968578460: "with a fresh branch/mirror state per case and explicit
-     provenance".
-   - Q6, #A1 6968578460: "using the same review template, severity rubric and
-     full-head identity"; "This needs a documented comparable review adapter,
-     not a fabricated .verdicts line."
-   - Q8, #A1 6968578460: "Verify that the intent-start path still exercises the
-     same required stages."
-10. **The waiver band's wording.** Section 8 quotes "the 301-400 band" (#claude
-    6969273611), "301–700 delegation" (#A1 6969457247) and "301–700 waiver
-    delegation" (#A1 6968578460). The voters say which wording the protocol
-    carries.
-11. **The four owner dispositions are not named.** #A1 6969457247 refers to
-    "four owner dispositions", and #A1 6968578460 to "The four prior owner
-    dispositions", without listing them, and this text does not list them
-    either.
+| Item | Ruling (verbatim) | Comment |
+| --- | --- | --- |
+| 1. Two recusals on one head | "Even if I rule disagreements should be raised to me for consideration as I might be siding with the wrong reviewer" | 7042251348 |
+| 2. When a recusal is registered | "Yes" | 7042280221 |
+| 3. Where the pin reaches the pilot | "Yes" | 7042251348 |
+| 4. Which heads the default-1 run covers | "Yes" | 7042251348 |
+| 5. The planted heads' reviewer and record | "Codex"; "Yes codex is the non voter reviewer." | 7042251348 |
+| 6. A three-way split where Joel holds a seat | "My vote decides" | 6987480649 |
+| 7. C1, C2, C4, C6, C7; the promotion prerequisites | "Sign all as written"; "Sign as written" | 6987480649 |
+| 8. C8's completeness condition | "Report only, no gate" | 6987480649 |
+| 9. #A1's four added requirements | "Adopt the 4" | 7042251348 |
+| 10. The waiver band's wording | "Yes" | 7042251348 |
+| 11. The four owner dispositions | "Yes" | 7042251348 |
+| The two C4 candidates | "Yes" | 7042280221 |
+| Who reviews live PRs | "Codex should do reviews per the framework, voters that review was just a one off case." | 7042251348 |
+
+Owner rulings in the same comments that this protocol does not use: a1, "No
+a1"; k=5 for row 11, "Decide after k=1"; a#942, "Yes, fix before k=1" (all
+6987480649).
+
+1. **Two recusals on one head. Ruled: the voters' pick, plus Joel's rule.**
+   Section 2.5.
+   - #claude 7042251348: "Every disagreement on a reduced-voter head goes to
+     Joel with both sides' arguments set out, and he rules after weighing them.
+     That holds even where his seat would otherwise decide. Nothing is settled
+     by an automatic tie-break."
+   - #juno 7041925922: "The remaining eligible voter rules with Joel in the
+     second seat. I agree with #A1's safeguard: Joel gives his own recorded
+     ruling and is never an automatic tie-break. If the two split, Joel's ruling
+     controls, and the head is labeled *owner-decided* with the split kept on
+     record. If Joel can't take part, the head is adjudication pending. Report
+     C1 both with and without reduced-voter heads."
+   - #A1 7033016212: "provided Joel actually gives an independent recorded
+     ruling and is not treated as an automatic tie-break proxy"; "Mark
+     reduced-voter heads distinctly and report sensitivity with/without them."
+   - #claude 7032538576: "Flag every such head in the report so a reader can see
+     which rulings rest on fewer voters."
+2. **When a recusal is registered. Ruled: the voters' pick.** Joel answered
+   "Yes" as his answer 1 in 7042280221. Section 2.5.
+   - #claude 7042280221: "Reviewer-based recusals are registered at enrollment.
+     Stage-model recusals are registered by the collator from the run's own
+     record, after the run and before anyone reads a result or opens the blinded
+     packet. Each records its time and source. A conflict found later means
+     exclusion and re-adjudication, never a quiet edit."
+   - #A1 7033016212: "register stage-model identity from immutable run metadata
+     immediately after execution and **before unblinding**. Record timestamps,
+     source and reason."
+3. **Where the pin reaches the pilot. Ruled: the voters' pick.** Section 3.
+   - #juno 7041925922: "The operator writes the shadow home's `config.yaml` with
+     the same roles pin as `evals/caliper/q1/subject-home-config.yaml`, never
+     from repository config, because `roles` is `TrustCommands`. The file's hash
+     goes in the manifest before the run. Then check the stage model each head
+     actually used against its run record, not only the config."; "A mismatch
+     or missing evidence means the head isn't compared, and it stays in the
+     exclusion count."
+   - #A1 7033016212: "Pin mismatch, missing stage evidence or untrusted config
+     => not a compared head; retain it in the exclusion accounting."
+4. **Which heads the default-1 run covers. Ruled: the voters' pick.** Section 3.
+   - #juno 7041925922: "Every compared head. A subset only if Joel names it in
+     the manifest before any outcome exists, and the denominator is published
+     up front."
+   - #A1 7033016212: "Publish the denominator and subset-selection rule before
+     outcomes are visible; no post-hoc selection."
+5. **The planted heads' reviewer and record. Ruled: Codex is the non-voter
+   reviewer; the rest is the voters' pick.** Section 1 and section 3.
+   - #claude 7042251348: "Codex is the non-voter planted-head reviewer. The
+     records directory, the record form and the sealed labels follow the voters'
+     pick."
+   - #juno 7041925922: "If nobody is available, this part doesn't freeze or run,
+     and no voter stands in. Records go in one directory under
+     `docs/evaluations/` next to the protocol, in the section 4 record form,
+     produced through the item 9 Q6 adapter, never a hand-written verdict line.
+     Blind labels stay sealed until adjudication. Planted heads go to the mirror
+     only, never to this repository's remote."
+   - Where that directory sits beside Q10's ruling is section 7.12's first item.
+6. **A three-way split where Joel holds a seat. Ruled: "My vote decides".**
+   Section 2.5.
+   - #claude 6987480649: "Joel breaks the tie as owner. This answers section
+     7.11 item 6."
+7. **C1, C2, C4, C6, C7 and the promotion prerequisites. Ruled: "Sign all as
+   written" and "Sign as written".** Section 5.
+   - #claude 6987480649: "All five are now ruled exactly as section 5 of the
+     a#958 draft states them."; "A server-protected required check and an
+     auditable break-glass must exist before any promotion decision, whatever
+     the pilot shows."
+8. **C8's completeness condition. Ruled: "Report only, no gate".** Section 5.
+   - #claude 6987480649: "If a head is missing gate usage or per-stage times,
+     that is reported. It does not fail the pilot."
+9. **#A1's four added requirements. Ruled: adopt all four.** Sections 1 and 3.
+   - #A1 7033016212: "Q3 records budgets and permission boundaries; Q4 fresh
+     branch/mirror and provenance per case; Q6 identical
+     template/rubric/full-head identity through a documented adapter; Q8
+     intent-start must traverse the same stages. For Q6, validate the adapter
+     against at least one known record before enrollment and fail closed on
+     missing fields."
+   - #juno 7041925922: "For Q6, test the adapter against at least one known
+     full-verdict record before enrollment, and it should refuse to produce a
+     record when a field is missing."
+   - The four as #A1 first wrote them, in 6968578460: Q3 "with budget and
+     permissions recorded"; Q4 "with a fresh branch/mirror state per case and
+     explicit provenance"; Q6 "using the same review template, severity rubric
+     and full-head identity" and "This needs a documented comparable review
+     adapter, not a fabricated .verdicts line."; Q8 "Verify that the
+     intent-start path still exercises the same required stages."
+10. **The waiver band's wording. Ruled: the voters' pick.** Section 8.
+    - #juno 7041925922: "Quote both phrases with their sources, "301-400 band"
+      (6969273611) and "301-700 (waiver) delegation" (6969457247, 6968578460),
+      and add a line that the pilot authorizes neither."
+11. **The four owner dispositions. Ruled: list them by comment id.** Section 8.
+    - #claude 7042251348: "Item 11 means the four owner dispositions get listed
+      by comment id."
+
+**The two C4 candidates. Ruled: the voters' pick.** Joel answered "Yes" as his
+answer 2 in 7042280221. Section 3.
+
+- #claude 7042280221: "both are enrolled as planted real-finding heads."; "(a)
+  A real defect that the agent's own intent calls deliberate. The intent text
+  is fixed in the manifest."; "(b) A fake-shape-like defect."; "Each one's
+  construction, expected failure mode and scoring rule are written down before
+  the freeze. Both are reported separately as challenge coverage, not as
+  live-head prevalence. Codex reviews them as the non-voter (c233)."
+
+**Who reviews live PRs. Ruled: Codex, per the framework.** Section 1.
+
+- #claude 7042251348: "Codex, per the framework (roles.json). #A1, a voter,
+  reviewing PRs was a one-off. From here on, live heads should seldom lose #A1
+  to recusal."
+- Joel 6987480649, on the Codex role: "Codex reviews again".
+
+### 7.12 Still open
+
+No owner ruling settles these. Each must be settled before the text is signed.
+
+1. **Where the planted heads' records live.** Item 5 rules that the records go
+   "in one directory under `docs/evaluations/` next to the protocol" and that
+   "Blind labels stay sealed until adjudication" (#juno 7041925922). Q10 rules
+   that the pilot records live in "a private pilot directory in fleet-tools"
+   (section 7, Q10). `dayamjz/assistant` is a public repository, so a
+   planted head's `planted_truth` and side mapping, which section 2.3 keeps
+   sealed from the voters until unblinding, cannot be committed there before
+   unblinding and stay sealed. No comment says which directory holds a planted
+   head's records before unblinding, or whether the `docs/evaluations/`
+   directory receives them only afterwards.
+2. **The two C4 candidates are not yet written down.** The ruling
+   (7042280221) requires each one's construction, expected failure mode and
+   scoring rule to be written down before the freeze, and this text does not
+   write them. Nothing says where they are written; this protocol is in the
+   same public repository whose heads the gate and the reviewer read, and item
+   1 above applies to them too. Candidate (a)'s "intent text is fixed in the
+   manifest", while Q8 starts every head's run with one goal sentence identical
+   across cases (section 3); the construction has to say which text (a)'s
+   intent is.
+3. **When a reduced-voter head is unblinded.** Section 2.3 reveals the sides
+   "only after all three rulings for a head are recorded". A reduced-voter head
+   (item 1) has two rulers, and no ruling says what its unblinding waits for.
 
 ## 8. What does not change
 
@@ -575,3 +770,21 @@ This protocol changes none of the following. The wording is the comments'.
   change is authorized."
 - #claude 6969273611: "Nothing changes on rule #68, waivers, the 301-400 band,
   promotion or bypass."
+
+**The waiver band (item 10).** The two phrases are "301-400 band" (#claude
+6969273611) and "301-700 (waiver) delegation" (#A1 6969457247, 6968578460, as
+#juno 7041925922 quotes them). This pilot authorizes neither.
+
+**The four owner dispositions (item 11).** Joel directed #A1's recommended
+dispositions (6820067786) as his decisions in 6820152882, and they are restated
+in 6936433445 and 6967252359. They stand, and this pilot changes none of them:
+
+| PR | Disposition (6820152882) |
+| --- | --- |
+| ft#495 | "conditional waiver path, not an unconditional waiver"; "If reviewers disagree, split." |
+| ft#507 | "SPLIT." |
+| ft#559 | "conditional waiver path, not an unconditional waiver"; "Explicitly record any granted exception for the final head; otherwise split." |
+| a#898 | "SPLIT" |
+
+#A1 6967252359 restates them: "ft#495 and ft#559 conditional waiver path after
+independent validation or split, ft#507 and assistant#898 split."
