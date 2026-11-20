@@ -34,7 +34,9 @@ evals/caliper/q1/install-caliper.sh
 # agent-ci-review's reviewer authenticates with this alone, held by the
 # reviewer process run-full.sh starts ("Reviewer process"):
 #   export CLAUDE_CODE_OAUTH_TOKEN=…   # claude setup-token
-export PATH="$HOME/.local/bin:$PWD/bin:$PATH"
+# This checkout's bin, then the venv install-caliper.sh put the patched
+# caliper in (CALIPER_VENV, if you set it), in run-full.sh's order.
+export PATH="$PWD/bin:${CALIPER_VENV:-$HOME/.local/share/caliper-q1attemptenv}/bin:$HOME/.local/bin:$PATH"
 cd evals/caliper/q1
 python3 verify_graders.py
 caliper validate q1.eval.yaml
