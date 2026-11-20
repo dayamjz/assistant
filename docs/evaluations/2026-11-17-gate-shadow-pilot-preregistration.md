@@ -1,15 +1,14 @@
 # Gate shadow pilot pre-registration, 2026-11-17
 
-**Status: Draft, not frozen.** This text is the complete protocol, apart from
-the salted hashes that section 7.12 says it does not yet carry. Every item the
-draft's section 7.11 listed as open, and every item a#976's section 7.12 listed
-as open, has an owner ruling, and sections 7.11 and 7.12 own those rulings. The
-text freezes only when Joel and the voters (#juno, #A1, #claude) each sign this
-exact text at a named commit, and that commit is the freeze point. They sign at
-the merge commit of the docs PR that adds section 7.12's rulings (Joel
-7044130931, 7046850989). Merging is not what freezes it; the four signatures
-are. Nothing is enrolled and no shadow run happens before then. No pilot head
-has run.
+**Status: Draft, not frozen.** This text is the complete protocol. Every item
+the draft's section 7.11 listed as open, and every item a#976's section 7.12
+listed as open, has an owner ruling, and sections 7.11 and 7.12 own those
+rulings. The text freezes only when Joel and the voters (#juno, #A1, #claude)
+each sign this exact text at a named commit, and that commit is the freeze
+point. They sign at the merge commit of the docs PR that adds section 7.12's
+rulings (Joel 7044130931, 7046850989). Merging is not what freezes it; the four
+signatures are. Nothing is enrolled and no shadow run happens before then. No
+pilot head has run.
 
 This is row 12 of the agreed order (ORDER r2), the a#806 shadow pilot.
 Row 12 (`ft:docs/critique/03-juno-response.md:52`) reads: "At least 10
@@ -172,7 +171,28 @@ protocol carries only a salted hash of each record, with the hash algorithm
 named. Each record has a random nonce of at least 128 bits, so no one can guess
 a label by hashing it. Public names do not reveal the label. After unblinding,
 the records are copied to `docs/evaluations/` in this repository and checked
-against the hashes. This text carries no such hash yet (section 7.12).
+against the hashes.
+
+The sealed records written before the freeze are these. Each hash is SHA-256
+over the record file's exact bytes, and each file begins with a line
+`nonce: <64 hex characters>`, a random 256-bit nonce. The ids were assigned in
+random order and say nothing about a head's case. s02 and s08 are the two C4
+specs (section 3).
+
+| id | record kind | sha256 | algorithm |
+| --- | --- | --- | --- |
+| s01 | planted-head record | `ad93d15b7ff21b97238c299b65fee268d19785dfe730033839cb79050783d975` | SHA-256 |
+| s02 | C4 spec | `113d6bdb11573425987f06387971b62b9ddc57b783ea943d7b2e1c7a3b6a38fc` | SHA-256 |
+| s03 | planted-head record | `963d41995183d7557d61ac9de5079df45341e6d1ec5cacac8aecf28eefba1507` | SHA-256 |
+| s04 | planted-head record | `3054623662fc4d4cf0f4dd3def488e8aed6a46cb459169794a138b61c7f5ed20` | SHA-256 |
+| s05 | planted-head record | `e2204208fb421bf060909112f4dbf1de8429f066a8b56be2533d827c912190de` | SHA-256 |
+| s06 | planted-head record | `143fa6e89eba814cd3a01a7a2df3ef7069d18ed0d4fa1112bc2292608918a2e0` | SHA-256 |
+| s07 | planted-head record | `a737d440306cae865e9851c72527e20df4f3e50ca970dcfa7bef62aae7217589` | SHA-256 |
+| s08 | C4 spec | `9b86a1d331e3a933048b16a1559b41101445c4a10e5972042e2a768045fee3a4` | SHA-256 |
+
+A record that exists only after a run, such as a planted head's review record
+or a capture (step 1), is not in this table: no such record exists at the
+freeze, and each is hashed at its own time.
 
 **Joel and the sealed records (7.12 item 3, #juno's addition).** Joel holds a
 ruling seat and has admin access to fleet-tools. He does not open sealed records
@@ -271,9 +291,9 @@ planted real-finding heads:
 
 Each one's construction, expected failure mode and scoring rule are written in
 the private pilot directory before the freeze, with their salted hashes in this
-protocol (section 2.3). This text does not carry those hashes yet (section
-7.12). Both are reported separately as challenge coverage, not as live-head
-prevalence. Codex reviews them as the non-voter (section 1).
+protocol: they are records s02 and s08 of section 2.3's table. Both are
+reported separately as challenge coverage, not as live-head prevalence. Codex
+reviews them as the non-voter (section 1).
 
 **Marking planted and replayed heads apart from live PRs.** The manifest records
 each head's `provenance`: `live`, `replayed` or `planted`. Every head is pushed to
@@ -792,10 +812,13 @@ relay says: "With this, every open item in sections 7.11 and 7.12 has an owner
 ruling." Sections 2 to 5 state each ruling as a rule; this section owns the
 quotes. Section 7.11's table lists the three rulings with their comment id.
 
-**The hashes are not in this text.** Items 1 and 2 put a salted hash of each
-sealed record, and of each C4 candidate's written construction, expected
-failure and scoring, in this protocol, and item 2 puts the C4 hashes there
-before the freeze. This text carries none of them.
+**The hashes.** Items 1 and 2 put a salted hash of each sealed record, and of
+each C4 candidate's written construction, expected failure and scoring, in this
+protocol, and item 2 puts the C4 hashes there before the freeze. #claude
+7047311907 found them missing from this text's first head. Section 2.3's table
+now carries the hash of every sealed record written before the freeze, s02 and
+s08 being the C4 specs; a record that exists only after a run is hashed at its
+own time.
 
 1. **Where the planted heads' records live. Ruled: the voters' pick.** Section
    2.3.
