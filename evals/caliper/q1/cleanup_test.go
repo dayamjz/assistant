@@ -22,13 +22,17 @@ import (
 
 var spec string // this directory, where cleanup.sh and build-subject.sh are
 
-// TestMain lets this binary act as the scripted agent (standin.Main, then
+// TestMain lets this binary read a process's start record for a stand-in
+// (printStartRecord), and act as the scripted agent (standin.Main, then
 // journey.ActAsShim, which refuses an agent call nothing scripted) and as a
 // held process (standin.HeldWait). Every process of this binary the tests
 // start ends with the test binary (standin.WatchOwner), and once the tests
 // return the package fails if any is still running (standin.RunOwned).
 // Nothing here pushes, so no standin.AtTerminal: every run starts with --intent.
 func TestMain(m *testing.M) {
+	if pid := os.Getenv("Q1_TEST_START_RECORD"); pid != "" {
+		os.Exit(printStartRecord(pid))
+	}
 	standin.WatchOwner()
 	standin.Main()
 	journey.ActAsShim()
@@ -60,11 +64,12 @@ type attempt struct {
 	t                    *testing.T
 	root, bin, path      string
 	home, work, checkout string
-	tmpdir               string   // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
-	key                  []string // the attempt key the patched caliper gives a hook; nil as a stock caliper
-	arm                  string   // the hooks' Q1_ARM, as run-full.sh exports it; empty leaves it unset
-	env                  []string // added to every command's environment
-	config               []string // lines serve adds to setup's home configuration (configure)
+	tmpdir               string    // the hooks' TMPDIR, where cleanup.sh writes caliper-q1-gate
+	key                  []string  // the attempt key the patched caliper gives a hook; nil as a stock caliper
+	arm                  string    // the hooks' Q1_ARM, as run-full.sh exports it; empty leaves it unset
+	env                  []string  // added to every command's environment
+	config               []string  // lines serve adds to setup's home configuration (configure)
+	reviewer             *reviewer // agent-ci-review's reviewer process (startReviewer); nil in another arm
 }
 
 // keyed gives the attempt's hooks the key caliper 0.19.0+q1attemptenv passes:

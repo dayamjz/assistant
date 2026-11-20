@@ -21,11 +21,12 @@ import (
 	"github.com/dayamjz/assistant/internal/procgroup"
 )
 
-// reviewToken is the CLAUDE_CODE_OAUTH_TOKEN every review attempt's pusher
-// carries, and ambientKey an ANTHROPIC_API_KEY beside it, so a test can look
-// for either value where the reviewer's credential must never be written
-// (#A1's condition) and see which one reached the reviewer. Lowercase, so the
-// stand-in's uppercased copy of what it saw is never read as the value.
+// reviewToken is the token every review attempt's reviewer process holds,
+// and ambientKey an ANTHROPIC_API_KEY in that process's environment and the
+// pusher's, so a test can look for either value where the reviewer's
+// credential must never be written (#A1's condition) and see which one
+// reached the reviewer. Lowercase, so the stand-in's uppercased copy of what
+// it saw is never read as the value.
 const (
 	reviewToken = "q1-review-token-sentinel-6f1c0d"
 	ambientKey  = "q1-ambient-api-key-sentinel-93ab"
@@ -42,26 +43,39 @@ const (
 // benign subject, so its remote's pre-receive runs CI and then
 // review-hook.py, with go on PATH and the package's GOCACHE as ciAttempt
 // has them. The root is inside an arm TMPDIR of its own, as caliper makes it,
-// so the reviewer's HOME can be outside it. The reviewer, claude on PATH, is
-// the scripted stand-in (seenClaude). extra is added to the hooks' environment.
+// so the reviewer's HOME can be outside it. Its reviewer process holds
+// reviewToken (startReviewer), and the pusher has no CLAUDE_CODE_OAUTH_TOKEN,
+// as an agent's push from a Claude Code tool call has none (a#968). The
+// reviewer, claude on that process's PATH, is the scripted stand-in
+// (seenClaude). extra is added to the hooks' environment.
 func reviewArm(t *testing.T, script standin.Script, extra ...string) (*attempt, *standin.Agent, string) {
 	t.Helper()
 	return attemptInArm(t, "agent-ci-review", script, extra...)
 }
 
-// attemptInArm is reviewArm in any arm.
+// attemptInArm is reviewArm in any arm; only agent-ci-review gets a reviewer process.
 func attemptInArm(t *testing.T, arm string, script standin.Script, extra ...string) (*attempt, *standin.Agent, string) {
+	t.Helper()
+	return attemptHolding(t, arm, reviewToken, script, extra...)
+}
+
+// attemptHolding is attemptInArm with token as the reviewer process's.
+func attemptHolding(t *testing.T, arm, token string, script standin.Script, extra ...string) (*attempt, *standin.Agent, string) {
 	t.Helper()
 	tmp, err := standin.TempDir("q1-arm")
 	must(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(tmp) })
 	a := newAttemptIn(t, tmp, "caliper-review").inArm(arm)
-	a.env = append([]string{"GOCACHE=" + sharedGoCache(t), "CLAUDE_CODE_OAUTH_TOKEN=" + reviewToken,
-		"ANTHROPIC_API_KEY=" + ambientKey}, extra...)
+	a.env = []string{"GOCACHE=" + sharedGoCache(t), "ANTHROPIC_API_KEY=" + ambientKey}
 	goTool, err := exec.LookPath("go")
 	must(t, err)
 	a.path += ":" + filepath.Dir(goTool)
 	agent, seen := a.seenClaude(script)
+	if arm == "agent-ci-review" {
+		a.reviewer = startReviewer(t, token, "PATH="+a.path, "ANTHROPIC_API_KEY="+ambientKey)
+		a.env = append(a.env, "Q1_REVIEWER_SOCKET="+a.reviewer.socket())
+	}
+	a.env = append(a.env, extra...)
 	if code, _, errs := a.run(a.work, "sh", filepath.Join(spec, "build-subject.sh"), "benign"); code != 0 {
 		t.Fatalf("build-subject: exit %d\n%s", code, errs)
 	}
@@ -72,8 +86,9 @@ func attemptInArm(t *testing.T, arm string, script standin.Script, extra ...stri
 // claudeStandIn does, after it writes, under a directory named by its pid in
 // the directory returned (outside every run directory), what the process
 // it is saw: its HOME, its working directory, what that HOME held, the names
-// in its environment, and its CLAUDE_CODE_OAUTH_TOKEN uppercased, never the
-// value itself.
+// in its environment, and the token it was handed uppercased, never the value
+// itself: what its CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names, then its
+// CLAUDE_CODE_OAUTH_TOKEN.
 func (a *attempt) seenClaude(script standin.Script) (*standin.Agent, string) {
 	a.t.Helper()
 	agent := standin.New(a.t, script)
@@ -88,7 +103,8 @@ func (a *attempt) seenClaude(script standin.Script) (*standin.Agent, string) {
 	}
 	body := "#!/bin/sh\nd=" + procgroup.ShellQuote(seen) + "/$$\nmkdir \"$d\" || exit 97\n" +
 		"printf '%s\\n%s\\n' \"$HOME\" \"$PWD\" >\"$d/where\"\nls -A \"$HOME\" >\"$d/home\"\n" +
-		"env | sed 's/=.*//' | sort >\"$d/names\"\nprintf '%s' \"$CLAUDE_CODE_OAUTH_TOKEN\" | tr a-z A-Z >\"$d/token\"\n" +
+		"env | sed 's/=.*//' | sort >\"$d/names\"\nfd=\"$CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR\"\n" +
+		"{ [ -z \"$fd\" ] || cat \"/dev/fd/$fd\"; printf '%s' \"$CLAUDE_CODE_OAUTH_TOKEN\"; } | tr a-z A-Z >\"$d/token\"\n" +
 		strings.Join(words, " ") + ` "$@"` + "\n"
 	must(a.t, procgroup.WriteProgram(filepath.Join(a.root, "stub", "claude"), []byte(body), 0o755))
 	return agent, seen
@@ -228,10 +244,9 @@ func hasAny(args []string, words ...string) bool {
 // refuses the push, recorded under why, never as a pass: output that is no
 // envelope, an envelope whose result is not the verdict object, an approve
 // from a reviewer that exited 1, an envelope the reviewer marked an error
-// (what an auth or quota failure answers), a reviewer still running at the
-// limit (ended with its group), and a reviewer that cannot start because no
-// CLAUDE_CODE_OAUTH_TOKEN reached the hook, which starts no process. None
-// moves the remote.
+// (what an auth or quota failure answers), and a reviewer still running at
+// the limit (ended with its group). None moves the remote. A review with no
+// reviewer process to run it is TestReviewHookWithoutItsReviewerProcessCannotStart.
 func TestReviewHookFailsClosed(t *testing.T) {
 	cases := []struct {
 		verdict string
@@ -262,14 +277,6 @@ func TestReviewHookFailsClosed(t *testing.T) {
 				t.Errorf("the timed-out push answered %v after it began, past its 10s limit", time.Since(start))
 			}
 			wanted = append(wanted, c.verdict+" rejected")
-		}
-		if len(group) < 3 { // the no-token case, in the attempt with budget left
-			a.env = without(a.env, "CLAUDE_CODE_OAUTH_TOKEN=")
-			code, errs := a.push()
-			if code == 0 || !strings.Contains(errs, "CLAUDE_CODE_OAUTH_TOKEN, the reviewer's only credential, is unset or empty") {
-				t.Errorf("no token: push exit %d\n%s", code, errs)
-			}
-			wanted = append(wanted, "cannot-start rejected")
 		}
 		want(t, "entries", verdicts(a.reviewEntries()), wanted)
 		want(t, "reviewer calls", len(agent.Calls()), len(group))
@@ -427,19 +434,30 @@ func TestReviewHookIsInstalledOnlyInItsArm(t *testing.T) {
 	}
 }
 
-// TestReviewerGetsOnlyItsTokenAndWritesItNowhere (#A1's condition): the
-// reviewer's process saw the pusher's CLAUDE_CODE_OAUTH_TOKEN, and no
-// ANTHROPIC_API_KEY though the pusher had one, under a HOME that was empty
-// (no credential file copied in), new per review, outside the attempt root and
-// removed after, with the pushed tree as its working directory. Even a
-// reviewer that echoes the token on stderr and in its findings leaves the
-// value nowhere: not in what the pusher is told, not in any file under the
-// arm's TMPDIR (the evidence, the record, the attempt root), and not in the
-// reviewer's argv.
+// TestReviewerGetsOnlyItsTokenAndWritesItNowhere (#A1's condition, a#968):
+// the pusher has no CLAUDE_CODE_OAUTH_TOKEN, as an agent's push from a Claude
+// Code tool call has none, and its push is still reviewed: the reviewer's
+// process was handed the reviewer process's token on the pipe its
+// CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names, with no CLAUDE_CODE_OAUTH_TOKEN
+// and no ANTHROPIC_API_KEY in its environment though the reviewer process
+// and the pusher had one, under a HOME that was empty (no credential file
+// copied in), new per review, outside the attempt root and removed after,
+// with the pushed tree as its working directory. Even a reviewer that echoes
+// the token on stderr and in its findings leaves the value nowhere the agent
+// can read it: not in its environment, not in what the pusher is told, not in
+// any file under the arm's TMPDIR (the evidence, the record, the attempt
+// root, the agent's HOME) or the reviewer process's directory, not in the
+// reviewer's argv, and not in the reviewer process's arguments or environment
+// as ps eww would list them.
 func TestReviewerGetsOnlyItsTokenAndWritesItNowhere(t *testing.T) {
 	echo := strings.Replace(block, "planted: the empty limit is not refused", "token "+reviewToken, 1)
 	a, agent, seen := reviewArm(t, standin.Script{Steps: []standin.Step{
 		{Reply: standin.Text(echo).WithStderr("token " + reviewToken)}, {Reply: standin.Text(approve)}}})
+	for _, e := range a.environ() {
+		if strings.HasPrefix(e, "CLAUDE_CODE_OAUTH_TOKEN") || strings.Contains(e, reviewToken) {
+			t.Fatalf("the pusher's environment carries the reviewer's credential: %.30s", e)
+		}
+	}
 	code, errs := a.push()
 	want(t, "echoing reviewer's block refused, token hidden", []any{code != 0, strings.Contains(errs, reviewToken),
 		strings.Contains(errs, "[CLAUDE_CODE_OAUTH_TOKEN]")}, []any{true, false, true})
@@ -455,10 +473,10 @@ func TestReviewerGetsOnlyItsTokenAndWritesItNowhere(t *testing.T) {
 	for _, s := range saw {
 		_, statErr := os.Stat(s.home)
 		names := strings.Join(s.environNames, " ")
-		want(t, "what a reviewer saw", []any{s.token, strings.Contains(names, "CLAUDE_CODE_OAUTH_TOKEN"),
-			strings.Contains(names, "ANTHROPIC_API_KEY"), len(s.homeHeld), strings.HasPrefix(s.home, a.root+"/"),
-			errors.Is(statErr, fs.ErrNotExist), filepath.Base(s.dir)},
-			[]any{strings.ToUpper(reviewToken), true, false, 0, false, true, "tree"})
+		want(t, "what a reviewer saw", []any{s.token, hasAny(s.environNames, "CLAUDE_CODE_OAUTH_TOKEN"),
+			hasAny(s.environNames, "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"), strings.Contains(names, "ANTHROPIC_API_KEY"),
+			len(s.homeHeld), strings.HasPrefix(s.home, a.root+"/"), errors.Is(statErr, fs.ErrNotExist), filepath.Base(s.dir)},
+			[]any{strings.ToUpper(reviewToken), false, true, false, 0, false, true, "tree"})
 	}
 	want(t, "token in the cleanup output", strings.Contains(out, reviewToken), false)
 	for _, c := range agent.Calls() {
@@ -466,18 +484,26 @@ func TestReviewerGetsOnlyItsTokenAndWritesItNowhere(t *testing.T) {
 			t.Errorf("the reviewer's argv carries the token: %v", c.Args)
 		}
 	}
+	// What ps eww lists of the reviewer process, read from the kernel (startRecord). The positive
+	// control: it holds the process's TMPDIR, so the read did reach its environment.
+	listed, err := startRecord(a.reviewer.pid)
+	must(t, err)
+	want(t, "the reviewer process's start record: its environment read, the token in it", []any{
+		strings.Contains(string(listed), "TMPDIR="+a.reviewer.dir), strings.Contains(string(listed), reviewToken)}, []any{true, false})
 	var scanned int
-	must(t, filepath.WalkDir(a.tmpdir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Type()&fs.ModeSymlink != 0 {
+	for _, dir := range []string{a.tmpdir, a.reviewer.dir} {
+		must(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return err
+			}
+			data, err := os.ReadFile(p)
+			scanned++
+			if err == nil && strings.Contains(string(data), reviewToken) {
+				t.Errorf("%s holds the token", p)
+			}
 			return err
-		}
-		data, err := os.ReadFile(p)
-		scanned++
-		if err == nil && strings.Contains(string(data), reviewToken) {
-			t.Errorf("%s holds the token", p)
-		}
-		return err
-	}))
+		}))
+	}
 	// The positive control for the scan: the evidence it read holds what the reviewer said, hidden.
 	data, err := json.Marshal(a.reviewEntries())
 	must(t, err)
@@ -630,8 +656,7 @@ func TestReviewHookHidesTheTokenBeforeTruncating(t *testing.T) {
 	const token = "Zq7Kx9Wm3Pv8Rt2Ny6Bh4Jd5Lf1Gc0Ts" // no 8-character piece of it is anything the harness writes
 	tail := strings.Repeat("y", 4000-len(token)/2)
 	said := "the token is " + token + tail
-	a, _, _ := reviewArm(t, standin.Script{Steps: []standin.Step{{Reply: standin.Text(said).WithStderr(said)}}},
-		"CLAUDE_CODE_OAUTH_TOKEN="+token) // the last value wins (os/exec Cmd.Env)
+	a, _, _ := attemptHolding(t, "agent-ci-review", token, standin.Script{Steps: []standin.Step{{Reply: standin.Text(said).WithStderr(said)}}})
 	code, errs := a.push()
 	want(t, "unreadable push refused", []any{code != 0, strings.Contains(errs, "Review rejected this push (unreadable)")}, []any{true, true})
 	_, out, _ := a.cleanup()

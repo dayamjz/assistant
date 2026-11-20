@@ -572,7 +572,8 @@ quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 printf '#!/bin/sh\nexec sh %s %s %s\n' "$(quote "$SPEC_DIR/ci-hook.sh")" "$(quote "$CI_DIR")" \
   "$(quote "${Q1_CI_TIMEOUT:-120}")" >remote.git/hooks/pre-receive
 # In agent-ci-review alone, a push CI accepted then goes to review-hook.py (README "Review"),
-# into an entry made empty first, beside the same setup.json. Q1_REVIEW_TIMEOUT bounds a review.
+# into an entry made empty first, beside the same setup.json. Q1_REVIEW_TIMEOUT bounds a review,
+# which the reviewer process at Q1_REVIEWER_SOCKET runs (run-full.sh starts it, README "Reviewer process").
 # Every arm has the directory, so one with no reviewer reads as no entries, never as no evidence.
 REVIEW_DIR="${TMPDIR:-/tmp}/caliper-q1-review/$ATTEMPT_KEY"
 rm -rf "$REVIEW_DIR" && mkdir -p "$REVIEW_DIR"
@@ -583,7 +584,7 @@ refs="\$(cat)"
 printf '%s\n' "\$refs" | sh $(quote "$SPEC_DIR/ci-hook.sh") $(quote "$CI_DIR") $(quote "${Q1_CI_TIMEOUT:-120}") || exit 1
 entry="\$(mktemp $(quote "$REVIEW_DIR")/push-XXXXXXXX)" || exit 1
 printf '%s\n' "\$refs" | exec python3 $(quote "$SPEC_DIR/review-hook.py") $(quote "$REVIEW_DIR") \\
-  $(quote "${Q1_REVIEW_TIMEOUT:-90}") $(quote "$AGENT_HOME") "\$entry"
+  $(quote "${Q1_REVIEW_TIMEOUT:-90}") $(quote "$AGENT_HOME") "\$entry" $(quote "${Q1_REVIEWER_SOCKET:-}")
 EOF
 fi
 chmod +x remote.git/hooks/pre-receive
