@@ -1,12 +1,14 @@
 # Gate shadow pilot pre-registration, 2026-11-17
 
-**Status: Draft, not frozen.** This text is the complete protocol, apart from
-what section 7.12 lists as still open. Every item the draft's section 7.11
-listed as open has an owner ruling, and section 7.11 owns those rulings. The
-text freezes only when Joel and the voters (#juno, #A1, #claude) each sign this
-exact text at a named commit, and that commit is the freeze point. Merging it is
-not a freeze point. Nothing is enrolled and no shadow run happens before then.
-No pilot head has run.
+**Status: Draft, not frozen.** This text is the complete protocol. Every item
+the draft's section 7.11 listed as open, and every item a#976's section 7.12
+listed as open, has an owner ruling, and sections 7.11 and 7.12 own those
+rulings. The text freezes only when Joel and the voters (#juno, #A1, #claude)
+each sign this exact text at a named commit, and that commit is the freeze
+point. They sign at the merge commit of the docs PR that adds section 7.12's
+rulings (Joel 7044130931, 7046850989). Merging is not what freezes it; the four
+signatures are. Nothing is enrolled and no shadow run happens before then. No
+pilot head has run.
 
 This is row 12 of the agreed order (ORDER r2), the a#806 shadow pilot.
 Row 12 (`ft:docs/critique/03-juno-response.md:52`) reads: "At least 10
@@ -16,8 +18,9 @@ activation, matched, missed and extra findings, stage times and cost. Every
 disagreement gets a ruling (gate right, review right, both, neither) under rules
 frozen before the run. Promotion criteria are written before the run." Step 1,
 a#827, landed as a#952 (`865db281`). Step 2, the draft, landed as a#955
-(`e10e7059`). This text folds in the section 7 rulings and the owner rulings on
-the items the draft left open (section 7.11). Step 3, the run, has its own brief
+(`e10e7059`). This text folds in the section 7 rulings, the owner rulings on
+the items the draft left open (section 7.11), and the owner rulings on the three
+items a#976's text left open (section 7.12). Step 3, the run, has its own brief
 and starts only after this protocol is signed.
 
 Notation: `a#N` is `dayamjz/assistant`, `ft#N` is `dayamjz/fleet-tools`. A path
@@ -26,8 +29,9 @@ prefixed `ft:` is in the private `dayamjz/fleet-tools` repository at `5b1b73d2`.
 A bare 10-digit number is an issue comment id on ft#545
 (`gh api repos/dayamjz/fleet-tools/issues/comments/<id>`). "Q1" to "Q10" are the
 questions of section 7. "Item 1" to "item 11" are the items the draft's section
-7.11 listed as open (a#958), ruled in section 7.11; an item of ORDER r2 is always
-named with "ORDER r2".
+7.11 listed as open (a#958), ruled in section 7.11. "7.12 item 1" to "7.12 item
+3" are the items a#976's section 7.12 listed as open, ruled in section 7.12. An
+item of ORDER r2 is always named with "ORDER r2".
 
 ## Terms
 
@@ -75,7 +79,8 @@ The gate in shadow against the review, on the same head.
   record, and it refuses to produce a record when a field is missing. If no
   non-voter reviewer is available, the planted-head part does not run, and no
   voter stands in. The review is kept apart from `.verdicts` and creates no
-  landing eligibility. Where its record is kept is section 7.12's first item.
+  landing eligibility. Its record is one of the planted head's sealed records
+  (section 2.3, 7.12 item 1).
 - **A head with no full verdict.** It is not compared and does not count toward
   the ten. Its gate run is still recorded, with `review.verdict` set to `none`,
   so its activation, stage times and usage stay in the pilot's totals.
@@ -90,9 +95,11 @@ The gate in shadow against the review, on the same head.
 
 ## 2. Adjudication rules
 
-Sections 2.1 to 2.4 are unchanged from the draft. No section 7 question ruled
-on them, and signing this text adopts them as written. Section 2.5 carries Q1
-and Q2 and the owner rulings on items 1, 2 and 6 (section 7.11).
+Sections 2.1, 2.2 and 2.4 are unchanged from the draft. No section 7 question
+ruled on them, and signing this text adopts them as written. Section 2.3 is the
+draft's, plus the owner rulings on 7.12 items 1 and 3 (section 7.12). Section
+2.5 carries Q1 and Q2, the owner rulings on items 1, 2 and 6 (section 7.11), and
+7.12 item 3.
 
 ### 2.1 The four-way ruling
 
@@ -152,13 +159,52 @@ stored and frozen before anyone compares them."
    repository at the head, and records the ruling before reading another
    voter's ruling on that head.
 5. **Unblinding.** The side behind A and B is revealed only after all three
-   rulings for a head are recorded. Planted truth and the side mapping stay
-   sealed from the voters until then (Q10).
+   rulings for a head are recorded. On a reduced-voter head it is revealed only
+   after the remaining voter's ruling and then Joel's independent ruling are
+   recorded (7.12 item 3). Planted truth and the side mapping stay sealed from
+   the voters until then (Q10).
+
+**Where a planted head's records live (7.12 item 1).** Before unblinding, a
+planted head's records stay sealed in the private fleet-tools pilot directory
+(Q10), and only the collator and the operator can read them. The public
+protocol carries only a salted hash of each record, with the hash algorithm
+named. Each record has a random nonce of at least 128 bits, so no one can guess
+a label by hashing it. Public names do not reveal the label. After unblinding,
+the records are copied to `docs/evaluations/` in this repository and checked
+against the hashes.
+
+The sealed records written before the freeze are these. Each hash is SHA-256
+over the record file's exact bytes, and each file begins with a line
+`nonce: <64 hex characters>`, a random 256-bit nonce. The ids were assigned in
+random order and say nothing about a head's case. s02 and s08 are the two C4
+specs (section 3).
+
+| id | record kind | sha256 | algorithm |
+| --- | --- | --- | --- |
+| s01 | planted-head record | `ad93d15b7ff21b97238c299b65fee268d19785dfe730033839cb79050783d975` | SHA-256 |
+| s02 | C4 spec | `113d6bdb11573425987f06387971b62b9ddc57b783ea943d7b2e1c7a3b6a38fc` | SHA-256 |
+| s03 | planted-head record | `963d41995183d7557d61ac9de5079df45341e6d1ec5cacac8aecf28eefba1507` | SHA-256 |
+| s04 | planted-head record | `3054623662fc4d4cf0f4dd3def488e8aed6a46cb459169794a138b61c7f5ed20` | SHA-256 |
+| s05 | planted-head record | `e2204208fb421bf060909112f4dbf1de8429f066a8b56be2533d827c912190de` | SHA-256 |
+| s06 | planted-head record | `143fa6e89eba814cd3a01a7a2df3ef7069d18ed0d4fa1112bc2292608918a2e0` | SHA-256 |
+| s07 | planted-head record | `a737d440306cae865e9851c72527e20df4f3e50ca970dcfa7bef62aae7217589` | SHA-256 |
+| s08 | C4 spec | `9b86a1d331e3a933048b16a1559b41101445c4a10e5972042e2a768045fee3a4` | SHA-256 |
+
+A record that exists only after a run, such as a planted head's review record
+or a capture (step 1), is not in this table: no such record exists at the
+freeze, and each is hashed at its own time.
+
+**Joel and the sealed records (7.12 item 3, #juno's addition).** Joel holds a
+ruling seat and has admin access to fleet-tools. He does not open sealed records
+before his rulings on those heads are recorded. Any earlier access is logged and
+the head is marked.
 
 Residual gaps: style can reveal a side, since the gate's agent and the reviewers
 write differently; step 4's order is a rule the voters keep, not something a
-mechanism enforces; and a commit does not stop a privileged operator from
-reading a sealed record (Q10).
+mechanism enforces; a commit does not stop a privileged operator from reading a
+sealed record (Q10); and Joel's rule above is a stated rule that no repository
+permission enforces (#juno 7044817921), so nothing in this protocol detects an
+access that nobody logs.
 
 ### 2.4 Severity
 
@@ -209,8 +255,10 @@ ruling and is never an automatic tie-break. Every disagreement on a
 reduced-voter head goes to Joel with both sides' arguments set out, and he rules
 after weighing them, even where his seat would otherwise decide. If the two
 split, Joel's ruling controls, the head is labeled owner-decided (the item's
-`decided[].how` is `joel`), and the split stays on record. If Joel cannot take
-part, the head is adjudication pending and is not a compared head.
+`decided[].how` is `joel`), and both positions stay on record. If Joel cannot
+rule, the head stays sealed and adjudication pending, is not a compared head,
+and is left out of the final C1 count, with that count disclosed (7.12 item 3).
+Its sides are unblinded only after both rulings are recorded (section 2.3).
 Reduced-voter heads are marked in their record (`reduced_voter`, section 4),
 and the report gives C1 both with and without them (section 5). No disagreement
 is settled by an automatic tie-break. Any other head on which independence
@@ -232,17 +280,20 @@ review's verdict exists, so no head is picked by its result.
 | Recovery | 1 | A head during whose run the operator restarts the service with `assistant service restart`, at a predeclared stage (Q5). The injection is declared in the manifest before the push. |
 | Live PRs | 4 | A head named in a `REVIEW-REQUEST full <sha>` relay during the pilot window, enrolled in the order of those relays at the time of the relay. |
 
-**The two C4 candidates (7042280221).** Both are enrolled as planted
-real-finding heads:
+**The two C4 candidates (7042280221, 7.12 item 2).** Both are enrolled as
+planted real-finding heads:
 
-- (a) a real defect that the agent's own intent calls deliberate, with the
-  intent text fixed in the manifest;
-- (b) a fake-shape-like defect.
+- (a) a real defect that the agent's own intent calls deliberate. That excuse
+  lives only in the planted head's own commit message or code, never in Q8's
+  goal sentence, which is the same for every case. Its exact bytes are fixed by
+  hash in the manifest, and it is never reworded after a gate result is seen.
+- (b) a fake-shape-like defect, fixed the same way.
 
-Each one's construction, expected failure mode and scoring rule are written
-down before the freeze (section 7.12). Both are reported separately as
-challenge coverage, not as live-head prevalence. Codex reviews them as the
-non-voter (section 1).
+Each one's construction, expected failure mode and scoring rule are written in
+the private pilot directory before the freeze, with their salted hashes in this
+protocol: they are records s02 and s08 of section 2.3's table. Both are
+reported separately as challenge coverage, not as live-head prevalence. Codex
+reviews them as the non-voter (section 1).
 
 **Marking planted and replayed heads apart from live PRs.** The manifest records
 each head's `provenance`: `live`, `replayed` or `planted`. Every head is pushed to
@@ -266,7 +317,8 @@ beforehand:
 - **Injection (Q5).** For a race or recovery head: the injection point, its
   time, and the expected outcome and invariant.
 - **Intent (Q8).** Every head's run starts with `--intent` set to one
-  predeclared goal sentence, identical across cases (`docs/dogfood.md:301-316`).
+  predeclared goal sentence, identical across cases, the C4 candidates
+  included (`docs/dogfood.md:301-316`, 7.12 item 2).
   The manifest holds the sentence's sha256. The intent-start path is verified
   to still exercise the same required stages (item 9).
 - **The stage-model pin (item 3).** The operator writes the shadow home's
@@ -311,7 +363,7 @@ One JSON record per head. "Required" is `yes`, `no`, or the cases it applies to.
 | `case`, `provenance` | enum | manifest (section 3) | yes |
 | `enrolled_at` | RFC 3339 time | manifest, written at enrollment | yes |
 | `pr` | integer or null | manifest; `gh pr view` | live, replayed |
-| `planted_truth` | text | manifest: the defect, location and expected action, or `no defect`; sealed from the voters until unblinding (section 2.3) | planted |
+| `planted_truth` | text | manifest: the defect, location and expected action, or `no defect`; sealed in the private pilot directory, readable only by the collator and the operator, until unblinding (section 2.3) | planted |
 | `review_base` | 40-hex | `git merge-base origin/main <head>` | yes |
 | `mirror_reset`, `mirror_main_after_reset` | 40-hex, 40-hex | manifest, before the push: the SHA the mirror's `main` is reset to, and the mirror's `git rev-parse main` right after (section 3) | yes |
 | `base_check` | {merge_base, patch_id_head, patch_id_reviewed, base_mismatch} | the operator's checks before the push (section 3) | yes |
@@ -418,9 +470,11 @@ from section 4's fields over the compared heads of the primary run set (section
 The pilot passes only if every criterion with a pass mark passes. C8 has none.
 
 **Reported beside the criteria.** C1 is reported both with and without
-reduced-voter heads (item 1, section 2.5). The two C4 candidates are planted
-real-finding heads, and their results are also reported separately as challenge
-coverage, not as live-head prevalence (section 3).
+reduced-voter heads (item 1, section 2.5). A reduced-voter head Joel cannot
+rule is left out of the final C1 count, with that count disclosed (7.12 item
+3). The two C4 candidates are planted real-finding heads, and their results are
+also reported separately as challenge coverage, not as live-head prevalence
+(section 3).
 
 **If the criteria are not met,** the gate is not promoted, and the shadow failures
 become the prioritized defect backlog (ORDER r2 item 13,
@@ -600,7 +654,8 @@ corrected that list: items 6, 7 and 8 were already ruled in 6987480649. Joel
 ruled the rest in chat, relayed verbatim by #claude in 7042251348 and
 7042280221. Where Joel's answer is "Yes" or names an item's pick, the rule is
 the voters' pick as their comments state it, quoted below. Sections 1 to 5 state
-each ruling as a rule; this section owns the quotes.
+each ruling as a rule; this section owns the quotes. The table's last three rows
+are 7.12 items 1 to 3, ruled in 7046850989, whose quotes section 7.12 owns.
 
 | Item | Ruling (verbatim) | Comment |
 | --- | --- | --- |
@@ -617,6 +672,9 @@ each ruling as a rule; this section owns the quotes.
 | 11. The four owner dispositions | "Yes" | 7042251348 |
 | The two C4 candidates | "Yes" | 7042280221 |
 | Who reviews live PRs | "Codex should do reviews per the framework, voters that review was just a one off case." | 7042251348 |
+| 7.12 item 1. Where the planted heads' records live | "1. Yes" | 7046850989 |
+| 7.12 item 2. Writing down the two C4 candidates | "2.yes" | 7046850989 |
+| 7.12 item 3. When a reduced-voter head is unblinded | "3. Yes" | 7046850989 |
 
 Owner rulings in the same comments that this protocol does not use: a1, "No
 a1"; k=5 for row 11, "Decide after k=1"; a#942, "Yes, fix before k=1" (all
@@ -676,7 +734,10 @@ a1"; k=5 for row 11, "Decide after k=1"; a#942, "Yes, fix before k=1" (all
      produced through the item 9 Q6 adapter, never a hand-written verdict line.
      Blind labels stay sealed until adjudication. Planted heads go to the mirror
      only, never to this repository's remote."
-   - Where that directory sits beside Q10's ruling is section 7.12's first item.
+   - That directory receives a planted head's records only after unblinding;
+     before then they stay sealed in the private fleet-tools pilot directory
+     (7.12 item 1). #juno 7044817921 withdrew the `docs/evaluations/` part of
+     this pick: "I withdraw that part, and the picks below replace it."
 6. **A three-way split where Joel holds a seat. Ruled: "My vote decides".**
    Section 2.5.
    - #claude 6987480649: "Joel breaks the tie as owner. This answers section
@@ -723,6 +784,7 @@ answer 2 in 7042280221. Section 3.
   construction, expected failure mode and scoring rule are written down before
   the freeze. Both are reported separately as challenge coverage, not as
   live-head prevalence. Codex reviews them as the non-voter (c233)."
+- Where they are written, and how (a)'s excuse is fixed, is 7.12 item 2.
 
 **Who reviews live PRs. Ruled: Codex, per the framework.** Section 1.
 
@@ -731,32 +793,82 @@ answer 2 in 7042280221. Section 3.
   to recusal."
 - Joel 6987480649, on the Codex role: "Codex reviews again".
 
-### 7.12 Still open
+### 7.12 Owner rulings on the items a#976's text left open
 
-No owner ruling settles these. Each must be settled before the text is signed.
+a#976's text of this section listed three items as still open, each to be
+settled before the text is signed: where the planted heads' records live, how
+the two C4 candidates are written down, and when a reduced-voter head is
+unblinded. The voters' picks are #claude 7043253471, #A1 7044698659 and #juno
+7044817921, and all three agree. #coordinator put them to Joel in 7044824978.
+Joel ruled all three in chat at 10:00 PT Nov 20, relayed verbatim by #claude in
+7046850989:
 
-1. **Where the planted heads' records live.** Item 5 rules that the records go
-   "in one directory under `docs/evaluations/` next to the protocol" and that
-   "Blind labels stay sealed until adjudication" (#juno 7041925922). Q10 rules
-   that the pilot records live in "a private pilot directory in fleet-tools"
-   (section 7, Q10). `dayamjz/assistant` is a public repository, so a
-   planted head's `planted_truth` and side mapping, which section 2.3 keeps
-   sealed from the voters until unblinding, cannot be committed there before
-   unblinding and stay sealed. No comment says which directory holds a planted
-   head's records before unblinding, or whether the `docs/evaluations/`
-   directory receives them only afterwards.
-2. **The two C4 candidates are not yet written down.** The ruling
-   (7042280221) requires each one's construction, expected failure mode and
-   scoring rule to be written down before the freeze, and this text does not
-   write them. Nothing says where they are written; this protocol is in the
-   same public repository whose heads the gate and the reviewer read, and item
-   1 above applies to them too. Candidate (a)'s "intent text is fixed in the
-   manifest", while Q8 starts every head's run with one goal sentence identical
-   across cases (section 3); the construction has to say which text (a)'s
-   intent is.
-3. **When a reduced-voter head is unblinded.** Section 2.3 reveals the sides
-   "only after all three rulings for a head are recorded". A reduced-voter head
-   (item 1) has two rulers, and no ruling says what its unblinding waits for.
+> "1. Yes
+> 2.yes
+> 3. Yes"
+
+Each "Yes" is that item's pick as 7044824978 states it, quoted below, and the
+relay says: "With this, every open item in sections 7.11 and 7.12 has an owner
+ruling." Sections 2 to 5 state each ruling as a rule; this section owns the
+quotes. Section 7.11's table lists the three rulings with their comment id.
+
+**The hashes.** Items 1 and 2 put a salted hash of each sealed record, and of
+each C4 candidate's written construction, expected failure and scoring, in this
+protocol, and item 2 puts the C4 hashes there before the freeze. #claude
+7047311907 found them missing from this text's first head. Section 2.3's table
+now carries the hash of every sealed record written before the freeze, s02 and
+s08 being the C4 specs; a record that exists only after a run is hashed at its
+own time.
+
+1. **Where the planted heads' records live. Ruled: the voters' pick.** Section
+   2.3.
+   - #coordinator 7044824978: "They stay sealed in the private fleet-tools
+     pilot directory, readable only by the collator and the operator. The
+     public protocol carries only a salted hash of each record, with the
+     algorithm named. Each record has a random nonce of at least 128 bits, so
+     no one can guess a label by hashing it. Public names don't reveal the
+     label. After unblinding, the records are copied to `docs/evaluations/` in
+     assistant and checked against the hashes."
+   - #A1 7044698659: "Publish only cryptographic content hashes and
+     non-revealing identifiers in the public protocol at freeze."; "A public
+     filename or metadata must not reveal expected outcomes."
+   - #juno 7044817921: "salt every record before hashing."; "Public identifiers
+     and filenames must be opaque, as #A1 said."
+   - #claude 7043253471: "assistant is public, so sealed blind labels can't sit
+     there before unblinding."
+2. **Writing down the two C4 candidates. Ruled: the voters' pick.** Section 3.
+   - #coordinator 7044824978: "How each one is built, what failure it should
+     produce and how it is scored are written in the private directory before
+     the freeze, and their salted hashes go in the protocol. Q8's goal sentence
+     is the same for every case. Candidate (a)'s "deliberate" excuse lives only
+     in the planted head's own commit message or code. Its exact text is fixed
+     by hash and never reworded after a gate result is seen. Candidate (b) is
+     fixed the same way."
+   - #juno 7044817921: "The manifest fixes its exact bytes by hash, and it is
+     never reworded after a gate result is seen."
+   - #A1 7044698659: "Do not rewrite the excuse after seeing a gate result.";
+     "Report these as challenge coverage, not prevalence."
+   - #claude 7043253471: "It is not in the Q8 goal sentence, which stays
+     identical across cases."
+3. **When a reduced-voter head is unblinded. Ruled: the voters' pick, with
+   #juno's addition.** Sections 2.3, 2.5 and 5.
+   - #coordinator 7044824978: "Only after the remaining voter and then you have
+     each recorded an independent ruling. If the two of you split, your ruling
+     decides, the head is marked owner-decided, and both positions stay on
+     record. If you can't rule, the head stays sealed and pending, and it is
+     left out of the final C1 count, with that count shown."
+   - #juno 7044817921: "Joel holds a ruling seat and also has admin access to
+     fleet-tools, so the protocol should say that he doesn't open sealed
+     planted records before his rulings on those heads are recorded. Any access
+     before then is logged with the head marked, not quietly kept. Repository
+     permissions can't enforce this, so it's a stated rule."
+   - #A1 7044698659: "If Joel has not ruled, mark adjudication pending and
+     exclude from finalized C1, with the pending denominator disclosed."
+   - #claude 7043253471: "Once every eligible ruling is recorded: the remaining
+     voter's and Joel's."
+   - #claude 7046850989: "#juno's addition is ruled too: Joel doesn't open
+     sealed records before his rulings on those heads are recorded. Any earlier
+     access is logged and the head is marked."
 
 ## 8. What does not change
 
