@@ -381,8 +381,10 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 
 - `enroll`: `head_id` (`hNN`), `case` (`clean`, `real-finding`, `hold`,
   `ci-failure`, `race`, `recovery` or `live`), `provenance` (`live`,
-  `replayed` or `planted`) and `sealed_id` (`sNN` for a planted head, else
-  `null`), plus the original's manifest fields (lines 306-330).
+  `replayed` or `planted`), `sealed_id` (`sNN` for a planted head, else
+  `null`) and `work_kind` (for a live head, its kind of work, which must equal
+  `pr_kind` for the head to count toward the end condition), plus the
+  original's manifest fields (lines 306-330).
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head.
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
@@ -396,8 +398,8 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 **Captures.** For each head the operator writes, under `<captures>/<head_id>/`:
 `gate.json` (the original's section 4 fields, lines 361-396, plus `pin_check`,
 `pass` or `fail`, the item 3 pin check of line 332), `review.md` (the review
-record, for a head that has one) and `tree.txt` (`git ls-tree -r --name-only
-<head>`). Each is listed in that head's `freeze` `raw[]`, and the scripts read
+record, for a head that has one) and `tree.txt` (`git ls-tree -r -z --name-only
+<head>`: NUL-separated, so no path is quoted). Each is listed in that head's `freeze` `raw[]`, and the scripts read
 no capture whose bytes differ from it.
 
 **Streams and chain heads.** The sealed ledger is
@@ -413,7 +415,8 @@ line, never from a flag. A value that is Joel's stays `UNRULED` until he rules.
 ```pilot-v2-params
 k: 3
 end_rule: pr-sequence
-pr_count: UNRULED J3 (5-10)
+pr_count: 10
+pr_kind: UNRULED J3 (kind of work)
 j1: UNRULED J1
 j1_budget: UNRULED J1
 j1_order: UNRULED J1
@@ -421,8 +424,9 @@ j4: UNRULED J4
 ```
 
 `k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
-is a whole number from 5 to 10, the length of that sequence, and it stays
-`UNRULED` until Joel gives it; `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
+is 10, the length of that sequence (Joel, 7083761337); `pr_kind` names the one
+kind of work whose PRs count, and it stays `UNRULED` until Joel names it, which
+blocks signing; `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
 `<N> hours`.
 
 ## 8. End condition and unblinding
@@ -438,10 +442,11 @@ when all of these hold:
 4. The end rule of section 7's parameters holds, read from the `preflight`
    line. Joel ruled it (J3): the pilot ends after one consistent sequence of
    PRs, the same kind of work, chosen to measure cost and efficiency, not on a
-   calendar date. It holds once `pr_count` heads of provenance `live` are
-   frozen. `pr_count` is between 5 and 10, and its exact value is J3's one
-   remaining blank. While it is unset, not a whole number, or outside 5-10,
-   this condition fails, so nothing is scored or unblinded.
+   calendar date. It holds once 10 heads of provenance `live` whose
+   `work_kind` equals `pr_kind` are frozen; planted heads never count. The
+   kind of work is J3's one remaining blank. While `pr_kind` is unruled, or
+   `pr_count` is anything but 10, this condition fails, so nothing is scored
+   or unblinded.
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -488,8 +493,8 @@ fails:
 4. Joel's signature of this text is recorded, naming its merge commit, in the
    form J4 rules. Until J4 is ruled this check fails with "J4 unruled", and once
    it is ruled, reading that form needs a reviewed change to the check.
-5. J3's `pr_count` is set, a whole number from 5 to 10, under the
-   `pr-sequence` end rule. J1 is ruled, and if it is option 2, this text states
+5. J3 is ruled: the `pr-sequence` end rule with `pr_count` 10 and a named
+   `pr_kind`. J1 is ruled, and if it is option 2, this text states
    a numeric budget and an item order.
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
    text's merge: run as uid 501, the uid agents run as, against targets owned by
@@ -543,7 +548,7 @@ section 7.12.
   UNMEASURED, and the pilot cannot pass with one. `pilot-score.py` implements
   only this default, so any other answer needs a reviewed change to it before
   enrollment.
-- **J3. The end condition. Ruled, except the count.** Joel, 09:12 PT Nov 22,
+- **J3. The end condition. Ruled, except the kind of work.** Joel, 09:12 PT Nov 22,
   relayed verbatim by #claude in 7082663349:
 
   > "End condition should be a consistent sequence of PRs that help measure
@@ -551,10 +556,19 @@ section 7.12.
 
   So `end_rule` is `pr-sequence`: the pilot ends after one consistent sequence
   of PRs, the same kind of work, chosen because it helps measure cost and
-  efficiency, and not on a calendar date. The sequence is 5 to 10 PRs long.
-  **Still open:** the exact count, `pr_count` in section 7, which this text
-  leaves unfilled. It blocks signing, and until it is set, preflight check 5
-  and end condition 4 fail closed.
+  efficiency, and not on a calendar date.
+
+  Joel, 10:38 PT Nov 22, relayed verbatim by #claude in 7083761337, answering
+  whether the count is 10 (so C1's 10-head minimum stays measurable) and
+  whether the kind of work is named before signing:
+
+  > "1.agree
+  > 2. Yes"
+
+  So `pr_count` is 10, C1 keeps its 10-head minimum and is measured, and only
+  PRs of the named kind count toward the 10. **Still open:** which kind,
+  `pr_kind` in section 7, which this text leaves unfilled. It blocks signing,
+  and until it is named, preflight check 5 and end condition 4 fail closed.
 - **J4. How Joel signs this text as its only signer.** Every agent and Joel post
   as `dayamjz` (#juno 7065464664), and his `fd80055c` signature was a chat
   relay posted by #claude (7051299262). Decides the form preflight check 4
