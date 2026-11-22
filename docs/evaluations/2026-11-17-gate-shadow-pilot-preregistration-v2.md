@@ -492,8 +492,11 @@ fails:
    `pr-sequence` end rule. J1 is ruled, and if it is option 2, this text states
    a numeric budget and an item order.
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
-   text's merge: run as uid 501, against targets owned by a different uid, never
-   as root, and every probe denied with `EACCES`. `pilot-preflight.py probe`
+   text's merge: run as uid 501, the uid agents run as, against targets owned by
+   a different uid, never as root, and every probe denied with `EACCES`. It
+   must probe `/Users/pilotseal`, `/Users/pilotseal/pilot` and
+   `/Users/pilotseal/pilot/sealed/s01.md`, each with an open and a directory
+   probe, and nothing outside `/Users/pilotseal`. `pilot-preflight.py probe`
    makes it: for each target it opens it read-only and closes it without reading
    a byte, opens it as a directory without listing an entry, and stats it, and it
    reads the owner uid from the nearest ancestor it can stat. A target whose own
