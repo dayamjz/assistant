@@ -250,8 +250,9 @@ shows around a change counts, and one beyond what the diff shows does not.
     in a range widened by K lines on each side.
   - `planted_match` is the first matching gate finding, ordered by its
     `stage`'s position in `gate.stages[]` (a finding naming no listed stage
-    comes after all), then by finding id, shorter first, then bytewise. It is
-    `null` when no gate finding matches, and `null` means a miss.
+    comes after all), then by finding id, shorter first, then bytewise. Only a
+    finding with a string `id` takes part. It is `null` when no gate finding
+    matches, and `null` means a miss.
   - UNMEASURED: when the record has no fenced diff, or more than one, or its
     diff does not parse (a hunk whose line counts disagree with its header, or
     no file with a new side), or a truth path is absent from the head's tree
@@ -274,7 +275,8 @@ shows around a change counts, and one beyond what the diff shows does not.
     and a `line` within K of that location. Review findings are taken in their
     block order.
   - A review finding located as a file only, or with no location, or from a
-    review with no findings block, is `unlocatable` and matches nothing.
+    review with no findings block, is `unlocatable` and matches nothing. A
+    malformed findings block makes the head's O5 counts UNMEASURED.
   - Counts: `matched`, `missed` (a locatable review finding with no match),
     `extra` (a gate finding with no match), `hold-not-made` (a `review` hold
     while the verdict is `APPROVE`), `pass-refused` (the `review` stage's
@@ -295,7 +297,7 @@ criterion UNMEASURED is J2; until Joel rules otherwise, it cannot.
 | # | v1 definition | v2 definition | Decided by |
 | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script |
-| C2 | line 462 | `gate.activated` is true for every enrolled head. | script |
+| C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script |
 | C3 | line 463 | UNMEASURED: "decided review right with severity blocker" needs a ruling. | UNMEASURED, or Joel (J1, J2) |
 | C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script |
 | C5 | line 465 | FAIL when any clean head has a false hold (O2). Otherwise UNMEASURED, since the rest of C5 needs a ruling. | script for clean heads; the rest UNMEASURED, or Joel (J2) |
@@ -413,8 +415,8 @@ j1_order: UNRULED J1
 j4: UNRULED J4
 ```
 
-`end_rule` is `c1-minimums`, `deadline` or `first-of`; `deadline` is an RFC
-3339 UTC time; `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
+`k` is a whole number; `end_rule` is `c1-minimums`, `deadline` or `first-of`;
+`deadline` is an RFC 3339 UTC time (`YYYY-MM-DDTHH:MM:SSZ`); `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
 `<N> hours`.
 
 ## 8. End condition and unblinding
@@ -435,18 +437,22 @@ when all of these hold:
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
 refused scoring appends `score-refused`. So an early attempt is logged, as the
-original's lines 199-200 require. A refusal prints no record content and
-publishes nothing.
+original's lines 199-200 require. The one refusal that cannot be logged is a
+ledger that does not verify (condition 1), since nothing can be appended to a
+broken chain: it is printed, and the posted chain heads show where the chain
+broke. A refusal prints no record content and publishes nothing.
 
 **Scoring.** `ft:pilot-score.py` scores only after the end condition holds, so
 no score is visible mid-pilot to steer enrollment. It appends one `score` line
 and prints only scores, ids and counts, never a sealed record's bytes.
 
-**Publishing.** `pilot-unblind.py run` copies the sealed files and the ledger to
-the publish directory, recomputes each sealed file's SHA-256 against the
-s01-s08 table of the original (read from blob `32424c20`, which it checks), and
-refuses on any mismatch. Only then does it append `unblind` with the published
-hashes. A second run refuses with "already unblinded". After that, the records
+**Publishing.** `pilot-unblind.py run` copies the sealed files and the ledger
+into a staging directory beside the publish directory, recomputes each copy's
+SHA-256 against the s01-s08 table of the original (read from blob `32424c20`,
+which it checks), and refuses on any mismatch. Only then does it append
+`unblind` with the published hashes, and only after that line is written does it
+move the copies into the publish directory, so nothing is published unlogged. A
+second run refuses with "already unblinded". After that, the records
 are copied to `docs/evaluations/` in this repository, as the original's line
 173 says.
 
@@ -463,12 +469,17 @@ fails:
 3. Every grep hit of section 3 has a row in its table, with the original's
    exact line.
 4. Joel's signature of this text is recorded, naming its merge commit, in the
-   form J4 rules.
+   form J4 rules. Until J4 is ruled this check fails with "J4 unruled", and once
+   it is ruled, reading that form needs a reviewed change to the check.
 5. If J1 is option 2, this text states a numeric budget and an item order. J1
    must be ruled.
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
    text's merge: run as uid 501, against targets owned by a different uid, never
-   as root, and every probe denied with `EACCES`.
+   as root, and every probe denied with `EACCES`. `pilot-preflight.py probe`
+   makes it: for each target it opens it read-only and closes it without reading
+   a byte, opens it as a directory without listing an entry, and stats it, and it
+   reads the owner uid from the nearest ancestor it can stat. A target whose own
+   stat gives the owner has no stat probe.
 7. The `install` record shows that the SHA-256 of each script in
    `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5).
 
@@ -508,7 +519,9 @@ section 7.12.
   how C3, C5 outside clean heads and C7 are treated: report-only like C8,
   planted heads only, or ruled by Joel under J1. Also decides whether the pilot
   can pass with any criterion UNMEASURED. Default if he declines: all three are
-  UNMEASURED, and the pilot cannot pass with one.
+  UNMEASURED, and the pilot cannot pass with one. `pilot-score.py` implements
+  only this default, so any other answer needs a reviewed change to it before
+  enrollment.
 - **J3. The end condition.** Decides `end_rule`: the C1 minimums met by frozen
   heads, a deadline, or whichever comes first, and the deadline's date. Default
   if he declines: none. The end condition then cannot hold, so nothing is
