@@ -407,16 +407,17 @@ line, never from a flag. A value that is Joel's stays `UNRULED` until he rules.
 
 ```pilot-v2-params
 k: 3
-end_rule: UNRULED J3
-deadline: UNRULED J3
+end_rule: pr-sequence
+pr_count: UNRULED J3 (5-10)
 j1: UNRULED J1
 j1_budget: UNRULED J1
 j1_order: UNRULED J1
 j4: UNRULED J4
 ```
 
-`k` is a whole number; `end_rule` is `c1-minimums`, `deadline` or `first-of`;
-`deadline` is an RFC 3339 UTC time (`YYYY-MM-DDTHH:MM:SSZ`); `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
+`k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
+is a whole number from 5 to 10, the length of that sequence, and it stays
+`UNRULED` until Joel gives it; `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
 `<N> hours`.
 
 ## 8. End condition and unblinding
@@ -430,9 +431,12 @@ when all of these hold:
 3. Every `enroll` has a `freeze` with a 40-hex `frozen_commit` and a non-empty
    `raw[]` of `{file, sha256}`.
 4. The end rule of section 7's parameters holds, read from the `preflight`
-   line: with `c1-minimums`, the frozen heads meet C1's minimums by their
-   enrolled case; with `deadline`, the clock has passed the deadline; with
-   `first-of`, either. Which one, and the date, are J3's blanks.
+   line. Joel ruled it (J3): the pilot ends after one consistent sequence of
+   PRs, the same kind of work, chosen to measure cost and efficiency, not on a
+   calendar date. It holds once `pr_count` heads of provenance `live` are
+   frozen. `pr_count` is between 5 and 10, and its exact value is J3's one
+   remaining blank. While it is unset, not a whole number, or outside 5-10,
+   this condition fails, so nothing is scored or unblinded.
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -471,8 +475,9 @@ fails:
 4. Joel's signature of this text is recorded, naming its merge commit, in the
    form J4 rules. Until J4 is ruled this check fails with "J4 unruled", and once
    it is ruled, reading that form needs a reviewed change to the check.
-5. If J1 is option 2, this text states a numeric budget and an item order. J1
-   must be ruled.
+5. J3's `pr_count` is set, a whole number from 5 to 10, under the
+   `pr-sequence` end rule. J1 is ruled, and if it is option 2, this text states
+   a numeric budget and an item order.
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
    text's merge: run as uid 501, against targets owned by a different uid, never
    as root, and every probe denied with `EACCES`. `pilot-preflight.py probe`
@@ -522,10 +527,18 @@ section 7.12.
   UNMEASURED, and the pilot cannot pass with one. `pilot-score.py` implements
   only this default, so any other answer needs a reviewed change to it before
   enrollment.
-- **J3. The end condition.** Decides `end_rule`: the C1 minimums met by frozen
-  heads, a deadline, or whichever comes first, and the deadline's date. Default
-  if he declines: none. The end condition then cannot hold, so nothing is
-  scored or unblinded.
+- **J3. The end condition. Ruled, except the count.** Joel, 09:12 PT Nov 22,
+  relayed verbatim by #claude in 7082663349:
+
+  > "End condition should be a consistent sequence of PRs that help measure
+  > cost and efficiency. Maybe between 5-10"
+
+  So `end_rule` is `pr-sequence`: the pilot ends after one consistent sequence
+  of PRs, the same kind of work, chosen because it helps measure cost and
+  efficiency, and not on a calendar date. The sequence is 5 to 10 PRs long.
+  **Still open:** the exact count, `pr_count` in section 7, which this text
+  leaves unfilled. It blocks signing, and until it is set, preflight check 5
+  and end condition 4 fail closed.
 - **J4. How Joel signs this text as its only signer.** Every agent and Joel post
   as `dayamjz` (#juno 7065464664), and his `fd80055c` signature was a chat
   relay posted by #claude (7051299262). Decides the form preflight check 4
