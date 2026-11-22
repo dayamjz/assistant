@@ -255,7 +255,9 @@ shows around a change counts, and one beyond what the diff shows does not.
     matches, and `null` means a miss.
   - UNMEASURED: when the record has no fenced diff, or more than one, or its
     diff does not parse (a hunk whose line counts disagree with its header, or
-    no file with a new side), or a truth path is absent from the head's tree
+    no file with a new side), or `git apply --numstat -z`, run outside any
+    repository, does not accept the diff, or a truth path is not one of the
+    file names git reports, or a truth path is absent from the head's tree
     list. Then `planted_match` is `unmeasured` with that reason, never `null`.
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
@@ -342,6 +344,8 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   only when Joel invokes them, as
   `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
   agent session runs as pilotseal, and no sudoers entry is recommended.
+  Scoring needs git on pilotseal's `PATH` (O1 above); with no git it refuses
+  and logs `score-refused` rather than marking heads UNMEASURED.
 - **Joel and the sealed records.** The original's rule (lines 197-200) is kept
   and applied to Joel as the only signer, and as the only ruler if J1 is
   option 2: he does not open a sealed record before the end condition of
