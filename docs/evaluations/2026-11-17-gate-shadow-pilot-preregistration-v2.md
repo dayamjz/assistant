@@ -365,10 +365,15 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   `unblind`, `unblind-refused`, `score-refused`, `denied-read`, `preflight`,
   `install`, `access`, `correction`. `enroll` and `freeze` are unique per
   `head_id`; `close`, `score` and `unblind` are unique per ledger. A `freeze`
-  needs an earlier `enroll` of its `head_id`. Nothing but a `correction` may
-  follow `unblind`.
+  needs an earlier `enroll` of its `head_id`. **`close` seals enrollment and
+  captures:** after it, only `score`, `score-refused`, `unblind`,
+  `unblind-refused`, `access` and `correction` may be appended, so no head,
+  freeze, capture or preflight can join after the end. Nothing but a
+  `correction` may follow `unblind`.
 - An append locks, verifies the whole chain, writes one line with `O_APPEND`
-  and syncs it. No mode rewrites or truncates a ledger. A mistake is fixed by a
+  and syncs it. A caller may name the chain head it expects, and the append
+  then refuses, under the lock, if the ledger has moved past that head. A write
+  that fails part way is truncated back to the size the append verified. No mode rewrites or truncates a ledger. A mistake is fixed by a
   `correction` line that names the bad `seq`.
 - `head <ledger>` prints `head <seq> <sha256 of the last line>`.
 
@@ -450,11 +455,19 @@ broke. A refusal prints no record content and publishes nothing.
 no score is visible mid-pilot to steer enrollment. It appends one `score` line
 and prints only scores, ids and counts, never a sealed record's bytes.
 
+**The closed snapshot.** Scoring and unblinding are bound to the ledger as the
+`close` sealed it. Each reads the chain head before it reads the entries, and
+appends its `score` or `unblind` line only if the ledger is still at that head
+(the expected-head append of section 7). If any line was written in between,
+it refuses and logs the refusal, and unblinding publishes nothing. Since
+`close` admits no `enroll`, `freeze` or `capture` after it, every head the score
+covers is every head that was enrolled.
+
 **Publishing.** `pilot-unblind.py run` copies the sealed files and the ledger
 into a staging directory beside the publish directory, recomputes each copy's
 SHA-256 against the s01-s08 table of the original (read from blob `32424c20`,
 which it checks), and refuses on any mismatch. Only then does it append
-`unblind` with the published hashes, and only after that line is written does it
+`unblind` with the published hashes and the chain head it checked, and only after that line is written does it
 move the copies into the publish directory, so nothing is published unlogged. A
 second run refuses with "already unblinded". After that, the records
 are copied to `docs/evaluations/` in this repository, as the original's line
