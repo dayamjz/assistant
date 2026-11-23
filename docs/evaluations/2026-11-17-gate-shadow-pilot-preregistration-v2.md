@@ -361,11 +361,11 @@ only, which this split follows. The `default-1` run is captured apart (section
 original's lines 455-457, with the per-criterion scope above in place of their
 "compared heads". Each criterion is required or report-only, as the table
 says. A criterion that is UNMEASURED cannot pass. The pilot passes only when
-every required criterion, C1 to C7, has a measured PASS. No success is declared while
-any required criterion is UNMEASURED (relay point 3, which answers J2's second
-half), and no report calls the pilot successful in that state. As built,
-`pilot-score.py` prints `pilot: PASS` only when C1 to C7 all PASS and
-`NOT PASSED` otherwise. Its self-test row "an UNMEASURED criterion never
+every required criterion, C1 to C7, has a measured PASS. No success is
+declared while any required criterion is UNMEASURED (relay point 3, which
+answers J2's second half), and no report calls the pilot successful in that
+state. As built, `pilot-score.py` prints `pilot: PASS` only when C1 to C7 all
+PASS and `NOT PASSED` otherwise. Its self-test row "an UNMEASURED criterion never
 passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 
 | # | v1 definition | v2 definition | Decided by | Required |
