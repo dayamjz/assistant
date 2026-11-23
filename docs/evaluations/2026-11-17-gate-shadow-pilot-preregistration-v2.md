@@ -5,7 +5,8 @@ he signs it at the merge commit of the docs PR that adds it, with the key of
 section 13 (section 11, I5). Nothing is enrolled and no shadow run happens
 before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
 7111628611, translated by the coordinator in 7114296700 and checked by #juno
-7114355345 and #claude 7114424384) is folded into sections 5 to 17.
+7114355345 and #claude 7114424384) is folded into sections 5 to 17, with
+#A1's further corrections of 7114817207 (r2).
 
 Notation is the original's (its lines 26-34): `a#N` is `dayamjz/assistant`,
 `ft#N` is `dayamjz/fleet-tools`, a path prefixed `ft:` is in fleet-tools, and a
@@ -51,7 +52,11 @@ does not govern this text, so the four signatures of `fd80055c` are not needed
 again: Joel's 07:47 ruling above set that rule aside for this change, and his
 07:40 ruling (7065065542) bars any item that depends on the voters existing,
 which a voter signature would be. Only Joel's key signature counts. A GitHub
-comment, a relay or a chat message is never that signature (section 13).
+comment, a relay or a chat message is never that signature (section 13). This
+is the agreed voter-free design, and #A1 confirms it (7114817207): this text is
+signed by its owner alone. The independent review that each implementing PR
+gets under the landing gates is review of code, not a signature of this text,
+and it adds no voter-signature requirement.
 Nothing is enrolled before the signature exists and every precondition of
 section 9 holds.
 
@@ -389,7 +394,8 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
 - **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
-  from the `/Users/pilotseal/bin` copy whose SHA-256 equals its section 10 pin,
+  from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
+  13 pins,
   so no agent can edit the checker that verifies the signature. Its `probe`
   mode is the one exception, by design: it runs as uid 501 to show that uid 501
   is denied (section 9, precondition 6), from a copy of the same pinned blob.
@@ -490,9 +496,8 @@ is 10, the length of that sequence (Joel, 7083761337); `pr_kind` is
 hours` and stays `UNRULED` until Joel answers I2, as does `j1_order`; `j4`
 names the signing form, which stays `UNRULED` until I5. The size bound and the
 exclusion rules have no key here: they are section 12's text, covered by
-Joel's signature of this text. A deadline (I4) would need a new key here,
-which is a reviewed change to `pilot-preflight.py` and `pilot-unblind.py`
-(F5).
+Joel's signature of this text. There is no deadline (I4, answered), so the end
+rule needs no date key.
 
 ## 8. End condition and unblinding
 
@@ -510,8 +515,8 @@ when all of these hold:
    once 10 heads of provenance `live` whose `work_kind` equals `pr_kind`
    (`fleet-tools-reliability-fix`, section 12) are frozen; planted heads never
    count. While `pr_kind` is unruled, or `pr_count` is anything but 10, this
-   condition fails, so nothing is scored or unblinded. Whether a deadline also
-   ends the pilot is I4.
+   condition fails, so nothing is scored or unblinded. No calendar deadline
+   ends the pilot: Joel chose a sequence, not a date (I4, answered).
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -556,7 +561,7 @@ fails:
 3. Every grep hit of section 3 has a row in its table, with the original's
    exact line.
 4. Joel's signature of this text is recorded, naming its merge commit, made
-   with the key pinned in section 13 (I5). Until `j4` is ruled this check fails
+   with the key pinned in the trust file of section 13 (I5). Until `j4` is ruled this check fails
    with "J4 unruled". Once it is ruled, it still fails with "has no check yet"
    until F3 lands the verification, so no enrollment can pass this check before
    then.
@@ -574,17 +579,25 @@ fails:
    reads the owner uid from the nearest ancestor it can stat. A target whose own
    stat gives the owner has no stat probe.
 7. The `install` record shows that the SHA-256 of each script in
-   `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5).
+   `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5), and the
+   trust file of section 13 holds the same hashes.
 8. Section 12's eligibility rule is in this text at its signed merge commit.
 9. Each owner record of section 13 that the pilot relies on is signed with the
    pinned key, and if the private key is a file, a denied-read record as uid
    501 against its location exists (section 13).
-10. A write-denied record as uid 501 against the sealed ledger exists, dated
-    after this text's merge (section 14).
+10. A write-denied record as uid 501 against the sealed ledger and the trust
+    file exists, dated after this text's merge (sections 13 and 14).
 11. The pinned `review-size.sh` and the enroll path of section 14 are in the
-    `install` record, at their section 12 and 14 pins.
+    `install` record, at the hashes the trust file pins.
+12. **No activation before review and reconciliation** (#A1 7114817207). Every
+    script this text pins, and every follow-up of section 17, has landed
+    through the landing gates with its review. Every landing requirement that
+    changed between this text's signing and the first `enroll` has been
+    reconciled explicitly: either this text is amended and re-signed to adopt
+    it, or a signed owner record says it does not apply to the pilot (section
+    15).
 
-On success it appends a `preflight` line. It never enrolls. Items 8 to 11 are
+On success it appends a `preflight` line. It never enrolls. Items 8 to 12 are
 not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
 refuses every signing form, so no enrollment can pass preflight without them.
 
@@ -601,7 +614,9 @@ refuses every signing form, so no enrollment can pass preflight without them.
 At this text's final head each row names the fleet-tools merge commit that
 landed the script and the SHA-256 of its bytes there. The copies Joel installs
 in `/Users/pilotseal/bin` must hash to those values, and preflight check 7
-compares them.
+compares them. These rows are a published copy. The authoritative hashes are
+in the trust file of section 13, outside any repository an agent can write,
+and the two must agree (F3).
 
 ## 11. Owner questions for v2
 
@@ -637,8 +652,9 @@ translated in 7114296700):
   > 2. Yes"
 
   Relay point 1 names the kind: fleet-tools reliability-fix PRs, so `pr_kind`
-  is `fleet-tools-reliability-fix` (section 12). Only whether a deadline also
-  ends the pilot is open (I4).
+  is `fleet-tools-reliability-fix` (section 12). #A1's r2 (7114817207): the
+  pilot ends at 10 eligible PRs, with no calendar deadline, since Joel chose a
+  sequence, not a date. So J3 is fully answered (I4).
 - **J4. How Joel signs: direction answered.** Relay point 4: a locally signed
   owner artifact that agents cannot impersonate (section 13). Which key and
   where its public key is pinned are open (I5).
@@ -650,25 +666,27 @@ translated in 7114296700):
   entry).
 - **v2's signers: answered, not an input.** Joel alone, with his key (section
   1, "Signing"). Requiring the four `fd80055c` signatures again would make v2
-  depend on the voters, which his 07:40 ruling (7065065542) bars.
+  depend on the voters, which his 07:40 ruling (7065065542) bars. #A1's r2
+  (7114817207) confirms it.
 
 **Open owner inputs (Joel).** These are the only questions this text asks.
+I1 and I4 keep their numbers but are answered, open only to Joel's
+correction.
 
-- **I1. Size bound:** fewer than 300 code lines, or at most 300? #claude has
-  asked Joel directly (7114424384 point 3). Until he answers, section 12 uses
-  the stricter fewer than 300. That is a pilot rule only and does not change
-  the landing cap.
+- **I1. Size bound: answered, fewer than 300.** #A1's r2 (7114817207) keeps
+  fewer than 300 code lines as the approved pilot-only eligibility bound,
+  pending any correction by Joel. #claude asked him directly (7114424384 point
+  3). It does not change the landing cap.
 - **I2. J1 budget and order:** the number (items or hours) and the order Joel
   rules live-head disagreements and disputed classifications in. These fill
   `j1_budget` and `j1_order` (section 7).
 - **I3. J2 first half:** C3, C5 outside clean heads, and C7. The proposed
   reading is "required, ruled by Joel under J1 within the budget, UNMEASURED
   past it" (7114296700, input 3). Joel confirms it or picks another.
-- **I4. J3 deadline:** is there a deadline as well as the 10-PR count, and if
-  so, what date? If there is one, F5 adds it to the end rule before
-  enrollment.
-- **I5. J4 key custody:** which key Joel signs with, and where its public key
-  is pinned (section 13). This fills `j4`.
+- **I4. J3 deadline: answered, none.** The pilot ends at 10 eligible PRs
+  (#A1's r2, 7114817207).
+- **I5. J4 key custody:** which key Joel signs with. Its public key is pinned
+  in the trust file of section 13. This fills `j4`.
 - **I6. The writer of section 14:** Joel by hand via `sudo -u pilotseal`, or a
   pilotseal-owned enroll script that only he invokes.
 - **I7. The promotion conflict of section 16:** either promotion stays blocked
@@ -704,24 +722,33 @@ left out only by a rule written here.
   issue whose `created_at` is earlier than the PR's `created_at`.
 - **Who classifies.** The writer of section 14 (I6) applies this test and
   records the evidence (the issue number and both `created_at` values) in the
-  `enroll` or `exclude` line. Anyone, Joel or an agent, may dispute a
-  classification before the PR's first review. A dispute goes to Joel under
-  J1 and counts against the J1 budget. His ruling takes effect only if it is
-  made before that first review. Otherwise, or past the budget, the recorded
-  classification stands, and the dispute is reported.
+  `enroll` or `exclude` line. These criteria are frozen at this text's signed
+  merge commit.
+- **Disputes go to Joel.** Anyone, Joel or an agent, may dispute a
+  classification. A dispute goes to Joel under J1 and counts against the J1
+  budget. A dispute raised before the PR's record is written is ruled before
+  that record is written, and it blocks the next enrollment until then. Once a
+  PR's `enroll` or `exclude` line exists, its classification never changes,
+  and no enrolled PR is removed or replaced by another. A later ruling, or a
+  dispute past the budget, is recorded and reported beside it.
 - **Size.** Eligible PRs have fewer than 300 code lines (I1, until Joel
   answers), measured by the pinned `review-size.sh` at the enrollment head:
   the PR head the `enroll` or `exclude` line records, before its first review.
   A PR that grows past the bound after it is enrolled stays enrolled. The
   report lists it with both sizes, and it is never quietly dropped.
-- **Order.** Live PRs are taken in order of their `created_at`, not of any
-  relay or request, since the coordinator controls when it relays (#juno fix
-  1). "Consecutive" means the first 10 eligible PRs in the window are
+- **Order.** Live PRs are taken in order of GitHub's `created_at`, which is
+  immutable, with ties broken by PR number, lower first. They are never
+  ordered by a relay or request, since the coordinator controls when it relays
+  (#juno fix 1). "Consecutive" means the first 10 eligible PRs in the window are
   enrolled, and none is skipped.
 - **Every PR gets a record.** Every PR created in the window gets an `enroll`
   or `exclude` line before its first review. No `enroll` may be written while
-  any PR created earlier in the window has no record. So a PR with no record
-  blocks the next enrollment.
+  any PR earlier in that order has no record. So a PR with no record blocks the
+  next enrollment.
+- **Reconciliation.** Before each `enroll` and before `close`, the writer lists
+  every `dayamjz/fleet-tools` PR created in the window, open or closed, from
+  GitHub, and checks that each has exactly one `enroll` or `exclude` line. A PR
+  with none, or with two, refuses the `enroll` or the `close`.
 - **The exclusion rules.** These are the only ones. Each `exclude` line names
   its rule:
   - **E1.** It fails the kind test above.
@@ -747,15 +774,18 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   pilotseal account, is I5. If the private key is a file, a denied-read record
   as uid 501 against its location is made in the shape of 7065533093
   (section 9, precondition 9).
-- **The pin.** The public key is pinned here. A change to the pin is valid
-  only with a statement signed by the old key that names the new key and this
-  text's commit, so an agent's PR to this file cannot swap the key.
-
-```pilot-v2-owner-key
-public_key: UNPINNED I5
-form: UNPINNED I5
-```
-
+- **The trust file.** The trust root is pinned outside any repository an
+  agent can write (#A1 7114817207): `/Users/pilotseal/pilot/trust.json`, owned
+  by pilotseal, not writable by uid 501, written only by Joel as pilotseal. It
+  holds the public key, the signing form, this text's merge commit and blob,
+  and the SHA-256 of every executable the pilot runs: section 10's scripts,
+  section 12's `review-size.sh` and section 14's enroll script. This text
+  publishes copies of those values, but no script trusts a copy read from a
+  repository.
+- **Key rotation.** A change to the public key in the trust file is valid only
+  with a statement signed by the old key that names the new key and this
+  text's commit. So neither an agent's PR nor a rewrite of the trust file
+  without the old key can swap it.
 - **What counts as a signature.** A signature is made with the pinned key over
   the exact bytes of the record, and the record names this text's merge
   commit. A GitHub comment from `dayamjz`, a relay or a chat message is never
@@ -774,8 +804,9 @@ form: UNPINNED I5
   signed record, or an amended and re-signed text. Joel's other rulings,
   cited here by comment id, stand as they are.
 - **The verifier.** `pilot-preflight.py check` verifies the signature against
-  the pin, as pilotseal, from its pinned copy (section 6). F3 builds that
-  check. Until then, check 4 refuses every form.
+  the trust file's key, as pilotseal, from the copy whose hash the trust file
+  pins (section 6). F3 builds that check. Until then, check 4 refuses every
+  form.
 
 ## 14. The enrollment writer
 
@@ -794,8 +825,8 @@ Relay point 5.
 | enroll | UNPINNED I6 | UNPINNED | UNPINNED |
 
 - **Scope.** The writer does one thing: it appends `enroll` and `exclude`
-  lines that meet section 12, and planted heads' `enroll` lines under the
-  original's section 3. `pilot-ledger.py` has no mode that rewrites or
+  lines that meet section 12, after section 12's reconciliation, and planted
+  heads' `enroll` lines under the original's section 3. `pilot-ledger.py` has no mode that rewrites or
   truncates a ledger. It only cuts back its own failed partial write to the
   size it verified.
 - **A known limit.** Under either I6 choice the writer runs as pilotseal,
@@ -805,19 +836,27 @@ Relay point 5.
   before unblinding. Only a writer uid other than pilotseal, able to append to
   the ledger and nothing else, would make that bar a mechanism.
 - **The denied-write test.** A record as uid 501, in the shape of section 9's
-  denied-read record, shows that opening the sealed ledger for append is denied
-  with `EACCES` (section 9, precondition 10). `pilot-preflight.py probe` opens
+  denied-read record, shows that opening the sealed ledger or the trust file
+  for writing is denied with `EACCES` (section 9, precondition 10). `pilot-preflight.py probe` opens
   read-only today, so the write probe is F3.
 - **Chain heads.** The coordinator posts the chain head at each `freeze`,
   `close`, `score` and `unblind` (section 7).
 
 ## 15. Landing during the pilot
 
-#juno's fix 6, under the relay's "preserve existing landing controls". An
-enrolled PR lands alone, never in a batched landing. The batched-landings
-change (Joel 7112930679, #juno 7113018815, #claude 7114168630) does not apply
-to enrolled PRs during the pilot unless this text is amended and re-signed
-before enrollment. Every existing landing control stays. Nothing in this text
+#juno's fix 6 and #A1's r2 (7114817207), under the relay's "preserve existing
+landing controls". An enrolled PR lands alone, never in a batched landing. The
+batched-landings change (Joel 7112930679, #juno 7113018815, #claude 7114168630)
+does not apply to enrolled PRs during the pilot unless this text is amended and
+re-signed before enrollment.
+
+**The landing regime is frozen** so that enrolled PRs are measured under the
+same rules. The first live `enroll` records `landing_regime`: the fleet-tools
+`main` commit at that time, whose landing scripts and gates apply to every
+enrolled PR until `close`. A landing change that lands later does not apply to
+an enrolled PR, unless this text is amended and re-signed. Section 9's
+precondition 12 reconciles any change made before the first `enroll`. Every
+existing landing control stays. Nothing in this text
 changes rule #68, delegates a waiver, changes admin bypass, enables branch
 protection or promotes a gate.
 
@@ -842,21 +881,26 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
 - **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`, and a
   `ruling` kind for Joel's J1 rulings, each naming its budget position.
 - **F2. The enroll path (I6):** a written by-hand procedure, or a
-  pilotseal-owned script. Either one applies section 12: it orders by
-  `created_at`, refuses an `enroll` while an earlier window PR has no record,
-  runs the pinned `review-size.sh` at the enrollment head, and records the
-  evidence fields.
+  pilotseal-owned script. Either one applies section 12:
+  - it orders by `created_at`, then PR number;
+  - it reconciles every window PR against the ledger before each `enroll` and
+    before `close`, and refuses on a missing or doubled record;
+  - it runs the pinned `review-size.sh` at the enrollment head;
+  - it records the evidence fields, and `landing_regime` on the first live
+    `enroll`.
 - **F3. `pilot-preflight.py`:**
-  - `check` verifies the signature against section 13's pin, including the
-    old-key rule for a pin change, and refuses to run as any user but
-    pilotseal;
-  - it checks preconditions 8 to 11;
-  - it adds the write probe of section 14 and a probe of the key's location;
+  - `check` reads the key and the executable hashes from the trust file, never
+    from a repository, and verifies the signature, including the old-key rule
+    for a rotation. It refuses to run as any user but pilotseal;
+  - it requires section 10's published pins to equal the trust file's;
+  - it checks preconditions 8 to 12;
+  - it adds the write probes of sections 13 and 14 and a probe of the key's
+    location;
   - its `install` check covers `review-size.sh` and the enroll script.
 - **F4. `pilot-score.py`:**
   - it reads Joel's `ruling` lines for C3, C5 outside clean heads and C7,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - it reports heads that grew past the size bound, and disputed
     classifications.
-- **F5. `pilot-unblind.py` and `pilot-preflight.py`:** only if I4 sets a
-  deadline: a new key in section 7's parameters and its end rule.
+- **F5. Dropped.** It would have added a deadline to the end rule. There is no
+  deadline (I4).
