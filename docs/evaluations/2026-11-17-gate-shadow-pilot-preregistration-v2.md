@@ -10,8 +10,8 @@ before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
 (r3).
 
 Notation is the original's (its lines 26-34): `a#N` is `dayamjz/assistant`,
-`ft#N` is `dayamjz/fleet-tools`, a path prefixed `ft:` is in fleet-tools, and a
-bare 10-digit number is an issue comment id
+`ft#N` is `dayamjz/fleet-tools`, and a bare 10-digit number is an issue comment
+id
 (`gh api repos/dayamjz/fleet-tools/issues/comments/<id>`). "The original" is
 `docs/evaluations/2026-11-17-gate-shadow-pilot-preregistration.md` at commit
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
@@ -19,6 +19,25 @@ line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
 the original owner questions of section 11 (now answered or narrowed), "I1" to
 "I8" the owner inputs (section 11), "E1" to "E5" the exclusion rules
 of section 12 and "F1" to "F6" the script follow-ups of section 17.
+
+**Where an `ft:` path is.** In the sections kept by reference, an `ft:` path is
+at fleet-tools `5b1b73d2`, as the original says (its line 28). In this text's
+own sections, an `ft:` path is at fleet-tools `main`, except the four pilot
+scripts. Every "as built" statement about them describes them at these
+commits:
+
+- `pilot-ledger.py` at `acdb837b0c8e297c718376c1c3dc42cb55c32e34`, ft#790's
+  merge on `main`;
+- `pilot-unblind.py` at `9cd73498ec4d1172bb45a5df4c2bf87bd14a6990`, ft#792's
+  approved head, not yet landed;
+- `pilot-score.py` at `9b2d4e2719ae17d40a1e4baa26aaeca8cfa5839c`, ft#793's
+  approved head, not yet landed;
+- `pilot-preflight.py` at `6adbd531c6402c0f19a8f531f2abcfaf6ced61f8`, ft#794's
+  approved head, not yet landed.
+
+None of the four exists at `5b1b73d2`. Before the signing commit, section 10
+pins the landed commits, and each "as built" statement is checked again
+against them and updated where it no longer holds.
 
 ## 1. Status and authority
 
@@ -382,7 +401,7 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 | --- | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
-| C3 | line 463 | Over every `missed` and `pass-refused` item of the compared heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script | required |
 | C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
@@ -391,6 +410,11 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 
 Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
 C7 stay UNMEASURED, so under the rule above the pilot cannot pass.
+
+C3 includes `unlocatable` items, so a review blocker located as a file only,
+or from a review with no findings block, still reaches C3: Joel rules whether
+the gate covered it. v1 counted such a finding as missed under its same-defect
+match (line 131).
 
 C1's live case minimum is 10 (section 12). C4 is the original's line 464 as
 written: it tests `planted_match` alone. O3 is reported for each hold head beside
@@ -606,7 +630,8 @@ broke. A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
-head, planted heads included, and the outcome of every race and recovery head
+head except `matched` ones, each `unlocatable` finding as its own item, planted
+heads included, and the outcome of every race and recovery head
 for C7. Each item gets an id. For a planted head it reads that head's captures
 (`gate.json`, `review.md`), never its sealed record, so listing it opens no
 sealed record and prints no score. Joel then rules items in the I2 order, one
@@ -626,9 +651,22 @@ C3, C5 outside clean heads and C7 can be measured.
   (`blocker`, `should-fix`, `nit`, `not-real`);
 - for a race or recovery outcome, `correct` is `true` or `false`;
 - for a classification, `class` is `eligible` or one of E1 to E5;
-- `budget` is its position in the J1 budget: each `ruling` line, of either
-  subject, takes the next position in ledger order, so the budget counts
-  every ruling once.
+- `budget` records where the line falls in the J1 budget, and the script
+  recomputes it from recorded bytes:
+  - **an items budget (`<N> items`):** each `ruling` line, of either subject,
+    takes the next position in ledger order, and positions 1 to N are inside
+    it;
+  - **an hours budget (`<N> hours`):** the window opens at the `at` of the
+    `items` line and lasts N hours. An item ruling is inside it when its `at`
+    falls in the window. A classification ruling comes before that line, so it
+    is not timed; it is inside, and the report counts it apart.
+
+**What the budget costs.** Under an items budget, classification rulings draw
+on the same budget as O5 items. Enough of them can leave O5 items unruled, so
+C3, C5 outside clean heads and C7 stay UNMEASURED and the pilot cannot pass.
+Joel may leave any dispute unruled, which costs nothing (section 12). Under an
+hours budget, classification rulings do not draw on the window. That is the
+one way the two forms differ, and I2's answer chooses between them.
 
 No voter rules, and no split vote exists. The four-way meanings and the
 severity scale serve only as the vocabulary of Joel's lines.
@@ -701,8 +739,8 @@ fails:
    501 against its location exists (section 13).
 10. A write-denied record as uid 501 against the sealed ledger and the trust
     file exists, dated after the signing commit (sections 13 and 14).
-11. The pinned `review-size.sh` and the enroll path of section 14 are in the
-    `install` record, at the hashes the trust file pins.
+11. The pinned `review-size.sh`, and section 14's enroll script if I6 picks
+    one, are in the `install` record, at the hashes the trust file pins.
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
     script this text pins, and every follow-up of section 17, has landed
     through the landing gates with its review. Every landing requirement that
@@ -758,8 +796,9 @@ translated in 7114296700):
   enrollment. So O5's items are ruled by Joel alone, as an endpoint different
   from the frozen text, and an item past the budget is UNMEASURED. The budget
   and the order are still open (I2). A disputed eligibility classification
-  (section 12) is also a J1 item and counts against the same budget. Ruling
-  needs a ledger kind the landed closed set lacks (F1).
+  (section 12) is also a J1 item, and it counts against the same budget under
+  an items budget (section 8). Ruling needs a ledger kind the landed closed
+  set lacks (F1).
 - **J2. Criteria: second half answered.** Relay point 3: no success while any
   required criterion is UNMEASURED (section 5). The first half, how C3, C5
   outside clean heads and C7 are treated, is still open (I3).
@@ -887,14 +926,15 @@ left out only by a rule written here.
   `enroll` or `exclude` line. These criteria are frozen at the signing
   commit.
 - **Disputes go to Joel.** Anyone, Joel or an agent, may dispute a
-  classification. A dispute goes to Joel under J1 and counts against the J1
-  budget. A dispute raised before the PR's record is written is ruled before
-  that record is written, and it blocks the next enrollment until then. Joel
-  rules it with a `ruling` line whose subject is `classification` (section
-  8), which may come before `close`, and the record then follows his ruling.
-  Once a PR's `enroll` or `exclude` line exists, its classification never
-  changes, and no enrolled PR is removed or replaced by another. A later
-  ruling, or a dispute past the budget, is recorded and reported beside it.
+  classification, and the dispute goes to Joel under J1 (section 8 says what
+  it costs in the budget). A dispute never blocks enrollment. When the writer
+  comes to record a PR, it follows a `classification` ruling for that PR if
+  one is in the ledger and inside the budget, and otherwise applies the test
+  above. So a dispute Joel has not ruled, or ruled past the budget, leaves the
+  test's classification standing, and the dispute is reported. Once a PR's
+  `enroll` or `exclude` line exists, its classification never changes, and no
+  enrolled PR is removed or replaced by another. A later ruling is recorded
+  and reported beside it.
 - **Size.** Eligible PRs have fewer than 300 code lines (I1, answered, open
   only to Joel's correction), measured by the pinned `review-size.sh` at the
   enrollment head: the PR head the `enroll` or `exclude` line records, before
@@ -920,7 +960,7 @@ left out only by a rule written here.
   - **E1.** It fails the kind test above.
   - **E2.** It is at or past the size bound at the enrollment head.
   - **E3.** It changes a file the pilot pins (section 10, this section's
-    `review-size.sh`, or section 14's enroll script).
+    `review-size.sh`, or section 14's enroll script if there is one).
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer
     comes to record it, `ft:reviews/ft-<N>.verdicts` already exists with any
@@ -950,7 +990,8 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   written only by Joel, as the user that owns it. It holds the public key and
   its fingerprint, the signing form, the signing commit and this text's blob
   there, and the SHA-256 of every executable the pilot runs: section 10's
-  scripts, section 12's `review-size.sh` and section 14's enroll script.
+  scripts, section 12's `review-size.sh` and section 14's enroll script, if
+  there is one.
 - **This text holds only copies.** The block below copies the fingerprint, and
   section 10's table and the rows of sections 12 and 14 copy the executable
   hashes. No script trusts a copy read from a repository. Preflight reads the
@@ -999,7 +1040,10 @@ Relay point 5.
   write.
 - **Who.** I6: Joel by hand via `sudo -u pilotseal`, or a pilotseal-owned
   enroll script that only he invokes. If it is a script, it is pinned like
-  section 10, and its row is filled in by the signing commit:
+  section 10, and its row is filled in by the signing commit. If it is by
+  hand, each of the row's three cells reads `none (by hand)`, which is filled,
+  not `UNPINNED`, and every rule below that names the enroll script then names
+  nothing:
 
 | script | fleet-tools path | commit | blob SHA-256 |
 | --- | --- | --- | --- |
@@ -1089,11 +1133,16 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it checks preconditions 8 to 13;
   - it adds the write probes of sections 13 and 14 and a probe of the key's
     location;
-  - its `install` check covers `review-size.sh` and the enroll script.
+  - its `install` check covers `review-size.sh`, and the enroll script if I6
+    picks one;
+  - it accepts `none (by hand)` in section 14's row as filled.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers every compared head, planted heads included, from
-    captures only;
+    captures only, and lists each `unlocatable` finding as its own item (as
+    built, `o5_counts` only counts them);
+  - it computes each ruling's budget position for both budget forms
+    (section 8);
   - it reads Joel's `ruling` lines and applies section 5's C3, C5 and C7 rules,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - the live minimum of C1 becomes 10;
