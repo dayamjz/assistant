@@ -1,8 +1,8 @@
 # Gate shadow pilot pre-registration, version 2 (no voters), 2026-11-22
 
 **Status: Draft, not signed.** Joel is this text's only signer. It freezes when
-he signs it at the merge commit of the docs PR that adds it, with the key of
-section 13 (section 11, I5). Nothing is enrolled and no shadow run happens
+he signs it at its signing commit (section 1), with the key of section 13
+(section 11, I5). Nothing is enrolled and no shadow run happens
 before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
 7111628611, translated by the coordinator in 7114296700 and checked by #juno
 7114355345 and #claude 7114424384) is folded into sections 5 to 17, with
@@ -17,7 +17,7 @@ bare 10-digit number is an issue comment id
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
 the original owner questions of section 11 (now answered or narrowed), "I1" to
-"I8" the owner inputs (section 11), "E1" to "E4" the exclusion rules
+"I8" the owner inputs (section 11), "E1" to "E5" the exclusion rules
 of section 12 and "F1" to "F6" the script follow-ups of section 17.
 
 ## 1. Status and authority
@@ -48,7 +48,7 @@ row 8 (7064759390, proposed in 7065147005), with #A1's acceptance condition B
 (7065454500), #juno's notes (7065464664) and #claude's acceptance (7065548378).
 
 **Signing.** Joel is the only signer. This text freezes when he signs it at its
-merge commit, with the key of section 13. The four-signature rule of lines 6-11
+signing commit, with the key of section 13. The four-signature rule of lines 6-11
 does not govern this text, so the four signatures of `fd80055c` are not needed
 again: Joel's 07:47 ruling above set that rule aside for this change, and his
 07:40 ruling (7065065542) bars any item that depends on the voters existing,
@@ -60,6 +60,17 @@ gets under the landing gates is review of code, not a signature of this text,
 and it adds no voter-signature requirement.
 Nothing is enrolled before the signature exists and every precondition of
 section 9 holds.
+
+**The signing commit.** The signature names one assistant `main` commit, the
+signing commit. It must be a commit on `main`'s first-parent history at which
+this text holds no `UNRULED` and no `UNPINNED` value, so every owner input is
+answered and every pin is filled there. This text may reach `main` earlier as an
+unsigned draft, and each later PR that answers an input or fills a pin is still
+a draft. Preflight check 4 verifies all three conditions: the commit is on
+`main`'s first-parent history, this text there has no `UNRULED` or `UNPINNED`
+value, and this text at `origin/main` is byte-identical to this text there. So
+any later edit leaves the text unsigned until Joel signs again. Every "after
+the signing commit" in this text means after that commit's time.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -126,7 +137,7 @@ check 3 compares this table with that grep and with the original's bytes.
 | original line | quote | v2 replacement |
 | --- | --- | --- |
 | 5 | listed as open, has an owner ruling, and sections 7.11 and 7.12 own those | kept, quote only: names the owner rulings v1 folded in |
-| 6 | rulings. The text freezes only when Joel and the voters (#juno, #A1, #claude) | replaced: v2 freezes when Joel, its only signer, signs it at its merge commit (v2 section 1) |
+| 6 | rulings. The text freezes only when Joel and the voters (#juno, #A1, #claude) | replaced: v2 freezes when Joel, its only signer, signs it at its signing commit (v2 section 1) |
 | 9 | rulings (Joel 7044130931, 7046850989). Merging is not what freezes it; the four | replaced: no four signatures; Joel's one signature freezes v2 (v2 section 1) |
 | 18 | disagreement gets a ruling (gate right, review right, both, neither) under rules | replaced: live-head disagreements are counted by kind (O5) and ruled by Joel alone within the budget (J1 option 2) |
 | 21 | (`e10e7059`). This text folds in the section 7 rulings, the owner rulings on | kept, quote only: history of v1's drafting |
@@ -272,9 +283,9 @@ review verdict is `APPROVE` or `CHANGES REQUESTED`, whose
 `base_check.base_mismatch` is `false`, and whose `pin_check` is `pass`
 (section 7). There is no adjudication pending and no reduced-voter head.
 
-**K = 3.** A finding within 3 lines of a changed line counts as at that line:
-3 is git's default unified context, so a finding on any line the diff itself
-shows around a change counts, and one beyond what the diff shows does not.
+**K = 3.** A finding within 3 lines of a changed line counts as at that line.
+K is a fixed rule. It does not depend on how much context the sealed record's
+diff shows. 3 was chosen because it equals git's default unified context.
 
 - **O1, planted location.**
   - Inputs: the sealed record `<sealed_id>.md`, the head's gate capture and its
@@ -332,13 +343,25 @@ shows around a change counts, and one beyond what the diff shows does not.
   within the budget (I3); the C4 specs' own prose scoring rules in s02 and s08
   (O1 still applies to the heads built from them); and `found_in_adjudication`.
 
-**Criteria.** Each criterion is computed over the compared heads of the
-primary run set, at `fix_rounds.review: 0` (the original's lines 340-347). The
-`default-1` run is captured apart (section 7), reported apart, never pooled,
-and decides nothing. This restates the original's lines 455-457. Each
-criterion is required or report-only, as the table says. A criterion that is
-UNMEASURED cannot pass. The pilot passes only when every
-required criterion, C1 to C7, has a measured PASS. No success is declared while
+**Criteria.** Every criterion is computed over the primary run set, at
+`fix_rounds.review: 0` (the original's lines 340-347). Which heads each one
+covers:
+
+- **Compared heads only:** C1 counts them. C3, C5 outside clean heads and C7
+  use the items of compared heads.
+- **Every enrolled head of the case named:** C2 (every head), C4 (planted
+  real-finding and hold heads), C6 (CI-failure heads) and C8 (every head).
+- **C5's clean part:** every enrolled clean head except a `base_mismatch` one,
+  since the original's line 315 leaves those out of C5. As built,
+  `pilot-score.py` also applies O2 to a `base_mismatch` clean head (F4).
+
+The original's line 315 leaves a `base_mismatch` head out of C1, C3, C5 and C7
+only, which this split follows. The `default-1` run is captured apart (section
+7), reported apart, never pooled, and decides nothing. This restates the
+original's lines 455-457, with the per-criterion scope above in place of their
+"compared heads". Each criterion is required or report-only, as the table
+says. A criterion that is UNMEASURED cannot pass. The pilot passes only when
+every required criterion, C1 to C7, has a measured PASS. No success is declared while
 any required criterion is UNMEASURED (relay point 3, which answers J2's second
 half), and no report calls the pilot successful in that state. As built,
 `pilot-score.py` prints `pilot: PASS` only when C1 to C7 all PASS and
@@ -380,7 +403,7 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 - **Who can read them.** Only pilotseal can read them. The evidence so far is
   the different-uid denied-read test as uid 501 (7065533093) and the completed
   option A checks (7066230158). Enrollment needs a fresh denied-read record
-  made after this text merges (section 9, precondition 6), in the record shape
+  made after the signing commit (section 9, precondition 6), in the record shape
   of row 5's brief 5b (7065714265, rule 3).
 - **The sealed records' hashes.** The original's s01-s08 table, lines
   182-191, copied byte for byte (preflight check 2 compares them). Each hash
@@ -447,8 +470,14 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 - An append locks, verifies the whole chain, writes one line with `O_APPEND`
   and syncs it. A caller may name the chain head it expects, and the append
   then refuses, under the lock, if the ledger has moved past that head. A write
-  that fails part way is truncated back to the size the append verified. No mode rewrites or truncates a ledger. A mistake is fixed by a
-  `correction` line that names the bad `seq`.
+  that fails part way is truncated back to the size the append verified. No
+  mode rewrites or truncates a ledger.
+- **A `correction` annotates and changes no result.** It names the bad `seq`
+  and says what is wrong with it. No script changes an enrollment, a case, a
+  capture, the end condition, a score or a publication because of one. The
+  line it names keeps its effect, and the correction is reported beside it
+  (F4). So a mistake that would change a result is reported, never repaired,
+  and no post-hoc line can move a result.
 - `head <ledger>` prints `head <seq> <sha256 of the last line>`.
 
 **Bodies.**
@@ -466,7 +495,7 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   (`eligible`).
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
   unique per `pr`, with the same evidence fields and the exclusion rule (`E1`
-  to `E4`) in place of `rule`.
+  to `E5`) in place of `rule`.
 - `items` and `ruling`: not in the landed kind set either, and F1 adds both.
   They are allowed after `close`, since Joel rules only once enrollment is
   sealed (section 8). `items` is unique per ledger and lists the items Joel
@@ -475,7 +504,7 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head.
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
-  text's merge commit and the parameters below. The end rule and K are read
+  signing commit and the parameters below. The end rule and K are read
   from the last `preflight` line before the first `enroll`, so they are fixed
   before any head is enrolled.
 - `close`, `score`, `unblind`, `unblind-refused`, `score-refused`,
@@ -486,8 +515,9 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 `gate.json` (the original's section 4 fields, lines 361-396, plus `pin_check`,
 `pass` or `fail`, the item 3 pin check of line 332), `review.md` (the review
 record, for a head that has one) and `tree.txt` (`git ls-tree -r -z --name-only
-<head>`: NUL-separated, so no path is quoted). Each is listed in that head's `freeze` `raw[]`, and the scripts read
-no capture whose bytes differ from it. The `default-1` run of a head goes under
+<head>`: NUL-separated, so no path is quoted). Each is listed in that head's
+`freeze` `raw[]`, and the scripts read no capture whose bytes differ from it.
+The `default-1` run of a head goes under
 `<captures>/<head_id>/default-1/`, with its own `gate.json`, and is listed in the
 same `raw[]`. `pilot-score.py` reads only the file named `gate.json`, so it
 never scores or pools the `default-1` run. Reporting that run apart is F4.
@@ -540,8 +570,9 @@ when all of these hold:
    (`fleet-tools-reliability-fix`, section 12) are frozen **and compared**
    (section 5), so C1's live minimum can always be met; planted heads never
    count. As built, `pilot-unblind.py` counts frozen live heads, not compared
-   ones, so F6 must land before activation (section 9, precondition 12). While `pr_kind` is unruled, or `pr_count` is anything but 10, this
-   condition fails, so nothing is scored or unblinded. No calendar deadline
+   ones, so F6 must land before activation (section 9, precondition 12). The
+   condition fails closed if the parameters ever stop naming a kind or a
+   count of 10, so nothing is scored or unblinded then. No calendar deadline
    ends the pilot: Joel chose a sequence, not a date (I4, answered).
 5. For unblinding only: a `score` line exists after the `close`.
 
@@ -566,23 +597,27 @@ C3, C5 outside clean heads and C7 can be measured.
 no score is visible mid-pilot to steer enrollment. It appends one `score` line
 and prints only scores, ids and counts, never a sealed record's bytes.
 
-**The closed snapshot.** Scoring and unblinding are bound to the ledger as the
-`close` sealed it. Each reads the chain head before it reads the entries, and
-appends its `score` or `unblind` line only if the ledger is still at that head
-(the expected-head append of section 7). If any line was written in between,
-it refuses and logs the refusal, and unblinding publishes nothing. Since
-`close` admits no `enroll`, `freeze` or `capture` after it, every head the score
-covers is every head that was enrolled.
+**What `close` fixes, and what each script is bound to.** `close` fixes the set
+of heads and their captures: after it, no `enroll`, `freeze`, `capture` or
+`preflight` may be appended. Lines that are meant to come after it still can:
+`items` and `ruling` (F1), `score`, `score-refused`, `unblind`,
+`unblind-refused`, `access` and `correction`. So the score covers every head
+that was enrolled, and it also reads the `ruling` lines written after `close`.
+Each of `pilot-score.py` and `pilot-unblind.py` is bound to the chain head it
+read when it started. It reads that head before the entries, and appends its
+`score` or `unblind` line only if the ledger is still at that head (the
+expected-head append of section 7). If any line was written in between, it
+refuses and logs the refusal, and unblinding publishes nothing.
 
 **Publishing.** `pilot-unblind.py run` copies the sealed files and the ledger
 into a staging directory beside the publish directory, recomputes each copy's
 SHA-256 against the s01-s08 table of the original (read from blob `32424c20`,
 which it checks), and refuses on any mismatch. Only then does it append
-`unblind` with the published hashes and the chain head it checked, and only after that line is written does it
-move the copies into the publish directory, so nothing is published unlogged. A
-second run refuses with "already unblinded". After that, the records
-are copied to `docs/evaluations/` in this repository, as the original's line
-173 says.
+`unblind` with the published hashes and the chain head it checked, and only
+after that line is written does it move the copies into the publish directory,
+so nothing is published unlogged. A second run refuses with "already unblinded".
+After that, the records are copied to `docs/evaluations/` in this repository,
+as the original's line 173 says.
 
 ## 9. Enrollment preconditions
 
@@ -596,8 +631,9 @@ fails:
    the original's lines 182-191 byte for byte.
 3. Every grep hit of section 3 has a row in its table, with the original's
    exact line.
-4. Joel's signature of this text is recorded, naming its merge commit, made
-   with the key pinned in the trust file of section 13 (I5). Until `j4` is ruled this check fails
+4. Joel's signature of this text is recorded, naming the signing commit, which
+   meets section 1's three conditions, and made with the key pinned in the
+   trust file of section 13 (I5). Until `j4` is ruled this check fails
    with "J4 unruled". Once it is ruled, it still fails with "has no check yet"
    until F3 lands the verification, so no enrollment can pass this check before
    then.
@@ -605,7 +641,7 @@ fails:
    `pr_kind`. J1 is ruled, and since it is option 2, this text states a numeric
    budget and an item order (I2).
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
-   text's merge: run as uid 501, the uid agents run as, against targets owned by
+   signing commit: run as uid 501, the uid agents run as, against targets owned by
    a different uid, never as root, and every probe denied with `EACCES`. It
    must probe `/Users/pilotseal`, `/Users/pilotseal/pilot` and
    `/Users/pilotseal/pilot/sealed/s01.md`, each with an open and a directory
@@ -619,12 +655,12 @@ fails:
 7. The `install` record shows that the SHA-256 of each script in
    `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5), and the
    trust file of section 13 holds the same hashes.
-8. Section 12's eligibility rule is in this text at its signed merge commit.
+8. Section 12's eligibility rule is in this text at the signing commit.
 9. Each owner record of section 13 that the pilot relies on is signed with the
    pinned key, and if the private key is a file, a denied-read record as uid
    501 against its location exists (section 13).
 10. A write-denied record as uid 501 against the sealed ledger and the trust
-    file exists, dated after this text's merge (sections 13 and 14).
+    file exists, dated after the signing commit (sections 13 and 14).
 11. The pinned `review-size.sh` and the enroll path of section 14 are in the
     `install` record, at the hashes the trust file pins.
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
@@ -660,7 +696,7 @@ refuses every signing form, so no enrollment can pass preflight without them.
 | preflight | `pilot-preflight.py` | UNPINNED | UNPINNED |
 | review findings, used by scoring | `review-findings.py` | UNPINNED | UNPINNED |
 
-At this text's final head each row names the fleet-tools merge commit that
+By the signing commit each row names the fleet-tools merge commit that
 landed the script and the SHA-256 of its bytes there. The copies Joel installs
 in `/Users/pilotseal/bin` must hash to those values, and preflight check 7
 compares them. These rows are a published copy. The authoritative hashes are
@@ -761,7 +797,7 @@ correction.
 ## 12. The eligible sequence
 
 Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
-(7114424384). This rule is frozen at this text's signed merge commit. A PR is
+(7114424384). This rule is frozen at the signing commit. A PR is
 left out only by a rule written here.
 
 - **The window.** The live window opens at the `at` of the **first**
@@ -792,8 +828,9 @@ left out only by a rule written here.
     `(delta from ...)`, which is not the review. Its line 2,
     `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. The verdict is
     what `ft:review-findings.py --verdict` prints, as for any other head.
-  - **CI.** `origin_ci` is `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`.
-    Fleet-tools runs no CI workflow today, so that list is empty, and the gate's
+  - **CI.** `origin_ci` is
+    `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`. Fleet-tools
+    runs no CI workflow today, so that list is empty, and the gate's
     `checks_basis` on the mirror is `no-ci-declaration`. No live head is a
     CI-failure head, since C6's heads are planted.
 - **The kind (`fleet-tools-reliability-fix`).** A `dayamjz/fleet-tools` PR
@@ -802,8 +839,8 @@ left out only by a rule written here.
   issue whose `created_at` is earlier than the PR's `created_at`.
 - **Who classifies.** The writer of section 14 (I6) applies this test and
   records the evidence (the issue number and both `created_at` values) in the
-  `enroll` or `exclude` line. These criteria are frozen at this text's signed
-  merge commit.
+  `enroll` or `exclude` line. These criteria are frozen at the signing
+  commit.
 - **Disputes go to Joel.** Anyone, Joel or an agent, may dispute a
   classification. A dispute goes to Joel under J1 and counts against the J1
   budget. A dispute raised before the PR's record is written is ruled before
@@ -836,8 +873,12 @@ left out only by a rule written here.
   - **E3.** It changes a file the pilot pins (section 10, this section's
     `review-size.sh`, or section 14's enroll script).
   - **E4.** It was closed unmerged with no review.
-- **The pinned `review-size.sh`.** The fleet-tools blob at this text's merge,
-  filled in at this text's final head like section 10:
+  - **E5.** It was reviewed before its record was written: when the writer
+    comes to record it, `ft:reviews/ft-<N>.verdicts` already exists with any
+    line. The record states that. The report counts E5 exclusions apart,
+    since each one is a lapse in recording, so a PR can't be excluded quietly.
+- **The pinned `review-size.sh`.** The fleet-tools blob current when the
+  signing commit is made, filled in by then like section 10:
 
 | script | fleet-tools path | commit | blob SHA-256 |
 | --- | --- | --- | --- |
@@ -854,12 +895,12 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   pilotseal account, is I5. If the private key is a file, a denied-read record
   as uid 501 against its location is made in the shape of 7065533093
   (section 9, precondition 9).
-- **The trust file.** The trust root is pinned outside any repository an
-  agent can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It
-  must be outside every repository and every agent's home, not writable by
-  uid 501, and written only by Joel, as the user that owns it. It holds the
-  public key and its fingerprint, the signing form, this text's merge commit
-  and blob, and the SHA-256 of every executable the pilot runs: section 10's
+- **The trust file.** The trust root is pinned outside any repository an agent
+  can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It must be
+  outside every repository and every agent's home, not writable by uid 501, and
+  written only by Joel, as the user that owns it. It holds the public key and
+  its fingerprint, the signing form, the signing commit and this text's blob
+  there, and the SHA-256 of every executable the pilot runs: section 10's
   scripts, section 12's `review-size.sh` and section 14's enroll script.
 - **This text holds only copies.** The block below copies the fingerprint, and
   section 10's table and the rows of sections 12 and 14 copy the executable
@@ -873,13 +914,13 @@ trust_file: UNRULED I8
 key_fingerprint: UNPINNED I5
 ```
 - **Key rotation.** A change to the public key in the trust file is valid only
-  with a statement signed by the old key that names the new key and this
-  text's commit. So neither an agent's PR nor a rewrite of the trust file
+  with a statement signed by the old key that names the new key and the
+  signing commit. So neither an agent's PR nor a rewrite of the trust file
   without the old key can swap it.
 - **What counts as a signature.** A signature is made with the pinned key over
-  the exact bytes of the record, and the record names this text's merge
-  commit. A GitHub comment from `dayamjz`, a relay or a chat message is never
-  one, since every agent posts as `dayamjz`.
+  the exact bytes of the record, and the record names the signing commit. A
+  GitHub comment from `dayamjz`, a relay or a chat message is never one,
+  since every agent posts as `dayamjz`.
 - **The owner records the pilot relies on.** Each is signed with the pinned
   key, or the pilot cannot rely on it:
   - the signature of this text;
@@ -909,7 +950,7 @@ Relay point 5.
   write.
 - **Who.** I6: Joel by hand via `sudo -u pilotseal`, or a pilotseal-owned
   enroll script that only he invokes. If it is a script, it is pinned like
-  section 10, and its row is filled in at this text's final head:
+  section 10, and its row is filled in by the signing commit:
 
 | script | fleet-tools path | commit | blob SHA-256 |
 | --- | --- | --- | --- |
@@ -917,9 +958,9 @@ Relay point 5.
 
 - **Scope.** The writer does one thing: it appends `enroll` and `exclude`
   lines that meet section 12, after section 12's reconciliation, and planted
-  heads' `enroll` lines under the original's section 3. `pilot-ledger.py` has no mode that rewrites or
-  truncates a ledger. It only cuts back its own failed partial write to the
-  size it verified.
+  heads' `enroll` lines under the original's section 3. `pilot-ledger.py` has no
+  mode that rewrites or truncates a ledger. It only cuts back its own failed
+  partial write to the size it verified.
 - **A known limit.** Under either I6 choice the writer runs as pilotseal,
   which owns the sealed records, so the operating system does not stop it
   from reading them. What keeps it from doing so is that the enroll path
@@ -928,8 +969,8 @@ Relay point 5.
   the ledger and nothing else, would make that bar a mechanism.
 - **The denied-write test.** A record as uid 501, in the shape of section 9's
   denied-read record, shows that opening the sealed ledger or the trust file
-  for writing is denied with `EACCES` (section 9, precondition 10). `pilot-preflight.py probe` opens
-  read-only today, so the write probe is F3.
+  for writing is denied with `EACCES` (section 9, precondition 10).
+  `pilot-preflight.py probe` opens read-only today, so the write probe is F3.
 - **Chain heads.** The coordinator posts the chain head at each `freeze`,
   `close`, `score` and `unblind` (section 7).
 
@@ -966,7 +1007,7 @@ promotes no gate.
 
 What this text requires that the landed and held scripts (ft#790, ft#792,
 ft#793, ft#794, ft#804) do not do yet. None widens a held PR. Each is its own
-reviewed PR, and each pin is filled at this text's final head. Enrollment
+reviewed PR, and each pin is filled by the signing commit. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
 - **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`; an
@@ -982,6 +1023,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`.
 - **F3. `pilot-preflight.py`:**
+  - check 4 verifies the signing commit's three conditions (section 1), and
+    preconditions 6 and 10 date their records against the signing commit, not
+    against the commit that added this text, as `pilot-preflight.py` does today;
   - `check` reads the key and the executable hashes from the trust file at the
     I8 location, never from a repository, and verifies the signature,
     including the old-key rule for a rotation. It refuses to run as any user
@@ -1000,8 +1044,10 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it reads Joel's `ruling` lines for C3, C5 outside clean heads and C7,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - the live minimum of C1 becomes 10;
+  - O2 skips a `base_mismatch` clean head, for C5's clean part (section 5);
   - it reports the `default-1` run apart, heads that grew past the size bound,
-    and disputed classifications.
+    disputed classifications, E5 exclusions counted apart, and every
+    `correction` line beside the line it names, with no result changed by one.
 - **F5. Dropped.** It would have added a deadline to the end rule. There is no
   deadline (I4).
 - **F6. `pilot-unblind.py`:** end condition 4 counts frozen live heads of the
