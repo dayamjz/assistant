@@ -1,9 +1,11 @@
 # Gate shadow pilot pre-registration, version 2 (no voters), 2026-11-22
 
 **Status: Draft, not signed.** Joel is this text's only signer. It freezes when
-he signs it at the merge commit of the docs PR that adds it, in the form J4
-rules (section 11). Nothing is enrolled and no shadow run happens before then.
-No pilot head has run.
+he signs it at the merge commit of the docs PR that adds it, with the key of
+section 13 (section 11, I5). Nothing is enrolled and no shadow run happens
+before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
+7111628611, translated by the coordinator in 7114296700 and checked by #juno
+7114355345 and #claude 7114424384) is folded into sections 5 to 17.
 
 Notation is the original's (its lines 26-34): `a#N` is `dayamjz/assistant`,
 `ft#N` is `dayamjz/fleet-tools`, a path prefixed `ft:` is in fleet-tools, and a
@@ -12,7 +14,9 @@ bare 10-digit number is an issue comment id
 `docs/evaluations/2026-11-17-gate-shadow-pilot-preregistration.md` at commit
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
-the owner questions of section 11.
+the original owner questions of section 11 (now answered or narrowed), "I1" to
+"I7" the owner inputs still open (section 11), "E1" to "E4" the exclusion rules
+of section 12 and "F1" to "F5" the script follow-ups of section 17.
 
 ## 1. Status and authority
 
@@ -42,9 +46,29 @@ row 8 (7064759390, proposed in 7065147005), with #A1's acceptance condition B
 (7065454500), #juno's notes (7065464664) and #claude's acceptance (7065548378).
 
 **Signing.** Joel is the only signer. This text freezes when he signs it at its
-merge commit, in the form J4 rules. The four-signature rule of lines 6-11 does
-not govern this text. Nothing is enrolled before Joel's signature exists and
-every precondition of section 9 holds.
+merge commit, with the key of section 13. The four-signature rule of lines 6-11
+does not govern this text, so the four signatures of `fd80055c` are not needed
+again: Joel's 07:47 ruling above set that rule aside for this change, and his
+07:40 ruling (7065065542) bars any item that depends on the voters existing,
+which a voter signature would be. Only Joel's key signature counts. A GitHub
+comment, a relay or a chat message is never that signature (section 13).
+Nothing is enrolled before the signature exists and every precondition of
+section 9 holds.
+
+**The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
+ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
+eligible sequence of 10 consecutive fleet-tools reliability-fix PRs under the
+size bound, frozen before enrollment (section 12); (2) Joel adjudicates
+unresolved disagreements, with an order and budget frozen before enrollment
+(sections 5 and 11); (3) no success while any required criterion is UNMEASURED
+(section 5); (4) a locally signed owner artifact agents cannot impersonate
+(section 13); (5) a protected append-only enrollment ledger with a narrowly
+scoped writer (section 14); (6) deterministic scoring and unblinding under
+pilotseal (sections 6 and 8); (7) reconciling the server-protected promotion
+requirement with Joel's no-branch-protection decision before any promotion
+(section 16). The relay is #A1's report of Joel's reply, and #claude has asked
+Joel to confirm it directly (7114424384 point 3). Joel's key signature of this
+text is what makes every value folded in here binding.
 
 ## 2. What is kept
 
@@ -63,7 +87,10 @@ these ranges, the table wins.
   extra, hold the review did not make, pass the review refused) and lines
   135-139 (setup holds are excluded). How two findings match (lines 131-133) is
   replaced by O5.
-- **Section 3, case mix and enrollment**, lines 267-352.
+- **Section 3, case mix and enrollment**, lines 267-352, except line 281 (the
+  "Live PRs" row: at least 4, in the order of `REVIEW-REQUEST full` relays),
+  which section 12 replaces. Live heads are the eligible sequence, 10 of them,
+  in PR creation order.
 - **Section 4's capture fields**, lines 354-396 (the field table from
   `head_id` to `review.record_commit`). Rows 397-405 and the example record
   (lines 407-448) are not kept.
@@ -90,7 +117,7 @@ check 3 compares this table with that grep and with the original's bytes.
 | 5 | listed as open, has an owner ruling, and sections 7.11 and 7.12 own those | kept, quote only: names the owner rulings v1 folded in |
 | 6 | rulings. The text freezes only when Joel and the voters (#juno, #A1, #claude) | replaced: v2 freezes when Joel, its only signer, signs it at its merge commit (v2 section 1) |
 | 9 | rulings (Joel 7044130931, 7046850989). Merging is not what freezes it; the four | replaced: no four signatures; Joel's one signature freezes v2 (v2 section 1) |
-| 18 | disagreement gets a ruling (gate right, review right, both, neither) under rules | replaced: live-head disagreements are counted by kind, not ruled (O5); a ruling exists only under J1 option 2 |
+| 18 | disagreement gets a ruling (gate right, review right, both, neither) under rules | replaced: live-head disagreements are counted by kind (O5) and ruled by Joel alone within the budget (J1 option 2) |
 | 21 | (`e10e7059`). This text folds in the section 7 rulings, the owner rulings on | kept, quote only: history of v1's drafting |
 | 22 | the items the draft left open (section 7.11), and the owner rulings on the three | kept, quote only: history of v1's drafting |
 | 43 | - **Voters:** #juno, #A1 and #claude. **Collator:** whoever prepares a head's | removed: no voters; the collator's packet is replaced by pilot-score.py after the end condition (v2 sections 5 and 8) |
@@ -103,11 +130,11 @@ check 3 compares this table with that grep and with the original's bytes.
 | 81 | voter stands in. The review is kept apart from `.verdicts` and creates no | kept, quote only: no voter stands in, and none exists |
 | 100 | draft's, plus the owner rulings on 7.12 items 1 and 3 (section 7.12). Section | removed: v1 sections 2.1, 2.3, 2.4 and 2.5 are superseded (v2 sections 3 to 8) |
 | 101 | 2.5 carries Q1 and Q2, the owner rulings on items 1, 2 and 6 (section 7.11), and | removed: v1 sections 2.1, 2.3, 2.4 and 2.5 are superseded (v2 sections 3 to 8) |
-| 104 | ### 2.1 The four-way ruling | removed: no four-way ruling (J1 option 1 default); under J1 option 2 Joel alone rules within the frozen budget and order |
-| 106 | Each disagreement gets exactly one ruling. "Real" means the described defect | removed: no four-way ruling (J1 option 1 default); under J1 option 2 Joel alone rules within the frozen budget and order |
-| 110 | \| Ruling \| Means \| Worked example \| | removed: no four-way ruling (J1 option 1 default); under J1 option 2 Joel alone rules within the frozen budget and order |
-| 112 | \| **Gate right** \| The gate's position holds and the review's does not. \| The gate raises that a refusal in `internal/cli` is reached by a path the review did not read; the voters reproduce it at the head. The review approved. \| | removed: no four-way ruling (J1 option 1 default); under J1 option 2 Joel alone rules within the frozen budget and order |
-| 117 | A matched item is not a disagreement and gets no ruling. A new defect found | removed: no four-way ruling (J1 option 1 default); under J1 option 2 Joel alone rules within the frozen budget and order |
+| 104 | ### 2.1 The four-way ruling | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
+| 106 | Each disagreement gets exactly one ruling. "Real" means the described defect | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
+| 110 | \| Ruling \| Means \| Worked example \| | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
+| 112 | \| **Gate right** \| The gate's position holds and the review's does not. \| The gate raises that a refusal in `internal/cli` is reached by a path the review did not read; the voters reproduce it at the head. The review approved. \| | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
+| 117 | A matched item is not a disagreement and gets no ruling. A new defect found | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
 | 131 | Two findings match when they name the same defect at overlapping locations. The | replaced: two findings match by location only, same path and line within K (O5); not v1's same-defect match |
 | 132 | collator proposes matches. Any voter may split a proposed match, which turns it | removed: no collator proposal and no voter split; O1 and O5 are pure functions of recorded bytes |
 | 133 | into one missed and one extra item, each ruled. | removed: no collator proposal and no voter split; O1 and O5 are pure functions of recorded bytes |
@@ -215,8 +242,9 @@ check 3 compares this table with that grep and with the original's bytes.
   `sandbox.forbidden_files`, note line 92). v2's planted-head scores are
   oracle-scored in that same sense, but on a different subject and case mix,
   so no rate carries over between them.
-- **Adjudication: none.** `found_in_adjudication` (lines 117-119) has no v2
-  counterpart, and it is UNMEASURED.
+- **Adjudication: no voters.** `found_in_adjudication` (lines 117-119) has no v2
+  counterpart, and it is UNMEASURED. Joel's rulings under J1 option 2 (section
+  11) are a different endpoint, not v1's three-voter adjudication.
 
 ## 5. Oracle rules
 
@@ -285,27 +313,36 @@ shows around a change counts, and one beyond what the diff shows does not.
     `outcome` is `passed` while the verdict is `CHANGES REQUESTED`) and
     `unlocatable`.
   - This is a location match, not v1's "same defect" match (line 131).
-  - The rulings on these items are UNMEASURED (J1 option 1), or Joel's alone
-    under J1 option 2.
+  - Joel rules these items alone (J1 option 2, relay point 2), within the
+    budget and in the order of I2. An item past the budget is UNMEASURED, never
+    decided by default.
 - **UNMEASURED by script:** severity (2.4; the raw gate and review labels are
-  reported); race and recovery correctness (C7), unless J1 or J2 rules
-  otherwise; the C4 specs' own prose scoring rules in s02 and s08 (O1 still
-  applies to the heads built from them); and `found_in_adjudication`.
+  reported); race and recovery correctness (C7), unless Joel rules it under J1
+  within the budget (I3); the C4 specs' own prose scoring rules in s02 and s08
+  (O1 still applies to the heads built from them); and `found_in_adjudication`.
 
-**Criteria.** A criterion that is UNMEASURED cannot pass. C8 has no pass mark.
-The pilot passes only when C1 to C7 all PASS. Whether it can pass with any
-criterion UNMEASURED is J2; until Joel rules otherwise, it cannot.
+**Criteria.** Each criterion is required or report-only, as the table says. A
+criterion that is UNMEASURED cannot pass. The pilot passes only when every
+required criterion, C1 to C7, has a measured PASS. No success is declared while
+any required criterion is UNMEASURED (relay point 3, which answers J2's second
+half), and no report calls the pilot successful in that state. As built,
+`pilot-score.py` prints `pilot: PASS` only when C1 to C7 all PASS and
+`NOT PASSED` otherwise. Its self-test row "an UNMEASURED criterion never
+passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 
-| # | v1 definition | v2 definition | Decided by |
-| --- | --- | --- | --- |
-| C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script |
-| C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script |
-| C3 | line 463 | UNMEASURED: "decided review right with severity blocker" needs a ruling. | UNMEASURED, or Joel (J1, J2) |
-| C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script |
-| C5 | line 465 | FAIL when any clean head has a false hold (O2). Otherwise UNMEASURED, since the rest of C5 needs a ruling. | script for clean heads; the rest UNMEASURED, or Joel (J2) |
-| C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script |
-| C7 | line 467 | UNMEASURED: correctness of a race or recovery outcome needs a ruling. | UNMEASURED, or Joel (J1, J2) |
-| C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script, report only |
+| # | v1 definition | v2 definition | Decided by | Required |
+| --- | --- | --- | --- | --- |
+| C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
+| C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
+| C3 | line 463 | UNMEASURED: "decided review right with severity blocker" needs a ruling. | Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script | required |
+| C5 | line 465 | FAIL when any clean head has a false hold (O2). Otherwise UNMEASURED, since the rest of C5 needs a ruling. | script for clean heads; the rest Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
+| C7 | line 467 | UNMEASURED: correctness of a race or recovery outcome needs a ruling. | Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
+
+Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
+C7 stay UNMEASURED, so under the rule above the pilot cannot pass.
 
 **If the criteria are not met,** the gate is not promoted, and each head behind
 a failed criterion is filed as its own issue on this repository with its scores,
@@ -345,9 +382,20 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
   agent session runs as pilotseal, and no sudoers entry is recommended.
   Scoring needs git on pilotseal's `PATH` (O1 above); with no git it refuses
-  and logs `score-refused` rather than marking heads UNMEASURED.
+  and logs `score-refused` rather than marking heads UNMEASURED. This is relay
+  point 6. Both are deterministic: the early-unblinding refusal is shown by
+  `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
+  `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
+  CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
+- **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
+  Joel's signature and appends the `preflight` line, runs only as pilotseal,
+  from the `/Users/pilotseal/bin` copy whose SHA-256 equals its section 10 pin,
+  so no agent can edit the checker that verifies the signature. Its `probe`
+  mode is the one exception, by design: it runs as uid 501 to show that uid 501
+  is denied (section 9, precondition 6), from a copy of the same pinned blob.
+  Making `check` refuse to run as any other user is F3.
 - **Joel and the sealed records.** The original's rule (lines 197-200) is kept
-  and applied to Joel as the only signer, and as the only ruler if J1 is
+  and applied to Joel as the only signer, and as the only ruler under J1
   option 2: he does not open a sealed record before the end condition of
   section 8 holds and `pilot-unblind.py` has published it. Any earlier access
   is logged as an `access` line in the ledger, and the head is marked.
@@ -388,7 +436,15 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   `replayed` or `planted`), `sealed_id` (`sNN` for a planted head, else
   `null`) and `work_kind` (for a live head, its kind of work, which must equal
   `pr_kind` for the head to count toward the end condition), plus the
-  original's manifest fields (lines 306-330).
+  original's manifest fields (lines 306-330). A live head's `enroll` also
+  records section 12's evidence: `pr` (its fleet-tools PR number),
+  `pr_created_at` (GitHub's `created_at`), `enroll_head` (the 40-hex head it is
+  enrolled at), `code_lines` (the pinned `review-size.sh` at that head),
+  `incident` (the issue number and that issue's `created_at`) and `rule`
+  (`eligible`).
+- `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
+  unique per `pr`, with the same evidence fields and the exclusion rule (`E1`
+  to `E4`) in place of `rule`.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head.
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
@@ -420,18 +476,23 @@ line, never from a flag. A value that is Joel's stays `UNRULED` until he rules.
 k: 3
 end_rule: pr-sequence
 pr_count: 10
-pr_kind: UNRULED J3 (kind of work)
-j1: UNRULED J1
-j1_budget: UNRULED J1
-j1_order: UNRULED J1
-j4: UNRULED J4
+pr_kind: fleet-tools-reliability-fix
+j1: option-2
+j1_budget: UNRULED I2
+j1_order: UNRULED I2
+j4: UNRULED I5
 ```
 
 `k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
-is 10, the length of that sequence (Joel, 7083761337); `pr_kind` names the one
-kind of work whose PRs count, and it stays `UNRULED` until Joel names it, which
-blocks signing; `j1` is `option-1` or `option-2`; `j1_budget` is `<N> items` or
-`<N> hours`.
+is 10, the length of that sequence (Joel, 7083761337); `pr_kind` is
+`fleet-tools-reliability-fix`, the kind relay point 1 names, defined in section
+12; `j1` is `option-2` (relay point 2); `j1_budget` is `<N> items` or `<N>
+hours` and stays `UNRULED` until Joel answers I2, as does `j1_order`; `j4`
+names the signing form, which stays `UNRULED` until I5. The size bound and the
+exclusion rules have no key here: they are section 12's text, covered by
+Joel's signature of this text. A deadline (I4) would need a new key here,
+which is a reviewed change to `pilot-preflight.py` and `pilot-unblind.py`
+(F5).
 
 ## 8. End condition and unblinding
 
@@ -445,12 +506,12 @@ when all of these hold:
    `raw[]` of `{file, sha256}`.
 4. The end rule of section 7's parameters holds, read from the `preflight`
    line. Joel ruled it (J3): the pilot ends after one consistent sequence of
-   PRs, the same kind of work, chosen to measure cost and efficiency, not on a
-   calendar date. It holds once 10 heads of provenance `live` whose
-   `work_kind` equals `pr_kind` are frozen; planted heads never count. The
-   kind of work is J3's one remaining blank. While `pr_kind` is unruled, or
-   `pr_count` is anything but 10, this condition fails, so nothing is scored
-   or unblinded.
+   PRs, the same kind of work, chosen to measure cost and efficiency. It holds
+   once 10 heads of provenance `live` whose `work_kind` equals `pr_kind`
+   (`fleet-tools-reliability-fix`, section 12) are frozen; planted heads never
+   count. While `pr_kind` is unruled, or `pr_count` is anything but 10, this
+   condition fails, so nothing is scored or unblinded. Whether a deadline also
+   ends the pilot is I4.
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -494,12 +555,14 @@ fails:
    the original's lines 182-191 byte for byte.
 3. Every grep hit of section 3 has a row in its table, with the original's
    exact line.
-4. Joel's signature of this text is recorded, naming its merge commit, in the
-   form J4 rules. Until J4 is ruled this check fails with "J4 unruled", and once
-   it is ruled, reading that form needs a reviewed change to the check.
+4. Joel's signature of this text is recorded, naming its merge commit, made
+   with the key pinned in section 13 (I5). Until `j4` is ruled this check fails
+   with "J4 unruled". Once it is ruled, it still fails with "has no check yet"
+   until F3 lands the verification, so no enrollment can pass this check before
+   then.
 5. J3 is ruled: the `pr-sequence` end rule with `pr_count` 10 and a named
-   `pr_kind`. J1 is ruled, and if it is option 2, this text states
-   a numeric budget and an item order.
+   `pr_kind`. J1 is ruled, and since it is option 2, this text states a numeric
+   budget and an item order (I2).
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
    text's merge: run as uid 501, the uid agents run as, against targets owned by
    a different uid, never as root, and every probe denied with `EACCES`. It
@@ -512,8 +575,18 @@ fails:
    stat gives the owner has no stat probe.
 7. The `install` record shows that the SHA-256 of each script in
    `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5).
+8. Section 12's eligibility rule is in this text at its signed merge commit.
+9. Each owner record of section 13 that the pilot relies on is signed with the
+   pinned key, and if the private key is a file, a denied-read record as uid
+   501 against its location exists (section 13).
+10. A write-denied record as uid 501 against the sealed ledger exists, dated
+    after this text's merge (section 14).
+11. The pinned `review-size.sh` and the enroll path of section 14 are in the
+    `install` record, at their section 12 and 14 pins.
 
-On success it appends a `preflight` line. It never enrolls.
+On success it appends a `preflight` line. It never enrolls. Items 8 to 11 are
+not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
+refuses every signing form, so no enrollment can pass preflight without them.
 
 ## 10. Scripts
 
@@ -532,35 +605,29 @@ compares them.
 
 ## 11. Owner questions for v2
 
-This text is not signed while any of these is open. Once Joel answers, his
+This text is not signed while any input below is open. Once Joel answers, his
 answers are quoted here verbatim with their comment ids, as a#977 folded in
-section 7.12.
+section 7.12, and his key signature of this text (section 13) is what makes
+them binding.
 
-- **J1. Live-head disagreements** (#juno 7065464664). Decides whether O5's
-  items are only counted or also ruled.
-  - Option 1 (the default if Joel declines): report counts and kinds only, and
-    declare their rulings UNMEASURED.
-  - Option 2: Joel rules them alone, as an endpoint different from the frozen
-    text. Then this text fixes, before any head is enrolled (#claude 7065849509
-    note 3, #A1 7065881793), a budget of `____` items or `____` hours and the
-    order `____` in which he rules them. Option 2 also needs a reviewed change
-    that adds a ruling kind to the ledger, since its kind set is closed.
-- **J2. Criteria** (the criteria are Joel's rulings, lines 452-458). Decides
-  how C3, C5 outside clean heads and C7 are treated: report-only like C8,
-  planted heads only, or ruled by Joel under J1. Also decides whether the pilot
-  can pass with any criterion UNMEASURED. Default if he declines: all three are
-  UNMEASURED, and the pilot cannot pass with one. `pilot-score.py` implements
-  only this default, so any other answer needs a reviewed change to it before
-  enrollment.
-- **J3. The end condition. Ruled, except the kind of work.** Joel, 09:12 PT Nov 22,
+**Answered or narrowed by the Nov 23 direction** (#A1's relay 7111628611,
+translated in 7114296700):
+
+- **J1. Live-head disagreements: option 2.** Relay point 2: Joel adjudicates
+  unresolved disagreements, with the order and budget frozen before
+  enrollment. So O5's items are ruled by Joel alone, as an endpoint different
+  from the frozen text, and an item past the budget is UNMEASURED. The budget
+  and the order are still open (I2). A disputed eligibility classification
+  (section 12) is also a J1 item and counts against the same budget. Ruling
+  needs a ledger kind the landed closed set lacks (F1).
+- **J2. Criteria: second half answered.** Relay point 3: no success while any
+  required criterion is UNMEASURED (section 5). The first half, how C3, C5
+  outside clean heads and C7 are treated, is still open (I3).
+- **J3. The end condition: count and kind answered.** Joel, 09:12 PT Nov 22,
   relayed verbatim by #claude in 7082663349:
 
   > "End condition should be a consistent sequence of PRs that help measure
   > cost and efficiency. Maybe between 5-10"
-
-  So `end_rule` is `pr-sequence`: the pilot ends after one consistent sequence
-  of PRs, the same kind of work, chosen because it helps measure cost and
-  efficiency, and not on a calendar date.
 
   Joel, 10:38 PT Nov 22, relayed verbatim by #claude in 7083761337, answering
   whether the count is 10 (so C1's 10-head minimum stays measurable) and
@@ -569,25 +636,225 @@ section 7.12.
   > "1.agree
   > 2. Yes"
 
-  So `pr_count` is 10, C1 keeps its 10-head minimum and is measured, and only
-  PRs of the named kind count toward the 10. **Still open:** which kind,
-  `pr_kind` in section 7, which this text leaves unfilled. It blocks signing,
-  and until it is named, preflight check 5 and end condition 4 fail closed.
-- **J4. How Joel signs this text as its only signer.** Every agent and Joel post
-  as `dayamjz` (#juno 7065464664), and his `fd80055c` signature was a chat
-  relay posted by #claude (7051299262). Decides the form preflight check 4
-  reads. Default if he declines: none, and the text stays unsigned.
-- **J5. Installing and running the scripts.** As pilotseal, Joel installs the
-  landed scripts of section 10 into `/Users/pilotseal/bin`, records their
-  SHA-256 (the `install` record), and at the end runs scoring and unblinding by
-  hand (7065248343 item 3; no sudoers entry). Decides whether he does so.
-  Default if he declines: no script runs as pilotseal, and nothing is scored.
+  Relay point 1 names the kind: fleet-tools reliability-fix PRs, so `pr_kind`
+  is `fleet-tools-reliability-fix` (section 12). Only whether a deadline also
+  ends the pilot is open (I4).
+- **J4. How Joel signs: direction answered.** Relay point 4: a locally signed
+  owner artifact that agents cannot impersonate (section 13). Which key and
+  where its public key is pinned are open (I5).
+- **J5. Installing and running the scripts: answered.** Relay point 6:
+  deterministic scoring and unblinding under pilotseal (sections 6 and 8). As
+  pilotseal, Joel installs the landed scripts of section 10 into
+  `/Users/pilotseal/bin`, records their SHA-256 (the `install` record), and at
+  the end runs scoring and unblinding by hand (7065248343 item 3; no sudoers
+  entry).
+- **v2's signers: answered, not an input.** Joel alone, with his key (section
+  1, "Signing"). Requiring the four `fd80055c` signatures again would make v2
+  depend on the voters, which his 07:40 ruling (7065065542) bars.
+
+**Open owner inputs (Joel).** These are the only questions this text asks.
+
+- **I1. Size bound:** fewer than 300 code lines, or at most 300? #claude has
+  asked Joel directly (7114424384 point 3). Until he answers, section 12 uses
+  the stricter fewer than 300. That is a pilot rule only and does not change
+  the landing cap.
+- **I2. J1 budget and order:** the number (items or hours) and the order Joel
+  rules live-head disagreements and disputed classifications in. These fill
+  `j1_budget` and `j1_order` (section 7).
+- **I3. J2 first half:** C3, C5 outside clean heads, and C7. The proposed
+  reading is "required, ruled by Joel under J1 within the budget, UNMEASURED
+  past it" (7114296700, input 3). Joel confirms it or picks another.
+- **I4. J3 deadline:** is there a deadline as well as the 10-PR count, and if
+  so, what date? If there is one, F5 adds it to the end rule before
+  enrollment.
+- **I5. J4 key custody:** which key Joel signs with, and where its public key
+  is pinned (section 13). This fills `j4`.
+- **I6. The writer of section 14:** Joel by hand via `sudo -u pilotseal`, or a
+  pilotseal-owned enroll script that only he invokes.
+- **I7. The promotion conflict of section 16:** either promotion stays blocked
+  until Joel allows a server-side required check, or Joel names a local
+  substitute (a locally enforced required check plus a break-glass log agents
+  cannot alter) and this text records it as his change to ORDER r2 item 13.
 
 **Open before signing, for the coordinator (not owner questions).**
 
-- Who appends `enroll` and `capture`, and to which ledger, now that the
-  manifest is under `/Users/pilotseal` (open item 2 of row 8's brief).
+- Who appends `capture` and `freeze`, and whether uid-501 captures go to a
+  second, public ledger (open item 2 of row 8's brief). Who appends `enroll`
+  and `exclude` is I6.
 - Where chain heads are posted, and who checks them at unblinding (open item 4).
 - Whether Joel runs a parse-only check of the real sealed records, as
   pilotseal, printing only how many parse under O1 (open item 3). If none
   parses, C4 is wholly UNMEASURED.
+
+## 12. The eligible sequence
+
+Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
+(7114424384). This rule is frozen at this text's signed merge commit. A PR is
+left out only by a rule written here.
+
+- **The window.** The live window opens at the `at` of the `preflight` line
+  that the first `enroll` is read against (section 7), and closes at the `at`
+  of the 10th live `enroll`. A PR is in the window when its GitHub
+  `created_at` falls in it.
+- **The kind (`fleet-tools-reliability-fix`).** A `dayamjz/fleet-tools` PR
+  fixes a reliability defect when its body's `Observed incident` field (the
+  freeze field every fix-shaped PR carries) links a `dayamjz/fleet-tools`
+  issue whose `created_at` is earlier than the PR's `created_at`.
+- **Who classifies.** The writer of section 14 (I6) applies this test and
+  records the evidence (the issue number and both `created_at` values) in the
+  `enroll` or `exclude` line. Anyone, Joel or an agent, may dispute a
+  classification before the PR's first review. A dispute goes to Joel under
+  J1 and counts against the J1 budget. His ruling takes effect only if it is
+  made before that first review. Otherwise, or past the budget, the recorded
+  classification stands, and the dispute is reported.
+- **Size.** Eligible PRs have fewer than 300 code lines (I1, until Joel
+  answers), measured by the pinned `review-size.sh` at the enrollment head:
+  the PR head the `enroll` or `exclude` line records, before its first review.
+  A PR that grows past the bound after it is enrolled stays enrolled. The
+  report lists it with both sizes, and it is never quietly dropped.
+- **Order.** Live PRs are taken in order of their `created_at`, not of any
+  relay or request, since the coordinator controls when it relays (#juno fix
+  1). "Consecutive" means the first 10 eligible PRs in the window are
+  enrolled, and none is skipped.
+- **Every PR gets a record.** Every PR created in the window gets an `enroll`
+  or `exclude` line before its first review. No `enroll` may be written while
+  any PR created earlier in the window has no record. So a PR with no record
+  blocks the next enrollment.
+- **The exclusion rules.** These are the only ones. Each `exclude` line names
+  its rule:
+  - **E1.** It fails the kind test above.
+  - **E2.** It is at or past the size bound at the enrollment head.
+  - **E3.** It changes a file the pilot pins (section 10, this section's
+    `review-size.sh`, or section 14's enroll script), or this text.
+  - **E4.** It was closed unmerged with no review.
+- **The pinned `review-size.sh`.** The fleet-tools blob at this text's merge,
+  filled in at this text's final head like section 10:
+
+| script | fleet-tools path | commit | blob SHA-256 |
+| --- | --- | --- | --- |
+| size | `review-size.sh` | UNPINNED | UNPINNED |
+
+## 13. Owner records and the signing key
+
+Relay point 4, with #juno's fix 4 and #claude's point 2.
+
+- **The key.** Joel signs with a key that no agent can read or use: not
+  readable by uid 501, and not under any agent's home or `~/Projects`. Agents
+  run as uid 501 (`/Users/joelzambrano`), so that home is ruled out too.
+  Which key, for example an SSH or GPG key on a hardware token or in the
+  pilotseal account, is I5. If the private key is a file, a denied-read record
+  as uid 501 against its location is made in the shape of 7065533093
+  (section 9, precondition 9).
+- **The pin.** The public key is pinned here. A change to the pin is valid
+  only with a statement signed by the old key that names the new key and this
+  text's commit, so an agent's PR to this file cannot swap the key.
+
+```pilot-v2-owner-key
+public_key: UNPINNED I5
+form: UNPINNED I5
+```
+
+- **What counts as a signature.** A signature is made with the pinned key over
+  the exact bytes of the record, and the record names this text's merge
+  commit. A GitHub comment from `dayamjz`, a relay or a chat message is never
+  one, since every agent posts as `dayamjz`.
+- **The owner records the pilot relies on.** Each is signed with the pinned
+  key, or the pilot cannot rely on it:
+  - the signature of this text;
+  - the J1 budget and order (I2);
+  - the size bound (I1);
+  - the end condition (J3 and I4);
+  - the writer's identity (I6);
+  - the section 16 choice (I7).
+
+  Each one that is folded into this text before signing is covered by the
+  signature of this text. One set or changed after signing needs its own
+  signed record, or an amended and re-signed text. Joel's other rulings,
+  cited here by comment id, stand as they are.
+- **The verifier.** `pilot-preflight.py check` verifies the signature against
+  the pin, as pilotseal, from its pinned copy (section 6). F3 builds that
+  check. Until then, check 4 refuses every form.
+
+## 14. The enrollment writer
+
+Relay point 5.
+
+- **Where.** `enroll` and `exclude` lines are written only through
+  `pilot-ledger.py append`, which hash-chains them and keeps `enroll` unique
+  per head, into `/Users/pilotseal/pilot/ledger.jsonl`, which uid 501 cannot
+  write.
+- **Who.** I6: Joel by hand via `sudo -u pilotseal`, or a pilotseal-owned
+  enroll script that only he invokes. If it is a script, it is pinned like
+  section 10, and its row is filled in at this text's final head:
+
+| script | fleet-tools path | commit | blob SHA-256 |
+| --- | --- | --- | --- |
+| enroll | UNPINNED I6 | UNPINNED | UNPINNED |
+
+- **Scope.** The writer does one thing: it appends `enroll` and `exclude`
+  lines that meet section 12, and planted heads' `enroll` lines under the
+  original's section 3. `pilot-ledger.py` has no mode that rewrites or
+  truncates a ledger. It only cuts back its own failed partial write to the
+  size it verified.
+- **A known limit.** Under either I6 choice the writer runs as pilotseal,
+  which owns the sealed records, so the operating system does not stop it
+  from reading them. What keeps it from doing so is that the enroll path
+  opens no sealed path, and section 6's rule that Joel opens no sealed record
+  before unblinding. Only a writer uid other than pilotseal, able to append to
+  the ledger and nothing else, would make that bar a mechanism.
+- **The denied-write test.** A record as uid 501, in the shape of section 9's
+  denied-read record, shows that opening the sealed ledger for append is denied
+  with `EACCES` (section 9, precondition 10). `pilot-preflight.py probe` opens
+  read-only today, so the write probe is F3.
+- **Chain heads.** The coordinator posts the chain head at each `freeze`,
+  `close`, `score` and `unblind` (section 7).
+
+## 15. Landing during the pilot
+
+#juno's fix 6, under the relay's "preserve existing landing controls". An
+enrolled PR lands alone, never in a batched landing. The batched-landings
+change (Joel 7112930679, #juno 7113018815, #claude 7114168630) does not apply
+to enrolled PRs during the pilot unless this text is amended and re-signed
+before enrollment. Every existing landing control stays. Nothing in this text
+changes rule #68, delegates a waiver, changes admin bypass, enables branch
+protection or promotes a gate.
+
+## 16. The promotion prerequisite and no branch protection
+
+Relay point 7. The original's lines 485-488, kept by section 2, require
+"a server-protected required check and an auditable break-glass" before a
+promotion decision, per ORDER r2 item 13. Joel's standing decision is that
+there is no branch protection (7114296700, point 7). Until Joel resolves the
+conflict (I7), that prerequisite stays as written and is **unmet**, so no
+promotion decision can be made, whatever the pilot shows. This section is a
+direction to resolve the conflict. It enables no branch protection and
+promotes no gate.
+
+## 17. Script follow-ups
+
+What this text requires that the landed and held scripts (ft#790, ft#792,
+ft#793, ft#794, ft#804) do not do yet. None widens a held PR. Each is its own
+reviewed PR, and each pin is filled at this text's final head. Enrollment
+cannot pass preflight before F3, since check 4 refuses every form until then.
+
+- **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`, and a
+  `ruling` kind for Joel's J1 rulings, each naming its budget position.
+- **F2. The enroll path (I6):** a written by-hand procedure, or a
+  pilotseal-owned script. Either one applies section 12: it orders by
+  `created_at`, refuses an `enroll` while an earlier window PR has no record,
+  runs the pinned `review-size.sh` at the enrollment head, and records the
+  evidence fields.
+- **F3. `pilot-preflight.py`:**
+  - `check` verifies the signature against section 13's pin, including the
+    old-key rule for a pin change, and refuses to run as any user but
+    pilotseal;
+  - it checks preconditions 8 to 11;
+  - it adds the write probe of section 14 and a probe of the key's location;
+  - its `install` check covers `review-size.sh` and the enroll script.
+- **F4. `pilot-score.py`:**
+  - it reads Joel's `ruling` lines for C3, C5 outside clean heads and C7,
+    within the J1 budget (I3), and anything past the budget is UNMEASURED;
+  - it reports heads that grew past the size bound, and disputed
+    classifications.
+- **F5. `pilot-unblind.py` and `pilot-preflight.py`:** only if I4 sets a
+  deadline: a new key in section 7's parameters and its end rule.
