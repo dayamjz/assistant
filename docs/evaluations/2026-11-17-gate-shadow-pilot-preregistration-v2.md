@@ -17,7 +17,7 @@ bare 10-digit number is an issue comment id
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
 the original owner questions of section 11 (now answered or narrowed), "I1" to
 "I7" the owner inputs still open (section 11), "E1" to "E4" the exclusion rules
-of section 12 and "F1" to "F5" the script follow-ups of section 17.
+of section 12 and "F1" to "F6" the script follow-ups of section 17.
 
 ## 1. Status and authority
 
@@ -88,6 +88,9 @@ these ranges, the table wins.
 - **Section 1, what is compared**, lines 54-94. **The planted-head review stays
   Codex, the non-voter (lines 72-83), unchanged:** a blinded full review of the
   exact commit outside a pull request, through the adapter `ft:pilot-review.sh`.
+  For a live head, which is now a fleet-tools PR, section 12's "Live heads run
+  on fleet-tools" replaces lines 58-60 (the mirror), 61-69 (the review record)
+  and 87-91 (the base).
 - **Section 2.2's definitions of a disagreement**, lines 121-130 (missed,
   extra, hold the review did not make, pass the review refused) and lines
   135-139 (setup holds are excluded). How two findings match (lines 131-133) is
@@ -98,7 +101,9 @@ these ranges, the table wins.
   in PR creation order.
 - **Section 4's capture fields**, lines 354-396 (the field table from
   `head_id` to `review.record_commit`). Rows 397-405 and the example record
-  (lines 407-448) are not kept.
+  (lines 407-448) are not kept. For a live head, section 12 restates the
+  sources of `origin_ci` (line 391) and of `review.head`, `review.kind`,
+  `review.reviewer` and `review.verdict` (lines 392-393).
 - **Section 5's prerequisites**, lines 485-488.
 - **Section 6, known limits**, lines 490-526.
 - **Section 8, what does not change**, lines 873-902.
@@ -326,8 +331,12 @@ shows around a change counts, and one beyond what the diff shows does not.
   within the budget (I3); the C4 specs' own prose scoring rules in s02 and s08
   (O1 still applies to the heads built from them); and `found_in_adjudication`.
 
-**Criteria.** Each criterion is required or report-only, as the table says. A
-criterion that is UNMEASURED cannot pass. The pilot passes only when every
+**Criteria.** Each criterion is computed over the compared heads of the
+primary run set, at `fix_rounds.review: 0` (the original's lines 340-347). The
+`default-1` run is captured apart (section 7), reported apart, never pooled,
+and decides nothing. This restates the original's lines 455-457. Each
+criterion is required or report-only, as the table says. A criterion that is
+UNMEASURED cannot pass. The pilot passes only when every
 required criterion, C1 to C7, has a measured PASS. No success is declared while
 any required criterion is UNMEASURED (relay point 3, which answers J2's second
 half), and no report calls the pilot successful in that state. As built,
@@ -348,6 +357,12 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 
 Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
 C7 stay UNMEASURED, so under the rule above the pilot cannot pass.
+
+C1's live case minimum is 10 (section 12). C4 is the original's line 464 as
+written: it tests `planted_match` alone. O3 is reported for each hold head beside
+C4, as `pilot-score.py` already prints it, and it is not a criterion. A hold head
+whose planted finding matched but caused no `review` hold passes C4 and shows a
+miss under O3.
 
 **If the criteria are not met,** the gate is not promoted, and each head behind
 a failed criterion is filed as its own issue on this repository with its scores,
@@ -451,6 +466,11 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
   unique per `pr`, with the same evidence fields and the exclusion rule (`E1`
   to `E4`) in place of `rule`.
+- `items` and `ruling`: not in the landed kind set either, and F1 adds both.
+  They are allowed after `close`, since Joel rules only once enrollment is
+  sealed (section 8). `items` is unique per ledger and lists the items Joel
+  may rule. Each `ruling` names one item, its ruling and its place in the J1
+  budget.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head.
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
@@ -466,7 +486,10 @@ original's lines 479-483 order by decided severity, which v2 does not have.
 `pass` or `fail`, the item 3 pin check of line 332), `review.md` (the review
 record, for a head that has one) and `tree.txt` (`git ls-tree -r -z --name-only
 <head>`: NUL-separated, so no path is quoted). Each is listed in that head's `freeze` `raw[]`, and the scripts read
-no capture whose bytes differ from it.
+no capture whose bytes differ from it. The `default-1` run of a head goes under
+`<captures>/<head_id>/default-1/`, with its own `gate.json`, and is listed in the
+same `raw[]`. `pilot-score.py` reads only the file named `gate.json`, so it
+never scores or pools the `default-1` run. Reporting that run apart is F4.
 
 **Streams and chain heads.** The sealed ledger is
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
@@ -513,8 +536,10 @@ when all of these hold:
    line. Joel ruled it (J3): the pilot ends after one consistent sequence of
    PRs, the same kind of work, chosen to measure cost and efficiency. It holds
    once 10 heads of provenance `live` whose `work_kind` equals `pr_kind`
-   (`fleet-tools-reliability-fix`, section 12) are frozen; planted heads never
-   count. While `pr_kind` is unruled, or `pr_count` is anything but 10, this
+   (`fleet-tools-reliability-fix`, section 12) are frozen **and compared**
+   (section 5), so C1's live minimum can always be met; planted heads never
+   count. As built, `pilot-unblind.py` counts frozen live heads, not compared
+   ones, so F6 must land before activation (section 9, precondition 12). While `pr_kind` is unruled, or `pr_count` is anything but 10, this
    condition fails, so nothing is scored or unblinded. No calendar deadline
    ends the pilot: Joel chose a sequence, not a date (I4, answered).
 5. For unblinding only: a `score` line exists after the `close`.
@@ -525,6 +550,16 @@ original's lines 199-200 require. The one refusal that cannot be logged is a
 ledger that does not verify (condition 1), since nothing can be appended to a
 broken chain: it is printed, and the posted chain heads show where the chain
 broke. A refusal prints no record content and publishes nothing.
+
+**Joel's rulings come before the score.** After `close`, `pilot-score.py items`
+(F4) appends the one `items` line: every O5 item of the live and replayed heads,
+every race and recovery outcome for C7, and every disputed classification of
+section 12. It reads only captures, never a sealed record, and prints no
+score. Joel then rules items in the I2 order, one `ruling` line each, until
+the budget is spent. Only then is the one `score` line appended. It reads the
+`ruling` lines, and every item without one is UNMEASURED. Since `items` and
+`ruling` are allowed after `close` (F1), and the `score` comes after both,
+C3, C5 outside clean heads and C7 can be measured.
 
 **Scoring.** `ft:pilot-score.py` scores only after the end condition holds, so
 no score is visible mid-pilot to steer enrollment. It appends one `score` line
@@ -575,9 +610,11 @@ fails:
    `/Users/pilotseal/pilot/sealed/s01.md`, each with an open and a directory
    probe, and nothing outside `/Users/pilotseal`. `pilot-preflight.py probe`
    makes it: for each target it opens it read-only and closes it without reading
-   a byte, opens it as a directory without listing an entry, and stats it, and it
-   reads the owner uid from the nearest ancestor it can stat. A target whose own
-   stat gives the owner has no stat probe.
+   a byte, and opens it as a directory without listing an entry. It then stats
+   the target for its owner uid. If that stat succeeds, the owner comes from
+   the target and no stat probe is recorded. If it is denied, the denied stat is
+   recorded as a probe, and the owner comes from the nearest ancestor it can
+   stat.
 7. The `install` record shows that the SHA-256 of each script in
    `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5), and the
    trust file of section 13 holds the same hashes.
@@ -597,7 +634,11 @@ fails:
     it, or a signed owner record says it does not apply to the pilot (section
     15).
 
-On success it appends a `preflight` line. It never enrolls. Items 8 to 12 are
+13. The fleet-tools mirror and its gate home of section 12 exist, isolated
+    like the assistant mirror (the original's item 9 and lines 349-352), with
+    the gate's first-run path proven on it.
+
+On success it appends a `preflight` line. It never enrolls. Items 8 to 13 are
 not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
 refuses every signing form, so no enrollment can pass preflight without them.
 
@@ -710,12 +751,38 @@ Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
 (7114424384). This rule is frozen at this text's signed merge commit. A PR is
 left out only by a rule written here.
 
-- **The window.** The live window opens at the `at` of the last `preflight`
-  line before the first `enroll` (section 7), and closes at the `at` of the
-  10th live `enroll`. A PR is in the window when its GitHub `created_at` falls
-  in it.
+- **The window.** The live window opens at the `at` of the **first**
+  `preflight` line in the ledger, so a later preflight never moves it. It
+  closes at the `at` of the first `freeze` after which 10 enrolled live heads of
+  the kind are compared heads (section 5). A PR is in the window when its
+  GitHub `created_at` falls in it. Enrollment continues in order until then, so
+  an enrolled PR that is never compared, for example one closed before review,
+  stays enrolled and reported, and a later PR in the order makes up the 10. No
+  PR is replaced: the uncompared one keeps its record.
 - **The live case.** This replaces the original's line 281: the live case's
-  minimum is 10, and its heads are this sequence.
+  minimum is 10 compared heads, and its heads are this sequence. As built,
+  `pilot-score.py` still holds the original's live minimum of 4, so F4 must land
+  before activation.
+- **Live heads run on fleet-tools.** This replaces the original's lines 58-60,
+  61-69 and 87-91, and the sources at lines 391-393, for a live head:
+  - **Mirror.** The gate runs against a private mirror of `dayamjz/fleet-tools`,
+    never `dayamjz/fleet-tools` itself, with its own gate home. The stage-model
+    pin (the original's lines 324-328) and the intent sentence (lines 319-323)
+    are the same as for every other head (section 9, precondition 13).
+  - **Base.** The merge base of the head with fleet-tools `origin/main`. The
+    operator resets the fleet-tools mirror's `main` to it before the push, and
+    the original's base check (lines 310-316) applies unchanged.
+  - **Review record.** The full verdict at that head under the landing rules is
+    the line of `ft:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
+    <short sha> (full): VERDICT: ...`, with `ft:reviews/ft-<N>.md` the review it
+    records. That file's line 1 is `reviewed at <40-hex>`, and a delta adds
+    `(delta from ...)`, which is not the review. Its line 2,
+    `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. The verdict is
+    what `ft:review-findings.py --verdict` prints, as for any other head.
+  - **CI.** `origin_ci` is `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`.
+    Fleet-tools runs no CI workflow today, so that list is empty, and the gate's
+    `checks_basis` on the mirror is `no-ci-declaration`. No live head is a
+    CI-failure head, since C6's heads are planted.
 - **The kind (`fleet-tools-reliability-fix`).** A `dayamjz/fleet-tools` PR
   fixes a reliability defect when its body's `Observed incident` field (the
   freeze field every fix-shaped PR carries) links a `dayamjz/fleet-tools`
@@ -878,8 +945,10 @@ ft#793, ft#794, ft#804) do not do yet. None widens a held PR. Each is its own
 reviewed PR, and each pin is filled at this text's final head. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
-- **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`, and a
-  `ruling` kind for Joel's J1 rulings, each naming its budget position.
+- **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`; an
+  `items` kind, unique per ledger; and a `ruling` kind for Joel's J1 rulings,
+  each naming its item and budget position. `items` and `ruling` join the kinds
+  allowed after `close`, and no `items` or `ruling` may follow `score`.
 - **F2. The enroll path (I6):** a written by-hand procedure, or a
   pilotseal-owned script. Either one applies section 12:
   - it orders by `created_at`, then PR number;
@@ -893,14 +962,19 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     from a repository, and verifies the signature, including the old-key rule
     for a rotation. It refuses to run as any user but pilotseal;
   - it requires section 10's published pins to equal the trust file's;
-  - it checks preconditions 8 to 12;
+  - it checks preconditions 8 to 13;
   - it adds the write probes of sections 13 and 14 and a probe of the key's
     location;
   - its `install` check covers `review-size.sh` and the enroll script.
 - **F4. `pilot-score.py`:**
+  - an `items` mode that appends section 8's `items` line from captures alone;
   - it reads Joel's `ruling` lines for C3, C5 outside clean heads and C7,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
-  - it reports heads that grew past the size bound, and disputed
-    classifications.
+  - the live minimum of C1 becomes 10;
+  - it reports the `default-1` run apart, heads that grew past the size bound,
+    and disputed classifications.
 - **F5. Dropped.** It would have added a deadline to the end rule. There is no
   deadline (I4).
+- **F6. `pilot-unblind.py`:** end condition 4 counts frozen live heads of the
+  kind that are compared (section 5), reading each head's frozen captures, not
+  frozen live heads alone.
