@@ -6,7 +6,8 @@ section 13 (section 11, I5). Nothing is enrolled and no shadow run happens
 before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
 7111628611, translated by the coordinator in 7114296700 and checked by #juno
 7114355345 and #claude 7114424384) is folded into sections 5 to 17, with
-#A1's further corrections of 7114817207 (r2).
+#A1's further corrections of 7114817207 (r2) and #juno's addition of 7115601439
+(r3).
 
 Notation is the original's (its lines 26-34): `a#N` is `dayamjz/assistant`,
 `ft#N` is `dayamjz/fleet-tools`, a path prefixed `ft:` is in fleet-tools, and a
@@ -16,7 +17,7 @@ bare 10-digit number is an issue comment id
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
 the original owner questions of section 11 (now answered or narrowed), "I1" to
-"I7" the owner inputs still open (section 11), "E1" to "E4" the exclusion rules
+"I8" the owner inputs (section 11), "E1" to "E4" the exclusion rules
 of section 12 and "F1" to "F6" the script follow-ups of section 17.
 
 ## 1. Status and authority
@@ -637,8 +638,15 @@ fails:
 13. The fleet-tools mirror and its gate home of section 12 exist, isolated
     like the assistant mirror (the original's item 9 and lines 349-352), with
     the gate's first-run path proven on it.
+14. **The pin is out of the repo and the copies match it** (#juno 7115601439).
+    Preflight reads the key fingerprint and the executable hashes from the
+    trust file at section 13's location (I8), never from this text. Each copy
+    in this text must equal the trust file: the fingerprint in section 13's
+    copy block, section 10's table, and the rows of sections 12 and 14. Any
+    mismatch, or a trust file that is missing or unreadable, refuses
+    enrollment.
 
-On success it appends a `preflight` line. It never enrolls. Items 8 to 13 are
+On success it appends a `preflight` line. It never enrolls. Items 8 to 14 are
 not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
 refuses every signing form, so no enrollment can pass preflight without them.
 
@@ -727,13 +735,18 @@ correction.
 - **I4. J3 deadline: answered, none.** The pilot ends at 10 eligible PRs
   (#A1's r2, 7114817207).
 - **I5. J4 key custody:** which key Joel signs with. Its public key is pinned
-  in the trust file of section 13. This fills `j4`.
+  in the trust file of section 13. This fills `j4` and the fingerprint copy.
 - **I6. The writer of section 14:** Joel by hand via `sudo -u pilotseal`, or a
   pilotseal-owned enroll script that only he invokes.
 - **I7. The promotion conflict of section 16:** either promotion stays blocked
   until Joel allows a server-side required check, or Joel names a local
   substitute (a locally enforced required check plus a break-glass log agents
   cannot alter) and this text records it as his change to ORDER r2 item 13.
+- **I8. Where the trust file lives** (#juno 7115601439). It must meet section
+  13's rules: outside every repository and every agent's home, not writable by
+  uid 501, and written only by Joel. A path under `/Users/pilotseal` would meet
+  them, as would another location Joel names. This fills `trust_file` in
+  section 13's copy block.
 
 **Open before signing, for the coordinator (not owner questions).**
 
@@ -842,13 +855,23 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   as uid 501 against its location is made in the shape of 7065533093
   (section 9, precondition 9).
 - **The trust file.** The trust root is pinned outside any repository an
-  agent can write (#A1 7114817207): `/Users/pilotseal/pilot/trust.json`, owned
-  by pilotseal, not writable by uid 501, written only by Joel as pilotseal. It
-  holds the public key, the signing form, this text's merge commit and blob,
-  and the SHA-256 of every executable the pilot runs: section 10's scripts,
-  section 12's `review-size.sh` and section 14's enroll script. This text
-  publishes copies of those values, but no script trusts a copy read from a
-  repository.
+  agent can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It
+  must be outside every repository and every agent's home, not writable by
+  uid 501, and written only by Joel, as the user that owns it. It holds the
+  public key and its fingerprint, the signing form, this text's merge commit
+  and blob, and the SHA-256 of every executable the pilot runs: section 10's
+  scripts, section 12's `review-size.sh` and section 14's enroll script.
+- **This text holds only copies.** The block below copies the fingerprint, and
+  section 10's table and the rows of sections 12 and 14 copy the executable
+  hashes. No script trusts a copy read from a repository. Preflight reads the
+  trust file and refuses enrollment when any copy here differs from it
+  (section 9, precondition 14). So an agent's PR that edits a copy makes
+  preflight fail closed, and the PR can't move the pin.
+
+```pilot-v2-trust-copy
+trust_file: UNRULED I8
+key_fingerprint: UNPINNED I5
+```
 - **Key rotation.** A change to the public key in the trust file is valid only
   with a statement signed by the old key that names the new key and this
   text's commit. So neither an agent's PR nor a rewrite of the trust file
@@ -864,7 +887,8 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   - the size bound (I1);
   - the end condition (J3 and I4);
   - the writer's identity (I6);
-  - the section 16 choice (I7).
+  - the section 16 choice (I7);
+  - the trust file's location (I8).
 
   Each one that is folded into this text before signing is covered by the
   signature of this text. One set or changed after signing needs its own
@@ -958,10 +982,15 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`.
 - **F3. `pilot-preflight.py`:**
-  - `check` reads the key and the executable hashes from the trust file, never
-    from a repository, and verifies the signature, including the old-key rule
-    for a rotation. It refuses to run as any user but pilotseal;
-  - it requires section 10's published pins to equal the trust file's;
+  - `check` reads the key and the executable hashes from the trust file at the
+    I8 location, never from a repository, and verifies the signature,
+    including the old-key rule for a rotation. It refuses to run as any user
+    but pilotseal;
+  - precondition 14: it refuses enrollment when the trust file is missing or
+    unreadable, or when any copy in this text (the fingerprint, section 10's
+    table, the rows of sections 12 and 14) differs from it. A self-test row
+    shows the refusal for a changed copy, and a mutation that skips the
+    comparison turns that row red;
   - it checks preconditions 8 to 13;
   - it adds the write probes of sections 13 and 14 and a probe of the key's
     location;
