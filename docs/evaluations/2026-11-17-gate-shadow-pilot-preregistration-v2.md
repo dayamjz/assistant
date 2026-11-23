@@ -692,10 +692,12 @@ Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
 (7114424384). This rule is frozen at this text's signed merge commit. A PR is
 left out only by a rule written here.
 
-- **The window.** The live window opens at the `at` of the `preflight` line
-  that the first `enroll` is read against (section 7), and closes at the `at`
-  of the 10th live `enroll`. A PR is in the window when its GitHub
-  `created_at` falls in it.
+- **The window.** The live window opens at the `at` of the last `preflight`
+  line before the first `enroll` (section 7), and closes at the `at` of the
+  10th live `enroll`. A PR is in the window when its GitHub `created_at` falls
+  in it.
+- **The live case.** This replaces the original's line 281: the live case's
+  minimum is 10, and its heads are this sequence.
 - **The kind (`fleet-tools-reliability-fix`).** A `dayamjz/fleet-tools` PR
   fixes a reliability defect when its body's `Observed incident` field (the
   freeze field every fix-shaped PR carries) links a `dayamjz/fleet-tools`
@@ -725,7 +727,7 @@ left out only by a rule written here.
   - **E1.** It fails the kind test above.
   - **E2.** It is at or past the size bound at the enrollment head.
   - **E3.** It changes a file the pilot pins (section 10, this section's
-    `review-size.sh`, or section 14's enroll script), or this text.
+    `review-size.sh`, or section 14's enroll script).
   - **E4.** It was closed unmerged with no review.
 - **The pinned `review-size.sh`.** The fleet-tools blob at this text's merge,
   filled in at this text's final head like section 10:
@@ -740,7 +742,7 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
 
 - **The key.** Joel signs with a key that no agent can read or use: not
   readable by uid 501, and not under any agent's home or `~/Projects`. Agents
-  run as uid 501 (`/Users/joelzambrano`), so that home is ruled out too.
+  run as uid 501, so uid 501's home is ruled out too.
   Which key, for example an SSH or GPG key on a hardware token or in the
   pilotseal account, is I5. If the private key is a file, a denied-read record
   as uid 501 against its location is made in the shape of 7065533093
