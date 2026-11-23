@@ -66,10 +66,11 @@ signing commit. It must be a commit on `main`'s first-parent history at which
 this text holds no `UNRULED` and no `UNPINNED` value, so every owner input is
 answered and every pin is filled there. This text may reach `main` earlier as an
 unsigned draft, and each later PR that answers an input or fills a pin is still
-a draft. Preflight check 4 verifies all three conditions: the commit is on
+a draft. Preflight check 4 must verify all three conditions: the commit is on
 `main`'s first-parent history, this text there has no `UNRULED` or `UNPINNED`
-value, and this text at `origin/main` is byte-identical to this text there. So
-any later edit leaves the text unsigned until Joel signs again. Every "after
+value, and this text at `origin/main` is byte-identical to this text there. As
+built, check 4 refuses every signing form, and these checks are F3. So any
+later edit leaves the text unsigned until Joel signs again. Every "after
 the signing commit" in this text means after that commit's time.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
@@ -127,8 +128,9 @@ superseded. Sections 4 to 8 below restate what replaces them.
 
 ## 3. Removed voter steps
 
-One row per non-blank original line in the ranges row 8's brief names, and one
-row for every hit of
+One row per non-blank original line in these ranges, named by row 8's build
+brief: 6, 43, 49-50, 70-71, 131-133, 158-165, 203, 213, 218-265, 397-405,
+410-411, 421-423, 443-447, 461, 467 and 472-475. Also one row for every hit of
 `grep -n -i -E 'voter|recus|#juno|#A1|#claude|ruling|split'` over lines 1-527.
 A row that is not a voter step says "kept, quote only". Each quote is that
 line's exact text, trimmed, with `|` written as `\|`. `ft:pilot-preflight.py`
@@ -152,11 +154,11 @@ check 3 compares this table with that grep and with the original's bytes.
 | 81 | voter stands in. The review is kept apart from `.verdicts` and creates no | kept, quote only: no voter stands in, and none exists |
 | 100 | draft's, plus the owner rulings on 7.12 items 1 and 3 (section 7.12). Section | removed: v1 sections 2.1, 2.3, 2.4 and 2.5 are superseded (v2 sections 3 to 8) |
 | 101 | 2.5 carries Q1 and Q2, the owner rulings on items 1, 2 and 6 (section 7.11), and | removed: v1 sections 2.1, 2.3, 2.4 and 2.5 are superseded (v2 sections 3 to 8) |
-| 104 | ### 2.1 The four-way ruling | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
-| 106 | Each disagreement gets exactly one ruling. "Real" means the described defect | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
-| 110 | \| Ruling \| Means \| Worked example \| | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
-| 112 | \| **Gate right** \| The gate's position holds and the review's does not. \| The gate raises that a refusal in `internal/cli` is reached by a path the review did not read; the voters reproduce it at the head. The review approved. \| | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
-| 117 | A matched item is not a disagreement and gets no ruling. A new defect found | removed: no four-way ruling; Joel alone rules within the frozen budget and order (J1 option 2, relay point 2) |
+| 104 | ### 2.1 The four-way ruling | replaced: no voter rules; the four-way meanings are kept only as the vocabulary of Joel's `ruling` lines, within the frozen budget and order (J1 option 2, v2 section 8) |
+| 106 | Each disagreement gets exactly one ruling. "Real" means the described defect | replaced: no voter rules; the four-way meanings are kept only as the vocabulary of Joel's `ruling` lines, within the frozen budget and order (J1 option 2, v2 section 8) |
+| 110 | \| Ruling \| Means \| Worked example \| | replaced: no voter rules; the four-way meanings are kept only as the vocabulary of Joel's `ruling` lines, within the frozen budget and order (J1 option 2, v2 section 8) |
+| 112 | \| **Gate right** \| The gate's position holds and the review's does not. \| The gate raises that a refusal in `internal/cli` is reached by a path the review did not read; the voters reproduce it at the head. The review approved. \| | replaced: no voter rules; the four-way meanings are kept only as the vocabulary of Joel's `ruling` lines, within the frozen budget and order (J1 option 2, v2 section 8) |
+| 117 | A matched item is not a disagreement and gets no ruling. A new defect found | replaced: no voter rules; the four-way meanings are kept only as the vocabulary of Joel's `ruling` lines, within the frozen budget and order (J1 option 2, v2 section 8) |
 | 131 | Two findings match when they name the same defect at overlapping locations. The | replaced: two findings match by location only, same path and line within K (O5); not v1's same-defect match |
 | 132 | collator proposes matches. Any voter may split a proposed match, which turns it | removed: no collator proposal and no voter split; O1 and O5 are pure functions of recorded bytes |
 | 133 | into one missed and one extra item, each ruled. | removed: no collator proposal and no voter split; O1 and O5 are pure functions of recorded bytes |
@@ -173,7 +175,7 @@ check 3 compares this table with that grep and with the original's bytes.
 | 199 | before his rulings on those heads are recorded. Any earlier access is logged and | kept and restated in v2 section 6: applied to Joel as the sole signer, and as the sole ruler under J1 option 2 |
 | 203 | write differently; step 4's order is a rule the voters keep, not something a | removed: step 4 (voter rulings) does not exist in v2 |
 | 206 | permission enforces (#juno 7044817921), so nothing in this protocol detects an | kept and restated in v2 section 6 (residual gaps) |
-| 213 | Each voter assigns one of `blocker`, `should-fix`, `nit` or `not-real` to every | replaced: severity is UNMEASURED; the raw gate and review labels are reported |
+| 213 | Each voter assigns one of `blocker`, `should-fix`, `nit` or `not-real` to every | replaced: no voter sets severity; Joel's `ruling` lines carry this scale for the items he rules (v2 section 8); elsewhere severity is UNMEASURED and the raw labels are reported |
 | 218 | ### 2.5 Who rules, and how a ruling is decided | removed: no voters rule disagreements |
 | 220 | The voters #juno, #A1 and #claude rule every disagreement, each ruling recorded | removed: no voters rule disagreements |
 | 221 | with its voter and time (Joel, ft#545 6954624923, answer 4). This replaces the | removed: no voters rule disagreements |
@@ -256,8 +258,15 @@ check 3 compares this table with that grep and with the original's bytes.
   - for every dimension v1 left to judgment, a stated measure or UNMEASURED
     (section 5).
 - **v2 is not the same experiment as v1.** Its results are not comparable with
-  v1's C3, C5 outside clean heads, or C7, and they are never pooled with any v1
-  result.
+  v1's C1, C3, C5 or C7, and they are never pooled with any v1 result:
+  - C1's live case is 10 fleet-tools PRs, where v1's was at least 4 assistant
+    PRs;
+  - C5's clean part counts any `review` hold on a clean head (O2). At
+    `fix_rounds.review: 0` every review finding becomes a hold (the original's
+    lines 341-342), where v1 counted only a hold decided `review right` with
+    severity `not-real`;
+  - C3, the rest of C5, and C7 are ruled by Joel alone, not blind (section 6),
+    where v1 had three blind voters.
 - **Comparability with row 11.** Row 11, the caliper Q1 agentic eval
   (`ft:notes/row11-design-a896-6953845110.md`), also scores against an oracle
   the agent under test cannot read (its review hook and prompt are in
@@ -339,8 +348,9 @@ diff shows. 3 was chosen because it equals git's default unified context.
     budget and in the order of I2. An item past the budget is UNMEASURED, never
     decided by default.
 - **UNMEASURED by script:** severity (2.4; the raw gate and review labels are
-  reported); race and recovery correctness (C7), unless Joel rules it under J1
-  within the budget (I3); the C4 specs' own prose scoring rules in s02 and s08
+  reported), except where a `ruling` line sets it (section 8); race and
+  recovery correctness (C7), unless Joel rules it under J1 within the budget
+  (I3); the C4 specs' own prose scoring rules in s02 and s08
   (O1 still applies to the heads built from them); and `found_in_adjudication`.
 
 **Criteria.** Every criterion is computed over the primary run set, at
@@ -372,11 +382,11 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 | --- | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
-| C3 | line 463 | UNMEASURED: "decided review right with severity blocker" needs a ruling. | Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C3 | line 463 | Over every `missed` and `pass-refused` item of the compared heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script | required |
-| C5 | line 465 | FAIL when any clean head has a false hold (O2). Otherwise UNMEASURED, since the rest of C5 needs a ruling. | script for clean heads; the rest Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
-| C7 | line 467 | UNMEASURED: correctness of a race or recovery outcome needs a ruling. | Joel under J1 within the budget, else UNMEASURED (I3) | required |
+| C7 | line 467 | Over every race and recovery head's outcome item: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
 
 Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
@@ -391,7 +401,8 @@ miss under O3.
 **If the criteria are not met,** the gate is not promoted, and each head behind
 a failed criterion is filed as its own issue on this repository with its scores,
 ordered by the number of failed criteria it appears in, then by head id. The
-original's lines 479-483 order by decided severity, which v2 does not have.
+original's lines 479-483 order by decided severity, which v2 has only for the
+items Joel rules.
 
 ## 6. Storage and blinding under c251 option A
 
@@ -445,9 +456,17 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   section 8 holds and `pilot-unblind.py` has published it. Any earlier access
   is logged as an `access` line in the ledger, and the head is marked.
 - **Residual gaps.** The original's (lines 202-207) are kept, except that
-  step 4's voter order no longer exists. One is added: root, or Joel through
-  `sudo`, can read the records or rewrite the ledger, and only the posted chain
-  heads of section 7 detect a rewrite.
+  step 4's voter order no longer exists. Two are added:
+  - Root, or Joel through `sudo`, can read the records or rewrite the ledger,
+    and only the posted chain heads of section 7 detect a rewrite.
+  - **Joel's rulings are not blind.** v1's packet hid each item's side, the
+    severity labels and the reviewer, and unblinded only after the rulings
+    (the original's lines 154-165). v2 has no packet. Each item Joel rules
+    carries its kind (`missed`, `extra`, `hold-not-made`, `pass-refused`),
+    which says which side raised it, and its raw labels and reviewer. Joel also
+    owns the gate under test. So a PASS of C3, of C5 outside clean heads, or of
+    C7 rests on his unblinded ruling, and the report says so beside each of
+    them.
 
 ## 7. Records
 
@@ -463,8 +482,9 @@ original's lines 479-483 order by decided severity, which v2 does not have.
   `install`, `access`, `correction`. `enroll` and `freeze` are unique per
   `head_id`; `close`, `score` and `unblind` are unique per ledger. A `freeze`
   needs an earlier `enroll` of its `head_id`. **`close` seals enrollment and
-  captures:** after it, only `score`, `score-refused`, `unblind`,
-  `unblind-refused`, `access` and `correction` may be appended, so no head,
+  captures:** in the landed set, only `score`, `score-refused`, `unblind`,
+  `unblind-refused`, `access` and `correction` may be appended after it, and
+  F1 adds `items` and `ruling` to that list, so no head,
   freeze, capture or preflight can join after the end. Nothing but a
   `correction` may follow `unblind`.
 - An append locks, verifies the whole chain, writes one line with `O_APPEND`
@@ -544,7 +564,8 @@ j4: UNRULED I5
 ```
 
 `k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
-is 10, the length of that sequence (Joel, 7083761337); `pr_kind` is
+is 10, the number of compared live heads that ends that sequence (Joel,
+7083761337; section 12); `pr_kind` is
 `fleet-tools-reliability-fix`, the kind relay point 1 names, defined in section
 12; `j1` is `option-2` (relay point 2); `j1_budget` is `<N> items` or `<N>
 hours` and stays `UNRULED` until Joel answers I2, as does `j1_order`; `j4`
@@ -584,14 +605,33 @@ broken chain: it is printed, and the posted chain heads show where the chain
 broke. A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
-(F4) appends the one `items` line: every O5 item of the live and replayed heads,
-every race and recovery outcome for C7, and every disputed classification of
-section 12. It reads only captures, never a sealed record, and prints no
-score. Joel then rules items in the I2 order, one `ruling` line each, until
-the budget is spent. Only then is the one `score` line appended. It reads the
-`ruling` lines, and every item without one is UNMEASURED. Since `items` and
+(F4) appends the one `items` line. It lists every O5 item of every compared
+head, planted heads included, and the outcome of every race and recovery head
+for C7. Each item gets an id. For a planted head it reads that head's captures
+(`gate.json`, `review.md`), never its sealed record, so listing it opens no
+sealed record and prints no score. Joel then rules items in the I2 order, one
+`ruling` line each, until the budget is spent. Only then is the one `score`
+line appended. It reads the `ruling` lines and applies section 5's C3, C5 and
+C7 rules to them. Every item without a ruling is UNMEASURED. Since `items` and
 `ruling` are allowed after `close` (F1), and the `score` comes after both,
 C3, C5 outside clean heads and C7 can be measured.
+
+**The `ruling` line.** Its vocabulary is the original's, by reference:
+
+- `subject` is `item` (an id from the `items` line) or `classification` (a PR
+  number, for section 12's disputes);
+- for an O5 item, `outcome` is one of the four-way rulings, with the meanings
+  of the original's lines 106-115 (`gate right`, `review right`, `both`,
+  `neither`), and `severity` is one of the original's line 213 scale
+  (`blocker`, `should-fix`, `nit`, `not-real`);
+- for a race or recovery outcome, `correct` is `true` or `false`;
+- for a classification, `class` is `eligible` or one of E1 to E5;
+- `budget` is its position in the J1 budget: each `ruling` line, of either
+  subject, takes the next position in ledger order, so the budget counts
+  every ruling once.
+
+No voter rules, and no split vote exists. The four-way meanings and the
+severity scale serve only as the vocabulary of Joel's lines.
 
 **Scoring.** `ft:pilot-score.py` scores only after the end condition holds, so
 no score is visible mid-pilot to steer enrollment. It appends one `score` line
@@ -822,12 +862,17 @@ left out only by a rule written here.
     operator resets the fleet-tools mirror's `main` to it before the push, and
     the original's base check (lines 310-316) applies unchanged.
   - **Review record.** The full verdict at that head under the landing rules is
-    the line of `ft:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
-    <short sha> (full): VERDICT: ...`, with `ft:reviews/ft-<N>.md` the review it
-    records. That file's line 1 is `reviewed at <40-hex>`, and a delta adds
-    `(delta from ...)`, which is not the review. Its line 2,
+    a line of `ft:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
+    <short sha> (full): VERDICT: ...`. When a head has several full verdicts,
+    the last such line in `.verdicts` is the review, as in the original's lines
+    68-69. The review it records is the file whose line 1 is
+    `reviewed at <40-hex>` for that head with no `(delta from ...)`:
+    `ft:reviews/ft-<N>.md` while it is the latest review, otherwise its archived
+    copy `ft:reviews/ft-<N>-full-<short sha>.md`. Its line 2,
     `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. The verdict is
-    what `ft:review-findings.py --verdict` prints, as for any other head.
+    what `ft:review-findings.py --verdict` prints, as for any other head. If no
+    such file exists, or its verdict differs from that last line, the head has
+    no review, and its `review.verdict` is `none`.
   - **CI.** `origin_ci` is
     `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`. Fleet-tools
     runs no CI workflow today, so that list is empty, and the gate's
@@ -844,20 +889,24 @@ left out only by a rule written here.
 - **Disputes go to Joel.** Anyone, Joel or an agent, may dispute a
   classification. A dispute goes to Joel under J1 and counts against the J1
   budget. A dispute raised before the PR's record is written is ruled before
-  that record is written, and it blocks the next enrollment until then. Once a
-  PR's `enroll` or `exclude` line exists, its classification never changes,
-  and no enrolled PR is removed or replaced by another. A later ruling, or a
-  dispute past the budget, is recorded and reported beside it.
-- **Size.** Eligible PRs have fewer than 300 code lines (I1, until Joel
-  answers), measured by the pinned `review-size.sh` at the enrollment head:
-  the PR head the `enroll` or `exclude` line records, before its first review.
+  that record is written, and it blocks the next enrollment until then. Joel
+  rules it with a `ruling` line whose subject is `classification` (section
+  8), which may come before `close`, and the record then follows his ruling.
+  Once a PR's `enroll` or `exclude` line exists, its classification never
+  changes, and no enrolled PR is removed or replaced by another. A later
+  ruling, or a dispute past the budget, is recorded and reported beside it.
+- **Size.** Eligible PRs have fewer than 300 code lines (I1, answered, open
+  only to Joel's correction), measured by the pinned `review-size.sh` at the
+  enrollment head: the PR head the `enroll` or `exclude` line records, before
+  its first review.
   A PR that grows past the bound after it is enrolled stays enrolled. The
   report lists it with both sizes, and it is never quietly dropped.
 - **Order.** Live PRs are taken in order of GitHub's `created_at`, which is
   immutable, with ties broken by PR number, lower first. They are never
   ordered by a relay or request, since the coordinator controls when it relays
-  (#juno fix 1). "Consecutive" means the first 10 eligible PRs in the window are
-  enrolled, and none is skipped.
+  (#juno fix 1). "Consecutive" means the eligible PRs in the window are
+  enrolled in this order, none skipped, until 10 enrolled live heads are
+  compared (the window above). That can be more than 10 enrolled PRs.
 - **Every PR gets a record.** Every PR created in the window gets an `enroll`
   or `exclude` line before its first review. No `enroll` may be written while
   any PR earlier in that order has no record. So a PR with no record blocks the
@@ -1011,9 +1060,11 @@ reviewed PR, and each pin is filled by the signing commit. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
 - **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`; an
-  `items` kind, unique per ledger; and a `ruling` kind for Joel's J1 rulings,
-  each naming its item and budget position. `items` and `ruling` join the kinds
-  allowed after `close`, and no `items` or `ruling` may follow `score`.
+  `items` kind, unique per ledger; and a `ruling` kind with section 8's body.
+  A `ruling` whose subject is `classification` may come before or after
+  `close`. One whose subject is `item` needs an earlier `items` line naming
+  that id. `items` and `ruling` join the kinds allowed after `close`, and no
+  `items` or `ruling` may follow `score`.
 - **F2. The enroll path (I6):** a written by-hand procedure, or a
   pilotseal-owned script. Either one applies section 12:
   - it orders by `created_at`, then PR number;
@@ -1041,7 +1092,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - its `install` check covers `review-size.sh` and the enroll script.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
-  - it reads Joel's `ruling` lines for C3, C5 outside clean heads and C7,
+  - the `items` line covers every compared head, planted heads included, from
+    captures only;
+  - it reads Joel's `ruling` lines and applies section 5's C3, C5 and C7 rules,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - the live minimum of C1 becomes 10;
   - O2 skips a `base_mismatch` clean head, for C5's clean part (section 5);
