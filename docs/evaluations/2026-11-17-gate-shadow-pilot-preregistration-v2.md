@@ -12,14 +12,13 @@ before then. No pilot head has run. Joel's direction of Nov 23 (#A1's relay
 
 Notation is the original's (its lines 26-34): `a#N` is `dayamjz/assistant`,
 `ft#N` is `dayamjz/fleet-tools`, and a bare 10-digit number is an issue comment
-id
-(`gh api repos/dayamjz/fleet-tools/issues/comments/<id>`). "The original" is
+id (`gh api repos/dayamjz/fleet-tools/issues/comments/<id>`). "The original" is
 `docs/evaluations/2026-11-17-gate-shadow-pilot-preregistration.md` at commit
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
-the original owner questions of section 11 (now answered or narrowed), "I1" to
-"I8" the owner inputs (section 11), "E1" to "E6" the exclusion rules
-of section 12 and "F1" to "F6" the script follow-ups of section 17.
+the owner questions of this text's section 11 (now answered or narrowed), "I1"
+to "I8" the owner inputs (section 11), "E1" to "E6" the exclusion rules of
+section 12 and "F1" to "F6" the script follow-ups of section 17.
 
 **Where the review records are (`ftw:`).** Fleet-tools publishes its `reviews/`
 files to `main` only in occasional batches. The last `.verdicts` commit there is
@@ -391,24 +390,30 @@ it equals git's default unified context.
     file with a new side); `git apply --numstat -z`, run outside any
     repository, does not accept the diff, or a truth path is not one of the
     file names git reports; a truth path is absent from the head's tree list;
-    or the head has no gate capture. Then `planted_match` is `unmeasured` with
+    the head has no gate capture; or its `review` stage did not run (below).
+    Then `planted_match` is `unmeasured` with
     that reason, never `null`. This is deliberately stricter than "the one
     diff parses": a record whose form is in doubt is never scored. The
     parse-only check of open item 3 (section 11) shows before unblinding how
     many sealed records this rule measures.
-- **A stage that never ran is never measured.** The gate's stage view lists
-  all nine stages for every run (`internal/service/runs.go:2177-2196`). A
-  stage that never ran has `ran: false` (`internal/machine/wire.go:189-192`)
-  and no holds, and its outcome is `""` (`internal/pipeline/outcome.go:19`)
-  or `skipped` (`internal/pipeline/outcome.go:44-52`: a skip-listed stage,
-  nothing left to change after the rebase, or the pull request or checks
-  stage of a run with no code host). `skipped` also has one producer that
-  did run, so the outcome never says whether a stage ran; only `ran` does.
-  So every oracle below that reads a stage, its outcome or its holds, first
-  needs that stage's entry in `gate.stages[]` to have `ran: true`. Otherwise
-  the oracle is UNMEASURED for that head, never a measured pass or failure.
-  This covers O2, O3 and O4, and O5's `hold-not-made` and `pass-refused`. As
-  built, `pilot-score.py` does not check `ran` (F4).
+- **A stage that never ran is never measured.** The gate's stage view lists all
+  nine stages for every run (`internal/service/runs.go:2177-2196`). A stage that
+  never ran has `ran: false` (`internal/machine/wire.go:189-192`) and no holds,
+  and its outcome is `""` (`internal/pipeline/outcome.go:19`) or `skipped`
+  (`internal/pipeline/outcome.go:44-52`: a skip-listed stage, nothing left to
+  change after the rebase, or the `pr` or `ci` stage of a run with no code
+  host). The stage names are the wire names of
+  `internal/pipeline/stage.go:96-118` (`intent`, `rebase`, `review`, `test`,
+  `document`, `lint`, `push`, `pr`, `ci`), which `stageViews` puts in
+  `gate.stages[]` (`internal/service/runs.go:2183`). `skipped` also has one
+  producer that did run, so the outcome never says whether a stage ran; only
+  `ran` does. So every oracle in this section (O1 to O5) that reads a stage, its
+  outcome, its holds or its findings, first needs that stage's entry in
+  `gate.stages[]` to have `ran: true`. Otherwise the oracle is UNMEASURED for
+  that head, never a measured pass or failure. This covers O1 (the `review`
+  stage, whose findings O1 matches), O2, O3, O4 (the `ci` stage), and O5's
+  `hold-not-made` and `pass-refused`. As built, `pilot-score.py` does not check
+  `ran` (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
@@ -417,7 +422,7 @@ it equals git's default unified context.
   entry whose finding ids include one that O1 matches. UNMEASURED when O1 is,
   or when the `review` stage did not run.
 - **O4, CI failure.** C6 is unchanged (line 466): the head's
-  `gate.checks_basis` is `live-checks`, its `checks` stage ran, and that
+  `gate.checks_basis` is `live-checks`, its `ci` stage ran, and that
   stage's `outcome` is not `passed` (`internal/pipeline/outcome.go:22`).
   UNMEASURED when the basis is `no-ci-declaration` (the original's line 278),
   or the stage is missing or did not run, as when the run was cancelled or
@@ -468,19 +473,27 @@ covers:
 - **Compared heads only:** C1 counts them. C3 and C5 outside clean heads use
   the O5 items of compared live and replayed heads (O5).
 - **C7:** the outcome items of every enrolled race and recovery head except a
-  `base_mismatch` one, whatever its provenance. Race and recovery
+  `base_mismatch` or pin-failed one, whatever its provenance. Race and recovery
   correctness is the gate's own behavior, so C7 needs no review: an outcome
   item reads only the gate capture and the manifest's declared injection.
   Deciding whether a planted race head is compared would mean reading its
   sealed review record, which the `items` step never does.
-- **Every enrolled head of the case named:** C2 (every head), C4 (planted
-  real-finding and hold heads), C6 (CI-failure heads) and C8 (every head).
-- **C5's clean part:** every enrolled clean head except a `base_mismatch` one,
-  since the original's line 315 leaves those out of C5. As built,
-  `pilot-score.py` also applies O2 to a `base_mismatch` clean head (F4).
+- **Every enrolled head:** C2 and C8. Activation, stage times and usage stay in
+  the pilot's totals for every head, as the original's lines 84-86 keep them
+  for a head with no full verdict.
+- **Every enrolled head of the case named, except a pin-failed one:** C4
+  (planted real-finding and hold heads) and C6 (CI-failure heads).
+- **C5's clean part:** every enrolled clean head except a `base_mismatch` or
+  pin-failed one, since the original's line 315 leaves `base_mismatch` heads
+  out of C5. As built, `pilot-score.py` also applies O2 to a `base_mismatch`
+  clean head (F4).
 
 The original's line 315 leaves a `base_mismatch` head out of C1, C3, C5 and C7
-only, which this split follows. The `default-1` run is captured apart (section
+only, which this split follows. A pin-failed head (`pin_check` `fail`: a stage
+model off the pin, missing stage evidence or an untrusted configuration) is
+"not a compared head" under the original's lines 332-336, so it is out of every
+criterion but C2 and C8. Leaving it out reads nothing sealed, since
+`pin_check` is in `gate.json`. The `default-1` run is captured apart (section
 7), reported apart, never pooled, and decides nothing. This restates the
 original's lines 455-457, with the per-criterion scope above in place of their
 "compared heads". Each criterion is required or report-only, as the table
@@ -497,10 +510,10 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
 | C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
-| C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
+| C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
 | C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
-| C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
-| C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
+| C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
 
 Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
@@ -841,19 +854,19 @@ refusal after `unblind` cannot be logged, since only a `correction` may follow
 it (section 7). A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
-(F4) appends the one `items` line. It lists every O5 item of every compared
-live and replayed head except `matched` ones, each `unlocatable` finding as
-its own item, and the outcome of every enrolled race and recovery head except
-a `base_mismatch` one for C7. Each item gets an id. It never reads a planted
-head's review record, which is sealed and kept out of `<captures>` (section
-7), and for a race or recovery outcome it reads only the gate capture and the
-manifest's declared injection, so listing opens no sealed record and prints
-no score. Joel then rules items in the I2 order, one
-`ruling` line each, until the budget is spent. Only then is the one `score`
-line appended. It reads the `ruling` lines and applies section 5's C3, C5 and
-C7 rules to them. Every item without a ruling is UNMEASURED. Since `items` and
-`ruling` are allowed after `close` (F1), and the `score` comes after both,
-C3, C5 outside clean heads and C7 can be measured.
+(F4) appends the one `items` line. It lists every O5 item of every compared live
+and replayed head except `matched` ones, each `unlocatable` finding as its own
+item, and the outcome of every enrolled race and recovery head except a
+`base_mismatch` or pin-failed one for C7. Each item gets an id. It never reads a
+planted head's review record, which is sealed and kept out of `<captures>`
+(section 7), and for a race or recovery outcome it reads only the gate capture
+and the manifest's declared injection, so listing opens no sealed record and
+prints no score. Joel then rules items in the I2 order, one `ruling` line each,
+until the budget is spent. Only then is the one `score` line appended. It reads
+the `ruling` lines and applies section 5's C3, C5 and C7 rules to them. Every
+item without a ruling is UNMEASURED. Since `items` and `ruling` are allowed
+after `close` (F1), and the `score` comes after both, C3, C5 outside clean heads
+and C7 can be measured.
 
 **The `ruling` line.** Its vocabulary is the original's, by reference:
 
@@ -975,7 +988,8 @@ fails:
 
 13. The fleet-tools mirror and its gate home of section 12 exist, isolated
     like the assistant mirror (the original's item 9 and lines 349-352), with
-    the gate's first-run path proven on it.
+    the gate's first-run path proven on it, and the home's `config.yaml`
+    declares `no_ci: true` (section 12, "CI").
 14. **The pin is out of the repo and the copies match it** (#juno 7115601439).
     Preflight reads the key fingerprint and the executable hashes from the
     trust file at section 13's location (I8), never from this text. That
@@ -1226,8 +1240,13 @@ left out only by a rule written here.
     the report lists the files.
   - **CI.** `origin_ci` is
     `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`. Fleet-tools
-    runs no CI workflow today, so that list is empty, and the gate's
-    `checks_basis` on the mirror is `no-ci-declaration`. No live head is a
+    runs no CI workflow today, so that list is empty. An empty list is not a
+    pass: the run waits in the `ci` stage until `checks_timeout` unless the
+    repository declares `no_ci` (`docs/dogfood.md:145-152`,
+    `docs/prd.md:3450`). So the fleet-tools gate home's own `config.yaml` sets
+    `no_ci: true` (precondition 13), and that declaration, as the original's
+    line 390 sources it, is what makes the gate's `checks_basis` on the mirror
+    `no-ci-declaration`. No live head is a
     CI-failure head, since C6's heads are planted.
 - **The kind (`fleet-tools-reliability-fix`).** A `dayamjz/fleet-tools` PR
   fixes a reliability defect when its body's `Observed incident` field (the
@@ -1516,19 +1535,33 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it checks preconditions 8 to 13 and 15;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
     file, `/Users/pilotseal/bin` and each installed script there), a probe of
-    the key's location, and precondition 15's sudo probe;
+    the key's location, precondition 9's signing probe (an attempt from an
+    agent session to sign a test message with the pinned key through each
+    agent the key could be reached by, `ssh-agent` and `gpg-agent`), and
+    precondition 15's sudo probe;
+  - each probe writes a record file in the shape `probe` writes today: a
+    `probes[]` list of `{tester_uid, target, target_owner_uid, owner_from,
+    command, exit, errno}`, plus a `kind` of `denied-read`, `denied-write`,
+    `denied-sign` or `denied-sudo`. `check` takes each record by its own flag,
+    validates it, and records its SHA-256 in the `preflight` line, as it does
+    the denied-read record today (`denied_read_sha256`). The record files are
+    their one home: no ledger kind holds them, so F1 adds none;
   - its `install` check covers `review-size.sh`.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared live and replayed
     head and the outcome of every enrolled race and recovery head except a
-    `base_mismatch` one, never a planted head's review record, and lists each
-    `unlocatable` finding as its own item (as built, `o5_counts` only counts
-    them);
+    `base_mismatch` or pin-failed one, never a planted head's review record, and
+    lists each `unlocatable` finding as its own item (as built, `o5_counts` only
+    counts them);
   - it computes each ruling's place in the 48-hour budget (section 8);
   - every oracle that reads a stage needs that stage's `ran: true`, or it is
     UNMEASURED, whatever the outcome says (section 5; as built, no oracle
-    checks `ran`: not O2, O3, O4 or O5's `hold-not-made` and `pass-refused`);
+    checks `ran`: not O1, O2, O3, O4 or O5's `hold-not-made` and
+    `pass-refused`);
+  - O4 reads the `ci` stage (as built, `stage_outcome(gate, "checks")` looks
+    for a stage that `gate.stages[]` never contains, so C6 is always
+    UNMEASURED);
   - it decides compared only by calling `pilot-unblind.py`'s compared
     predicate (F6), which reads `verdicts.txt` with the `.verdicts` line
     winning, never by a second implementation; it reads each field only from
@@ -1556,7 +1589,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it reads Joel's `ruling` lines and applies section 5's C3, C5 and C7 rules,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - the live minimum of C1 becomes 10;
-  - O2 skips a `base_mismatch` clean head, for C5's clean part (section 5);
+  - O2 skips a `base_mismatch` clean head, for C5's clean part, and C4, C5's
+    clean part, C6 and C7 leave out a pin-failed head (section 5; as built,
+    none of them checks `pin_check`);
   - it reports, for each enrolled PR that landed, whether the landing scripts
     and gates on `main` at its merge differ from `landing_regime` (section
     15);
