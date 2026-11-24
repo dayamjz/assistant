@@ -102,12 +102,17 @@ a pin table (sections 10 and 12). The word in prose, as in this sentence, is not
 a value. This text may reach `main` earlier as an unsigned draft, and each later
 PR that answers an input or fills a pin is still a draft. Preflight check 4 must
 verify all three conditions: the commit is on `main`'s first-parent history,
-this text there has no `UNRULED` or `UNPINNED` value, and this text at
-`origin/main` is byte-identical to this text there. As built, check 4 refuses
-every signing form, and these checks are F3. So any later edit leaves the text
-unsigned until Joel signs again. Every "after the signing commit" in this text
-means after that commit's committer date (`git log --format=%ct`), the time
-preflight dates records against.
+this text there has no `UNRULED` or `UNPINNED` value, and this text on `main` is
+byte-identical to this text there. Preflight reads assistant history only from
+the *assistant history clone*, `/Users/pilotseal/pilot/assistant.git`, a bare
+clone of `dayamjz/assistant` that Joel fetches as pilotseal right before each
+`check` and that uid 501 cannot write (precondition 10). Its `main` is what
+"assistant `main`" means in section 9, and the `preflight` line records that
+`main` commit (F3). As built, check 4 refuses every signing form, and these
+checks are F3. So any later edit leaves the text unsigned until Joel signs
+again. Every "after the signing commit" in this text means after that commit's
+committer date (`git log --format=%ct`), the time preflight dates records
+against.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -670,15 +675,26 @@ items Joel rules.
   and applied to Joel as the only signer, and as the only ruler under J1 option
   2: he does not open a sealed record before the end condition of section 8
   holds and `pilot-unblind.py` has published it. Any earlier access is logged as
-  an `access` line in the ledger, and the head is marked. v2 has exactly two
-  such accesses, both logged:
+  an `access` line in the ledger, and the head is marked. v2 has exactly four
+  such accesses, all logged:
   - **building a planted head** whose record is a construction spec (section 7,
     "Building and binding a planted head"): Joel reads the record as pilotseal
     to build the commit, appends an `access` line (`by: build`, the
     `sealed_id`), and the head is marked;
   - **`pilot-score.py bind`**, which reads a record and prints only the head and
     case it names, never its truth. It appends an `access` line (`by: bind`),
-    and since it prints no truth, the head is not marked.
+    and since it prints no truth, the head is not marked;
+  - **`pilot-score.py bind --census`**, run before signing (section 7), which
+    reads every record and prints only counts. It appends one `access` line
+    (`by: census`) naming every record it read, and marks no head;
+  - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
+    pilotseal before signing, which reads every record and prints only how
+    many parse under O1. It appends one `access` line (`by: parse-check`)
+    naming every record it read, and marks no head.
+
+  A run before signing creates the sealed ledger if it does not exist yet, so
+  these lines come before the first `preflight`, and the report lists them with
+  the rest.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -766,7 +782,7 @@ items Joel rules.
   carries no planted truth: no defect, location, family, expected action, `ask`
   or failing check. Those are only in its sealed record `sNN.md`, the one owner
   of planted truth, which O1 reads and which Joel opens before unblinding only
-  through section 6's two logged accesses.
+  through section 6's four logged accesses.
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
   with the same evidence fields and the exclusion rule (`E1` to `E6`) in place
   of `rule`. An E5 or E6 `exclude` also carries `verdicts_seen` (`true` for E5,
@@ -832,7 +848,8 @@ verdict equals the one on the counted line of its captured `verdicts.txt`, and
 for a live head the capture was on time; for a planted head
 `review_adapter_sha256` equals the adapter pin, read from the last `preflight`
 line before the first `enroll`, which copied it from the trust file (section
-13; section 12's row is a copy no script reads); the one-head rule below holds;
+13; section 12's row is a copy no script trusts, which preflight only
+compares with the trust file, precondition 14); the one-head rule below holds;
 `base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The counted
 line is:
 
@@ -931,11 +948,12 @@ and s08, the C4 candidates, are (the original's lines 283-296).
   those values into the planted head's `enroll`; for a built head, `head` is the
   commit he built. A record that names no case, or names neither a commit nor a
   construction, cannot be bound, so that planted head is not enrolled.
-- **Before signing:** `pilot-score.py bind --census`, as pilotseal, prints only
-  counts: how many records name a commit, how many are construction specs, and
-  how many name a case. It is run before signing with open item 3's parse-only
-  check (section 11), so a pilot whose planted cases can't meet C1's minimums is
-  caught before any live enrollment.
+- **Before signing:** `pilot-score.py bind --census`, as pilotseal, appends an
+  `access` line (`by: census`, section 6) and prints only counts: how many
+  records name a commit, how many are construction specs, and how many name a
+  case. It is run before signing with open item 3's parse-only check (section
+  11), so a pilot whose planted cases can't meet C1's minimums is caught before
+  any live enrollment.
 
 At scoring, the script checks again that each planted `enroll`'s `case`, and its
 `head` where the record names a commit, equal what its record names, and a
@@ -1137,10 +1155,11 @@ Enrollment needs every one of these. Choosing an option is not evidence (#A1
 7065454500). `ft:pilot-preflight.py check` tests them and names the first that
 fails:
 
-1. The original's blob at `fd80055c` and at assistant `origin/main` is
+1. The original's blob at `fd80055c` and at assistant `main`, read from the
+   assistant history clone (section 1), is
    `32424c209b2bc43cd18ba653c7d2091edefc5dcc`.
-2. This text exists on assistant `origin/main`, and its s01-s08 rows equal
-   the original's lines 182-191 byte for byte.
+2. This text exists on assistant `main` in that clone, and its s01-s08 rows
+   equal the original's lines 182-191 byte for byte.
 3. Every grep hit of section 3 has a row in its table, with the original's
    exact line.
 4. Joel's signature of this text is recorded, naming the signing commit, which
@@ -1194,11 +1213,13 @@ fails:
    `gpg-agent`), or, for a token, fails without a physical touch (section
    13).
 10. A write-denied record as uid 501 against the sealed ledger, the trust file,
-    the checker's directory and section 10's history clone exists, dated after
-    the signing commit (sections 6, 13 and 14). For `/Users/pilotseal/bin` it
-    shows that creating a file in the directory, and opening each installed
-    script there for writing, are both denied with `EACCES`, and for the history
-    clone `/Users/pilotseal/pilot/fleet-tools.git` that creating a file in it is
+    the checker's directory, section 10's history clone and section 1's
+    assistant history clone exists, dated after the signing commit (sections 6,
+    13 and 14). For `/Users/pilotseal/bin` it shows that creating a file in the
+    directory, and opening each installed script there for writing, are both
+    denied with `EACCES`, and for the history clones
+    `/Users/pilotseal/pilot/fleet-tools.git` and
+    `/Users/pilotseal/pilot/assistant.git` that creating a file in either is
     denied the same way. Read probes alone do not show it: a directory can deny
     listing and still allow traversal and writes by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
@@ -1245,11 +1266,19 @@ fails:
     and made from an agent session as uid 501, shows that
     `sudo -n -u pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid
     501 reach pilotseal, and no sudo ticket usable from that session is cached.
-    It also records the sudoers `timestamp_type` in force, which must keep
-    tickets per terminal (`tty` or `ppid`), never `global`. It shows only that
-    an agent session cannot use sudo by itself. It does not show that an agent
-    cannot tamper with the terminal Joel uses, which section 14 states as a
-    residual gap.
+    uid 501 cannot read the sudoers policy (`/etc/sudoers` is readable only by
+    root and `wheel`, and `sudo -n -l` is refused by this same precondition), so
+    the `timestamp_type` in force comes from a second record: in his own
+    terminal Joel runs `/usr/bin/sudo /usr/bin/sudo -V`, so `sudo -V` runs as
+    root and prints sudo's defaults, including its authentication timestamp
+    type, and he saves that output as a sudoers record owned by pilotseal. It
+    must show tickets kept per terminal (`tty` or `ppid`), never `global`.
+    `check`, as pilotseal, validates both records and records both hashes in
+    its `preflight` line (F3). No field of either is typed in. The sudoers
+    record passes through Joel's uid-501 terminal, so section 14's terminal gap
+    applies to it. The sudo-denied record shows only that an agent session
+    cannot use sudo by itself. It does not show that an agent cannot tamper with
+    the terminal Joel uses, which section 14 states as a residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1466,11 +1495,12 @@ keeps its number, answered or not.
   signing: `chain_head_checker` above is `UNRULED` until it is named.
 - Whether Joel runs a parse-only check of the real sealed records, as pilotseal,
   printing only how many parse under O1 (open item 3), together with
-  `bind --census` (section 7). If none parses, C4 is wholly UNMEASURED, and if
-  too few records can be bound, C1's planted minimums can't be met. This does
-  not block signing and has no value: it only tells in advance whether C4 and
-  C1 can be measured, and skipping it can only leave them UNMEASURED, never
-  produce a PASS.
+  `bind --census` (section 7). If he does, it is `pilot-score.py parse-check`,
+  which logs an `access` line like every other read of a sealed record (section
+  6). If none parses, C4 is wholly UNMEASURED, and if too few records can be
+  bound, C1's planted minimums can't be met. This does not block signing and has
+  no value: it only tells in advance whether C4 and C1 can be measured, and
+  skipping it can only leave them UNMEASURED, never produce a PASS.
 
 ## 12. The eligible sequence
 
@@ -1620,7 +1650,8 @@ left out only by a rule written here.
     table: `review-size.sh` and `pilot-review.sh`).
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer comes
-    to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any line.
+    to record it, `ftw:reviews/ft-<N>.verdicts` already exists with at least
+    one line. An empty file is not a review.
     The record states that, with `verdicts_seen: true` and `verdicts_sha256`
     (section 7). The report counts E5 exclusions apart and lists each with its
     `created_at`, the `at` of its `exclude` line and that hash, so a PR can't be
@@ -1636,7 +1667,8 @@ left out only by a rule written here.
     Right after `pilot-unblind.py window` first reports the close, he records
     every unrecorded window PR by the precedence above: first E1 to E4, and only
     a PR none of those fits gets E5 or E6. Among those, one whose
-    `ftw:reviews/ft-<N>.verdicts` already exists then gets E5
+    `ftw:reviews/ft-<N>.verdicts` already exists then with at least one line
+    gets E5
     (`verdicts_seen: true`), and the rest get E6 (`verdicts_seen: false`). F2
     runs `window` right after every live `freeze`, so the gap between the
     closing `freeze` and Joel's record is only his own delay, which the report
@@ -1790,7 +1822,7 @@ Relay point 5.
 - **A known limit.** Joel writes as pilotseal, which owns the sealed records, so
   the operating system does not stop the writer from reading them. What keeps
   him from doing so is that F2's procedure opens a sealed path only through
-  section 6's two logged accesses, and section 6's rule that any other earlier
+  section 6's four logged accesses, and section 6's rule that any other earlier
   access is logged and marks the head. Only a writer uid other than pilotseal,
   able to append to the ledger and nothing else, would make that bar a
   mechanism.
@@ -1902,8 +1934,9 @@ refuses every form until then.
   signature covers them and no separate document needs a pin. A written copy may
   exist for Joel's use, and when it differs from these bullets, these bullets
   win. It applies section 12:
-  - it opens a sealed path only through section 6's two logged accesses:
-    building a planted head from its spec, and `pilot-score.py bind`. Its one
+  - it opens a sealed path only through section 6's four logged accesses:
+    building a planted head from its spec, `pilot-score.py bind`,
+    `bind --census` and `parse-check`. Its one
     write there is section 6's unlogged copy of a planted head's review record
     into `sealed/reviews/<head_id>.md`, made without reading it. Otherwise
     it reads the ledger only through `pilot-ledger.py` and the captures, never
@@ -1918,8 +1951,8 @@ refuses every form until then.
     `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
     closed, it writes no more live `enroll` and records every unrecorded window
     PR at once, under the first of E1 to E4 that applies, and otherwise under
-    E5 when its `.verdicts` file exists then and under E6 when it does not
-    (section 12);
+    E5 when its `.verdicts` file exists then with at least one line, and under
+    E6 otherwise, an empty file included (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`, after comparing it with the trust file's landing baseline and
     refusing that `enroll` while a difference is not reconciled (precondition
@@ -1943,6 +1976,12 @@ refuses every form until then.
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
   - it refuses enrollment when the parameters' `k` is not 3 (section 5);
+  - it reads assistant history only from section 1's assistant history clone,
+    for check 4 and preconditions 1 and 2, and records that clone's `main`
+    commit in its `preflight` line;
+  - it validates precondition 15's sudo-denied record and its sudoers record,
+    made through sudo as root, and records both hashes in its `preflight`
+    line;
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -1957,7 +1996,7 @@ refuses every form until then.
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
     file, `/Users/pilotseal/bin` and each installed script there, and the
-    history clone), a probe of
+    two history clones), a probe of
     the key's location, precondition 9's signing probe (an attempt from an
     agent session to sign a test message with the pinned key through each
     agent the key could be reached by, `ssh-agent` and `gpg-agent`), and
@@ -1978,10 +2017,12 @@ refuses every form until then.
 - **F4. `pilot-score.py`:**
   - a `bind <sealed_id>` mode that, as pilotseal, appends an `access` line
     (`by: bind`) and prints only the case and any commit a sealed record names,
-    a `bind --census` mode that prints only counts, a refusal to bind a
-    construction spec whose case is race or recovery, and a check at scoring
-    that every planted `enroll` agrees with its record (section 7, "Building and
-    binding a planted head");
+    a `bind --census` mode that appends an `access` line (`by: census`) and
+    prints only counts, a `parse-check` mode that appends an `access` line
+    (`by: parse-check`) and prints only how many records parse under O1, a
+    refusal to bind a construction spec whose case is race or recovery, and a
+    check at scoring that every planted `enroll` agrees with its record (section
+    7, "Building and binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone,
     and refuses, appending `score-refused`, unless the ledger already has a
     `close` line, so no item list, and no near-score, exists mid-pilot and the
