@@ -715,27 +715,32 @@ items Joel rules.
   pre-run record, as pilotseal, into `/Users/pilotseal/pilot/records/`, its one
   home, and each `access` line records its SHA-256 (`prerun_record_sha256`).
   `check` later finds the file in that directory with that hash and refuses the
-  line unless the file is a write-denied record for `/Users/pilotseal/bin` whose
-  every probe was denied and whose date is before the line's `at` (F3). The
-  trust file's location is I8 (section 11), so neither runs until I8 is settled
-  and the trust file exists there; the reference holds only from then. If the
-  trust file holds no scoring hash yet, Joel runs neither until he has written
-  one, as pilotseal, for a `pilot-score.py` blob he has read from a landed F4 or
-  F5 merge in section 10's history clone. The `access` line records that hash
-  (`script_sha256`). `check` later accepts that line only when its
-  `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
-  history clone's `main` first-parent history at or after `f4_first`, the first
-  F4 merge, which section 10 records once and never moves (F3). That shows only
-  that the copy was on fleet-tools `main` at or after the first F4 merge, not
-  that it was reviewed: fleet-tools has no branch protection (section 16) and
-  every agent pushes as `dayamjz`. What ties the copy to the trust file's
-  scoring hash at the time of the run is Joel's pre-run check above; `check`
-  does not verify that tie, and the procedure guarantees no more than it. The
-  line need not equal the final scoring pin: if a later fix moves `f4` and
-  re-pins `pilot-score.py`, `f4_first` stays put, the earlier line still passes,
-  nothing in the sealed ledger is rewritten, and the read stays logged. A copy
-  that lies in its own `access` line is not caught by that check; what bars it
-  is that uid 501 cannot write `/Users/pilotseal/bin`.
+  line unless the file is a write-denied record for `/Users/pilotseal/bin`
+  holding at least these two probes, each denied with `EACCES`: creating a file
+  in `/Users/pilotseal/bin`, and opening `/Users/pilotseal/bin/pilot-score.py`
+  for writing. Every probe in it must be denied, and every probe's `date` must
+  be before the line's `at` (F3). The trust file's location is I8 (section 11),
+  so neither runs until I8 is settled and the trust file exists there; the
+  reference holds only from then. If the trust file holds no scoring hash yet,
+  Joel runs neither until he has written one, as pilotseal, for a
+  `pilot-score.py` blob he has read from a landed F4 or F5 merge in section 10's
+  history clone. The `access` line records that hash (`script_sha256`). `check`
+  later accepts that line only when its `script_sha256` is the blob of
+  `pilot-score.py` at a merge commit on the history clone's `main` first-parent
+  history at or after `f4_first`, the first F4 merge, which section 10 records
+  once and never moves (F3). That shows only that the copy was on fleet-tools
+  `main` at or after the first F4 merge, not that it was reviewed: fleet-tools
+  has no branch protection (section 16) and every agent pushes as `dayamjz`.
+  What ties the copy to the trust file's scoring hash at the time of the run is
+  Joel's pre-run check above; `check` does not verify that tie, and the
+  procedure guarantees no more than it. The line need not equal the final
+  scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
+  `f4_first` stays put, the earlier line still passes, nothing in the sealed
+  ledger is rewritten, and the read stays logged. A copy that lies in its own
+  `access` line is not caught by that check; what bars it is that uid 501 can
+  neither create a file in `/Users/pilotseal/bin` nor open `pilot-score.py`
+  there for writing, as the pre-run record shows, within the
+  self-attesting-record gap of section 9.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1285,12 +1290,15 @@ fails:
     writing is denied with `EACCES`, and that creating a file is denied in each
     directory along two paths: the path as I8 writes it, and the path with every
     symlink resolved (`realpath`), from the file's directory up to `/`. A create
-    there is denied with `EACCES`, or with `EROFS` in a directory on a read-only
-    mount, which is what uid 501 gets in `/` on this host, a sealed read-only
-    system volume. So the file cannot be replaced from a directory uid 501 can
-    write, whether reached by the name I8 gives or through a symlink. Read
-    probes alone do not show it: a directory can deny listing and still allow
-    traversal and writes by group.
+    there is denied with `EACCES`. The one exception is `/` itself, where uid
+    501 gets `EROFS` on this host: `EROFS` is accepted there only, and only when
+    the record also carries `mount`'s line for `/` and that line shows it
+    `sealed` and `read-only`, the signed system volume, which uid 501 cannot
+    remount writable. `EROFS` in any other directory fails the record, since a
+    read-only mount uid 501 attached could be reattached writable. So the file
+    cannot be replaced from a directory uid 501 can write, whether reached by
+    the name I8 gives or through a symlink. Read probes alone do not show it: a
+    directory can deny listing and still allow traversal and writes by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
@@ -1409,15 +1417,16 @@ fails:
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
-15 are files written by a process running as uid 501, the uid they restrain.
-`check` validates their fields and hashes them, but nothing ties a record to a
-probe that really ran: an agent whose session can in fact reach `ssh-agent` or a
-sudo ticket could write a well-formed record by hand. What narrows it: Joel runs
-each probe himself, under section 14's terminal practice, and checks that the
-hash `check` records is the hash of the file he saw written. What closes it:
-running each probe as uid 501 from the separate account of section 14 (`sudo -u`
-from there) and signing each record with the pinned key, so a record an agent
-wrote fails its signature. Until then this is a stated residual gap.
+15, and section 6's pre-run write-denied record, are files written by a process
+running as uid 501, the uid they restrain. `check` validates their fields and
+hashes them, but nothing ties a record to a probe that really ran: an agent
+whose session can in fact reach `ssh-agent` or a sudo ticket could write a
+well-formed record by hand. What narrows it: Joel runs each probe himself, under
+section 14's terminal practice, and checks that the hash `check` records is the
+hash of the file he saw written. What closes it: running each probe as uid 501
+from the separate account of section 14 (`sudo -u` from there) and signing each
+record with the pinned key, so a record an agent wrote fails its signature.
+Until then this is a stated residual gap.
 
 On success it appends a `preflight` line. It never enrolls. As built
 (`6adbd531`), `pilot-preflight.py` checks items 1 to 7 only in part: item 4
@@ -2049,10 +2058,9 @@ Relay point 5.
   toward the 10. F1 makes the ledger refuse a second window record naming a PR,
   and F6 counts distinct PRs. Both must land before signing (precondition
   12).
-- **The denied-write test.** A record as uid 501, in the shape of section 9's
-  denied-read record, shows that opening the sealed ledger or the trust file
-  for writing is denied with `EACCES` (section 9, precondition 10).
-  `pilot-preflight.py probe` opens read-only today, so the write probe is F3.
+- **The denied-write test.** Precondition 10's write-denied record, which owns
+  the list of what is probed. `pilot-preflight.py probe` opens read-only today,
+  so the write probes are F3.
 - **Chain heads.** Joel produces the chain head as pilotseal after the first
   `preflight` and at each `freeze`, `close`, `score`, `unblind`,
   `promotion-due` and `substitute-check`, and the coordinator posts the line he
@@ -2245,8 +2253,9 @@ refuses every form until then.
     the history clone's `main` first-parent history at or after `f4_first`, or
     whose `prerun_record_sha256` names no file in
     `/Users/pilotseal/pilot/records/` that is a write-denied record for
-    `/Users/pilotseal/bin`, every probe denied, dated before the line's `at`
-    (sections 6 and 10);
+    `/Users/pilotseal/bin` holding a denied create in that directory and a
+    denied open-for-write of `pilot-score.py` there, every probe denied and
+    every probe's `date` before the line's `at` (sections 6 and 10);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2261,13 +2270,14 @@ refuses every form until then.
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
     file and a create-file probe of every directory on its written and its
-    resolved path up to `/`, accepting `EROFS` on a read-only mount,
-    `/Users/pilotseal/bin` and each installed script there, and the two history
-    clones), which also make section 6's pre-run write-denied record, a probe of
-    the key's location, precondition 9's signing probe (an attempt from an agent
-    session to sign a test message with the pinned key through each agent the
-    key could be reached by, `ssh-agent` and `gpg-agent`), and precondition 15's
-    sudo probe;
+    resolved path up to `/`, accepting `EROFS` only for `/` when the `mount`
+    line for `/`, which the probe captures into the record, shows `sealed` and
+    `read-only`, `/Users/pilotseal/bin` and each installed script there, and the
+    two history clones), which also make section 6's pre-run write-denied
+    record, a probe of the key's location, precondition 9's signing probe (an
+    attempt from an agent session to sign a test message with the pinned key
+    through each agent the key could be reached by, `ssh-agent` and
+    `gpg-agent`), and precondition 15's sudo probe;
   - each probe writes a record file in the shape `probe` writes today: a
     `probes[]` list of entries with the fields `tester_uid`, `target`,
     `target_owner_uid`, `owner_from`, `command`, `exit`, `errno` and `date`,
