@@ -28,9 +28,12 @@ import (
 // entry naming the task, its reason and the commits the copy holds; the next
 // pass raises it as one kept-work wake, actionable and appended, records
 // when it surfaced, and no later pass raises it again; the catch-up read
-// lists it; and the copy is left standing. Without the entry's writer the
-// poll for the entry fails, and without the loop's detection the pass
-// raises nothing.
+// lists it; and the copy is left standing. The loop's first pass starts the
+// cleanup off the pass (landed.go) and then reads the open kept work, so a
+// cleanup that finishes first is surfaced by that same pass; which pass
+// surfaces the entry is the scheduler's, and the test asserts only that one
+// does, once. Without the entry's writer the poll for the entry fails, and
+// without the loop's detection neither pass raises anything.
 func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P15)
@@ -82,7 +85,7 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 	terminals.dead("pane-kept")
 	l := openLoop(t, h, records, terminals, &fakeClock{now: time.Now()})
 	defer func() { _ = l.service.Close() }()
-	l.nextPass(t)
+	first := l.nextPass(t)
 
 	var entry store.KeptWork
 	deadline := time.Now().Add(loopWait)
@@ -116,10 +119,13 @@ func TestARefusedTaskCleanupIsKeptWorkThatSurfacesOnce(t *testing.T) {
 		t.Fatalf("the entry's detail %q is not the redacted account of the refusal", entry.Detail)
 	}
 
-	got := detectionsOf(l.pass(t), id, supervisor.KindKeptWork)
+	got := detectionsOf(first, id, supervisor.KindKeptWork)
+	if len(got) == 0 {
+		got = detectionsOf(l.pass(t), id, supervisor.KindKeptWork)
+	}
 	if len(got) != 1 || got[0].Marker != keptWorkMarker(entry.ID) ||
 		got[0].Verdict.Reason != supervisor.ReasonActionable || got[0].Disposition != store.WakeAppended {
-		t.Fatalf("the pass after the entry = %+v, want entry %d surfaced as actionable and appended", got, entry.ID)
+		t.Fatalf("the pass that surfaced the entry = %+v, want entry %d surfaced as actionable and appended", got, entry.ID)
 	}
 	for range 3 {
 		if again := detectionsOf(l.pass(t), id, supervisor.KindKeptWork); len(again) != 0 {
