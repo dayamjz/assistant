@@ -376,11 +376,16 @@ it equals git's default unified context.
     never a miss (F4).
   - Match: a gate finding matches when its `path` is equal and its `line` lies
     in a range widened by K lines on each side.
-  - `planted_match` is the first matching gate finding, ordered by its
-    `stage`'s position in `gate.stages[]` (a finding naming no listed stage
-    comes after all), then by finding id, shorter first, then bytewise. Only a
-    finding with a string `id` takes part. It is `null` when no gate finding
-    matches, and `null` means a miss.
+  - `planted_match` is the first matching gate finding, ordered by its `stage`'s
+    position in `gate.stages[]` (a finding naming no listed stage comes after
+    all), then by finding id, shorter first, then bytewise. Each
+    `gate.findings[]` entry records `stage`, the stage whose report holds it,
+    which extends the original's line 386 field list (section 7). Finding ids
+    are unique only within one stage's report
+    (`internal/findings/identity.go:40-56`), so a finding is identified by its
+    (`stage`, `id`) pair, and no two entries share both. Only a finding with a
+    string `id` and a `stage` takes part. `planted_match` records that pair. It
+    is `null` when no gate finding matches, and `null` means a miss.
   - UNMEASURED, in this order: a fence never closes; the record has no fenced
     diff, or more than one; a diff line appears anywhere outside the one
     fenced diff (in prose, a quote, or another block, so a quoted `--- verdict`
@@ -413,27 +418,40 @@ it equals git's default unified context.
   `ci` stage), and O5's `hold-not-made` and `pass-refused`. O1 matches the
   findings of every stage that ran, as its rule says, and it needs the `review`
   stage to have run: a run that ended before review is UNMEASURED for O1, though
-  an earlier stage may have reported findings. As built, `pilot-score.py` does
-  not check `ran` (F4).
+  an earlier stage may have reported findings. **The usage ceiling.** A stage
+  whose agent call the usage ceiling refused still reports `ran: true`: the
+  refusal becomes a report holding one `ask` finding, id `usage-ceiling`, marked
+  not started (`internal/service/observe.go:113`,
+  `internal/service/ceiling.go:160-166`, `internal/machine/ceiling.go:305-337`),
+  and `StageRan` checks only that a report exists
+  (`internal/pipeline/outcome.go:173-180`). So, for every oracle here, a stage
+  has run only when `ran` is true and none of its findings has the id
+  `usage-ceiling`; a ceiling-held stage is UNMEASURED, never a miss or a false
+  hold. Precondition 13 also forbids a usage ceiling in either gate home, so
+  this rule is a backstop. As built, `pilot-score.py` checks neither `ran` nor
+  the ceiling finding (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
   `review` stage did not run.
 - **O3, hold heads.** A hold head is found when `gate.holds[]` has a `review`
-  entry whose finding ids include one that O1 matches. UNMEASURED when O1 is,
-  or when the `review` stage did not run.
+  entry whose finding ids include the `id` of a finding O1 matches whose `stage`
+  is `review`, so an equal id from another stage never counts. UNMEASURED when
+  O1 is, or when the `review` stage did not run.
 - **O4, CI failure.** C6 is unchanged (line 466): the head's
   `gate.checks_basis` is `live-checks`, its `ci` stage ran, and that
   stage's `outcome` is not `passed` (`internal/pipeline/outcome.go:22`).
   UNMEASURED when the basis is `no-ci-declaration` (the original's line 278),
   or the stage is missing or did not run, as when the run was cancelled or
   parked at an earlier hold.
-- **O5, live and replayed heads.** O5 applies to compared heads of
-  provenance `live` or `replayed` only. A planted head's review record is one
-  of its sealed records (the original's lines 82-83, kept by section 2), so
-  no O5 item of a planted head is listed or ruled before unblinding, and none
-  after, since Joel would then see the planted truth while ruling. A planted
-  head is scored by script alone (O1 to O4).
+- **O5, live and replayed heads.** O5 applies to compared heads of provenance
+  `live` or `replayed` only. A planted head's review record is one of its sealed
+  records (the original's lines 82-83, kept by section 2), so no O5 item of a
+  planted head is listed or ruled before unblinding, and none after, since Joel
+  would then see the planted truth while ruling. A planted clean, real-finding,
+  hold or CI-failure head is scored by script alone (O1 to O4). A planted race
+  or recovery head's outcome item is the one planted item Joel rules (C7): it
+  reads only the gate capture and the declared injection, never a sealed record.
   - Inputs: the gate capture and the review record. Review findings are read
     with `ft:review-findings.py`'s findings block, never a second parser.
   - A review finding whose location is `path:N` or `path:N-M` matches the
@@ -516,7 +534,7 @@ it.
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
 | C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no compared live or replayed head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
-| C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
+| C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that names a gate finding, by (`stage`, `id`) (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
 | C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct` and at least one such head exists; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
@@ -609,8 +627,11 @@ items Joel rules.
     case it names, never its truth. It appends an `access` line (`by: bind`),
     and since it prints no truth, the head is not marked.
 
-  Joel's rulings never touch a planted head (O5, section 8), so a mark changes
-  no result, and the report lists every `access` line.
+  Building is allowed only for a planted head of a case Joel never rules (clean,
+  real-finding, hold or CI-failure), and `bind` refuses a construction spec
+  whose case is race or recovery (F4). So a marked head is never one whose
+  outcome Joel rules, a mark changes no result, and the report lists every
+  `access` line.
 - **Residual gaps.** The original's (lines 202-207) are kept, except that
   step 4's voter order no longer exists. Two are added:
   - Root, or Joel through `sudo`, can read the records or rewrite the ledger,
@@ -773,9 +794,10 @@ and it appears nowhere else:
   for a window PR section 12's evidence and `landing_regime`.
 - **`gate.json`**, written by the operator: the base facts of the original's
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
-  `base_check`), the `gate.*` fields (among them `gate.checks_basis`),
-  `origin_ci`, `pin_check`, and for a planted head `review_adapter_sha256`
-  (section 12).
+  `base_check`), the `gate.*` fields (among them `gate.checks_basis`, and
+  `gate.findings[]` with each entry's `stage`, taken from the `stages[].report`
+  that holds it), `origin_ci`, `pin_check`, and for a planted head
+  `review_adapter_sha256` (section 12).
 - **The review record:** every `review.*` field (above) except
   `review.record_commit`, which v2 does not record (section 2).
 - **The sealed record `sNN.md`:** planted truth.
@@ -823,8 +845,8 @@ At scoring, the script checks again that each planted `enroll`'s `case`, and its
 planted head that differs is UNMEASURED for every oracle (F4). The planted
 commit and its case are not sealed: in the original the case is a manifest field
 (line 363), and only `planted_truth` (line 366) is sealed. Knowing them does not
-bias Joel, whose only rulings are on live heads and on race and recovery
-outcomes (section 8).
+bias Joel, whose only rulings are on the O5 items of live and replayed heads, on
+race and recovery outcomes, and on classifications (section 8).
 
 **Where a planted head's review record lives.** A planted head's review record
 is a sealed record (O5). **A stated limit:** the operator runs the pinned
@@ -1065,10 +1087,13 @@ fails:
     to adopt it, or a signed owner record says it does not apply to the pilot
     (section 15).
 
-13. The fleet-tools mirror and its gate home of section 12 exist, isolated
-    like the assistant mirror (the original's item 9 and lines 349-352), with
-    the gate's first-run path proven on it, and the home's `config.yaml`
-    declares `no_ci: true` (section 12, "CI").
+13. The fleet-tools mirror and its gate home of section 12 exist, isolated like
+    the assistant mirror (the original's item 9 and lines 349-352), with the
+    gate's first-run path proven on it, and the home's `config.yaml` declares
+    `no_ci: true` (section 12, "CI"). Neither that home nor the assistant gate
+    home that runs planted and replayed heads sets any `usage_ceiling.*` key
+    (`internal/config/key.go:313-350`), and the preflight record shows both
+    `config.yaml` files with none (F3).
 14. **The pin is out of the repo and the copies match it** (#juno 7115601439).
     Preflight reads the key fingerprint and the executable hashes from the
     trust file at section 13's location (I8), never from this text. That
@@ -1682,7 +1707,8 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     table, section 12's rows) differs from it. A self-test row
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
-  - it checks preconditions 8 to 13 and 15;
+  - it checks preconditions 8 to 13 and 15, including that neither gate home's
+    `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
     file, `/Users/pilotseal/bin` and each installed script there), a probe of
     the key's location, precondition 9's signing probe (an attempt from an
@@ -1705,8 +1731,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
 - **F4. `pilot-score.py`:**
   - a `bind <sealed_id>` mode that, as pilotseal, appends an `access` line
     (`by: bind`) and prints only the case and any commit a sealed record names,
-    a `bind --census` mode that prints only counts, and a check at scoring that
-    every planted `enroll` agrees with its record (section 7, "Building and
+    a `bind --census` mode that prints only counts, a refusal to bind a
+    construction spec whose case is race or recovery, and a check at scoring
+    that every planted `enroll` agrees with its record (section 7, "Building and
     binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared live and replayed
@@ -1744,6 +1771,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it never opens a `raw[]` entry whose `file` starts `sealed:`, and never
     reads a planted head's review record itself: the compared predicate it
     calls does (F6, section 7);
+  - it identifies a gate finding by (`stage`, `id`), `planted_match` records
+    that pair, and O3 counts only a matched finding whose `stage` is `review`
+    (as built, `planted_match` holds the id alone and O3 compares ids alone);
   - it takes review fields only from the review record, and makes a head
     UNMEASURED when its `gate.json` holds `planted_truth` or a `review.*` field
     (section 7);
