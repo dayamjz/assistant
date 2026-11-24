@@ -108,8 +108,9 @@ the *assistant history clone*, `/Users/pilotseal/pilot/assistant.git`, a bare
 clone of `dayamjz/assistant` that uid 501 cannot write (precondition 10).
 **Freshness.** A bare clone has no fetch refspec, so a plain `git fetch` can
 leave its `main` behind. Right before each `check`, Joel runs, as pilotseal,
-`/usr/bin/git fetch origin +refs/heads/main:refs/heads/main` in that clone, in
-section 6's fixed form, and `check`
+`/usr/bin/git -C /Users/pilotseal/pilot/assistant.git fetch origin
++refs/heads/main:refs/heads/main` in section 6's fixed form (uid 501 cannot
+`cd` into the clone, so `-C` names it), and `check`
 compares the clone's `main` with `git ls-remote origin refs/heads/main` and
 refuses on a mismatch. That `main` is what "assistant `main`" means in section
 9, and the `preflight` line records it (F3). As built, check 4 refuses every
@@ -663,40 +664,51 @@ items Joel rules.
   ```
 
   **Every other command Joel runs as pilotseal** uses the same prefix
-  (`/usr/bin/sudo -u pilotseal /usr/bin/env -i PATH=/usr/bin:/bin
-  HOME=/Users/pilotseal`) and names its tool by absolute path: `/usr/bin/git`
-  for the history clones' fetch, `/usr/bin/shasum -a 256` for the `bin`
-  comparison, and `/bin/cp` for the copies into `records/` and
-  `sealed/reviews/`. Without that, sudo finds a bare command name through
-  Joel's `PATH` unless `secure_path` is set, which precondition 15 does not
-  require. `env -i` drops every variable Joel's shell would pass, such as a
-  `PATH` with a uid-501-writable directory first, or `DEVELOPER_DIR`. `-B`
-  stops Python writing bytecode, so the scripts' sibling loads leave no
-  `__pycache__` in `bin`; it does not stop Python reading a cache that is
-  already there, which section 6's `bin` rule refuses. Elsewhere this text says
-  `sudo -u pilotseal` for short; it means this form.
+  (`/usr/bin/sudo -u pilotseal` then
+  `/usr/bin/env -i PATH=/usr/bin:/bin HOME=/Users/pilotseal`) and names its tool
+  by absolute path: `/usr/bin/git` for the history clones' fetch,
+  `/usr/bin/shasum -a 256` for the `bin` comparison, and `/bin/cp` for the
+  copies into `records/` and `sealed/reviews/`. Inside the prefix sudo resolves
+  only `/usr/bin/env`, an absolute path, and `env` would find a bare tool name
+  through its own fixed `PATH=/usr/bin:/bin`; the absolute tool path names
+  exactly which file runs. A command typed without the prefix is different: sudo
+  then finds a bare name through Joel's `PATH` unless `secure_path` is set,
+  which precondition 15 does not require. `env -i` drops every variable Joel's
+  shell would pass, such as a `PATH` with a uid-501-writable directory first, or
+  `DEVELOPER_DIR`. `-B` stops Python writing bytecode, so the scripts' sibling
+  loads leave no `__pycache__` in `bin`; it does not stop Python reading a cache
+  that is already there, which section 6's `bin` rule refuses. Elsewhere this
+  text says `sudo -u pilotseal` for short; it means this form.
 
   **What actually runs is not fully checked.** `/usr/bin/python3` and
-  `/usr/bin/git` are on the sealed read-only system volume (`mount` shows `/`
-  as `sealed` and `read-only`), but on this host both are the same launcher,
-  which runs the copies under `/Library/Developer/CommandLineTools`, the
-  directory `/var/db/xcode_select_link` names, on the writable data volume.
-  Those copies and that link are root-owned today (observed 2026-11-24), but no
-  record in this text checks them, so a Command Line Tools update or an admin
+  `/usr/bin/git` are on the sealed read-only system volume (`mount` shows `/` as
+  `sealed` and `read-only`), but on this host both are the same launcher, which
+  runs the copies under `/Library/Developer/CommandLineTools`, the directory
+  `/var/db/xcode_select_link` names, on the writable data volume. Those copies
+  and that link are root-owned today (observed 2026-11-24), but no record in
+  this text checks them, so a Command Line Tools update or an admin
   `xcode-select -s` changes the Python or git that runs as pilotseal without any
-  record failing. This is a stated residual gap (section 14, "What the system
-  launchers run"). No agent session can use
+  record failing. That Python's `site.py` also adds
+  `/Library/Python/3.9/site-packages` to `sys.path`, on the same writable
+  volume, and a `.pth` file there runs code when the interpreter starts, `-B` or
+  not. That directory does not exist today and `/Library` is root-owned, but no
+  record checks it. `/usr/bin/shasum` is a Perl script whose modules come from
+  Perl's library path, which no record checks either. This is a stated residual
+  gap (section 14, "What the system launchers run"). No agent session can use
   sudo to become pilotseal without Joel's password, as far as precondition 15
   checks the sudo policy and the sudo PAM stack, and no sudoers entry is
   recommended. Precondition 15 does not cover `su pilotseal` or what password
   pilotseal itself has (section 14, "Other routes to pilotseal"). An agent can
   still tamper with the uid-501 terminal Joel runs `sudo` from (section 14,
-  "Joel's terminal is the agents' uid"). Scoring needs `/usr/bin/git` (O1 above)
-  for any planted record that reaches O1's git step. If one does and git is
-  missing, scoring refuses and logs `score-refused` rather than marking heads
-  UNMEASURED. If every planted record is UNMEASURED by an earlier O1 rule, git
-  is never called and scoring completes without it. This is relay point 6. Both
-  are deterministic: the early-unblinding refusal is shown by
+  "Joel's terminal is the agents' uid"). Scoring runs `git apply` (O1 above) for
+  any planted record that reaches O1's git step. As built (`9b2d4e27`), it
+  refuses and logs `score-refused` only when git cannot be started at all. On
+  this host `/usr/bin/git` is a launcher that always starts, so a missing or
+  broken Command Line Tools install makes `git apply` exit non-zero instead:
+  every planted record that reaches the git step is UNMEASURED as "git does not
+  accept the diff", and C4 is UNMEASURED, never PASS. If every planted record is
+  UNMEASURED by an earlier O1 rule, git is never called. This is relay point 6.
+  Both are deterministic: the early-unblinding refusal is shown by
   `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
   `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
   CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
@@ -726,16 +738,17 @@ items Joel rules.
   - **`pilot-score.py bind --census`**, run before signing (section 7), which
     reads every record and prints only counts. It appends one `access` line
     (`by: census`) naming every record it read, and marks no head;
-  - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
-    pilotseal before signing, which reads every record and prints only how
-    many parse under O1's record rules. Those are the rules that need no head:
-    the fence rules, diff text outside the one fenced diff, a diff that does
-    not parse, `git apply --numstat -z` rejecting it, and a diff that adds no
-    truth line. The rules that need a head (its tree list, its gate capture,
-    whether its `review` ran) are not applied, so a record that parses can
-    still be UNMEASURED at scoring. It needs `/usr/bin/git`, as
-    scoring does (section 6), and refuses without it. It appends one `access`
-    line (`by: parse-check`) naming every record it read, and marks no head.
+  -  - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
+    pilotseal before signing, which reads every record and prints only how many
+    parse under O1's record rules. Those are the rules that need no head: the
+    fence rules, diff text outside the one fenced diff, a diff that does not
+    parse, `git apply --numstat -z` rejecting it, and a diff that adds no truth
+    line. The rules that need a head (its tree list, its gate capture, whether
+    its `review` ran) are not applied, so a record that parses can still be
+    UNMEASURED at scoring. It runs `git apply` as scoring does, and like scoring
+    refuses only when git cannot be started; a broken git counts the records
+    that reach it as not parsing (section 6). It appends one `access` line
+    (`by: parse-check`) naming every record it read, and marks no head.
 
   A run before signing creates the sealed ledger if it does not exist yet, so
   these lines come before the first `preflight`, and the report lists them with
@@ -1441,13 +1454,16 @@ fails:
     record carries the names and gids it matches against. uid 501 cannot read
     the sudoers policy (`/etc/sudoers` is readable only by root and `wheel`),
     and the text relies on no uid-501 view of it. The policy comes from a second
-    record, the *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo`
-    to copy, as root, the bytes of `/etc/sudoers` and of every file it includes
-    (each `#include`, `@include`, `#includedir` and `@includedir` target,
-    recursively), with each path, the output of `visudo -c`, the output of
-    `sudo -V` run as root (what it reports for the two PAM service names), and
-    the output of `id -un 501`, `id -Gn 501` and `id -G 501` (the user, group
-    names and gids the scan above matches), into one file owned by pilotseal.
+    record, the *sudoers record*: in his own terminal Joel copies, as root, the
+    bytes of `/etc/sudoers` and of every file it includes (each `#include`,
+    `@include`, `#includedir` and `@includedir` target, recursively), with each
+    path, the output of `visudo -c`, the output of `sudo -V` run as root (what
+    it reports for the two PAM service names), and the output of `id -un 501`,
+    `id -Gn 501` and `id -G 501` (the user, group names and gids the scan above
+    matches), into one file owned by pilotseal. Each of these runs in the root
+    fixed form, `/usr/bin/sudo /usr/bin/env -i PATH=/usr/bin:/bin` followed by
+    the tool's absolute path (`/bin/cat`, `/usr/sbin/visudo -c`,
+    `/usr/bin/sudo -V`, `/usr/bin/id`), never a bare name.
     The record must show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -1519,7 +1535,9 @@ section 6's rule for the census and parse-check copies.
 only from the *history clone*, `/Users/pilotseal/pilot/fleet-tools.git`, a bare
 clone of `dayamjz/fleet-tools` that uid 501 cannot write (precondition 10's
 write probes cover it), kept fresh as section 1 keeps the assistant clone:
-fetched with `+refs/heads/main:refs/heads/main` right before each `check`, and
+fetched with `/usr/bin/git -C /Users/pilotseal/pilot/fleet-tools.git fetch
+origin +refs/heads/main:refs/heads/main` in section 6's fixed form right before
+each `check`, and
 compared with `git ls-remote origin refs/heads/main`, refusing on a mismatch.
 For each script with a follow-up it checks that:
 - the row's merge commit equals the merge commit of the script's latest
@@ -2082,9 +2100,11 @@ Relay point 5.
   `/usr/bin/git` are launchers on the sealed volume that run the copies under
   `/Library/Developer/CommandLineTools`, chosen by `/var/db/xcode_select_link`,
   on the writable data volume (section 6). No record checks those copies or the
-  link, so whoever can change them changes what runs as pilotseal, and no
-  record of this text would show it. They are root-owned today; this text does
-  not check that they stay so.
+  link, nor `/Library/Python/3.9/site-packages`, whose `.pth` files run code at
+  every Python start, nor the Perl library path `/usr/bin/shasum` loads from.
+  Whoever can change any of them changes what runs as pilotseal or what the
+  `bin` comparison reports, and no record of this text would show it. They are
+  root-owned or absent today; this text does not check that they stay so.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -2097,9 +2117,10 @@ Relay point 5.
   can use the key, holds only while this gap and the "other routes to pilotseal"
   gap above are not exploited, since an agent with Joel's captured password, or
   with pilotseal's own, acts as pilotseal.
-  - **What narrows it:** Joel runs every command as pilotseal only in section
-    6's fixed form (absolute `/usr/bin/sudo`, `env -i`, a fixed `PATH`,
-    absolute tool paths), within the launcher gap above,
+  - **What narrows it:** Joel runs every command as pilotseal or as root only
+    in section 6's fixed form or precondition 15's root form (absolute
+    `/usr/bin/sudo`, `env -i`, a fixed `PATH`, absolute tool paths), within the
+    launcher gap above,
     from a shell started with no startup files (`/bin/zsh -f`), ends the ticket
     with `sudo -k` when he is done, and reads what he signs with tools outside
     uid 501's writable paths. This only narrows it: a shell that was already
@@ -2353,7 +2374,8 @@ refuses every form until then.
     a `bind --census` mode that appends an `access` line (`by: census`) and
     prints only counts, a `parse-check` mode that appends an `access` line
     (`by: parse-check`) and prints only how many records parse under O1's
-    record rules, refusing without `/usr/bin/git` (section 6), each of the two
+    record rules, refusing only when git cannot be started (section 6), each of
+    the two
     recording the `script_sha256`, the `bin_sha256` and the
     `prerun_record_sha256` Joel checked (section 6), a refusal to bind a
     construction spec whose case is race or recovery, and a check at scoring
@@ -2398,10 +2420,10 @@ refuses every form until then.
     miss (O1);
   - it reports section 12's recording delay, from the window's close (by count
     or by time) to the first E5 or E6 `exclude` written after it;
-  - it lists every `bind --census` and `parse-check` `access` line with the age
-    of its pre-run record, the line's `at` minus the latest probe `date` in the
-    record its `prerun_record_sha256` names in `/Users/pilotseal/pilot/records/`
-    (section 6);
+  -  - it lists every `bind --census` and `parse-check` `access` line with the
+    age of its pre-run record, the line's `at` minus the earliest probe `date`
+    in the record its `prerun_record_sha256` names in
+    `/Users/pilotseal/pilot/records/` (section 6);
   - a live head whose `pr_created_at` is outside the window, before its
     opening or after its close, or whose `enroll` line's `at` is later than the
     window's close, is not a sequence head, so it is in none of C1,
