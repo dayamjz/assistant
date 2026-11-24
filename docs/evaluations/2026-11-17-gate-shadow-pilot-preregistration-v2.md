@@ -513,8 +513,12 @@ it equals git's default unified context.
 covers:
 
 - **Compared heads only:** C1 counts them. C3 and C5 outside clean heads use
-  the O5 items of compared replayed heads and of compared live heads created
-  in the window (O5, section 12).
+  the O5 items of compared replayed heads and of compared sequence heads (O5).
+- **Which live heads count:** in C1, C3, C5 and the `items` line, the live
+  heads are exactly the *sequence heads*, as section 8's end condition 4
+  defines them; that definition is the one owner of this scope. A live head
+  that is not a sequence head, for any reason section 12 lists, is in none of
+  them, and the report lists it (F4).
 - **C7:** the outcome items of every enrolled race and recovery head except a
   `base_mismatch` or pin-failed one, whatever its provenance. Race and recovery
   correctness is the gate's own behavior, so C7 needs no review: an outcome
@@ -557,9 +561,9 @@ it.
 | --- | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
-| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared replayed heads and the compared live heads created in the window (section 12): FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no such head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared replayed heads and the compared sequence heads (section 8, end condition 4): FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no such head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that names a gate finding, by (`stage`, `id`) (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
-| C5 | line 465 | FAIL when any clean head that is neither `base_mismatch` nor pin-failed has a false hold (O2), or when more than one compared replayed head, or compared live head created in the window (section 12), that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no such replayed or live head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C5 | line 465 | FAIL when any clean head that is neither `base_mismatch` nor pin-failed has a false hold (O2), or when more than one compared replayed head or compared sequence head (section 8, end condition 4) that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no such replayed or sequence head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct` and at least one such head exists; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
@@ -995,10 +999,10 @@ when all of these hold:
    the first `preflight` line, and not after its close (section 12), and whose
    `enroll` line's `at` is not later than the closing `freeze`'s `at`. A head
    enrolled after that `freeze` cannot be frozen before it, so this condition
-   never moves where the window closes. C1's live
-   minimum counts compared heads of `case` `live`, leaving out a live head
-   created outside the window, and so includes every sequence head, so it can
-   always be met when this holds. Every window PR is enrolled with `case` `live`
+   never moves where the window closes. This definition is the one owner of
+   which live heads C1, C3, C5 and the `items` line cover (section 5). C1's
+   live minimum counts compared sequence heads, so it can always be met when
+   this holds. Every window PR is enrolled with `case` `live`
    (section 12), so no eligible PR can leave the sequence by its case; planted
    heads never count. As built, `pilot-unblind.py` counts frozen heads of
    provenance `live`, not compared sequence heads, so F6 must land before
@@ -1020,9 +1024,8 @@ it (section 7). A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
-replayed head and every compared live head created in the window (a live head
-created outside the window is left out, section 12) except `matched`
-ones, each `unlocatable` finding as its own
+replayed head and every compared sequence head (end condition 4) except
+`matched` ones, each `unlocatable` finding as its own
 item, and the outcome of every enrolled race and recovery head except a
 `base_mismatch` or pin-failed one for C7. Each item gets an id. It never reads a
 planted head's review record, which is sealed and kept out of `<captures>`
@@ -1050,11 +1053,12 @@ both, C3, C5 outside clean heads and C7 can be measured.
 - `budget` records where the line falls in the J1 budget. The script
   recomputes it from recorded bytes, and the recomputed value wins; a recorded
   value that differs is reported beside the line. The budget is 48 hours (Joel,
-  7121929832, answer 3): the window opens at the `at` of the `items` line and
-  lasts 48 hours. An item ruling is inside it when its `at` falls in the
-  window. A classification ruling is not tied to the `items` line, and F1 lets
-  it come before or after `close`, so it is not timed; it is inside, and the
-  report counts it apart.
+  7121929832, answer 3): the *budget period* opens at the `at` of the `items`
+  line and lasts 48 hours. It is not section 12's live window. An item ruling
+  is inside the budget when its `at` falls in the budget period. A
+  classification ruling is not tied to the `items` line, and F1 lets it come
+  before or after `close`, so it is not timed; it is inside, and the report
+  counts it apart.
 
 **What the budget costs.** Since the budget is hours, classification rulings
 do not draw on the window, and O5 items are limited only by time. An item Joel
@@ -1392,9 +1396,10 @@ left out only by a rule written here.
   `pr_created_at` is after the close is enrolled anyway, or one created before
   the opening gets past F1, or a live `enroll` for any PR is written after the
   closing `freeze` (its `at` later than that `freeze`'s `at`), it is not a
-  sequence head, it is left out of C1, C3 and C5, and the report lists it
-  (F4). The last case takes the place of the PR's E5 or E6 record, so it also
-  marks the pilot "possibly selected".
+  sequence head by end condition 4, so it is in none of C1, C3, C5 or the
+  `items` line (section 5), and the report lists it (F4). The last case takes
+  the place of the PR's E5 or E6 record, so it also marks the pilot "possibly
+  selected".
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
   with `case` `live` and `provenance` `live`. This replaces the original's lines
   279 and 280 for v2: a race or recovery head is planted or replayed, never a
@@ -1486,12 +1491,16 @@ left out only by a rule written here.
   while any PR earlier in that order has no record. So a PR with no record
   blocks the next live enrollment. A planted head's `enroll` has no place in
   the PR order and is never blocked by it.
-- **Reconciliation.** Before each `enroll` and before `close`, the writer lists
-  every `dayamjz/fleet-tools` PR created in the window, open or closed, from
-  GitHub, and checks that each has exactly one window record (section 7), never
-  counting a replayed head's `enroll`, whose `pr` is an assistant number. A PR
-  with none, or with two, refuses the `enroll` or the `close`. Joel does this by
-  hand under F2's procedure, and the ledger enforces the "two" half (F1): it
+- **Reconciliation.** Before each live `enroll` and before `close`, the writer
+  lists every `dayamjz/fleet-tools` PR created in the window, open or closed,
+  from GitHub, and checks the window records (section 7), never counting a
+  replayed head's `enroll`, whose `pr` is an assistant number. Before a live
+  `enroll`, every PR earlier in the order than the one being enrolled must have
+  exactly one record, and the one being enrolled must have none. Before
+  `close`, every PR created in the window must have exactly one. A PR with none
+  where one is due, or with two, refuses the `enroll` or the `close`. A planted
+  `enroll` is not reconciled, as "Every PR gets a record" says. Joel does this
+  by hand under F2's procedure, and the ledger enforces the "two" half (F1): it
   refuses an `enroll` or `exclude` naming a PR that already has a record.
 - **The exclusion rules.** These are the only ones. Each `exclude` line names
   one rule. When more than one applies, the first in the order E1, E2, E3, E4,
@@ -1786,8 +1795,10 @@ refuses every form until then.
     it reads the ledger only through `pilot-ledger.py` and the captures, never
     `/Users/pilotseal/pilot/sealed/` (section 14);
   - it orders by `created_at`, then PR number;
-  - it reconciles every window PR against the ledger before each `enroll` and
-    before `close`, and refuses on a missing or doubled record;
+  - it reconciles the window PRs against the ledger before each live `enroll`
+    (every PR earlier in the order has exactly one record, the one being
+    enrolled has none) and before `close` (every window PR has exactly one),
+    and refuses on a missing or doubled record (section 12);
   - it runs the pinned `review-size.sh` at the enrollment head;
   - right after each live head's `freeze` is appended, and before each live
     `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
@@ -1847,7 +1858,7 @@ refuses every form until then.
     binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared replayed head and
-    every compared live head created in the window (section 12), and the outcome
+    every compared sequence head (section 8, end condition 4), and the outcome
     of every enrolled race and recovery head except a `base_mismatch` or
     pin-failed one, never a planted head's review record, and lists each
     `unlocatable` finding as its own item (as built, `o5_counts` only counts
@@ -1875,8 +1886,9 @@ refuses every form until then.
     miss (O1);
   - a live head whose `pr_created_at` is outside the window, before its
     opening or after its close, or whose `enroll` line's `at` is later than the
-    closing `freeze`'s `at`, is left out of C1, C3 and C5 and listed, and the
-    last case marks the pilot possibly selected (section 12);
+    closing `freeze`'s `at`, is not a sequence head, so it is in none of C1,
+    C3, C5 or the `items` line (section 5); it is listed, and the last case
+    marks the pilot possibly selected (section 12);
   - it lists each item ruling made out of the `j1_order` order (section 8);
   - it lists every enrolled live head that is not compared, with its reason
     (captured late, moved after enrollment, no review, or another), every E5
