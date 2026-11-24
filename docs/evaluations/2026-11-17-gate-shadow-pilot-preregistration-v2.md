@@ -135,8 +135,12 @@ these ranges, the table wins.
 - **Section 3, case mix and enrollment**, lines 267-352, except line 281 (the
   "Live PRs" row: at least 4, in the order of `REVIEW-REQUEST full` relays),
   which section 12 replaces, and the words "A live or" in line 279 (the Race
-  row), since a race or recovery head is planted or replayed in v2 (section
-  12). Live heads are the eligible sequence, 10 of them, in PR creation order.
+  row), since a race or recovery head is planted or replayed in v2 (section 12),
+  and the "manifest entry" clauses of lines 275-278 (the clean, real finding,
+  hold and CI-failure rows), which put planted truth in the manifest. In v2 the
+  manifest is Joel's `enroll` lines, so that truth lives only in the head's
+  sealed record `sNN.md` (section 7, "Bodies"). Live heads are the eligible
+  sequence, 10 of them, in PR creation order.
 - **Section 4's capture fields**, lines 354-396 (the field table from
   `head_id` to `review.record_commit`). Rows 397-405 and the example record
   (lines 407-448) are not kept. For a live head, section 12 restates the
@@ -317,12 +321,13 @@ person's judgment. `ft:pilot-score.py` implements them, and section 7 names the
 files it reads.
 
 **Terms.** The **operator** drives each gate run and writes the captures. The
-**manifest** of the original's section 3 is, in v2, the ledger's `enroll`
-lines (section 7). A **planted head** is one whose `enroll` names a sealed
-record (`sealed_id`). A **compared head** is an enrolled, frozen head whose
-review verdict is `APPROVE` or `CHANGES REQUESTED`, whose
-`base_check.base_mismatch` is `false`, and whose `pin_check` is `pass`
-(section 7). There is no adjudication pending and no reduced-voter head.
+**manifest** of the original's section 3 is, in v2, the ledger's `enroll` lines
+(section 7). A **planted head** is one whose `enroll` names a sealed record
+(`sealed_id`). A **compared head** is an enrolled, frozen head that meets
+section 7's one definition ("One owner for the review fields"): a review verdict
+of `APPROVE` or `CHANGES REQUESTED` that its `.verdicts` capture agrees with,
+one head throughout, `base_check.base_mismatch` false and `pin_check` `pass`.
+There is no adjudication pending and no reduced-voter head.
 
 **K = 3.** A finding within 3 lines of a changed line (O1), or of a review
 finding's location (O5), counts as at that line. K is a fixed rule. It does not
@@ -367,8 +372,12 @@ it equals git's default unified context.
     many sealed records this rule measures.
 - **A stage that never ran is never measured.** The gate's stage view lists
   all nine stages for every run (`internal/service/runs.go:2177-2196`). A
-  stage that never ran has outcome `""` (`internal/pipeline/outcome.go:19`)
-  and `ran: false` (`internal/machine/wire.go:189-192`), and it has no holds.
+  stage that never ran has `ran: false` (`internal/machine/wire.go:189-192`)
+  and no holds, and its outcome is `""` (`internal/pipeline/outcome.go:19`)
+  or `skipped` (`internal/pipeline/outcome.go:43-51`: a skip-listed stage,
+  nothing left to change after the rebase, or the pull request or checks
+  stage of a run with no code host). `skipped` also has one producer that
+  did run, so the outcome never says whether a stage ran; only `ran` does.
   So every oracle below that reads a stage, its outcome or its holds, first
   needs that stage's entry in `gate.stages[]` to have `ran: true`. Otherwise
   the oracle is UNMEASURED for that head, never a measured pass or failure.
@@ -515,8 +524,11 @@ items Joel rules.
   only when Joel invokes them, as
   `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
   agent session runs as pilotseal, and no sudoers entry is recommended.
-  Scoring needs git on pilotseal's `PATH` (O1 above); with no git it refuses
-  and logs `score-refused` rather than marking heads UNMEASURED. This is relay
+  Scoring needs git on pilotseal's `PATH` (O1 above) for any planted record
+  that reaches O1's git step. If one does and git is missing, scoring
+  refuses and logs `score-refused` rather than marking heads UNMEASURED. If
+  every planted record is UNMEASURED by an earlier O1 rule, git is never
+  called and scoring completes without it. This is relay
   point 6. Both are deterministic: the early-unblinding refusal is shown by
   `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
   `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
@@ -599,7 +611,12 @@ items Joel rules.
   `pr_created_at` (GitHub's `created_at`), `enroll_head` (the 40-hex head it is
   enrolled at), `code_lines` (the pinned `review-size.sh` at that head),
   `incident` (the issue number and that issue's `created_at`) and `rule`
-  (`eligible`).
+  (`eligible`). The first live `enroll` also records `landing_regime`
+  (section 15); the landed ledger checks no body fields, so this needs no
+  ledger change. A planted head's `enroll` carries no planted truth: no
+  defect, location, family, expected action, `ask` or failing check. Those
+  are only in its sealed record `sNN.md`, the one owner of planted truth,
+  which O1 reads and Joel never opens before unblinding (section 6).
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
   unique per `pr`, with the same evidence fields and the exclusion rule (`E1`
   to `E5`) in place of `rule`.
@@ -609,7 +626,8 @@ items Joel rules.
   may rule. Each `ruling` names one item, its ruling and its place in the J1
   budget.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
-  `{file, sha256}`, one per capture file of the head.
+  `{file, sha256}`, one per capture file of the head, and for a planted head
+  one more for its sealed review record (section 7).
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
   signing commit and the parameters below. The end rule and K are read
   from the last `preflight` line before the first `enroll`, so they are fixed
@@ -620,30 +638,58 @@ items Joel rules.
 
 **Captures.** For each head the operator writes, under `<captures>/<head_id>/`:
 `gate.json` (the original's section 4 fields of lines 361-391 except
-`planted_truth` at line 366, plus `pin_check`, `pass` or `fail`, the item 3
-pin check of line 332), `review.md` (the review record, for a live or replayed
-head that has one) and `tree.txt` (`git ls-tree -r -z --name-only
-<head>`: NUL-separated, so no path is quoted). Each is listed in that head's
-`freeze` `raw[]`, and the scripts read no capture whose bytes differ from it.
-The `default-1` run of a head goes under
-`<captures>/<head_id>/default-1/`, with its own `gate.json`, and is listed in the
-same `raw[]`. `pilot-score.py` reads only the file named `gate.json`, so it
+`planted_truth` at line 366, plus `pin_check`, `pass` or `fail`, the item 3 pin
+check of line 332), `review.md` (the review record, for a live or replayed head
+that has one), `verdicts.txt` (for a live or replayed head, the bytes of
+`ft:reviews/ft-<N>.verdicts` for a live head, or of `ft:reviews/<N>.verdicts`
+for a replayed one, taken when the review record is captured) and `tree.txt`
+(`git ls-tree -r -z --name-only <head>`: NUL-separated, so no path is quoted).
+Each is listed in that head's `freeze` `raw[]`, and the scripts read no capture
+whose bytes differ from it. The `default-1` run of a head goes under
+`<captures>/<head_id>/default-1/`, with its own `gate.json`, and is listed in
+the same `raw[]`. `pilot-score.py` reads only the file named `gate.json`, so it
 never scores or pools the `default-1` run. Reporting that run apart is F4.
 
 **One owner for the review fields.** `gate.json` never holds `planted_truth`
 or any `review.*` field (the original's lines 392-396). Those come only from
 the review record, by `ft:review-findings.py`, so no second copy can disagree
 with it. A `gate.json` that holds either makes every oracle for that head
-UNMEASURED (F4). A head is *compared* when its `gate.json` exists, its review
-record's verdict is `APPROVE` or `CHANGES REQUESTED` (for a live head, also
-agreeing with `.verdicts`, section 12), `base_check.base_mismatch` is `false`
-and `pin_check` is `pass`. That one definition serves C1, O5 and the `items`
-line. A planted head's review record is a sealed record (O5). It is written to
-`/Users/pilotseal/pilot/sealed/reviews/<head_id>.md`, never into
-`<captures>`, and listed by hash in that head's `freeze` `raw[]`. Only
-`pilot-score.py score`, as pilotseal, reads it, and only for the verdict that
-decides whether the head is compared. The `items` step never reads it. It is
-published at unblinding with s01 to s08 (F6).
+UNMEASURED (F4). A head is *compared* when its `gate.json` exists; its review
+record's verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed
+head, that verdict equals the one on the last full-verdict line for the head
+in its captured `verdicts.txt`; the one-head rule below holds;
+`base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The
+`.verdicts` line wins, as in the original's lines 68-69: when the captured
+review record's verdict differs from it, the head has no review (section 12),
+is not compared, and the report names both. That one definition serves C1,
+O5 and the `items` line.
+
+**One owner for the manifest fields.** The `enroll` line owns every field the
+original's section 4 sources from the manifest: `head_id`, `head`, `case`,
+`provenance`, `pr`, `mirror_reset`, `injection`, `intent_sha256`,
+`roles_pin_sha256`, `run_set` and `fix_rounds_review`, and for a live head
+section 12's evidence. The scripts read them only from it. `gate.json` owns
+what the run and the operator's checks produce: `review_base`,
+`mirror_main_after_reset`, `base_check`, the `gate.*` fields, `origin_ci` and
+`pin_check`. If `gate.json` repeats a manifest field, that is only a copy, and
+a copy that differs from the `enroll` line makes every oracle for that head
+UNMEASURED (F4).
+
+**One head.** `gate.json`'s `head` and the head the review record names (line
+1's `reviewed at <40-hex>` for a fleet-tools review) must both equal the
+`enroll` line's `head`, and for a live head `head` must equal `enroll_head`, the
+head that was sized and classified (section 12). If any of them differs, for
+example because the author pushed after enrollment and the review is of the new
+head, the head is not compared. It stays enrolled, and the report lists it as
+moved after enrollment.
+
+**Where a planted head's review record lives.** A planted head's review record
+is a sealed record (O5). It is written to
+`/Users/pilotseal/pilot/sealed/reviews/<head_id>.md`, never into `<captures>`,
+and listed by hash in that head's `freeze` `raw[]`. Only `pilot-score.py score`,
+as pilotseal, reads it, and only for the verdict that decides whether the head
+is compared. The `items` step never reads it. It is published at unblinding with
+s01 to s08 (F6).
 
 **Streams and chain heads.** The sealed ledger is
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
@@ -708,10 +754,12 @@ when all of these hold:
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
 refused scoring appends `score-refused`. So an early attempt is logged, as the
-original's lines 199-200 require. The one refusal that cannot be logged is a
-ledger that does not verify (condition 1), since nothing can be appended to a
-broken chain: it is printed, and the posted chain heads show where the chain
-broke. A refusal prints no record content and publishes nothing.
+original's lines 199-200 require. Three refusals are printed but cannot be
+logged. A ledger that does not verify (condition 1) takes no append, and the
+posted chain heads show where the chain broke. A second `pilot-unblind.py run`
+refuses with "already unblinded" before it reaches its logging step. And any
+refusal after `unblind` cannot be logged, since only a `correction` may follow
+it (section 7). A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
@@ -1300,7 +1348,9 @@ conflict. It enables no branch protection and promotes no gate.
 ## 17. Script follow-ups
 
 What this text requires that the landed and held scripts (ft#790, ft#792,
-ft#793, ft#794, ft#804) do not do yet. None widens a held PR. Each is its own
+ft#793, ft#794, and ft#804, the open fix that makes `pilot-ledger.py append`
+refuse a ledger it cannot open for writing with one line, not a traceback) do
+not do yet. None widens a held PR. Each is its own
 reviewed PR, and each pin is filled by the signing commit. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
@@ -1352,7 +1402,14 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     them);
   - it computes each ruling's place in the 48-hour budget (section 8);
   - every oracle that reads a stage needs that stage's `ran: true`, or it is
-    UNMEASURED (section 5; as built, O2 and O4 do not check it);
+    UNMEASURED, whatever the outcome says (section 5; as built, no oracle
+    checks `ran`: not O2, O3, O4 or O5's `hold-not-made` and `pass-refused`);
+  - it reads `verdicts.txt` and decides compared by section 7's one
+    definition, the `.verdicts` line winning; it reads manifest fields only
+    from the `enroll` line, makes a head UNMEASURED when a `gate.json` copy
+    differs, and does not compare a head that fails the one-head rule (as
+    built, `score_head` reads the verdict from `review.md` alone and
+    `base_check` from `gate.json` with no such checks);
   - it takes review fields only from the review record, reads a planted
     head's review record only from the sealed directory and only for the
     compared verdict, and makes a head UNMEASURED when its `gate.json` holds
