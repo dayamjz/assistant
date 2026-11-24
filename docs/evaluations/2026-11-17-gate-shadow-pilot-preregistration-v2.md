@@ -27,7 +27,8 @@ as untracked files in the coordinator's working checkout. So an `ftw:` path is
 in that working checkout, `~/Projects/fleet-tools` in the account the
 coordinator runs as (uid 501), where the review scripts write. v2 reads every
 review record and `.verdicts` file of a live or replayed head there, never at
-fleet-tools `main`. A known limit follows: uid 501 can write that directory, so
+fleet-tools `main` and never at the `5b1b73d2` that the kept original text
+names (section 2). A known limit follows: uid 501 can write that directory, so
 a record could change before it is captured. After capture its bytes are fixed
 by their hash in `freeze` `raw[]`.
 
@@ -141,7 +142,12 @@ collator, and only pilotseal reads a sealed record.
   exact commit outside a pull request, through the adapter `ft:pilot-review.sh`.
   For a live head, which is now a fleet-tools PR, section 12's "Live heads run
   on fleet-tools" replaces lines 58-60 (the mirror), 61-69 (the review record)
-  and 87-91 (the base).
+  and 87-91 (the base). For a replayed head, lines 61-69 and section 4's
+  line 392 are kept except for where they look: its `.verdicts` file and its
+  review record are `ftw:` paths (the `ftw:` note above section 1), never
+  `ft:` paths at `5b1b73d2`, and its review record is the file section 7's
+  "Replayed review record" finds by content, not whatever `<N>.md` holds when
+  it is read.
 - **Section 2.2's definitions of a disagreement**, lines 121-130 (missed,
   extra, hold the review did not make, pass the review refused) and lines
   135-139 (setup holds are excluded). How two findings match (lines 131-133) is
@@ -184,9 +190,12 @@ One row per non-blank original line in these ranges, named by row 8's build
 brief: 6, 43, 49-50, 70-71, 131-133, 158-165, 203, 213, 218-265, 397-405,
 410-411, 421-423, 443-447, 461, 467 and 472-475. Also one row for every hit of
 `grep -n -i -E 'voter|recus|#juno|#A1|#claude|ruling|split'` over lines 1-527.
-A row that is not a voter step says "kept, quote only". Each quote is that
-line's exact text, trimmed, with `|` written as `\|`. `ft:pilot-preflight.py`
-check 3 compares this table with that grep and with the original's bytes.
+A row whose line is not a voter step starts with "kept": "kept, quote only"
+when v2 keeps the line as written, and otherwise "kept" and how v2 restates or
+limits it (rows 70, 197-199 and 206). Each quote is that line's exact text,
+trimmed, with `|` written as `\|`. `ft:pilot-preflight.py` check 3 compares
+the first two columns with that grep and with the original's bytes; it does
+not read the third.
 
 | original line | quote | v2 replacement |
 | --- | --- | --- |
@@ -627,6 +636,13 @@ items Joel rules.
     case it names, never its truth. It appends an `access` line (`by: bind`),
     and since it prints no truth, the head is not marked.
 
+  One more touch of the sealed directory is a write, not an access: Joel, as
+  pilotseal, copies each planted head's review record into
+  `sealed/reviews/<head_id>.md` (section 7) with `cp`, without reading it. It
+  opens no existing sealed file, so it needs no `access` line and marks no
+  head. Its `freeze` `raw[]` entry `sealed:reviews/<head_id>.md` records it
+  and its hash.
+
   Building is allowed only for a planted head of a case Joel never rules (clean,
   real-finding, hold or CI-failure), and `bind` refuses a construction spec
   whose case is race or recovery (F4). So a marked head is never one whose
@@ -729,9 +745,10 @@ items Joel rules.
   `{file, sha256}`, one per capture file of the head, and for a planted head
   one more for its sealed review record (section 7).
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
-  signing commit and the parameters below. The end rule and K are read
-  from the last `preflight` line before the first `enroll`, so they are fixed
-  before any head is enrolled.
+  signing commit, the parameters below and `key_fingerprint`, the fingerprint
+  of the key it verified the signature with (section 13, F3). The end rule and
+  K are read from the last `preflight` line before the first `enroll`, so they
+  are fixed before any head is enrolled.
 - `close`, `score`, `unblind`, `unblind-refused`, `score-refused`,
   `denied-read`, `install`, `access`, `correction`: as their scripts write them
   (section 10).
@@ -776,8 +793,24 @@ line is:
   Any later line means another review ran before the capture, so the head is
   captured late: it is not compared, stays enrolled, and is listed. This
   replaces the original's lines 68-69 ("the last full verdict") for live heads.
-- **for a replayed head**, the last full-verdict line at that head, as in the
-  original's lines 68-69, since its reviews ended before the pilot.
+- **for a replayed head**, the last full-verdict line at that head in
+  `ftw:reviews/<N>.verdicts`, of the form
+  `--- verdict #<N> at <short sha> (full): VERDICT: ...`, as in the original's
+  lines 68-69, since its reviews ended before the pilot.
+
+**Replayed review record.** A later review of the same assistant PR overwrites
+`ftw:reviews/<N>.md`, so a replayed head's record is found by content, as
+section 12 finds a live head's. It is the file in `ftw:reviews/` named `<N>.md`
+or `<N>-<anything>.md` whose line 1 is
+`# <Reviewer> review of PR #<N> at <40-hex> (...)` naming that head, without
+`delta from`, and whose verdict, as `ft:review-findings.py --verdict` prints
+it, equals the counted line's. Line 1 gives `review.head`, `review.kind`
+(`full`) and `review.reviewer` (its `<Reviewer>` word). If no such file exists,
+the head has no review and is not compared. If more than one exists, they must
+have the same line 1 and the same findings block, as `ft:review-findings.py`
+prints it, or the head has no review. The report lists the files in both
+cases. The operator applies this rule when capturing `review.md`, and the
+*compared* predicate checks the captured bytes.
 
 The counted line wins: when the captured review record's verdict differs from
 it, the head has no review (section 12), is not compared, and the report names
@@ -1092,8 +1125,10 @@ fails:
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
-    script this text pins, and every follow-up of section 17, has landed through
-    the landing gates with its review. Every landing requirement that changed
+    script this text pins, and every script follow-up of section 17 (F1, F3,
+    F4, F6, and F5 if Joel picks a deadline), has landed through the landing
+    gates with its review. F2 is part of this text and needs no landing of its
+    own. Every landing requirement that changed
     between this text's signing and the first live `enroll` has been reconciled
     explicitly, comparing the trust file's landing baseline (section 13) with
     `landing_regime` at that `enroll`: either this text is amended and re-signed
@@ -1518,7 +1553,8 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It must be
   outside every repository and every agent's home, not writable by uid 501, and
   written only by Joel, as the user that owns it. It holds the public key and
-  its fingerprint, the signing form, the signing commit and this text's blob
+  its fingerprint, every earlier key with its rotation statement (the key
+  rotation rule below), the signing form, the signing commit and this text's blob
   there, the landing baseline at signing (the fleet-tools `main` commit when the
   signing commit is made, and the path and blob of each landing script and gate
   the coordinator runs there), and the SHA-256 of every executable the pilot
@@ -1535,10 +1571,17 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
 trust_file: UNRULED I8
 key_fingerprint: UNPINNED I5
 ```
-- **Key rotation.** A change to the public key in the trust file is valid only
-  with a statement signed by the old key that names the new key and the
-  signing commit. So neither an agent's PR nor a rewrite of the trust file
-  without the old key can swap it.
+- **Key rotation.** The anchor is the `key_fingerprint` in the ledger's first
+  `preflight` line (section 7), which is hash-chained and covered by a posted
+  chain head, so a rewrite of the trust file cannot also move it. The trust file
+  keeps every key since that one, in order, each later key with a statement
+  signed by the key before it that names the new key and the signing commit.
+  `check` verifies that chain from the ledger's anchor to the trust file's
+  current key, and refuses when a link is missing or its signature fails (F3).
+  So after the first `preflight` line, neither an agent's PR nor a rewrite of
+  the trust file without the old key can swap it. Before that line there is no
+  anchor outside the trust file, so a key change then is only as safe as the
+  trust file itself: only Joel writes it, and uid 501 cannot.
 - **What counts as a signature.** A signature is made with the pinned key over
   the exact bytes of the record, and the record names the signing commit. A
   GitHub comment from `dayamjz`, a relay or a chat message is never one,
@@ -1670,9 +1713,12 @@ conflict. It enables no branch protection and promotes no gate.
 What this text requires that the landed and held scripts (ft#790, ft#792,
 ft#793, ft#794, and ft#804, the open fix that makes `pilot-ledger.py append`
 refuse a ledger it cannot open for writing with one line, not a traceback) do
-not do yet. None widens a held PR. Each is its own
-reviewed PR, and each pin is filled by the signing commit. Enrollment
-cannot pass preflight before F3, since check 4 refuses every form until then.
+not do yet. None widens a held PR. F1, F3, F4 and F6 are script changes,
+each its own reviewed PR. F2 is the bullets below, in this text, so this text's
+review and signature cover it and it lands with this text. F5 exists only if
+Joel picks a deadline (I4), and is then its own reviewed PR. Each pin is filled
+by the signing commit. Enrollment cannot pass preflight before F3, since check 4
+refuses every form until then.
 
 - **F1. `pilot-ledger.py`:** add an `exclude` kind; make window records (section
   7) unique per `pr`, so the ledger refuses a second window record naming a PR
@@ -1691,7 +1737,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   exist for Joel's use, and when it differs from these bullets, these bullets
   win. It applies section 12:
   - it opens a sealed path only through section 6's two logged accesses:
-    building a planted head from its spec, and `pilot-score.py bind`. Otherwise
+    building a planted head from its spec, and `pilot-score.py bind`. Its one
+    write there is section 6's unlogged copy of a planted head's review record
+    into `sealed/reviews/<head_id>.md`, made without reading it. Otherwise
     it reads the ledger only through `pilot-ledger.py` and the captures, never
     `/Users/pilotseal/pilot/sealed/` (section 14);
   - it orders by `created_at`, then PR number;
@@ -1715,8 +1763,11 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     I8 location, which is a constant in its own code, never read from this
     text or any repository, and refuses when section 13's `trust_file` copy
     differs from that constant;
-  - it verifies the signature, including the old-key rule for a rotation. It
-    refuses to run as any user but pilotseal;
+  - it verifies the signature and records the key's fingerprint as
+    `key_fingerprint` in its `preflight` line. On every run after the first
+    `preflight` line it verifies section 13's rotation chain from that line's
+    `key_fingerprint` to the trust file's current key, and refuses when a link
+    is missing or fails. It refuses to run as any user but pilotseal;
   - precondition 14: it refuses enrollment when the trust file is missing or
     unreadable, or when any copy in this text (the fingerprint, section 10's
     table, section 12's rows) differs from it. A self-test row
