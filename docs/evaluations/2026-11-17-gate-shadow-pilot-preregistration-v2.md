@@ -519,7 +519,7 @@ it.
 | C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
 | C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
-| C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct` and at least one such head exists; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
 
 Until `pilot-score.py` reads Joel's rulings (F4), C3, C5 outside clean heads and
@@ -681,8 +681,10 @@ items Joel rules.
 - **Window records.** An `enroll` or `exclude` that carries section 12's
   evidence (`pr_created_at`, `enroll_head`, `code_lines`) is a window record:
   only a fleet-tools window PR has one. A replayed head's `enroll` carries its
-  own `pr` (an assistant PR) and no such evidence, so it is never a window
-  record, and its `pr` never collides with a fleet-tools PR number.
+  own `pr` (an assistant PR number) and no such evidence, so it is never a
+  window record. Its `pr` can equal a fleet-tools PR number, so nothing compares
+  a bare `pr` across the two: F1's uniqueness and section 12's reconciliation
+  count window records only.
 - `items` and `ruling`: not in the landed kind set either, and F1 adds both.
   Both are allowed after `close`: `items` and every item ruling come only after
   it (section 8), and a `classification` ruling may come before or after it, so
@@ -729,9 +731,10 @@ it. A `gate.json` that holds either makes every oracle for that head UNMEASURED
 verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed head, that
 verdict equals the one on the counted line of its captured `verdicts.txt`, and
 for a live head the capture was on time; for a planted head
-`review_adapter_sha256` equals section 12's adapter pin; the one-head rule below
-holds; `base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The
-counted line is:
+`review_adapter_sha256` equals the adapter pin in the trust file (section 13;
+section 12's row is a copy); the one-head rule below holds;
+`base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The counted
+line is:
 
 - **for a live head**, the first full-verdict line at `enroll_head`. The
   capture was on time only when that line is the last line of `verdicts.txt`.
@@ -779,8 +782,24 @@ because the author pushed after enrollment and the review is of the new head,
 the head is not compared. It stays enrolled, and the report lists it as moved
 after enrollment.
 
+**Binding a planted head.** Joel may not open a sealed record before unblinding
+(section 6), so he never reads one to enroll a planted head. Instead
+`pilot-score.py bind <sealed_id>` (F4), run by Joel as pilotseal, reads that
+record and prints only the commit it names as the head and the case it names,
+never its truth. Joel copies those two values into the planted head's `enroll`.
+A record that names no head or no case cannot be bound, so that planted head is
+not enrolled. At scoring, the script checks again that each planted `enroll`'s
+`head` and `case` equal what its record names, and a planted head that differs
+is UNMEASURED for every oracle (F4). The planted commit and its case are not
+sealed: in the original the case is a manifest field (line 363), and only
+`planted_truth` (line 366) is sealed. Knowing them does not bias Joel, whose
+only rulings are on live heads and on race and recovery outcomes (section 8).
+
 **Where a planted head's review record lives.** A planted head's review record
-is a sealed record (O5). It is written to
+is a sealed record (O5). The operator runs the pinned adapter as uid 501, so its
+output first exists in agent-readable space, where the operator, an agent, can
+read it, as the original's line 169 let the operator read sealed records. That
+is a stated limit. Joel then moves the file, as pilotseal, to
 `/Users/pilotseal/pilot/sealed/reviews/<head_id>.md`, never into `<captures>`,
 and listed by hash in that head's `freeze` `raw[]`, as the entry whose `file` is
 `sealed:reviews/<head_id>.md`. The `sealed:` prefix names
@@ -1031,7 +1050,7 @@ fails:
     tickets per terminal (`tty` or `ppid`), never `global`. It shows only that
     an agent session cannot use sudo by itself. It does not show that an agent
     cannot tamper with the terminal Joel uses, which section 14 states as a
-    residual     gap.
+    residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1320,10 +1339,11 @@ left out only by a rule written here.
   the PR order and is never blocked by it.
 - **Reconciliation.** Before each `enroll` and before `close`, the writer lists
   every `dayamjz/fleet-tools` PR created in the window, open or closed, from
-  GitHub, and checks that each has exactly one `enroll` or `exclude` line. A PR
-  with none, or with two, refuses the `enroll` or the `close`. Joel does this
-  by hand under F2's procedure, and the ledger enforces the "two" half (F1):
-  it refuses an `enroll` or `exclude` naming a PR that already has a record.
+  GitHub, and checks that each has exactly one window record (section 7), never
+  counting a replayed head's `enroll`, whose `pr` is an assistant number. A PR
+  with none, or with two, refuses the `enroll` or the `close`. Joel does this by
+  hand under F2's procedure, and the ledger enforces the "two" half (F1): it
+  refuses an `enroll` or `exclude` naming a PR that already has a record.
 - **The exclusion rules.** These are the only ones. Each `exclude` line names
   one rule. When more than one applies, the first in the order E1, E2, E3, E4,
   E5, E6 is recorded, except that between E5 and E6 the rule in E6 decides. So a
@@ -1334,27 +1354,31 @@ left out only by a rule written here.
   - **E3.** It changes a file the pilot pins (section 10, or this section's pin
     table: `review-size.sh` and `pilot-review.sh`).
   - **E4.** It was closed unmerged with no review.
-  - **E5.** It was reviewed before its record was written: when the writer
-    comes to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any
-    line. The record states that. The report counts E5 exclusions apart and
-    lists each with its `created_at` and the time of its first `.verdicts`
-    line, so a PR can't be excluded quietly.
+  - **E5.** It was reviewed before its record was written: when the writer comes
+    to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any line.
+    The record states that, with `verdicts_seen: true` and the SHA-256 of that
+    file's bytes when Joel recorded it. The report counts E5 exclusions apart
+    and lists each with its `created_at`, the `at` of its `exclude` line and
+    that hash, so a PR can't be excluded quietly.
   - **E6.** The window closed before it was recorded: it was created in the
     window, and when the window closed (above) it had no record, so it can no
     longer be enrolled. The writer records it under E6 before `close`, so
     reconciliation can pass. The report counts E6 exclusions apart and lists
     each with its `created_at`. E6 applies only once the window has closed, so
-    it never removes a PR from the sequence that could still be enrolled. When
-    the PR was also reviewed before Joel recorded it, the time of its first
-    `.verdicts` line decides: before the window's close, E5 is recorded, since
-    that review could have been timed to exclude it; at or after the close, E6
-    is recorded, since no review then could change the selection.
+    it never removes a PR from the sequence that could still be enrolled. No
+    review time is trusted: the `.verdicts` lines carry none, and uid 501 can
+    write their files. So the split uses only what Joel sees when he records.
+    Right after `pilot-unblind.py window` first reports the close, he records
+    every unrecorded window PR: one whose `ftw:reviews/ft-<N>.verdicts` already
+    exists then gets E5 (`verdicts_seen: true`), and the rest get E6
+    (`verdicts_seen: false`). A PR reviewed in the minutes between the close and
+    Joel's record therefore counts as E5. That over-reports the lever, never
+    under-reports it.
   - **Residual selection levers.** The agents decide when reviews are
     requested, and they author, push and close the PRs, so they can drop a
     chosen eligible PR from the compared ten. That is the lever #juno's fix 1
     took away from ordering. The levers are:
-    - an E5 exclusion whose first review came before the window's close (a
-      review requested before Joel records the PR);
+    - an E5 exclusion (a review requested before Joel records the PR);
     - a live head captured late (another review requested before the
       capture, section 7);
     - a live head moved after enrollment (a push before its first full
@@ -1576,9 +1600,13 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   `classification` may come before or after `close`. One whose subject is `item`
   needs an earlier `items` line naming that id. `items` and `ruling` join the
   kinds allowed after `close`, and no `items` or `ruling` may follow `score`.
-- **F2. The enrollment procedure (I6):** a written procedure Joel follows by
-  hand as pilotseal. It is a document, not a script, and it applies section
-  12:
+- **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
+  pilotseal. Its binding steps are the bullets below, in this text, so the
+  signature covers them and no separate document needs a pin. A written copy may
+  exist for Joel's use, and when it differs from these bullets, these bullets
+  win. It applies section 12:
+  - it opens no sealed path: it reads the ledger only through `pilot-ledger.py`
+    and the captures, never `/Users/pilotseal/pilot/sealed/` (section 14);
   - it orders by `created_at`, then PR number;
   - it reconciles every window PR against the ledger before each `enroll` and
     before `close`, and refuses on a missing or doubled record;
@@ -1626,6 +1654,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     report lists it;
   - its `install` check covers `review-size.sh` and `pilot-review.sh`.
 - **F4. `pilot-score.py`:**
+  - a `bind <sealed_id>` mode that, as pilotseal, prints only the head commit
+    and case a sealed record names (section 7, "Binding a planted head"), and a
+    check at scoring that every planted `enroll` agrees with its record;
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared live and replayed
     head and the outcome of every enrolled race and recovery head except a
@@ -1656,9 +1687,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     of C1, C3 and C5 and listed (section 12);
   - it lists every enrolled live head that is not compared, with its reason
     (captured late, moved after enrollment, no review, or another), every E5
-    exclusion whose first review came before the window's close, and every E4
-    exclusion, and marks the pilot possibly selected when any exists; it counts
-    and lists E1 to E3 exclusions without the mark (section 12);
+    exclusion, and every E4 exclusion, and marks the pilot possibly selected
+    when any exists; it counts and lists E1 to E3 exclusions without the mark
+    (section 12);
   - it never opens a `raw[]` entry whose `file` starts `sealed:`, and never
     reads a planted head's review record itself: the compared predicate it
     calls does (F6, section 7);
