@@ -428,17 +428,22 @@ it equals git's default unified context.
   findings of every stage that ran, as its rule says, and it needs the `review`
   stage to have run: a run that ended before review is UNMEASURED for O1, though
   an earlier stage may have reported findings. **The usage ceiling.** A stage
-  whose agent call the usage ceiling refused still reports `ran: true`: the
-  refusal becomes a report holding one `ask` finding, id `usage-ceiling`, marked
-  not started (`internal/service/observe.go:113`,
-  `internal/service/ceiling.go:160-166`, `internal/machine/ceiling.go:305-337`),
-  and `StageRan` checks only that a report exists
+  whose agent call the usage ceiling refused still reports `ran: true`, by two
+  paths. A refused stage body becomes a report holding only one `ask` finding,
+  id `usage-ceiling`, marked not started (`internal/service/observe.go:113`,
+  `internal/service/ceiling.go:160-166`, `internal/machine/ceiling.go:305-337`).
+  A refused fix round returns that hold, and the stage's next execution, which
+  did run, reports it with its own findings
+  (`internal/service/ceiling.go:171-179`, `internal/pipeline/doc.go:58-60`).
+  `StageRan` checks only that a report exists
   (`internal/pipeline/outcome.go:173-180`). So, for every oracle here, a stage
-  has run only when `ran` is true and none of its findings has the id
-  `usage-ceiling`; a ceiling-held stage is UNMEASURED, never a miss or a false
-  hold. Precondition 13 also forbids a usage ceiling in either gate home, so
-  this rule is a backstop. As built, `pilot-score.py` checks neither `ran` nor
-  the ceiling finding (F4).
+  has run only when `ran` is true and its findings are not just `usage-ceiling`
+  ones; such a stage is UNMEASURED, never a miss or a false hold. A stage that
+  ran and also carries a `usage-ceiling` hold counts as run, and its other
+  findings count; the `usage-ceiling` finding itself never matches planted truth
+  and is never a hold O2 counts. Precondition 13 also forbids a usage ceiling in
+  either gate home, so this rule is a backstop. As built, `pilot-score.py`
+  checks neither `ran` nor the ceiling finding (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
@@ -499,7 +504,8 @@ it equals git's default unified context.
 covers:
 
 - **Compared heads only:** C1 counts them. C3 and C5 outside clean heads use
-  the O5 items of compared live and replayed heads (O5).
+  the O5 items of compared replayed heads and of compared live heads created
+  in the window (O5, section 12).
 - **C7:** the outcome items of every enrolled race and recovery head except a
   `base_mismatch` or pin-failed one, whatever its provenance. Race and recovery
   correctness is the gate's own behavior, so C7 needs no review: an outcome
@@ -542,9 +548,9 @@ it.
 | --- | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
-| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no compared live or replayed head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared replayed heads and the compared live heads created in the window (section 12): FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no such head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that names a gate finding, by (`stage`, `id`) (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
-| C5 | line 465 | FAIL when any clean head that is neither `base_mismatch` nor pin-failed has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C5 | line 465 | FAIL when any clean head that is neither `base_mismatch` nor pin-failed has a false hold (O2), or when more than one compared replayed head, or compared live head created in the window (section 12), that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no such replayed or live head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct` and at least one such head exists; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
@@ -925,13 +931,14 @@ never reads it.
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
 public ledger is coordinator open item 2 (section 11). The coordinator, as uid
 501, cannot read the sealed ledger (section 6, precondition 6), so it cannot
-compute a chain head. Joel does: right after each `freeze`, `close`, `score` and
-`unblind`, he runs the installed `pilot-ledger.py head` on the sealed ledger as
-pilotseal (`sudo -u pilotseal`) and passes the printed line (`head`'s line,
-which reveals no content) to the coordinator, who posts it as given. That line
-passes through Joel's uid-501 terminal, so section 14's residual gap applies to
-it. Pilot-op's proposal (`cl-pilotop` REPORT.md, step 6) suggested posting each
-`frozen_commit` the same way.
+compute a chain head. Joel does: right after the first `preflight` and after
+each `freeze`, `close`, `score` and `unblind`, he runs the installed
+`pilot-ledger.py head` on the sealed ledger as pilotseal (`sudo -u pilotseal`)
+and passes the printed line (`head`'s line, which reveals no content) to the
+coordinator, who posts it as given. That line passes through Joel's uid-501
+terminal, so section 14's residual gap applies to it. Pilot-op's proposal
+(`cl-pilotop` REPORT.md, step 6) suggested posting each `frozen_commit` the same
+way.
 
 **Parameters.** The scripts read these from this block, through the `preflight`
 line, never from a flag. A value that is Joel's stays `UNRULED` until he rules.
@@ -999,8 +1006,10 @@ refusal after `unblind` cannot be logged, since only a `correction` may follow
 it (section 7). A refusal prints no record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
-(F4) appends the one `items` line. It lists every O5 item of every compared live
-and replayed head except `matched` ones, each `unlocatable` finding as its own
+(F4) appends the one `items` line. It lists every O5 item of every compared
+replayed head and every compared live head created in the window (a live head
+created after the window's close is left out, section 12) except `matched`
+ones, each `unlocatable` finding as its own
 item, and the outcome of every enrolled race and recovery head except a
 `base_mismatch` or pin-failed one for C7. Each item gets an id. It never reads a
 planted head's review record, which is sealed and kept out of `<captures>`
@@ -1359,10 +1368,11 @@ left out only by a rule written here.
   (F6), which checks end condition 4 alone, computing the window's close from
   the ledger and the frozen captures, and writes no `enroll` once it says the
   window has closed. A PR created in the window that still has no record then
-  gets an `exclude` under E6. A PR created after the window's close gets no
-  record and is never reconciled. If a live head whose `pr_created_at` is after
-  the close is enrolled anyway, it is not a sequence head, it is left out of C1,
-  C3 and C5, and the report lists it (F4).
+  gets an `exclude` under the first of E1 to E6 that applies (the precedence
+  below), so E5 or E6 only when E1 to E4 do not. A PR created after the window's
+  close gets no record and is never reconciled. If a live head whose
+  `pr_created_at` is after the close is enrolled anyway, it is not a sequence
+  head, it is left out of C1, C3 and C5, and the report lists it (F4).
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
   with `case` `live` and `provenance` `live`. This replaces the original's lines
   279 and 280 for v2: a race or recovery head is planted or replayed, never a
@@ -1382,7 +1392,9 @@ left out only by a rule written here.
   - **Mirror.** The gate runs against a private mirror of `dayamjz/fleet-tools`,
     never `dayamjz/fleet-tools` itself, with its own gate home. The stage-model
     pin (the original's lines 324-328) and the intent sentence (lines 319-323)
-    are the same as for every other head (section 9, precondition 13).
+    are the same as for every other head (the original's section 3 items,
+    kept by section 2), and `pin_check` checks the pin for each head
+    (section 7).
   - **Base.** The merge base of the head with fleet-tools `origin/main`. The
     operator resets the fleet-tools mirror's `main` to it before the push, and
     the original's base check (lines 310-316) applies unchanged.
@@ -1484,13 +1496,14 @@ left out only by a rule written here.
     review time is trusted: the `.verdicts` lines carry none, and uid 501 can
     write their files. So the split uses only what Joel sees when he records.
     Right after `pilot-unblind.py window` first reports the close, he records
-    every unrecorded window PR: one whose `ftw:reviews/ft-<N>.verdicts` already
-    exists then gets E5 (`verdicts_seen: true`), and the rest get E6
-    (`verdicts_seen: false`). F2 runs `window` right after every live `freeze`,
-    so the gap between the closing `freeze` and Joel's record is only his own
-    delay, which the report shows as the difference between the two lines' `at`.
-    A PR reviewed in that gap counts as E5. That over-reports the lever, never
-    under-reports it.
+    every unrecorded window PR by the precedence above: first E1 to E4, and only
+    a PR none of those fits gets E5 or E6. Among those, one whose
+    `ftw:reviews/ft-<N>.verdicts` already exists then gets E5
+    (`verdicts_seen: true`), and the rest get E6 (`verdicts_seen: false`). F2
+    runs `window` right after every live `freeze`, so the gap between the
+    closing `freeze` and Joel's record is only his own delay, which the report
+    shows as the difference between the two lines' `at`. A PR reviewed in that
+    gap counts as E5. That over-reports the lever, never under-reports it.
   - **Residual selection levers.** The agents decide when reviews are
     requested, and they author, push and close the PRs, so they can drop a
     chosen eligible PR from the compared ten. That is the lever #juno's fix 1
@@ -1554,11 +1567,11 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   outside every repository and every agent's home, not writable by uid 501, and
   written only by Joel, as the user that owns it. It holds the public key and
   its fingerprint, every earlier key with its rotation statement (the key
-  rotation rule below), the signing form, the signing commit and this text's blob
-  there, the landing baseline at signing (the fleet-tools `main` commit when the
-  signing commit is made, and the path and blob of each landing script and gate
-  the coordinator runs there), and the SHA-256 of every executable the pilot
-  runs: section 10's scripts and section 12's `review-size.sh` and
+  rotation rule below), the signing form, the signing commit and this text's
+  blob there, the landing baseline at signing (the fleet-tools `main` commit
+  when the signing commit is made, and the path and blob of each landing script
+  and gate the coordinator runs there), and the SHA-256 of every executable the
+  pilot runs: section 10's scripts and section 12's `review-size.sh` and
   `pilot-review.sh`. No enroll script exists (section 14).
 - **This text holds only copies.** The block below copies the fingerprint, and
   section 10's table and section 12's rows copy the executable hashes. No
@@ -1572,16 +1585,18 @@ trust_file: UNRULED I8
 key_fingerprint: UNPINNED I5
 ```
 - **Key rotation.** The anchor is the `key_fingerprint` in the ledger's first
-  `preflight` line (section 7), which is hash-chained and covered by a posted
-  chain head, so a rewrite of the trust file cannot also move it. The trust file
+  `preflight` line (section 7), which is hash-chained and covered by the chain
+  head Joel posts right after it, so once that head is posted a rewrite of the
+  trust file cannot also move it. The trust file
   keeps every key since that one, in order, each later key with a statement
   signed by the key before it that names the new key and the signing commit.
   `check` verifies that chain from the ledger's anchor to the trust file's
   current key, and refuses when a link is missing or its signature fails (F3).
-  So after the first `preflight` line, neither an agent's PR nor a rewrite of
-  the trust file without the old key can swap it. Before that line there is no
-  anchor outside the trust file, so a key change then is only as safe as the
-  trust file itself: only Joel writes it, and uid 501 cannot.
+  So once that head is posted, neither an agent's PR nor a rewrite of the
+  trust file without the old key can swap it. Before it is posted there is no
+  anchor outside the trust file and the ledger, which the same user can rewrite
+  together (section 6, residual gaps), so a key change then is only as safe as
+  the trust file itself: only Joel writes it, and uid 501 cannot.
 - **What counts as a signature.** A signature is made with the pinned key over
   the exact bytes of the record, and the record names the signing commit. A
   GitHub comment from `dayamjz`, a relay or a chat message is never one,
@@ -1664,9 +1679,9 @@ Relay point 5.
   denied-read record, shows that opening the sealed ledger or the trust file
   for writing is denied with `EACCES` (section 9, precondition 10).
   `pilot-preflight.py probe` opens read-only today, so the write probe is F3.
-- **Chain heads.** Joel produces the chain head as pilotseal at each `freeze`,
-  `close`, `score` and `unblind`, and the coordinator posts the line he passes
-  it (section 7).
+- **Chain heads.** Joel produces the chain head as pilotseal after the first
+  `preflight` and at each `freeze`, `close`, `score` and `unblind`, and the
+  coordinator posts the line he passes it (section 7).
 
 ## 15. Landing during the pilot
 
@@ -1749,8 +1764,9 @@ refuses every form until then.
   - right after each live head's `freeze` is appended, and before each live
     `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
     closed, it writes no more live `enroll` and records every unrecorded window
-    PR at once, under E5 when its `.verdicts` file exists then and under E6
-    otherwise (section 12);
+    PR at once, under the first of E1 to E4 that applies, and otherwise under
+    E5 when its `.verdicts` file exists then and under E6 when it does not
+    (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`, after comparing it with the trust file's landing baseline and
     refusing that `enroll` while a difference is not reconciled (precondition
@@ -1802,11 +1818,12 @@ refuses every form until then.
     that every planted `enroll` agrees with its record (section 7, "Building and
     binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone;
-  - the `items` line covers the O5 items of every compared live and replayed
-    head and the outcome of every enrolled race and recovery head except a
-    `base_mismatch` or pin-failed one, never a planted head's review record, and
-    lists each `unlocatable` finding as its own item (as built, `o5_counts` only
-    counts them);
+  - the `items` line covers the O5 items of every compared replayed head and
+    every compared live head created in the window (section 12), and the outcome
+    of every enrolled race and recovery head except a `base_mismatch` or
+    pin-failed one, never a planted head's review record, and lists each
+    `unlocatable` finding as its own item (as built, `o5_counts` only counts
+    them);
   - it computes each ruling's place in the 48-hour budget (section 8);
   - every oracle that reads a stage needs that stage's `ran: true`, or it is
     UNMEASURED, whatever the outcome says (section 5; as built, no oracle
