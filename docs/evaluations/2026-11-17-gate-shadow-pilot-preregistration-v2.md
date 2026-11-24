@@ -323,12 +323,19 @@ diff shows. 3 was chosen because it equals git's default unified context.
 - **O1, planted location.**
   - Inputs: the sealed record `<sealed_id>.md`, the head's gate capture and its
     tree list.
+  - Fences: a fence opens at a line of at most 3 spaces of indentation and then
+    3 or more backticks or tildes, and closes at the first later line of at
+    most 3 spaces and at least as many of the same character, with only
+    trailing spaces or tabs. The block's lines lose the opening fence's
+    indentation. A *diff line* is a line that starts, after any whitespace or
+    `>` characters, with `diff --git `, `--- `, `+++ ` or `@@`. A fenced block
+    is a diff when its info string is `diff` or any of its lines is a diff
+    line.
   - Truth: the set of (path, new-side line range) of the added or changed lines
-    in the record's one fenced unified diff. A fenced block is a diff when its
-    body has a line starting `@@ `. An added line is truth at its new-side
-    line. A removed line is truth at the new-side line it was removed before. A
-    file the diff deletes adds no truth. Consecutive truth lines of one path
-    form one range.
+    in the record's one fenced unified diff. An added line is truth at its
+    new-side line. A removed line is truth at the new-side line it was removed
+    before. A file the diff deletes adds no truth. Consecutive truth lines of
+    one path form one range.
   - Match: a gate finding matches when its `path` is equal and its `line` lies
     in a range widened by K lines on each side.
   - `planted_match` is the first matching gate finding, ordered by its
@@ -336,12 +343,19 @@ diff shows. 3 was chosen because it equals git's default unified context.
     comes after all), then by finding id, shorter first, then bytewise. Only a
     finding with a string `id` takes part. It is `null` when no gate finding
     matches, and `null` means a miss.
-  - UNMEASURED: when the record has no fenced diff, or more than one, or its
-    diff does not parse (a hunk whose line counts disagree with its header, or
-    no file with a new side), or `git apply --numstat -z`, run outside any
+  - UNMEASURED, in this order: a fence never closes; the record has no fenced
+    diff, or more than one; a diff line appears anywhere outside the one
+    fenced diff (in prose, a quote, or another block, so a quoted `--- verdict`
+    line or a prose line starting `@@` makes the record unmeasured); its diff
+    does not parse (a hunk whose line counts disagree with its header, or no
+    file with a new side); `git apply --numstat -z`, run outside any
     repository, does not accept the diff, or a truth path is not one of the
-    file names git reports, or a truth path is absent from the head's tree
-    list. Then `planted_match` is `unmeasured` with that reason, never `null`.
+    file names git reports; a truth path is absent from the head's tree list;
+    or the head has no gate capture. Then `planted_match` is `unmeasured` with
+    that reason, never `null`. This is deliberately stricter than "the one
+    diff parses": a record whose form is in doubt is never scored. The
+    parse-only check of open item 3 (section 11) shows before unblinding how
+    many sealed records this rule measures.
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing.
@@ -408,8 +422,8 @@ passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
 | C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
-| C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`. | script | required |
-| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C4 | line 464 | Every planted real-finding and hold head has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
+| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over every race and recovery head's outcome item: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
@@ -596,7 +610,7 @@ j4: UNRULED I5
 ```
 
 `k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
-is 10, the number of compared live heads that ends that sequence (Joel,
+is 10, the number of compared sequence heads that ends it (section 8; Joel,
 7083761337; section 12); `pr_kind` is
 `fleet-tools-reliability-fix`, the kind relay point 1 names, defined in section
 12; `j1` is `option-2` (relay point 2); `j1_budget` is `48 hours` (Joel,
@@ -620,11 +634,17 @@ when all of these hold:
 4. The end rule of section 7's parameters holds, read from the `preflight`
    line. Joel ruled it (J3): the pilot ends after one consistent sequence of
    PRs, the same kind of work, chosen to measure cost and efficiency. It holds
-   once 10 heads of provenance `live` whose `work_kind` equals `pr_kind`
-   (`fleet-tools-reliability-fix`, section 12) are frozen **and compared**
-   (section 5), so C1's live minimum can always be met; planted heads never
-   count. As built, `pilot-unblind.py` counts frozen live heads, not compared
-   ones, so F6 must land before activation (section 9, precondition 12). The
+   once 10 *sequence heads* are frozen **and compared** (section 5). A
+   sequence head is an enrolled head whose `case` and `provenance` are both
+   `live` and whose `work_kind` equals `pr_kind`
+   (`fleet-tools-reliability-fix`, section 12). C1's live minimum counts
+   compared heads of `case` `live`, which include every sequence head, so it
+   can always be met when this holds. A live PR enrolled as a race or recovery
+   head (the original's line 279 allows that) is not a sequence head and does
+   not count toward the 10; planted heads never count. As built,
+   `pilot-unblind.py` counts frozen heads of provenance `live`, not compared
+   sequence heads, so F6 must land before activation (section 9, precondition
+   12). The
    condition fails closed if the parameters ever stop naming a kind or a
    count of 10, so nothing is scored or unblinded then. No calendar deadline
    ends the pilot until Joel says otherwise (I4, still open: he wrote "No
@@ -695,12 +715,14 @@ read when it started. It reads that head before the entries, and appends its
 expected-head append of section 7). If any line was written in between, it
 refuses and logs the refusal, and unblinding publishes nothing.
 
-**Publishing.** `pilot-unblind.py run` copies the sealed files and the ledger
-into a staging directory beside the publish directory, recomputes each copy's
+**Publishing.** `pilot-unblind.py run` copies the sealed files s01 to s08 into
+a staging directory beside the publish directory, recomputes each copy's
 SHA-256 against the s01-s08 table of the original (read from blob `32424c20`,
 which it checks), and refuses on any mismatch. Only then does it append
-`unblind` with the published hashes and the chain head it checked, and only
-after that line is written does it move the copies into the publish directory,
+`unblind` with those hashes (`published` covers s01 to s08, not the ledger)
+and the chain head it checked. After that line is written it copies the
+ledger into the staging directory, checks that the copy ends in that `unblind`
+line, and only then moves the staging directory into the publish directory,
 so nothing is published unlogged. A second run refuses with "already unblinded".
 After that, the records are copied to `docs/evaluations/` in this repository,
 as the original's line 173 says.
@@ -781,8 +803,12 @@ fails:
     records the sudoers `timestamp_type` in force, which must keep tickets per
     terminal (`tty` or `ppid`), never `global`.
 
-On success it appends a `preflight` line. It never enrolls. Items 8 to 15 are
-not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
+On success it appends a `preflight` line. It never enrolls. As built
+(`6adbd531`), `pilot-preflight.py` checks items 1 to 7 only in part: item 4
+refuses every signing form, item 6 dates its record against the commit that
+added this text, not the signing commit, and item 7 compares the installed
+hashes with section 10 of this text, not with the trust file. Items 8 to 15
+are not checked at all. F3 adds every one of these. Until F3 lands, item 4
 refuses every signing form, so no enrollment can pass preflight without them.
 
 ## 10. Scripts
@@ -804,16 +830,16 @@ and the two must agree (F3).
 
 ## 11. Owner questions for v2
 
-This text is not signed while any input below that blocks signing is open.
-Each one that blocks has an `UNRULED` value (section 1): `j1_order` (I2) and
-`j4` (I5) in section 7's parameters, `trust_file` (I8) and `key_fingerprint`
-(I5) in section 13's copy block, and `deadline` (I4) in the block below. I7 is
-the one open input that does not block signing: it governs only promotion,
-which section 16 keeps blocked until Joel names the substitute, and its choice
-is recorded after signing as its own signed owner record (section 13). Once
-Joel answers, his answers are quoted here verbatim with their comment ids, as
-a#977 folded in section 7.12, and his key signature of this text (section 13)
-is what makes them binding.
+This text is not signed while any input below that blocks signing is open. Each
+one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `j1_order`
+(I2) and `j4` (I5) in section 7's parameters, `trust_file` (I8) and
+`key_fingerprint` (I5) in section 13's copy block, and `deadline` (I4) in the
+block below. I7 is the one open input that does not block signing: it governs
+only promotion, which section 16 keeps blocked until Joel names the substitute,
+and its choice is recorded after signing as its own signed owner record (section
+13). Once Joel answers, his answers are quoted here verbatim with their comment
+ids, as a#977 folded in section 7.12, and his key signature of this text
+(section 13) is what makes them binding.
 
 ```pilot-v2-open-inputs
 deadline: UNRULED I4
@@ -852,8 +878,8 @@ translated in 7114296700):
 
   Relay point 1 names the kind: fleet-tools reliability-fix PRs, so `pr_kind`
   is `fleet-tools-reliability-fix` (section 12). The count of 10 is Joel's
-  (7083761337, above). The pilot ends once 10 enrolled live heads of the kind
-  are compared, which can take more than 10 enrolled PRs (sections 8 and 12).
+  (7083761337, above). The pilot ends once 10 sequence heads are compared,
+  which can take more than 10 enrolled PRs (sections 8 and 12).
   Whether a deadline applies is still open (I4).
 - **J4. How Joel signs: direction answered.** Relay point 4: a locally signed
   owner artifact that agents cannot impersonate (section 13). Which key and
@@ -942,12 +968,12 @@ Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
 (7114424384). This rule is frozen at the signing commit. A PR is
 left out only by a rule written here.
 
-- **The window.** The live window opens at the `at` of the **first**
-  `preflight` line in the ledger, so a later preflight never moves it. It
-  closes at the `at` of the first `freeze` after which 10 enrolled live heads of
-  the kind are compared heads (section 5). A PR is in the window when its
-  GitHub `created_at` falls in it. Enrollment continues in order until then, so
-  an enrolled PR that is never compared, for example one closed before review,
+- **The window.** The live window opens at the `at` of the **first** `preflight`
+  line in the ledger, so a later preflight never moves it. It closes at the `at`
+  of the first `freeze` after which 10 sequence heads (section 8, end condition
+  4) are compared heads (section 5). A PR is in the window when its GitHub
+  `created_at` falls in it. Enrollment continues in order until then, so an
+  enrolled PR that is never compared, for example one closed before review,
   stays enrolled and reported, and a later PR in the order makes up the 10. No
   PR is replaced: the uncompared one keeps its record.
 - **The live case.** This replaces the original's line 281: the live case's
@@ -967,14 +993,19 @@ left out only by a rule written here.
     a line of `ft:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
     <short sha> (full): VERDICT: ...`. When a head has several full verdicts,
     the last such line in `.verdicts` is the review, as in the original's lines
-    68-69. The review it records is the file whose line 1 is
-    `reviewed at <40-hex>` for that head with no `(delta from ...)`:
-    `ft:reviews/ft-<N>.md` while it is the latest review, otherwise its archived
-    copy `ft:reviews/ft-<N>-full-<short sha>.md`. Its line 2,
-    `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. The verdict is
-    what `ft:review-findings.py --verdict` prints, as for any other head. If no
-    such file exists, or its verdict differs from that last line, the head has
-    no review, and its `review.verdict` is `none`.
+    68-69. The review it records is found by content, never by file name,
+    since archived copies are named in more than one way (for example
+    `ft-787-full-ff23425.md` and `ft-791-claude-full-a787e4f.md`). It is the
+    file in `ft:reviews/` named `ft-<N>.md` or `ft-<N>-<anything>.md` whose
+    line 1 is exactly `reviewed at <40-hex>` naming that head, with no
+    `(delta from ...)`, and whose verdict, as `ft:review-findings.py
+    --verdict` prints it, equals that last line's. That line 1 gives
+    `review.head` (the 40-hex), and the absence of `(delta from ...)` gives
+    `review.kind`, which is `full`. Its line 2,
+    `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. If no such
+    file exists, the head has no review, and its `review.verdict` is `none`.
+    If more than one exists and their line 2 differ, the head has no review
+    either, and the report lists the files.
   - **CI.** `origin_ci` is
     `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`. Fleet-tools
     runs no CI workflow today, so that list is empty, and the gate's
@@ -1008,8 +1039,8 @@ left out only by a rule written here.
   immutable, with ties broken by PR number, lower first. They are never
   ordered by a relay or request, since the coordinator controls when it relays
   (#juno fix 1). "Consecutive" means the eligible PRs in the window are
-  enrolled in this order, none skipped, until 10 enrolled live heads are
-  compared (the window above). That can be more than 10 enrolled PRs.
+  enrolled in this order, none skipped, until 10 sequence heads are compared
+  (the window above). That can be more than 10 enrolled PRs.
 - **Every PR gets a record.** Every PR created in the window gets an `enroll`
   or `exclude` line before its first review. No `enroll` may be written while
   any PR earlier in that order has no record. So a PR with no record blocks the
@@ -1232,7 +1263,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   signing, F5 adds its key to the parameters, to section 8's end condition, to
   `pilot-unblind.py`'s end condition and to preflight check 5. If no deadline
   applies, F5 is empty.
-- **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose live
-  head of the kind is frozen and compared (section 5), reading each head's
-  frozen captures, not `enroll` lines or frozen live heads alone, so a doubled
-  record can never count twice.
+- **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose
+  sequence head (section 8: `case` and `provenance` both `live`, `work_kind`
+  equal to `pr_kind`) is frozen and compared (section 5), reading each head's
+  frozen captures, not `enroll` lines or frozen heads of provenance `live`
+  alone, so a doubled record can never count twice and a live race head never
+  counts.
