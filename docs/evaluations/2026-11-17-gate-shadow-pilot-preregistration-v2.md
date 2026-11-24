@@ -468,14 +468,17 @@ unified context.
   `review` stage did not run. **A hold with no capture.** `gate.holds[]` comes
   from the operator's capture at each hold, so a hold answered without one
   leaves no entry. The `review` stage's recorded outcome still shows the hold:
-  `held`, `approved`, `cancelled` or `fix`, or `skipped` while the stage ran
-  (`retry` does not, since it stands only until the stage runs again,
-  `internal/pipeline/outcome.go:65-71`), since a person answering `skipped` at a
-  hold is the one producer of `skipped` that follows a run
+  `held` or `fixable` while it waits for an answer (at `fix_rounds.review: 0` a
+  fix-eligible finding routes straight to the hold with outcome `fixable`,
+  `internal/pipeline/pipeline.go:284-317`), `approved`, `cancelled` or `fix`
+  once answered, or `skipped` while the stage ran, since a person answering
+  `skipped` at a hold is the one producer of `skipped` that follows a run
   (`internal/pipeline/outcome.go:41-70`, the hold node at
-  `internal/pipeline/node.go:245-268`). When that outcome shows a hold and
-  `gate.holds[]` has no `review` entry, O2, O3 and O5's `hold-not-made` count
-  are UNMEASURED for that head, never a measured "no hold".
+  `internal/pipeline/node.go:245-268`). `retry` does not show a hold: it stands
+  only until the stage runs again (`internal/pipeline/outcome.go:65-71`). When
+  that outcome shows a hold and `gate.holds[]` has no `review` entry, O2, O3 and
+  O5's `hold-not-made` count are UNMEASURED for that head, never a measured "no
+  hold".
 - **O3, hold heads.** A hold head is found when `gate.holds[]` has a `review`
   entry whose finding ids include the `id` of a finding O1 matches whose `stage`
   is `review`, so an equal id from another stage never counts. UNMEASURED when
@@ -787,8 +790,10 @@ items Joel rules.
   `{file, sha256}`, one per capture file of the head, and for a planted head
   one more for its sealed review record (section 7).
 - `preflight`: what `ft:pilot-preflight.py check` verified, including this
-  signing commit, the parameters below and `key_fingerprint`, the fingerprint
-  of the key it verified the signature with (section 13, F3). The end rule and
+  signing commit, the parameters below, `key_fingerprint`, the fingerprint
+  of the key it verified the signature with, and `review_adapter_sha256`, the
+  adapter pin it read from the trust file (section 13, F3). That line is the
+  one place another script reads the adapter pin from. The end rule and
   K are read from the last `preflight` line before the first `enroll`, so they
   are fixed before any head is enrolled.
 - `close`, `score`, `unblind`, `unblind-refused`, `score-refused`,
@@ -825,8 +830,9 @@ it. A `gate.json` that holds either makes every oracle for that head UNMEASURED
 verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed head, that
 verdict equals the one on the counted line of its captured `verdicts.txt`, and
 for a live head the capture was on time; for a planted head
-`review_adapter_sha256` equals the adapter pin in the trust file (section 13;
-section 12's row is a copy); the one-head rule below holds;
+`review_adapter_sha256` equals the adapter pin, read from the last `preflight`
+line before the first `enroll`, which copied it from the trust file (section
+13; section 12's row is a copy no script reads); the one-head rule below holds;
 `base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The counted
 line is:
 
@@ -1707,11 +1713,13 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   `pilot-review.sh`, and section 10's follow-up PRs and merge commits. No enroll
   script exists (section 14).
 - **This text holds only copies.** The block below copies the fingerprint, and
-  section 10's table and section 12's rows copy the executable hashes. No
-  script trusts a copy read from a repository. Preflight reads the
-  trust file and refuses enrollment when any copy here differs from it
-  (section 9, precondition 14). So an agent's PR that edits a copy makes
-  preflight fail closed, and the PR can't move the pin.
+  section 10's table and section 12's rows copy the executable hashes. No script
+  trusts a copy read from a repository. Only preflight opens the trust file;
+  another script that needs a trust-file value, such as the adapter pin the
+  *compared* predicate needs, reads it from the `preflight` line, which copied
+  it (section 7). Preflight reads the trust file and refuses enrollment when any
+  copy here differs from it (section 9, precondition 14). So an agent's PR that
+  edits a copy makes preflight fail closed, and the PR can't move the pin.
 
 ```pilot-v2-trust-copy
 trust_file: UNRULED I8
@@ -1940,6 +1948,8 @@ refuses every form until then.
     `pilot-v2-followups` block and the trust file, the script's blob there
     hashes to the pin, and an earlier follow-up of the same script is an
     ancestor (precondition 12);
+  - it records `key_fingerprint` and `review_adapter_sha256`, the latter read
+    from the trust file, in its `preflight` line (section 7);
   - it records precondition 6's traversal probes and read probes of the ledger
     and s01 to s08, and refuses a record whose stat of a target below
     `/Users/pilotseal` succeeds;
@@ -2049,19 +2059,20 @@ refuses every form until then.
   head (section 8: `case` and `provenance` both `live`, `work_kind` equal to
   `pr_kind`, `pr_created_at` at or after the first `preflight` line's `at` and
   not after the window's close, `enroll` not after the closing `freeze`) is
-  frozen and
-  compared (section 5), reading each head's frozen captures, not `enroll` lines
-  or frozen heads of provenance `live` alone, so a doubled record can never
-  count twice. It owns the *compared* predicate of section 7, including the
-  on-time capture check for a live head (as built, nothing checks it) and the
-  reading of a planted head's sealed review record, opened from its `sealed:`
-  `raw[]` entry under `/Users/pilotseal/pilot/sealed/` and checked against its
-  hash: one function, which `pilot-score.py` calls and never reimplements, so
-  end condition 4 and C1 can never disagree on a head. It also adds a `window`
-  mode that checks end condition 4 alone and appends nothing, which the writer
-  runs before each live `enroll` (section 12), and a `ready` mode that checks
-  end conditions 1, 3 and 4 without a `close` and appends nothing, so Joel
-  appends `close` only when it says the end rule holds (section 7). Its `run`
-  mode also publishes each planted head's sealed review record from
+  frozen and compared (section 5), reading each head's frozen captures, not
+  `enroll` lines or frozen heads of provenance `live` alone, so a doubled record
+  can never count twice. It owns the *compared* predicate of section 7,
+  including the on-time capture check for a live head (as built, nothing checks
+  it), the adapter pin, read from the last `preflight` line before the first
+  `enroll` and never from the trust file or this text, and the reading of a
+  planted head's sealed review record, opened from its `sealed:` `raw[]` entry
+  under `/Users/pilotseal/pilot/sealed/` and checked against its hash: one
+  function, which `pilot-score.py` calls and never reimplements, so end
+  condition 4 and C1 can never disagree on a head. It also adds a `window` mode
+  that checks end condition 4 alone and appends nothing, which the writer runs
+  before each live `enroll` (section 12), and a `ready` mode that checks end
+  conditions 1, 3 and 4 without a `close` and appends nothing, so Joel appends
+  `close` only when it says the end rule holds (section 7). Its `run` mode also
+  publishes each planted head's sealed review record from
   `/Users/pilotseal/pilot/sealed/reviews/`, with its hash in `published` checked
   against that head's `freeze` `raw[]` (section 7).
