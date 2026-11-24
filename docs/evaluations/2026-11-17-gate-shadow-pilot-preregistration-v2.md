@@ -461,11 +461,21 @@ unified context.
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
-  `review` stage did not run.
+  `review` stage did not run. **A hold with no capture.** `gate.holds[]` comes
+  from the operator's capture at each hold, so a hold answered without one
+  leaves no entry. The `review` stage's recorded outcome still shows the hold:
+  `held`, `approved`, `cancelled`, `fix` or `retry`, or `skipped` while the
+  stage ran, since a person answering `skipped` at a hold is the one producer
+  of `skipped` that follows a run (`internal/pipeline/outcome.go:41-70`, the
+  hold node at `internal/pipeline/node.go:245-268`). When that outcome shows a
+  hold and `gate.holds[]` has no `review` entry, O2, O3 and O5's
+  `hold-not-made` count are UNMEASURED for that head, never a measured "no
+  hold".
 - **O3, hold heads.** A hold head is found when `gate.holds[]` has a `review`
   entry whose finding ids include the `id` of a finding O1 matches whose `stage`
   is `review`, so an equal id from another stage never counts. UNMEASURED when
-  O1 is, or when the `review` stage did not run.
+  O1 is, when the `review` stage did not run, or when it held with no capture
+  (O2).
 - **O4, CI failure.** C6 is unchanged (line 466): the head's
   `gate.checks_basis` is `live-checks`, its `ci` stage ran, and that
   stage's `outcome` is not `passed` (`internal/pipeline/outcome.go:22`).
@@ -496,7 +506,8 @@ unified context.
     built, a review whose prose `review-findings.py` cannot parse gives none
     (F4). A malformed findings block makes the head's O5 counts UNMEASURED, and
     so does a `review` stage that did not run, since `hold-not-made` and
-    `pass-refused` read it.
+    `pass-refused` read it, and a `review` hold with no capture makes
+    `hold-not-made` UNMEASURED (O2).
   - Counts: `matched`, `missed` (a locatable review finding with no match),
     `extra` (a gate finding with no match), `hold-not-made` (a `review` hold
     while the verdict is `APPROVE`), `pass-refused` (the `review` stage's
@@ -1016,7 +1027,7 @@ when all of these hold:
    (section 12), so no eligible PR can leave the sequence by its case; planted
    heads never count. As built, `pilot-unblind.py` counts frozen heads of
    provenance `live`, not compared sequence heads, so F6 must land before
-   activation (section 9, precondition 12). The condition fails closed if the
+   signing (section 9, precondition 12). The condition fails closed if the
    parameters ever stop naming a kind or a count of 10, so nothing is scored or
    unblinded then. No calendar deadline ends the pilot until Joel says otherwise
    (I4, still open: he wrote "No deadline, maybe 48 hrs" in 7121929832, and
@@ -1045,10 +1056,11 @@ prints no score. Joel then rules items, working in the I2 order, one `ruling`
 line each, until the budget is spent. The order guides his work and decides
 nothing: a ruling made out of it still counts, and the report lists each such
 ruling, computed from the `ruling` lines and `j1_order` (F4). Only then is the
-one `score` line appended. It reads the `ruling` lines and applies section 5's
-C3, C5 and C7 rules to them. Every item without a ruling is UNMEASURED. Since
-`items` and `ruling` are allowed after `close` (F1), and the `score` comes after
-both, C3, C5 outside clean heads and C7 can be measured.
+one `score` line appended: `pilot-score.py` refuses before an `items` line
+exists or before its budget period ends (F4). It reads the `ruling` lines and
+applies section 5's C3, C5 and C7 rules to them. Every item without a ruling is
+UNMEASURED. Since `items` and `ruling` are allowed after `close` (F1), and the
+`score` comes after both, C3, C5 outside clean heads and C7 can be measured.
 
 **The `ruling` line.** Its vocabulary is the original's, by reference:
 
@@ -1166,10 +1178,14 @@ fails:
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
     script this text pins, and every script follow-up of section 17 (F1, F3,
     F4, F6, and F5 if Joel picks a deadline), has landed through the landing
-    gates with its review. F2 is part of this text and needs no landing of its
-    own. Every landing requirement that changed
-    between this text's signing and the first live `enroll` has been reconciled
-    explicitly, comparing the trust file's landing baseline (section 13) with
+    gates with its review before the signing commit, so the pin section 10 fills
+    there is a blob that contains it. Each follow-up's merge commit is an
+    ancestor of the merge commit its script's row names, which preflight checks
+    (F3). A follow-up that lands after signing is not in the pinned blob, so it
+    needs this text amended and re-signed. F2 is part of this text and needs no
+    landing of its own. Every landing requirement that changed between this
+    text's signing and the first live `enroll` has been reconciled explicitly,
+    comparing the trust file's landing baseline (section 13) with
     `landing_regime` at that `enroll`: either this text is amended and re-signed
     to adopt it, or a signed owner record says it does not apply to the pilot
     (section 15).
@@ -1235,12 +1251,14 @@ refuses every signing form, so no enrollment can pass preflight without them.
 | preflight | `pilot-preflight.py` | UNPINNED | UNPINNED |
 | review findings, used by scoring | `review-findings.py` | UNPINNED | UNPINNED |
 
-By the signing commit each row names the fleet-tools merge commit that
-landed the script and the SHA-256 of its bytes there. The copies Joel installs
-in `/Users/pilotseal/bin` must hash to those values, and preflight check 7
-compares them. These rows are a published copy. The authoritative hashes are
-in the trust file of section 13, outside any repository an agent can write,
-and the two must agree (F3).
+By the signing commit each row names a fleet-tools `main` merge commit that
+contains the script's follow-up (F1 for `pilot-ledger.py`, F3 for
+`pilot-preflight.py`, F4 for `pilot-score.py`, F6 for `pilot-unblind.py`), at or
+after the merge that last changed the script, and the SHA-256 of its bytes
+there. The copies Joel installs in `/Users/pilotseal/bin` must hash to those
+values, and preflight check 7 compares them. These rows are a published copy.
+The authoritative hashes are in the trust file of section 13, outside any
+repository an agent can write, and the two must agree (F3).
 
 ## 11. Owner questions for v2
 
@@ -1433,7 +1451,7 @@ left out only by a rule written here.
 - **The live case.** This replaces the original's line 281: the live case's
   minimum is 10 compared heads, and its heads are this sequence. As built,
   `pilot-score.py` still holds the original's live minimum of 4, so F4 must land
-  before activation.
+  before signing (precondition 12).
 - **Live heads run on fleet-tools.** This replaces the original's lines 58-60,
   61-69 and 87-91, and the sources at lines 391-393, for a live head:
   - **Mirror.** The gate runs against a private mirror of `dayamjz/fleet-tools`,
@@ -1732,7 +1750,7 @@ Relay point 5.
   enrolled twice as two heads, or both enrolled and excluded, is accepted, and
   `pilot-unblind.py` as built counts `enroll` lines, so one PR could count twice
   toward the 10. F1 makes the ledger refuse a second window record naming a PR,
-  and F6 counts distinct PRs. Both must land before activation (precondition
+  and F6 counts distinct PRs. Both must land before signing (precondition
   12).
 - **The denied-write test.** A record as uid 501, in the shape of section 9's
   denied-read record, shows that opening the sealed ledger or the trust file
@@ -1856,6 +1874,8 @@ refuses every form until then.
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
   - it refuses enrollment when the parameters' `k` is not 3 (section 5);
+  - it checks that each script follow-up's merge commit is an ancestor of the
+    merge commit section 10 names for its script (precondition 12);
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
@@ -1897,6 +1917,9 @@ refuses every form until then.
   - it computes each ruling's place in the 48-hour budget (section 8);
   - it scores nothing, appending `score-refused`, when the frozen parameters'
     `k` is not 3 (section 5);
+  - it scores nothing, appending `score-refused`, before an `items` line exists
+    or before its budget period has ended, 48 hours after that line's `at`
+    (section 8), so no item can be cut off early;
   - every oracle that reads a stage needs that stage to have run by section
     5's rule, all three conditions: `ran: true`, `report_present: true`, and no
     finding with the id `usage-ceiling`; otherwise it is UNMEASURED, whatever
