@@ -667,18 +667,30 @@ items Joel rules.
   (`/usr/bin/sudo -u pilotseal` then
   `/usr/bin/env -i PATH=/usr/bin:/bin HOME=/Users/pilotseal`) and names its tool
   by absolute path: `/usr/bin/git` for the history clones' fetch,
-  `/usr/bin/shasum -a 256` for the `bin` comparison, and `/bin/cp` for the
-  copies into `records/` and `sealed/reviews/`. Inside the prefix sudo resolves
-  only `/usr/bin/env`, an absolute path, and `env` would find a bare tool name
-  through its own fixed `PATH=/usr/bin:/bin`; the absolute tool path names
-  exactly which file runs. A command typed without the prefix is different: sudo
-  then finds a bare name through Joel's `PATH` unless `secure_path` is set,
-  which precondition 15 does not require. `env -i` drops every variable Joel's
-  shell would pass, such as a `PATH` with a uid-501-writable directory first, or
-  `DEVELOPER_DIR`. `-B` stops Python writing bytecode, so the scripts' sibling
-  loads leave no `__pycache__` in `bin`; it does not stop Python reading a cache
-  that is already there, which section 6's `bin` rule refuses. Elsewhere this
-  text says `sudo -u pilotseal` for short; it means this form.
+  `/usr/bin/shasum -a 256` for the `bin` comparison, `/bin/cp` for the copies
+  into `records/` and `sealed/reviews/`, `/usr/bin/tee` for the sudoers record
+  (precondition 15), and `/bin/rm -r` to remove a `__pycache__` from `bin`.
+  Inside the prefix sudo resolves only `/usr/bin/env`, an absolute path, and
+  `env` would find a bare tool name through its own fixed `PATH=/usr/bin:/bin`;
+  the absolute tool path names exactly which file runs. A command typed without
+  the prefix is different: sudo then finds a bare name through Joel's `PATH`
+  unless `secure_path` is set, which precondition 15 does not require. `env -i`
+  drops every variable Joel's shell would pass, such as a `PATH` with a
+  uid-501-writable directory first, or `DEVELOPER_DIR`. `-B` stops the Python
+  process it is given to from writing bytecode, and nothing more. Pinned
+  `pilot-score.py` (`9b2d4e27`, line 249) starts `pilot-unblind.py` as a child
+  with `-I` and no `-B`, and that child loads `pilot-ledger.py` by a sibling
+  load, so whether the child writes `bin/__pycache__` depends on the
+  interpreter's own default. On this host the Command Line Tools Python reports
+  `sys.flags.dont_write_bytecode` as set even with `-I` and no `-B` (observed
+  2026-11-24), so no cache is written today, but no record checks that default,
+  and an update can change it (section 14, "What the system launchers run"). If
+  a cache is written, pilotseal writes it from the pinned source, a later run
+  such as `unblind` may load from it with no `bin` check of its own, and section
+  6's `bin` rule refuses every later census and parse-check until Joel removes
+  it in this form. That fails closed: it stops runs, never changes a result.
+  `-B` does not stop Python reading a cache that is already there. Elsewhere
+  this text says `sudo -u pilotseal` for short; it means this form.
 
   **What actually runs is not fully checked.** `/usr/bin/python3` and
   `/usr/bin/git` are on the sealed read-only system volume (`mount` shows `/` as
@@ -738,7 +750,7 @@ items Joel rules.
   - **`pilot-score.py bind --census`**, run before signing (section 7), which
     reads every record and prints only counts. It appends one `access` line
     (`by: census`) naming every record it read, and marks no head;
-  -  - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
+  - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
     pilotseal before signing, which reads every record and prints only how many
     parse under O1's record rules. Those are the rules that need no head: the
     fence rules, diff text outside the one fenced diff, a diff that does not
@@ -759,7 +771,8 @@ items Joel rules.
   every file in `/Users/pilotseal/bin` equals that file's hash in the trust file
   (section 13), the one reference for this check, and that `bin` holds no entry,
   file or directory, the trust file does not hash, so a `__pycache__` there
-  refuses the run (the fixed form's `-B` keeps the runs from writing one). He
+  refuses the run (the fixed form's `-B` covers only the process it starts;
+  "Who runs the scripts" above says what that leaves). He
   also checks that a *pre-run write-denied record* exists for
   `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
   is not precondition 10's record, which is dated after signing. Since only F3
@@ -772,7 +785,7 @@ items Joel rules.
   and an open-for-write probe, denied with `EACCES`, of every file the line's
   `bin_sha256` names. Every probe in it must be denied, and every probe's `date`
   must be before the line's `at` (F3). The record speaks only for the time it
-  was taken: `check` sets no lower bound on its age, so Joel takes it right
+  was taken: `check` sets no upper bound on its age, so Joel takes it right
   before each run, and F4's report shows each record's age beside its line. The
   trust file's location is I8 (section 11), so neither runs until I8 is settled
   and the trust file exists there; the reference holds only from then. If the
@@ -1453,17 +1466,23 @@ fails:
     copy; those are part of section 14's "other routes to pilotseal" gap. The
     record carries the names and gids it matches against. uid 501 cannot read
     the sudoers policy (`/etc/sudoers` is readable only by root and `wheel`),
-    and the text relies on no uid-501 view of it. The policy comes from a second
-    record, the *sudoers record*: in his own terminal Joel copies, as root, the
-    bytes of `/etc/sudoers` and of every file it includes (each `#include`,
+    and the text relies on no uid-501 copy of it. The policy comes from a second
+    record, the *sudoers record*: in his own terminal Joel records, reading as root,
+    the bytes of `/etc/sudoers` and of every file it includes (each `#include`,
     `@include`, `#includedir` and `@includedir` target, recursively), with each
     path, the output of `visudo -c`, the output of `sudo -V` run as root (what
     it reports for the two PAM service names), and the output of `id -un 501`,
     `id -Gn 501` and `id -G 501` (the user, group names and gids the scan above
-    matches), into one file owned by pilotseal. Each of these runs in the root
-    fixed form, `/usr/bin/sudo /usr/bin/env -i PATH=/usr/bin:/bin` followed by
-    the tool's absolute path (`/bin/cat`, `/usr/sbin/visudo -c`,
-    `/usr/bin/sudo -V`, `/usr/bin/id`), never a bare name.
+    matches), into one file owned by pilotseal in
+    `/Users/pilotseal/pilot/records/`. Each reader runs in the root fixed form,
+    `/usr/bin/sudo /usr/bin/env -i PATH=/usr/bin:/bin` followed by the tool's
+    absolute path (`/bin/cat`, `/usr/sbin/visudo -c`, `/usr/bin/sudo -V`,
+    `/usr/bin/id`), never a bare name, and its output is piped straight into
+    `/usr/bin/tee -a` on that file, run as pilotseal in section 6's fixed form.
+    So the bytes never sit in a file uid 501 can edit; they pass only through a
+    pipe between processes Joel's uid-501 shell starts, which section 14's
+    terminal gap covers. A redirect into a uid-501 file followed by a copy is
+    not this form, and leaves a window in which an agent could edit the bytes.
     The record must show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -2420,7 +2439,7 @@ refuses every form until then.
     miss (O1);
   - it reports section 12's recording delay, from the window's close (by count
     or by time) to the first E5 or E6 `exclude` written after it;
-  -  - it lists every `bind --census` and `parse-check` `access` line with the
+  - it lists every `bind --census` and `parse-check` `access` line with the
     age of its pre-run record, the line's `at` minus the earliest probe `date`
     in the record its `prerun_record_sha256` names in
     `/Users/pilotseal/pilot/records/` (section 6);
