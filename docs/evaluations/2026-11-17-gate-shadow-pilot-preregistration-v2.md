@@ -708,10 +708,14 @@ items Joel rules.
   the blob of `pilot-score.py` at F4's merge commit in section 10's history
   clone, and that a write-denied record for `/Users/pilotseal/bin` made before
   the run exists (the probe of precondition 10). The `access` line records that
-  hash (`script_sha256`), and `check` later refuses an `access` line whose
-  `script_sha256` differs from section 10's scoring pin (F3). A copy that lies
-  in its own `access` line is not caught by that check; what bars it is that
-  uid 501 cannot write `/Users/pilotseal/bin`.
+  hash (`script_sha256`). `check` later accepts that line only when its
+  `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
+  history clone's `main` first-parent history at or after F4's merge, so the
+  copy that read the records was a landed, reviewed one (F3). It need not equal
+  the final scoring pin: if a later fix re-pins `pilot-score.py`, the earlier
+  line still passes, nothing in the sealed ledger is rewritten, and the read
+  stays logged. A copy that lies in its own `access` line is not caught by that
+  check; what bars it is that uid 501 cannot write `/Users/pilotseal/bin`.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1196,8 +1200,9 @@ fails:
    fails with "has no check yet" until F3 lands the verification, so no
    enrollment can pass this check before then.
 5. J3 is ruled: the `pr-sequence` end rule with `pr_count` 10 and a named
-   `pr_kind`. J1 is ruled, and since it is option 2, this text states a numeric
-   budget and an item order (I2).
+   `pr_kind`, and section 11's `deadline` is `48 hours`, which `check` copies
+   into its `preflight` line (I4, F5). J1 is ruled, and since it is option 2,
+   this text states a numeric budget and an item order (I2).
 6. A denied-read record that passes brief 5b's rule 4 exists, dated after this
    signing commit: run as uid 501, the uid agents run as, against targets owned by
    a different uid, never as root, and every probe denied with `EACCES`. It
@@ -1304,14 +1309,16 @@ fails:
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and
     no other line that sets `timestamp_type` in any scope: none for a user
     (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
-    (`Defaults!`). The text relies on that explicit line, not on sudo's
-    default. `check`, as pilotseal, validates both records and records both
-    hashes in its `preflight` line (F3). No field of either is typed in. The
-    sudoers record passes through Joel's uid-501 terminal, so section 14's
-    terminal gap applies to it. The sudo-denied record shows only that an agent
-    session cannot use sudo by itself. It does not show that an agent cannot
-    tamper with the terminal Joel uses, which section 14 states as a residual
-    gap.
+    (`Defaults!`). Nor may any line in any scope set `tty_tickets`, either way:
+    `!tty_tickets` uses a single ticket record for all login sessions
+    (`sudoers(5)`), which is the sharing this precondition rules out. The text
+    relies on that explicit `timestamp_type` line, not on sudo's default.
+    `check`, as pilotseal, validates both records and records both hashes in its
+    `preflight` line (F3). No field of either is typed in. The sudoers record
+    passes through Joel's uid-501 terminal, so section 14's terminal gap applies
+    to it. The sudo-denied record shows only that an agent session cannot use
+    sudo by itself. It does not show that an agent cannot tamper with the
+    terminal Joel uses, which section 14 states as a residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1392,14 +1399,14 @@ repository an agent can write, and the two must agree (F3).
 ## 11. Owner questions for v2
 
 This text is not signed while any input below that blocks signing is open. Each
-one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `j1_order`
-`trust_file` (I8) and `key_fingerprint` in section 13's copy block,
-`freeze_writer` (open item 2) and `chain_head_checker` (open item 4) in the
-block below, and the follow-up merges in section 10's `pilot-v2-followups`
-block. `key_fingerprint` is filled once Joel makes the key of I5 (answered).
-Once Joel answers, his answers are quoted here verbatim with their comment
-ids, as a#977 folded in section 7.12, and his key signature of this text
-(section 13) is what makes them binding.
+one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `trust_file`
+(I8) and `key_fingerprint` in section 13's copy block, `freeze_writer` (open
+item 2) and `chain_head_checker` (open item 4) in the block below, and the
+follow-up merges in section 10's `pilot-v2-followups` block. `key_fingerprint`
+is filled once Joel makes the key of I5 (answered). Once Joel answers, his
+answers are quoted here verbatim with their comment ids, as a#977 folded in
+section 7.12, and his key signature of this text (section 13) is what makes them
+binding.
 
 ```pilot-v2-open-inputs
 deadline: 48 hours
@@ -1505,8 +1512,9 @@ keeps its number, answered or not.
 - **I7. The promotion conflict of section 16: answered.** Joel does the local
   substitute check for the server-protected required check himself. If he has
   not done it within 48 hours of its being due, #claude (the arbiter) does it
-  (Nov 24, below). Section 16 records this, and this text's signature covers
-  it.
+  (Nov 24, below). Section 16 records this, defines when it is due, and keeps
+  the original's break-glass requirement, which is still unmet: promotion
+  stays blocked until a break-glass log agents cannot alter exists.
 - **I8. Where the trust file lives: open** (#juno 7115601439). It was not
   among the questions put to Joel on Nov 23. It must meet section 13's rules:
   outside every repository and every agent's home, not writable by uid 501,
@@ -1537,13 +1545,20 @@ Read narrowly, as #claude relayed them:
   anything past it is UNMEASURED." In this text every item is posted at once,
   by the one `items` line, and every item ruling's window is that line's budget
   period (section 8). So every item's window is open together, every item was
-  posted at the same time, and the order comes down to the lower PR number
-  first, by item id within one head. Past the budget period an item is
-  UNMEASURED. As section 8 says, the order guides Joel's work and decides
-  nothing, and the report lists a ruling made out of it.
+  posted at the same time, and the order comes down to the tie-break: the lower
+  PR number first. Numbers from two repositories are not comparable (section 7),
+  and planted heads have none, so the tie-break is made total by this order over
+  every `items` entry, which F4's out-of-order list uses exactly: first live
+  heads, by fleet-tools PR number; then replayed heads, by assistant PR number;
+  then planted heads, by `head_id`; and within one head, by item id. Inside each
+  repository that is Joel's lower-PR-number rule; the repository order only
+  fills the gap his rule leaves. Past the budget period an item is UNMEASURED.
+  As section 8 says, the order guides Joel's work and decides nothing, and the
+  report lists a ruling made out of it.
 - **(7) substitute (I7):** Joel does the local substitute check for the
   server-protected required check; if he has not done it within 48 hours of its
-  being due, #claude (the arbiter) does it (section 16).
+  being due, #claude (the arbiter) does it (section 16). It covers the required
+  check only; the break-glass requirement stands and is unmet (section 16).
 - **J4 key custody (I5):** the key of section 13.
 - Item 4 (an idle pane) is not about this text.
 
@@ -1859,6 +1874,7 @@ key_fingerprint: UNPINNED key not yet made
   - the end condition (J3 and I4);
   - the writer's identity (I6);
   - the section 16 choice (I7);
+  - the break-glass log section 16 still needs, once it exists;
   - the trust file's location (I8).
 
   Each one that is folded into this text before signing is covered by the
@@ -1965,15 +1981,20 @@ waiver, changes admin bypass, enables branch protection or promotes a gate.
 Relay point 7. The original's lines 485-488, kept by section 2, require "a
 server-protected required check and an auditable break-glass" before a promotion
 decision, per ORDER r2 item 13. Joel's standing decision is that there is no
-branch protection (7114296700, point 7). Joel resolved the conflict with a
-local substitute (I7: answer 8 of 7121929832, and 7135308036 and 7135401609 on
-Nov 24): Joel does the local substitute check for the server-protected required
-check himself, and if he has not done it within 48 hours of its being due,
-#claude (the arbiter) does it. This is his change to ORDER r2 item 13, and this
-text's signature records it. Until this text is signed, the prerequisite stays
-as the original wrote it and is **unmet**, so no promotion decision can be made,
-whatever the pilot shows. This section is a direction to resolve the
-conflict. It enables no branch protection and promotes no gate.
+branch protection (7114296700, point 7). Joel resolved the required-check half
+of the conflict with a local substitute (I7: answer 8 of 7121929832, and
+7135308036 and 7135401609 on Nov 24): Joel does the local substitute check for
+the server-protected required check himself, and if he has not done it within 48
+hours of its being due, #claude (the arbiter) does it. The check is *due* at the
+`created_at` of the comment that puts a promotion decision to Joel, naming the
+gate to promote. This is his change to ORDER r2 item 13's first half, and this
+text's signature records it. **The break-glass half is unchanged.** The
+original's "an auditable break-glass" and "Both must exist" stand as written:
+Joel's answer names no break-glass, so that half is still **unmet**. Promotion
+stays blocked until a break-glass log that agents cannot alter exists and a
+signed owner record (section 13) names it, and until this text is signed,
+whatever the pilot shows. This section is a direction to resolve the conflict.
+It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2020,6 +2041,13 @@ refuses every form until then.
     enrolled has none) and before `close` (every window PR has exactly one),
     and refuses on a missing or doubled record (section 12);
   - it runs the pinned `review-size.sh` at the enrollment head;
+  - the timed close is due at the window's opening plus 48 hours, read from
+    the `preflight` line: Joel runs `pilot-unblind.py window` as pilotseal at
+    or after that time, before he appends any other ledger line, and then
+    records the unrecorded window PRs as below. If he runs it late, every
+    unrecorded PR is still recorded then, a review in the gap counts as E5
+    (section 12), and the report shows the delay as the difference between
+    the due time and the first E5 or E6 line's `at`;
   - right after each live head's `freeze` is appended, and before each live
     `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
     closed, it writes no more live `enroll` and records every unrecorded window
@@ -2054,12 +2082,15 @@ refuses every form until then.
     commit in its `preflight` line;
   - it validates precondition 15's sudo-denied record and its sudoers record,
     made through sudo as root: `visudo -c` OK, one global `timestamp_type` of
-    `tty` or `ppid`, and no `timestamp_type` line in any other scope; it records
+    `tty` or `ppid`, no `timestamp_type` line in any other scope, and no
+    `tty_tickets` setting in any scope; it records
     both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
-    `script_sha256` differs from section 10's scoring pin (section 6);
+    `script_sha256` is not the blob of `pilot-score.py` at some merge commit on
+    the history clone's `main` first-parent history at or after F4's merge
+    (section 6);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2145,7 +2176,10 @@ refuses every form until then.
     window's close, is not a sequence head, so it is in none of C1,
     C3, C5 or the `items` line (section 5); it is listed, and the last case
     marks the pilot possibly selected (section 12);
-  - it lists each item ruling made out of the `j1_order` order (section 8);
+  - it lists each item ruling made out of the `j1_order` order, using exactly
+    section 11's total order over the `items` entries (live by fleet-tools PR
+    number, then replayed by assistant PR number, then planted by `head_id`,
+    then item id) (section 8);
   - it lists every enrolled live head that is not compared, with its reason
     (captured late, moved after enrollment, no review, or another), every E5
     exclusion, and every E4 exclusion, and marks the pilot possibly selected
