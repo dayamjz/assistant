@@ -535,7 +535,7 @@ it.
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
 | C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no compared live or replayed head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that names a gate finding, by (`stage`, `id`) (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
-| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C5 | line 465 | FAIL when any clean head that is neither `base_mismatch` nor pin-failed has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct` and at least one such head exists; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
@@ -754,8 +754,9 @@ in `ftw:reviews/ft-<N>.verdicts`, before any later review of that PR is
 requested. The *compared* predicate below detects a capture that came too late.
 The `default-1` run of a head goes under `<captures>/<head_id>/default-1/`, with
 its own `gate.json`, and is listed in the same `raw[]`. `pilot-score.py` reads
-only the file named `gate.json`, so it never scores or pools the `default-1`
-run. Reporting that run apart is F4.
+only `<captures>/<head_id>/gate.json`, the `raw[]` entry whose `file` is
+`gate.json` at the head's top level, never `default-1/gate.json`, so it never
+scores or pools the `default-1` run. Reporting that run apart is F4.
 
 **One owner for the review fields.** `gate.json` never holds `planted_truth` or
 any `review.*` field (the original's lines 392-396). Those come only from the
@@ -794,10 +795,10 @@ and it appears nowhere else:
   for a window PR section 12's evidence and `landing_regime`.
 - **`gate.json`**, written by the operator: the base facts of the original's
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
-  `base_check`), the `gate.*` fields (among them `gate.checks_basis`, and
-  `gate.findings[]` with each entry's `stage`, taken from the `stages[].report`
-  that holds it), `origin_ci`, `pin_check`, and for a planted head
-  `review_adapter_sha256` (section 12).
+  `base_check`), the `gate.*` fields (among them `gate.submitted_head`,
+  `gate.checks_basis`, and `gate.findings[]` with each entry's `stage`, taken
+  from the `stages[].report` that holds it), `origin_ci`, `pin_check`, and for a
+  planted head `review_adapter_sha256` (section 12).
 - **The review record:** every `review.*` field (above) except
   `review.record_commit`, which v2 does not record (section 2).
 - **The sealed record `sNN.md`:** planted truth.
@@ -808,14 +809,26 @@ have the base facts recorded before the push. In v2 they are the operator's,
 in `gate.json`, whose bytes are fixed only at `freeze`, so the ledger does not
 show that they predate the push. That is a known limit.
 
-**One head.** The revision the gate's review stage reviewed
-(`gate.reviewed_revision`) and the head the review record names (line 1's
-`reviewed at <40-hex>` for a fleet-tools review) must both equal the `enroll`
-line's `head`, and for a live head `head` must equal `enroll_head`, the head
-that was sized and classified (section 12). If any of them differs, for example
-because the author pushed after enrollment and the review is of the new head,
-the head is not compared. It stays enrolled, and the report lists it as moved
-after enrollment.
+**One head.** The gate run's submitted head and the head the review record names
+(line 1's `reviewed at <40-hex>` for a fleet-tools review) must both equal the
+`enroll` line's `head`, and for a live head `head` must equal `enroll_head`, the
+head that was sized and classified (section 12). The submitted head is
+`gate.submitted_head`, the run record's `record.submitted_head`
+(`internal/store/run.go:61`), by which the original's line 374 already picks
+`gate.run`; v2 adds it to section 4's field list so the rule reads recorded
+bytes. If either differs, for example because the author pushed after enrollment
+and the review is of the new head, the head is not compared. It stays enrolled,
+and the report lists it as moved after enrollment.
+
+**A head the gate rewrote.** `gate.reviewed_revision` (the original's line 377)
+is the commit the gate's review read, which is `pipeline.KeyHead`
+(`internal/stages/review.go:189`). That key starts at the submitted commit and
+moves when the gate's own rebase or a fix round rewrites it
+(`internal/pipeline/key.go:95-97`, `internal/stages/rebase.go:284-321`). So a
+`reviewed_revision` that differs from `gate.submitted_head` is the gate's
+rewrite, not an author's push. It never makes a head uncompared. The report
+lists every such head as "rewritten by the gate", since its findings' line
+numbers refer to the rewritten commit and may sit off the submitted one's.
 
 **Building and binding a planted head.** A planted record either names an
 existing commit, or it is a construction spec that a head is built from, as s02
@@ -1092,7 +1105,7 @@ fails:
     gate's first-run path proven on it, and the home's `config.yaml` declares
     `no_ci: true` (section 12, "CI"). Neither that home nor the assistant gate
     home that runs planted and replayed heads sets any `usage_ceiling.*` key
-    (`internal/config/key.go:313-350`), and the preflight record shows both
+    (`internal/config/key.go:313-354`), and the preflight record shows both
     `config.yaml` files with none (F3).
 14. **The pin is out of the repo and the copies match it** (#juno 7115601439).
     Preflight reads the key fingerprint and the executable hashes from the
@@ -1450,8 +1463,10 @@ left out only by a rule written here.
     - an E5 exclusion (a review requested before Joel records the PR);
     - a live head captured late (another review requested before the
       capture, section 7);
-    - a live head moved after enrollment (a push before its first full
-      review, section 7's one-head rule);
+    - a live head moved after enrollment (a push before its first full review,
+      section 7's one-head rule), for example a merge of `main` into the PR
+      branch pushed to get it dropped; a rewrite by the gate's own rebase is not
+      a move and drops no head (section 7);
     - any other enrolled live head that ends not compared, for example a PR
       closed before its first full review;
     - an E4 exclusion: a PR closed unmerged before any review, before Joel
@@ -1749,13 +1764,14 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - O4 reads the `ci` stage (as built, `stage_outcome(gate, "checks")` looks
     for a stage that `gate.stages[]` never contains, so C6 is always
     UNMEASURED);
-  - it decides compared only by calling `pilot-unblind.py`'s compared
-    predicate (F6), which reads `verdicts.txt` with the `.verdicts` line
-    winning, never by a second implementation; it reads each field only from
-    its one owner (section 7), makes a head UNMEASURED when a field appears
-    in a file that does not own it, and does not compare a head that fails
-    the one-head rule on `gate.reviewed_revision` (as built, `score_head`
-    reads the verdict from `review.md` alone, with no such checks);
+  - it decides compared only by calling `pilot-unblind.py`'s compared predicate
+    (F6), which reads `verdicts.txt` with the `.verdicts` line winning, never by
+    a second implementation; it reads each field only from its one owner
+    (section 7), makes a head UNMEASURED when a field appears in a file that
+    does not own it, and does not compare a head that fails the one-head rule on
+    `gate.submitted_head`, and lists a head whose `gate.reviewed_revision`
+    differs from it as rewritten by the gate (as built, `score_head` reads the
+    verdict from `review.md` alone, with no such checks);
   - a review with no findings block gives an `unlocatable` item per prose
     finding, and at least one when its verdict is `CHANGES REQUESTED`
     (section 5, O5);
