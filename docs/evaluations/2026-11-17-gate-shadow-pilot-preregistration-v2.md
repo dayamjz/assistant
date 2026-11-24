@@ -108,7 +108,8 @@ the *assistant history clone*, `/Users/pilotseal/pilot/assistant.git`, a bare
 clone of `dayamjz/assistant` that uid 501 cannot write (precondition 10).
 **Freshness.** A bare clone has no fetch refspec, so a plain `git fetch` can
 leave its `main` behind. Right before each `check`, Joel runs, as pilotseal,
-`git fetch origin +refs/heads/main:refs/heads/main` in that clone, and `check`
+`/usr/bin/git fetch origin +refs/heads/main:refs/heads/main` in that clone, in
+section 6's fixed form, and `check`
 compares the clone's `main` with `git ls-remote origin refs/heads/main` and
 refuses on a mismatch. That `main` is what "assistant `main`" means in section
 9, and the `preflight` line records it (F3). As built, check 4 refuses every
@@ -658,15 +659,33 @@ items Joel rules.
 
   ```sh
   /usr/bin/sudo -u pilotseal /usr/bin/env -i PATH=/usr/bin:/bin \
-    HOME=/Users/pilotseal /usr/bin/python3 /Users/pilotseal/bin/<script>
+    HOME=/Users/pilotseal /usr/bin/python3 -B /Users/pilotseal/bin/<script>
   ```
 
-  The interpreter is `/usr/bin/python3`, and `git` resolves to `/usr/bin/git`
-  through that fixed `PATH`; on this host both are on the sealed read-only
-  system volume (`mount` shows `/` as `sealed` and `read-only`), and `env -i`
-  drops every variable Joel's shell would pass, such as a `PATH` with a
-  uid-501-writable directory first, or `DEVELOPER_DIR`. Elsewhere this text says
-  `sudo -u pilotseal` for short; it means this form. No agent session can use
+  **Every other command Joel runs as pilotseal** uses the same prefix
+  (`/usr/bin/sudo -u pilotseal /usr/bin/env -i PATH=/usr/bin:/bin
+  HOME=/Users/pilotseal`) and names its tool by absolute path: `/usr/bin/git`
+  for the history clones' fetch, `/usr/bin/shasum -a 256` for the `bin`
+  comparison, and `/bin/cp` for the copies into `records/` and
+  `sealed/reviews/`. Without that, sudo finds a bare command name through
+  Joel's `PATH` unless `secure_path` is set, which precondition 15 does not
+  require. `env -i` drops every variable Joel's shell would pass, such as a
+  `PATH` with a uid-501-writable directory first, or `DEVELOPER_DIR`. `-B`
+  stops Python writing bytecode, so the scripts' sibling loads leave no
+  `__pycache__` in `bin`; it does not stop Python reading a cache that is
+  already there, which section 6's `bin` rule refuses. Elsewhere this text says
+  `sudo -u pilotseal` for short; it means this form.
+
+  **What actually runs is not fully checked.** `/usr/bin/python3` and
+  `/usr/bin/git` are on the sealed read-only system volume (`mount` shows `/`
+  as `sealed` and `read-only`), but on this host both are the same launcher,
+  which runs the copies under `/Library/Developer/CommandLineTools`, the
+  directory `/var/db/xcode_select_link` names, on the writable data volume.
+  Those copies and that link are root-owned today (observed 2026-11-24), but no
+  record in this text checks them, so a Command Line Tools update or an admin
+  `xcode-select -s` changes the Python or git that runs as pilotseal without any
+  record failing. This is a stated residual gap (section 14, "What the system
+  launchers run"). No agent session can use
   sudo to become pilotseal without Joel's password, as far as precondition 15
   checks the sudo policy and the sudo PAM stack, and no sudoers entry is
   recommended. Precondition 15 does not cover `su pilotseal` or what password
@@ -725,42 +744,43 @@ items Joel rules.
   `pilot-unblind.py` loads `pilot-ledger.py`, so one rule covers the whole
   directory. Before either run, Joel checks, as pilotseal, that the SHA-256 of
   every file in `/Users/pilotseal/bin` equals that file's hash in the trust file
-  (section 13), the one reference for this check, and that `bin` holds no file
-  the trust file does not hash. He also checks that a *pre-run write-denied
-  record* exists for `/Users/pilotseal/bin`, made by uid 501 before the run with
-  F3's `probe`. It is not precondition 10's record, which is dated after
-  signing. Since only F3 adds write probes, neither run happens before F3 lands.
-  Joel copies the pre-run record, as pilotseal, into
-  `/Users/pilotseal/pilot/records/`, its one home, and each `access` line
-  records its SHA-256 (`prerun_record_sha256`). `check` later finds the file in
-  that directory with that hash and refuses the line unless the file is a
-  write-denied record for `/Users/pilotseal/bin` holding at least precondition
-  10's directory walk of `/Users/pilotseal/bin` and an open-for-write probe,
-  denied with `EACCES`, of every file the line's `bin_sha256` names. Every probe
-  in it must be denied, and every probe's `date` must be before the line's `at`
-  (F3). The record speaks only for the time it was taken: `check` sets no lower
-  bound on its age, so Joel takes it right before each run, and the report shows
-  each record's age beside its line. The trust file's location is I8 (section
-  11), so neither runs until I8 is settled and the trust file exists there; the
-  reference holds only from then. If the trust file lacks a hash for any file in
-  `bin`, Joel runs neither until he has written it, as pilotseal, for a blob he
-  has read from a landed merge in section 10's history clone (for
-  `pilot-score.py`, an F4 or F5 merge). The `access` line records
-  `pilot-score.py`'s hash (`script_sha256`) and every file's hash in `bin`
-  (`bin_sha256`). `check` later accepts that line only when its `script_sha256`
-  is the blob of `pilot-score.py` at a merge commit on the history clone's
-  `main` first-parent history at or after `f4_first`, the first F4 merge, which
-  section 10 records once and never moves (F3). That shows only that the copy
-  was on fleet-tools `main` at or after the first F4 merge, not that it was
-  reviewed: fleet-tools has no branch protection (section 16) and every agent
-  pushes as `dayamjz`. What ties the copies to the trust file's hashes at the
-  time of the run is Joel's pre-run check above; `check` does not verify that
-  tie, and the procedure guarantees no more than it. The line need not equal the
-  final scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
-  `f4_first` stays put, the earlier line still passes, nothing in the sealed
-  ledger is rewritten, and the read stays logged. A copy that lies in its own
-  `access` line is not caught by that check, and `check` verifies only
-  `pilot-score.py`'s hash: for the other files in `bin` the tie is Joel's
+  (section 13), the one reference for this check, and that `bin` holds no entry,
+  file or directory, the trust file does not hash, so a `__pycache__` there
+  refuses the run (the fixed form's `-B` keeps the runs from writing one). He
+  also checks that a *pre-run write-denied record* exists for
+  `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
+  is not precondition 10's record, which is dated after signing. Since only F3
+  adds write probes, neither run happens before F3 lands. Joel copies the
+  pre-run record, as pilotseal, into `/Users/pilotseal/pilot/records/`, its one
+  home, and each `access` line records its SHA-256 (`prerun_record_sha256`).
+  `check` later finds the file in that directory with that hash and refuses the
+  line unless the file is a write-denied record for `/Users/pilotseal/bin`
+  holding at least precondition 10's directory walk of `/Users/pilotseal/bin`
+  and an open-for-write probe, denied with `EACCES`, of every file the line's
+  `bin_sha256` names. Every probe in it must be denied, and every probe's `date`
+  must be before the line's `at` (F3). The record speaks only for the time it
+  was taken: `check` sets no lower bound on its age, so Joel takes it right
+  before each run, and F4's report shows each record's age beside its line. The
+  trust file's location is I8 (section 11), so neither runs until I8 is settled
+  and the trust file exists there; the reference holds only from then. If the
+  trust file lacks a hash for any file in `bin`, Joel runs neither until he has
+  written it, as pilotseal, for a blob he has read from a landed merge in
+  section 10's history clone (for `pilot-score.py`, an F4 or F5 merge). The
+  `access` line records `pilot-score.py`'s hash (`script_sha256`) and every
+  file's hash in `bin` (`bin_sha256`). `check` later accepts that line only when
+  its `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
+  history clone's `main` first-parent history at or after `f4_first`, the first
+  F4 merge, which section 10 records once and never moves (F3). That shows only
+  that the copy was on fleet-tools `main` at or after the first F4 merge, not
+  that it was reviewed: fleet-tools has no branch protection (section 16) and
+  every agent pushes as `dayamjz`. What ties the copies to the trust file's
+  hashes at the time of the run is Joel's pre-run check above; `check` does not
+  verify that tie, and the procedure guarantees no more than it. The line need
+  not equal the final scoring pin: if a later fix moves `f4` and re-pins
+  `pilot-score.py`, `f4_first` stays put, the earlier line still passes, nothing
+  in the sealed ledger is rewritten, and the read stays logged. A copy that lies
+  in its own `access` line is not caught by that check, and `check` verifies
+  only `pilot-score.py`'s hash: for the other files in `bin` the tie is Joel's
   pre-run check alone. What bars a lying copy is that uid 501 could neither
   create a file in any directory of `bin`'s walk nor open a file in `bin` for
   writing when the pre-run record was taken, within the self-attesting-record
@@ -768,10 +788,10 @@ items Joel rules.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
-  `sealed/reviews/<head_id>.md` (section 7) with `cp`, without reading it. It
-  opens no existing sealed file, so it needs no `access` line and marks no
-  head. Its `freeze` `raw[]` entry `sealed:reviews/<head_id>.md` records it
-  and its hash.
+  `sealed/reviews/<head_id>.md` (section 7) with `/bin/cp`, without reading it.
+  It opens no existing sealed file, so it needs no `access` line and marks no
+  head. Its `freeze` `raw[]` entry `sealed:reviews/<head_id>.md` records it and
+  its hash.
 
   Building is allowed only for a planted head of a case Joel never rules (clean,
   real-finding, hold or CI-failure), and `bind` refuses a construction spec
@@ -1307,11 +1327,13 @@ fails:
     assistant history clone exists, dated after the signing commit (sections 6,
     13 and 14). A *directory walk* of a path is a create probe in every
     directory along two paths, the path as written and the path with every
-    symlink resolved (`realpath`), from the path's own directory up to `/`, each
-    denied as described below for the trust file. For `/Users/pilotseal/bin` the
-    record holds its directory walk and an open-for-write probe of each
-    installed file there, denied with `EACCES`, and for the history clones
-    `/Users/pilotseal/pilot/fleet-tools.git` and
+    symlink resolved (`realpath`), up to `/`, each denied as described below for
+    the trust file. A walk starts at the path itself when the path is a
+    directory, so `/Users/pilotseal/bin`'s walk includes a create in `bin`, and
+    at the directory holding the path when it is a file. For
+    `/Users/pilotseal/bin` the record holds its directory walk and an
+    open-for-write probe of each installed file there, denied with `EACCES`, and
+    for the history clones `/Users/pilotseal/pilot/fleet-tools.git` and
     `/Users/pilotseal/pilot/assistant.git` that creating a file in either is
     denied the same way. For the trust file it holds an open-for-write probe of
     the file, denied with `EACCES`, and the directory walk of its path as I8
@@ -2056,6 +2078,13 @@ Relay point 5.
   pilotseal with `su` and read the sealed records and write the ledger, and no
   record of this text would show it. Giving pilotseal no usable password closes
   it; this text does not check that.
+- **A residual gap: what the system launchers run.** `/usr/bin/python3` and
+  `/usr/bin/git` are launchers on the sealed volume that run the copies under
+  `/Library/Developer/CommandLineTools`, chosen by `/var/db/xcode_select_link`,
+  on the writable data volume (section 6). No record checks those copies or the
+  link, so whoever can change them changes what runs as pilotseal, and no
+  record of this text would show it. They are root-owned today; this text does
+  not check that they stay so.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -2068,8 +2097,9 @@ Relay point 5.
   can use the key, holds only while this gap and the "other routes to pilotseal"
   gap above are not exploited, since an agent with Joel's captured password, or
   with pilotseal's own, acts as pilotseal.
-  - **What narrows it:** Joel runs pinned scripts only in section 6's fixed form
-    (absolute `/usr/bin/sudo`, `env -i`, a fixed `PATH`, `/usr/bin/python3`),
+  - **What narrows it:** Joel runs every command as pilotseal only in section
+    6's fixed form (absolute `/usr/bin/sudo`, `env -i`, a fixed `PATH`,
+    absolute tool paths), within the launcher gap above,
     from a shell started with no startup files (`/bin/zsh -f`), ends the ticket
     with `sudo -k` when he is done, and reads what he signs with tools outside
     uid 501's writable paths. This only narrows it: a shell that was already
@@ -2368,6 +2398,10 @@ refuses every form until then.
     miss (O1);
   - it reports section 12's recording delay, from the window's close (by count
     or by time) to the first E5 or E6 `exclude` written after it;
+  - it lists every `bind --census` and `parse-check` `access` line with the age
+    of its pre-run record, the line's `at` minus the latest probe `date` in the
+    record its `prerun_record_sha256` names in `/Users/pilotseal/pilot/records/`
+    (section 6);
   - a live head whose `pr_created_at` is outside the window, before its
     opening or after its close, or whose `enroll` line's `at` is later than the
     window's close, is not a sequence head, so it is in none of C1,
