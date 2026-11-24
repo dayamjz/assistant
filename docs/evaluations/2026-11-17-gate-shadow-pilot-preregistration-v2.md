@@ -410,10 +410,12 @@ it equals git's default unified context.
   `ran` does. So every oracle in this section (O1 to O5) that reads a stage, its
   outcome, its holds or its findings, first needs that stage's entry in
   `gate.stages[]` to have `ran: true`. Otherwise the oracle is UNMEASURED for
-  that head, never a measured pass or failure. This covers O1 (the `review`
-  stage, whose findings O1 matches), O2, O3, O4 (the `ci` stage), and O5's
-  `hold-not-made` and `pass-refused`. As built, `pilot-score.py` does not check
-  `ran` (F4).
+  that head, never a measured pass or failure. This covers O1, O2, O3, O4 (the
+  `ci` stage), and O5's `hold-not-made` and `pass-refused`. O1 matches the
+  findings of every stage that ran, as its rule says, and it needs the `review`
+  stage to have run: a run that ended before review is UNMEASURED for O1, though
+  an earlier stage may have reported findings. As built, `pilot-score.py` does
+  not check `ran` (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
@@ -567,7 +569,9 @@ items Joel rules.
 - **Who runs the scripts.** Scoring and unblinding run only as pilotseal, and
   only when Joel invokes them, as
   `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
-  agent session runs as pilotseal, and no sudoers entry is recommended.
+  agent session can run as pilotseal by itself (precondition 15), and no sudoers
+  entry is recommended. An agent can still tamper with the uid-501 terminal Joel
+  runs `sudo` from (section 14, "Joel's terminal is the agents' uid").
   Scoring needs git on pilotseal's `PATH` (O1 above) for any planted record
   that reaches O1's git step. If one does and git is missing, scoring
   refuses and logs `score-refused` rather than marking heads UNMEASURED. If
@@ -580,13 +584,13 @@ items Joel rules.
 - **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
   from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
-  13 pins,
-  so no agent can edit the checker that verifies the signature, as long as
-  uid 501 cannot write that directory or its files. Precondition 10's
-  write-denied record shows that (F3). Its `probe`
-  mode is the one exception, by design: it runs as uid 501 to show that uid 501
-  is denied (section 9, precondition 6), from a copy of the same pinned blob.
-  Making `check` refuse to run as any other user is F3.
+  13 pins, so no agent can edit the checker that verifies the signature, as long
+  as uid 501 cannot write that directory or its files and section 14's residual
+  gap ("Joel's terminal is the agents' uid") is not exploited. Precondition 10's
+  write-denied record shows the first of those (F3). Its `probe` mode is the one
+  exception, by design: it runs as uid 501 to show that uid 501 is denied
+  (section 9, precondition 6), from a copy of the same pinned blob. Making
+  `check` refuse to run as any other user is F3.
 - **Joel and the sealed records.** The original's rule (lines 197-200) is kept
   and applied to Joel as the only signer, and as the only ruler under J1
   option 2: he does not open a sealed record before the end condition of
@@ -1002,14 +1006,17 @@ fails:
     copy block, section 10's table, and section 12's row. Any
     mismatch, or a trust file that is missing or unreadable, refuses
     enrollment.
-15. **No agent reaches pilotseal through sudo.** Joel's account is uid 501,
-    the uid agents run as, so the `sudo -u pilotseal` Joel runs starts from
+15. **No agent session can use sudo to reach pilotseal.** Joel's account is uid
+    501, the uid agents run as, so the `sudo -u pilotseal` Joel runs starts from
     the agents' own uid. A sudo-denied record, dated after the signing commit
-    and made from an agent session as uid 501, shows that `sudo -n -u
-    pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid 501 reach
-    pilotseal, and no sudo ticket usable from that session is cached. It also
-    records the sudoers `timestamp_type` in force, which must keep tickets per
-    terminal (`tty` or `ppid`), never `global`.
+    and made from an agent session as uid 501, shows that
+    `sudo -n -u pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid
+    501 reach pilotseal, and no sudo ticket usable from that session is cached.
+    It also records the sudoers `timestamp_type` in force, which must keep
+    tickets per terminal (`tty` or `ppid`), never `global`. It shows only that
+    an agent session cannot use sudo by itself. It does not show that an agent
+    cannot tamper with the terminal Joel uses, which section 14 states as a
+    residual gap.
 
 On success it appends a `preflight` line. It never enrolls. As built
 (`6adbd531`), `pilot-preflight.py` checks items 1 to 7 only in part: item 4
@@ -1291,7 +1298,10 @@ left out only by a rule written here.
   by hand under F2's procedure, and the ledger enforces the "two" half (F1):
   it refuses an `enroll` or `exclude` naming a PR that already has a record.
 - **The exclusion rules.** These are the only ones. Each `exclude` line names
-  its rule:
+  one rule. When more than one applies, the first in the order E1, E2, E3, E4,
+  E5, E6 is recorded, except that between E5 and E6 the rule in E6 decides. So a
+  PR that fails the kind, size or pinned-file test is excluded for that, never
+  as E5, and only an otherwise eligible PR can count as an E5 selection lever:
   - **E1.** It fails the kind test above.
   - **E2.** It has more than 300 code lines at the enrollment head.
   - **E3.** It changes a file the pilot pins (section 10, or this section's
@@ -1339,21 +1349,23 @@ left out only by a rule written here.
 
 Relay point 4, with #juno's fix 4 and #claude's point 2.
 
-- **The key.** Joel signs with a key that no agent can read or use: not
-  readable by uid 501, and not under any agent's home or `~/Projects`. Agents
-  run as uid 501, so uid 501's home is ruled out too.
-  Which key, for example an SSH or GPG key on a hardware token or in the
-  pilotseal account, is I5. If the private key is a file, a denied-read record
-  as uid 501 against its location is made in the shape of 7065533093. Reading
-  is not the only risk: a key served to uid 501 by `ssh-agent` or
-  `gpg-agent`, or a token with no touch policy, can be used by an agent
-  without being read. So whatever the key, precondition 9's use-denied
+- **The key.** Joel signs with a key that no agent can read or use, within
+  section 14's residual gap ("Joel's terminal is the agents' uid"): not readable
+  by uid 501, and not under any agent's home or `~/Projects`. Agents run as uid
+  501, so uid 501's home is ruled out too. Which key, for example an SSH or GPG
+  key on a hardware token or in the pilotseal account, is I5. If the private key
+  is a file, a denied-read record as uid 501 against its location is made in the
+  shape of 7065533093. Reading is not the only risk: a key served to uid 501 by
+  `ssh-agent` or `gpg-agent`, or a token with no touch policy, can be used by an
+  agent without being read. So whatever the key, precondition 9's use-denied
   record shows that an agent session cannot sign with it.
 - **A residual gap: a touch-required token.** If the key is on a token that
   needs a physical touch per signature, an agent can still start a signing
   request that Joel touches by mistake. What bars that is Joel touching the
-  token only for a signature he started and read. A key held by a user other
-  than uid 501, such as the pilotseal account, would make it a mechanism.
+  token only for a signature he started and read. He reads it with uid-501
+  tools, though, which an agent can change (section 14, "Joel's terminal is the
+  agents' uid"). A key held by a user other than uid 501, used from an account
+  no agent can write, would close both gaps.
 - **The trust file.** The trust root is pinned outside any repository an agent
   can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It must be
   outside every repository and every agent's home, not writable by uid 501, and
@@ -1409,10 +1421,12 @@ Relay point 5.
   per head, into `/Users/pilotseal/pilot/ledger.jsonl`, which uid 501 cannot
   write.
 - **Who.** Joel, by hand, as pilotseal via `sudo -u pilotseal` (I6, answered:
-  "I'll add them", 7121929832). No script enrolls a head, and no enroll path
-  exists that an agent can invoke: the ledger is not writable by uid 501
-  (precondition 10), and uid 501 cannot reach pilotseal through sudo without
-  Joel's password (precondition 15). So the pilot pins no enroll script.
+  "I'll add them", 7121929832). No script enrolls a head, and no agent session
+  can enroll by itself: the ledger is not writable by uid 501 (precondition 10),
+  and an agent session cannot use sudo to reach pilotseal without Joel's
+  password (precondition 15). An agent can still tamper with the uid-501
+  terminal Joel enrolls from (the residual gap below). So the pilot pins no
+  enroll script.
 - **Scope.** Joel's enrollment does one thing: it appends `enroll` and
   `exclude` lines that meet section 12, after section 12's reconciliation, and
   planted heads' `enroll` lines under the original's section 3, following F2's
@@ -1425,13 +1439,26 @@ Relay point 5.
   section 6's rule that Joel opens no sealed record before unblinding. Only a
   writer uid other than pilotseal, able to append to the ledger and nothing
   else, would make that bar a mechanism.
-- **A residual gap: sudo from the agents' uid.** Precondition 15 shows that an
-  agent session cannot use sudo without the password. It cannot show that no
-  agent can act inside Joel's own terminal while his sudo ticket is live,
-  since he and the agents share uid 501. What bars that is Joel running
-  `sudo -u pilotseal` only in a terminal no agent drives, and ending the
-  ticket (`sudo -k`) when he is done. A separate account for Joel, other than
-  uid 501, would make it a mechanism.
+- **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
+  501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
+  shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
+  its tools, all of which agents can write. A `sudo` function, or a `sudo`
+  wrapper earlier on `PATH`, could capture his password or add its own command
+  to his. A live sudo ticket can be used from his terminal. A signing or viewing
+  tool on that `PATH` could show him one record while signing another.
+  Precondition 15 cannot show that none of this happened. Every claim in this
+  text that only pilotseal can read, write or run something, or that no agent
+  can use the key, holds only while this gap is not exploited, since an agent
+  with Joel's captured password acts as pilotseal.
+  - **What narrows it:** Joel runs `/usr/bin/sudo -u pilotseal` by absolute
+    path, from a shell started with no startup files (`/bin/zsh -f`), ends the
+    ticket with `sudo -k` when he is done, and reads what he signs with tools
+    outside uid 501's writable paths. This only narrows it: a shell that was
+    already started with tampered files can intercept what is typed into it.
+  - **What closes it:** a separate account for Joel's `sudo` and signing,
+    other than uid 501, whose home, startup files and `PATH` no agent can
+    write. Until he has one, this is a stated residual gap, and the report
+    says so beside the result.
 - **A gap until F1 and F6: one record per PR.** By hand, nothing refuses a
   doubled record. The landed ledger keeps `enroll` unique per head only, so a PR
   enrolled twice as two heads, or both enrolled and excluded, is accepted, and
@@ -1540,12 +1567,15 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     agent the key could be reached by, `ssh-agent` and `gpg-agent`), and
     precondition 15's sudo probe;
   - each probe writes a record file in the shape `probe` writes today: a
-    `probes[]` list of `{tester_uid, target, target_owner_uid, owner_from,
-    command, exit, errno}`, plus a `kind` of `denied-read`, `denied-write`,
-    `denied-sign` or `denied-sudo`. `check` takes each record by its own flag,
-    validates it, and records its SHA-256 in the `preflight` line, as it does
-    the denied-read record today (`denied_read_sha256`). The record files are
-    their one home: no ledger kind holds them, so F1 adds none;
+    `probes[]` list of entries with the fields `tester_uid`, `target`,
+    `target_owner_uid`, `owner_from`, `command`, `exit`, `errno` and `date`,
+    where `date` is what every "dated after the signing commit" check reads, a
+    top-level `isolation_broken` list, and, new in F3, a `kind` of
+    `denied-read`, `denied-write`, `denied-sign` or `denied-sudo`. `check` takes
+    each record by its own flag, validates it, and records its SHA-256 in the
+    `preflight` line, as it does the denied-read record today
+    (`denied_read_sha256`). The record files are their one home: no ledger kind
+    holds them, so F1 adds none;
   - its `install` check covers `review-size.sh`.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
