@@ -1467,8 +1467,8 @@ fails:
     record carries the names and gids it matches against. uid 501 cannot read
     the sudoers policy (`/etc/sudoers` is readable only by root and `wheel`),
     and the text relies on no uid-501 copy of it. The policy comes from a second
-    record, the *sudoers record*: in his own terminal Joel records, reading as root,
-    the bytes of `/etc/sudoers` and of every file it includes (each `#include`,
+    record, the *sudoers record*: in his own terminal Joel records, reading as
+    root, the bytes of `/etc/sudoers` and of every file it includes (each `#include`,
     `@include`, `#includedir` and `@includedir` target, recursively), with each
     path, the output of `visudo -c`, the output of `sudo -V` run as root (what
     it reports for the two PAM service names), and the output of `id -un 501`,
