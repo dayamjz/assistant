@@ -705,20 +705,24 @@ items Joel rules.
   these lines come before the first `preflight`, and the report lists them with
   the rest. **Both run only from a pinned copy.** Before either, Joel checks, as
   pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
-  the blob of `pilot-score.py` at the current `f4` merge commit: he pipes
-  `git show <f4>:pilot-score.py`, run in section 10's history clone after its
-  freshness fetch, through `shasum -a 256`, and that a write-denied record for
-  `/Users/pilotseal/bin` made before the run exists (the probe of precondition
-  10). The `access` line records that hash (`script_sha256`). `check` later
-  accepts that line only when its `script_sha256` is the blob of
+  the blob of `pilot-score.py` at the merge commit section 10 pins it at (its
+  latest follow-up, the later of `f4` and `f5`): he pipes
+  `git show <commit>:pilot-score.py`, run in section 10's history clone after
+  its freshness fetch, through `shasum -a 256`, and that a write-denied record
+  for `/Users/pilotseal/bin` made before the run exists (the probe of
+  precondition 10). The `access` line records that hash (`script_sha256`).
+  `check` later accepts that line only when its `script_sha256` is the blob of
   `pilot-score.py` at a merge commit on the history clone's `main` first-parent
   history at or after `f4_first`, the first F4 merge, which section 10 records
-  once and never moves, so the copy that read the records was a landed, reviewed
-  one (F3). It need not equal the final scoring pin: if a later fix moves `f4`
-  and re-pins `pilot-score.py`, `f4_first` stays put, the earlier line still
-  passes, nothing in the sealed ledger is rewritten, and the read stays logged.
-  A copy that lies in its own `access` line is not caught by that check; what
-  bars it is that uid 501 cannot write `/Users/pilotseal/bin`.
+  once and never moves (F3). That shows only that the copy was on fleet-tools
+  `main` at or after the first F4 merge, not that it was reviewed: fleet-tools
+  has no branch protection (section 16) and every agent pushes as `dayamjz`.
+  What ties the copy to a reviewed blob is Joel's pre-run check above, against
+  section 10's pin. It need not equal the final scoring pin: if a later fix
+  moves `f4` and re-pins `pilot-score.py`, `f4_first` stays put, the earlier
+  line still passes, nothing in the sealed ledger is rewritten, and the read
+  stays logged. A copy that lies in its own `access` line is not caught by that
+  check; what bars it is that uid 501 cannot write `/Users/pilotseal/bin`.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1149,7 +1153,8 @@ UNMEASURED. Since `items` and `ruling` are allowed after `close` (F1), and the
   line and lasts 48 hours. It is not section 12's live window. An item ruling
   is inside the budget when its `at` falls in the budget period. A
   classification ruling is not tied to the `items` line, and F1 lets it come
-  before or after `close`, so it is not timed; it is inside, and the report
+  before or after `close`, though never after `score` (section 7), so it is
+  not timed; it is inside, and the report
   counts it apart.
 
 **What the budget costs.** Since the budget is hours, classification rulings are
@@ -1315,7 +1320,22 @@ fails:
       any of these) and that carries the `NOPASSWD` tag, for any runas user
       and any command;
     - any `Defaults` line, in any scope (global, user, runas, host or
-      command), that sets `!authenticate`.
+      command), that sets `!authenticate`;
+    - any user-list entry, in a rule or a `User_Alias`, that is a netgroup
+      (`+netgroup`) or a non-Unix group (`%:group` or `%:#gid`), whatever it
+      would match, since the record cannot resolve those;
+    - a sudo PAM stack whose `auth` facility can succeed without the password
+      module. The record also carries, copied as root, `/etc/pam.d/sudo` and
+      every file its `auth` lines `include` or `substack`, recursively, each
+      with the path it resolves to (on this host `sudo_local` resolves through
+      `/etc/static` into `/nix/store`, so a nix-darwin rebuild can change it).
+      In the resolved `auth` stack `check` requires `pam_opendirectory.so` as
+      `required` or `requisite`, and rejects any other `auth` line marked
+      `sufficient` or with a bracketed control, and any `pam_permit.so` or
+      `pam_tid.so` on an `auth` line. Only the `auth` facility is judged: the
+      stock `account` and `session` lines use `pam_permit.so` and grant no
+      authentication. As configured today this host fails the rule, since
+      `/etc/pam.d/sudo` has `auth sufficient pam_smartcard.so`.
 
     So uid 501 can reach no user without a password, and no chain through
     another user can start. The record carries the names and gids it matches
@@ -1718,7 +1738,9 @@ left out only by a rule written here.
   standing, and the dispute is reported. Once a PR's
   `enroll` or `exclude` line exists, its classification never changes, and no
   enrolled PR is removed or replaced by another. A later ruling is recorded
-  and reported beside it.
+  and reported beside it if it comes before `score`. After `score` the ledger
+  refuses a `ruling` (section 7), so a dispute raised then stays unruled and
+  the report lists it as such.
 - **Size.** Eligible PRs have at most 300 code lines (I1, answered: "300 or
   less", 7121929832), measured by the pinned `review-size.sh` at the
   enrollment head: the PR head the `enroll` or `exclude` line records, at the
@@ -1877,22 +1899,22 @@ key_fingerprint: UNPINNED key not yet made
 ```
 - **Key rotation.** The anchor is the `key_fingerprint` in the ledger's first
   `preflight` line (section 7), which is hash-chained and covered by the chain
-  head Joel posts right after it, so once that head is posted, moving the
-  anchor breaks the chain against that head. The trust file
-  keeps every key since that one, in order, each later key with a statement
-  signed by the key before it that names the new key and the signing commit.
-  `check` verifies that chain from the ledger's anchor to the trust file's
-  current key, and refuses when a link is missing or its signature fails (F3).
-  An agent's PR cannot swap the key, since no script trusts a copy in a
-  repository. A rewrite of the trust file without the old key is refused unless
-  the ledger's anchor is rewritten too, and once the head is posted that second
-  rewrite is detected only by comparing the ledger with the posted heads, which
-  `check` does not do (it reads the anchor from the ledger it checks); who makes
-  that comparison is open item 4. So the posted head gives detection, not
-  prevention (section 6, residual gaps). Before it is posted there is no
-  anchor outside the trust file and the ledger, which the same user can rewrite
-  together (section 6, residual gaps), so a key change then is only as safe as
-  the trust file itself: only Joel writes it, and uid 501 cannot.
+  head posted right after it (section 7), so once that head is posted, moving
+  the anchor breaks the chain against that head. The trust file keeps every key
+  since that one, in order, each later key with a statement signed by the key
+  before it that names the new key and the signing commit. `check` verifies that
+  chain from the ledger's anchor to the trust file's current key, and refuses
+  when a link is missing or its signature fails (F3). An agent's PR cannot swap
+  the key, since no script trusts a copy in a repository. A rewrite of the trust
+  file without the old key is refused unless the ledger's anchor is rewritten
+  too, and once the head is posted that second rewrite is detected only by
+  comparing the ledger with the posted heads, which `check` does not do (it
+  reads the anchor from the ledger it checks); who makes that comparison is open
+  item 4. So the posted head gives detection, not prevention (section 6,
+  residual gaps). Before it is posted there is no anchor outside the trust file
+  and the ledger, which the same user can rewrite together (section 6, residual
+  gaps), so a key change then is only as safe as the trust file itself: only
+  Joel writes it, and uid 501 cannot.
 - **What counts as a signature.** A signature is made with the pinned key over
   the exact bytes of the record, and the record names the signing commit. A
   GitHub comment from `dayamjz`, a relay or a chat message is never one,
@@ -2017,30 +2039,29 @@ branch protection (7114296700, point 7). Joel resolved the required-check half
 of the conflict with a local substitute (I7: answer 8 of 7121929832, and
 7135308036 and 7135401609 on Nov 24): Joel does the local substitute check for
 the server-protected required check himself, and if he has not done it within 48
-hours of its being due, #claude (the arbiter) does it. The check is *due* when
-Joel appends the first `promotion-due` line to the sealed ledger (F1), as
-pilotseal, when a promotion decision is put to him, naming the gate to promote;
-no agent can append to that ledger, and only the first such line counts. The
-arbiter runs as uid 501 and cannot read the ledger, so both facts are made
-visible through posted chain heads (section 7): Joel posts the head after
-`promotion-due`, and after the `substitute-check` line he appends when he has
-done the check. The arbiter's 48 hours run from the post time of the first
-posted `promotion-due` head. If no `substitute-check` head is posted within
-those 48 hours, the arbiter does the check and Joel appends its
-`substitute-check` line (`by: arbiter`) when he can. Until a `promotion-due`
-head is posted, nothing is due and promotion stays blocked. This is his change
-to ORDER r2 item 13's first half, and this text's signature records it. **A
-residual gap:** the posts are made as `dayamjz`, which every agent posts as, so
-an agent could post a false head. A false `promotion-due` head would start the
-arbiter early, and a false `substitute-check` head would stop it; the comparison
-of posted heads with the ledger (open item 4) exposes either, after the fact.
-**The break-glass half is unchanged.** The original's "an auditable break-glass"
-and "Both must exist" stand as written: Joel's answer names no break-glass, so
-that half is still **unmet**. Promotion stays blocked until a break-glass log
-that agents cannot alter exists and a signed owner record (section 13) names it,
-and until this text is signed, whatever the pilot shows. This section is a
-direction to resolve the conflict. It enables no branch protection and promotes
-no gate.
+hours of its being due, #claude (the arbiter) does it. **Due** has one
+definition: the check is due at the post time of the first chain head posted
+after a `promotion-due` line (section 7), since that post is what uid 501, the
+uid the arbiter runs as, can see. Joel appends `promotion-due` to the sealed
+ledger as pilotseal when a promotion decision is put to him, naming the gate to
+promote, and passes the chain head after it to the coordinator, who posts it; no
+agent can append to that ledger. When Joel has done the check he appends a
+`substitute-check` line, and the coordinator posts the head after it the same
+way. If no head after a `substitute-check` line is posted within 48 hours of the
+due time, the arbiter does the check, and Joel appends its `substitute-check`
+line (`by: arbiter`) when he can. Until a head after `promotion-due` is posted,
+nothing is due and promotion stays blocked. This is his change to ORDER r2 item
+13's first half, and this text's signature records it. **A residual gap:** the
+posts are made as `dayamjz`, which every agent posts as, so an agent could post
+a false head. A false `promotion-due` head would start the arbiter early, and a
+false `substitute-check` head would stop it; the comparison of posted heads with
+the ledger (open item 4) exposes either, after the fact. **The break-glass half
+is unchanged.** The original's "an auditable break-glass" and "Both must exist"
+stand as written: Joel's answer names no break-glass, so that half is still
+**unmet**. Promotion stays blocked until a break-glass log that agents cannot
+alter exists and a signed owner record (section 13) names it, and until this
+text is signed, whatever the pilot shows. This section is a direction to resolve
+the conflict. It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2064,14 +2085,14 @@ refuses every form until then.
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
   ledger and refused unless a `close` line precedes it, with a self-test row
   and a mutation that turns it red; a `ruling` kind with section 8's body; and a
-  `promotion-due` kind naming the gate to promote, whose first line sets section
-  16's due time; and a `substitute-check` kind recording that the substitute
-  check of section 16 was done, by whom, and its result. A `ruling` whose
-  subject is `classification` may come before or after `close`. One whose
-  subject is `item` needs an earlier `items` line naming that id, so it too can
-  only follow `close`. Which kinds may follow `close` and `unblind` is section
-  7's list, which F1 enforces, with a self-test row and a mutation for each new
-  kind on it.
+  `promotion-due` kind naming the gate to promote (section 16 defines when the
+  check it announces is due); and a `substitute-check` kind recording that the
+  substitute check of section 16 was done, by whom, and its result. A `ruling`
+  whose subject is `classification` may come before or after `close`, but not
+  after `score` (section 7). One whose subject is `item` needs an earlier
+  `items` line naming that id, so it too can only follow `close`. Which kinds
+  may follow `close` and `unblind` is section 7's list, which F1 enforces, with
+  a self-test row and a mutation for each new kind on it.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
   signature covers them and no separate document needs a pin. A written copy may
@@ -2133,8 +2154,10 @@ refuses every form until then.
     `tty` or `ppid`, no `timestamp_type` line in any other scope, no
     `tty_tickets` setting in any scope, no rule (aliases expanded) whose user
     list can match uid 501 by name, `%group`, `%#gid`, `#501` or `ALL` that
-    carries `NOPASSWD` for any runas and command, and no `Defaults` line in any
-    scope that sets `!authenticate` (precondition 15); it records
+    carries `NOPASSWD` for any runas and command, no `Defaults` line in any
+    scope that sets `!authenticate`, no `+netgroup`, `%:group` or `%:#gid`
+    user-list entry, and a resolved sudo PAM `auth` stack that cannot succeed
+    without `pam_opendirectory.so` (precondition 15); it records
     both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
