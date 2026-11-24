@@ -652,18 +652,20 @@ items Joel rules.
 - **Who runs the scripts.** Scoring and unblinding run only as pilotseal, and
   only when Joel invokes them, as
   `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
-  agent session can run as pilotseal by itself (precondition 15), and no sudoers
-  entry is recommended. An agent can still tamper with the uid-501 terminal Joel
-  runs `sudo` from (section 14, "Joel's terminal is the agents' uid").
-  Scoring needs git on pilotseal's `PATH` (O1 above) for any planted record
-  that reaches O1's git step. If one does and git is missing, scoring
-  refuses and logs `score-refused` rather than marking heads UNMEASURED. If
-  every planted record is UNMEASURED by an earlier O1 rule, git is never
-  called and scoring completes without it. This is relay
-  point 6. Both are deterministic: the early-unblinding refusal is shown by
-  `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
-  `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
-  CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
+  agent session can use sudo to become pilotseal without Joel's password, as far
+  as precondition 15 checks the sudo policy and the sudo PAM stack, and no
+  sudoers entry is recommended. Precondition 15 does not cover `su pilotseal` or
+  what password pilotseal itself has (section 14, "Other routes to pilotseal").
+  An agent can still tamper with the uid-501 terminal Joel runs `sudo` from
+  (section 14, "Joel's terminal is the agents' uid"). Scoring needs git on
+  pilotseal's `PATH` (O1 above) for any planted record that reaches O1's git
+  step. If one does and git is missing, scoring refuses and logs `score-refused`
+  rather than marking heads UNMEASURED. If every planted record is UNMEASURED by
+  an earlier O1 rule, git is never called and scoring completes without it. This
+  is relay point 6. Both are deterministic: the early-unblinding refusal is
+  shown by `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment"
+  by `pilot-score.py`'s rows "the dry run makes no agent or network call" and
+  "the CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
 - **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
   from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
@@ -706,18 +708,21 @@ items Joel rules.
   the rest. **Both run only from a pinned copy.** Before either, Joel checks, as
   pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
   the scoring hash in the trust file (section 13), the one reference for this
-  check, and that a write-denied record for `/Users/pilotseal/bin` made before
-  the run exists (the probe of precondition 10). If the trust file holds no
-  scoring hash yet, Joel runs neither until he has written one, as pilotseal,
-  for a `pilot-score.py` blob he has read from a landed F4 or F5 merge in
-  section 10's history clone. The `access` line records that hash
-  (`script_sha256`). `check` later accepts that line only when its
-  `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
-  history clone's `main` first-parent history at or after `f4_first`, the first
-  F4 merge, which section 10 records once and never moves (F3). That shows only
-  that the copy was on fleet-tools `main` at or after the first F4 merge, not
-  that it was reviewed: fleet-tools has no branch protection (section 16) and
-  every agent pushes as `dayamjz`. What ties the copy to the trust file's
+  check, and that a *pre-run write-denied record* exists for
+  `/Users/pilotseal/bin`, made by uid 501 before the run in the shape of
+  precondition 10's probe. It is not precondition 10's record, which is dated
+  after signing. The trust file's location is I8 (section 11), so neither runs
+  until I8 is settled and the trust file exists there; the reference holds only
+  from then. If the trust file holds no scoring hash yet, Joel runs neither
+  until he has written one, as pilotseal, for a `pilot-score.py` blob he has
+  read from a landed F4 or F5 merge in section 10's history clone. The `access`
+  line records that hash (`script_sha256`). `check` later accepts that line only
+  when its `script_sha256` is the blob of `pilot-score.py` at a merge commit on
+  the history clone's `main` first-parent history at or after `f4_first`, the
+  first F4 merge, which section 10 records once and never moves (F3). That shows
+  only that the copy was on fleet-tools `main` at or after the first F4 merge,
+  not that it was reviewed: fleet-tools has no branch protection (section 16)
+  and every agent pushes as `dayamjz`. What ties the copy to the trust file's
   scoring hash at the time of the run is Joel's pre-run check above; `check`
   does not verify that tie, and the procedure guarantees no more than it. The
   line need not equal the final scoring pin: if a later fix moves `f4` and
@@ -773,15 +778,15 @@ items Joel rules.
   set, and F1 adds `items`, `ruling`, `promotion-due` and `substitute-check`, so
   no head, freeze, capture or preflight can join after the end. After `unblind`,
   only `correction`, `promotion-due` and `substitute-check` may follow (the last
-  two for section 16). A `substitute-check` names by `seq` the one earlier
-  `promotion-due` it answers, and the ledger refuses one that names none. No
-  `items` or `ruling` may follow `score`. Joel appends `close` by hand as
-  pilotseal, and only after `pilot-unblind.py ready` (F6) reports that end
-  condition 4 holds over the frozen heads. A `close` appended earlier cannot be
-  undone: `close` is unique and no `enroll` may follow it, so end condition 4
-  can never hold and the pilot is never scored or unblinded. There is no
-  recovery inside this pilot. The report then says the pilot ended without a
-  result, and a new attempt needs a new version of this text.
+  two for section 16). Which `promotion-due` a `substitute-check` answers, and
+  how many may answer it, is section 16's rule, which F1 enforces. No `items` or
+  `ruling` may follow `score`. Joel appends `close` by hand as pilotseal, and
+  only after `pilot-unblind.py ready` (F6) reports that end condition 4 holds
+  over the frozen heads. A `close` appended earlier cannot be undone: `close` is
+  unique and no `enroll` may follow it, so end condition 4 can never hold and
+  the pilot is never scored or unblinded. There is no recovery inside this
+  pilot. The report then says the pilot ended without a result, and a new
+  attempt needs a new version of this text.
 - An append locks, verifies the whole chain, writes one line with `O_APPEND`
   and syncs it. A caller may name the chain head it expects, and the append
   then refuses, under the lock, if the ledger has moved past that head. A write
@@ -1331,37 +1336,47 @@ fails:
       would match, since the record cannot resolve those;
     - any setting of `pam_service` or `pam_login_service`, in any scope, to a
       value other than `sudo`, since either option makes sudo apply another PAM
-      policy (`sudoers(5)`) and the record judges only `sudo`'s;
+      policy (`sudoers(5)`) and the record judges only `sudo`'s; and, since an
+      unset option falls back to a value fixed when sudo was built, a record
+      whose `sudo -V` output (below) does not show `sudo` as the build default
+      for both, or does not show them at all;
+    - any setting, in any scope, of `targetpw`, `runaspw` or `rootpw`, under
+      which sudo asks for the target's, the runas user's or root's password
+      instead of Joel's;
     - a sudo PAM stack whose `auth` facility can succeed without the password
       module. The record also carries, copied as root, `/etc/pam.d/sudo` and
       every file its `auth` lines `include` or `substack`, recursively, each
       with the path it resolves to (on this host `sudo_local` resolves through
       `/etc/static` into `/nix/store`, so a nix-darwin rebuild can change it).
-      In the resolved `auth` stack `check` requires `pam_opendirectory.so` as
-      `required` or `requisite`, and accepts on an `auth` line only the controls
-      `required`, `requisite` and `optional`. It rejects every other control,
-      whether `sufficient`, `binding` (OpenPAM's "If this module succeeds, the
-      chain is broken and the result is success", `pam.conf(5)`), bracketed or
-      unknown, and any `pam_permit.so` or `pam_tid.so` on an `auth` line. Only
-      the `auth` facility is judged: the stock `account` and `session` lines use
+      An `include` or `substack` line is not judged as a control: it is replaced
+      by its target's `auth` lines, which are judged. In the resolved `auth`
+      stack `check` requires `pam_opendirectory.so` as `required` or
+      `requisite`, and accepts on an `auth` line only the controls `required`,
+      `requisite` and `optional`. It rejects every other control, whether
+      `sufficient`, `binding` (OpenPAM's "If this module succeeds, the chain is
+      broken and the result is success", `pam.conf(5)`), bracketed or unknown,
+      and any `pam_permit.so` or `pam_tid.so` on an `auth` line. Only the `auth`
+      facility is judged: the stock `account` and `session` lines use
       `pam_permit.so` and grant no authentication. As configured today this host
       fails the rule, since `/etc/pam.d/sudo` has
       `auth sufficient pam_smartcard.so`.
 
-    So uid 501 can reach no user without a password, and no chain through
-    another user can start. The record carries the names and gids it matches
-    against. uid 501 cannot read the sudoers policy (`/etc/sudoers` is readable
-    only by root and `wheel`), and the text relies on no uid-501 view of it. The
-    policy comes from a second record, the *sudoers record*: in his own terminal
-    Joel uses `/usr/bin/sudo` to copy, as root, the bytes of `/etc/sudoers` and
-    of every file it includes (each `#include`, `@include`, `#includedir` and
-    `@includedir` target, recursively), with each path, the output of
-    `visudo -c`, and the output of `id -un 501`, `id -Gn 501` and `id -G 501`
-    (the user, group names and gids the scan above matches), into one file owned
-    by pilotseal. The record must show `visudo -c` reporting every file parsed
-    OK, a global `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid`
-    line, and no other line that sets `timestamp_type` in any scope: none for a
-    user (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
+    So no sudo rule lets uid 501 reach another user without Joel's password, and
+    no chain through another user can start through sudo. The record carries the
+    names and gids it matches against. uid 501 cannot read the sudoers policy
+    (`/etc/sudoers` is readable only by root and `wheel`), and the text relies
+    on no uid-501 view of it. The policy comes from a second record, the
+    *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo` to copy, as
+    root, the bytes of `/etc/sudoers` and of every file it includes (each
+    `#include`, `@include`, `#includedir` and `@includedir` target,
+    recursively), with each path, the output of `visudo -c`, the output of
+    `sudo -V` run as root (for the PAM service names sudo was built with), and
+    the output of `id -un 501`, `id -Gn 501` and `id -G 501` (the user, group
+    names and gids the scan above matches), into one file owned by pilotseal.
+    The record must show `visudo -c` reporting every file parsed OK, a global
+    `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
+    other line that sets `timestamp_type` in any scope: none for a user
+    (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
     (`Defaults!`). Nor may any line in any scope set `tty_tickets`, either way:
     `!tty_tickets` uses a single ticket record for all login sessions
     (`sudoers(5)`), which is the sharing this precondition rules out. The text
@@ -1962,9 +1977,9 @@ Relay point 5.
   "I'll add them", 7121929832). No script enrolls a head, and no agent session
   can enroll by itself: the ledger is not writable by uid 501 (precondition 10),
   and an agent session cannot use sudo to reach pilotseal without Joel's
-  password (precondition 15). An agent can still tamper with the uid-501
-  terminal Joel enrolls from (the residual gap below). So the pilot pins no
-  enroll script.
+  password, as far as precondition 15 checks (see "Other routes to pilotseal"
+  below). An agent can still tamper with the uid-501 terminal Joel enrolls from
+  (the residual gap below). So the pilot pins no enroll script.
 - **Scope.** Joel's enrollment does one thing: it appends `enroll` and
   `exclude` lines that meet section 12, after section 12's reconciliation, and
   planted heads' `enroll` lines under the original's section 3, following F2's
@@ -1978,6 +1993,13 @@ Relay point 5.
   access is logged and marks the head. Only a writer uid other than pilotseal,
   able to append to the ledger and nothing else, would make that bar a
   mechanism.
+- **A residual gap: other routes to pilotseal.** Precondition 15 checks only
+  sudo. It does not check `su pilotseal`, which asks for pilotseal's own
+  password, or what that password is. If pilotseal has an empty or known
+  password, an agent session can become pilotseal with `su` and read the
+  sealed records and write the ledger, and no record of this text would show
+  it. Giving pilotseal no usable password closes it; this text does not check
+  that.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -1987,8 +2009,9 @@ Relay point 5.
   tool on that `PATH` could show him one record while signing another.
   Precondition 15 cannot show that none of this happened. Every claim in this
   text that only pilotseal can read, write or run something, or that no agent
-  can use the key, holds only while this gap is not exploited, since an agent
-  with Joel's captured password acts as pilotseal.
+  can use the key, holds only while this gap and the "other routes to pilotseal"
+  gap above are not exploited, since an agent with Joel's captured password, or
+  with pilotseal's own, acts as pilotseal.
   - **What narrows it:** Joel runs `/usr/bin/sudo -u pilotseal` by absolute
     path, from a shell started with no startup files (`/bin/zsh -f`), ends the
     ticket with `sudo -k` when he is done, and reads what he signs with tools
@@ -2062,21 +2085,27 @@ When Joel has done the check he appends a `substitute-check` line naming by
 head after it the same way, with that `seq`. If no head after a
 `substitute-check` naming that `promotion-due` is posted within 48 hours of its
 due time, the arbiter does that check, and Joel appends its `substitute-check`
-line (`by: arbiter`, naming the same `seq`) when he can. A check for one gate
-never stops the arbiter's clock for another. Until a head after `promotion-due`
-is posted, nothing is due and promotion stays blocked. This is his change to
-ORDER r2 item 13's first half, and this text's signature records it. **A
-residual gap:** the posts are made as `dayamjz`, which every agent posts as, so
-an agent could post a false head. A false `promotion-due` head would start the
-arbiter early, and a false `substitute-check` head would stop it; the comparison
-of posted heads with the ledger (open item 4) exposes either, after the fact.
-**The break-glass half is unchanged.** The original's "an auditable break-glass"
-and "Both must exist" stand as written: Joel's answer names no break-glass, so
-that half is still **unmet**. Promotion stays blocked until a break-glass log
-that agents cannot alter exists and a signed owner record (section 13) names it,
-and until this text is signed, whatever the pilot shows. This section is a
-direction to resolve the conflict. It enables no branch protection and promotes
-no gate.
+line (`by: arbiter`, naming the same `seq`) when he can. **One answer per
+`promotion-due`.** A `substitute-check` names by `seq` one earlier
+`promotion-due`, and the ledger refuses one that names none, and a second one
+that names a `promotion-due` already answered (F1). So each `promotion-due` has
+at most one `substitute-check`, and its result is the one that counts, whoever
+did the check. If Joel and the arbiter both checked, Joel records the second
+result as a `correction` naming the first `substitute-check`, which annotates it
+and changes nothing (section 7). A check for one gate never stops the arbiter's
+clock for another. Until a head after `promotion-due` is posted, nothing is due
+and promotion stays blocked. This is his change to ORDER r2 item 13's first
+half, and this text's signature records it. **A residual gap:** the posts are
+made as `dayamjz`, which every agent posts as, so an agent could post a false
+head. A false `promotion-due` head would start the arbiter early, and a false
+`substitute-check` head would stop it; the comparison of posted heads with the
+ledger (open item 4) exposes either, after the fact. **The break-glass half is
+unchanged.** The original's "an auditable break-glass" and "Both must exist"
+stand as written: Joel's answer names no break-glass, so that half is still
+**unmet**. Promotion stays blocked until a break-glass log that agents cannot
+alter exists and a signed owner record (section 13) names it, and until this
+text is signed, whatever the pilot shows. This section is a direction to resolve
+the conflict. It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2103,13 +2132,13 @@ refuses every form until then.
   `promotion-due` kind naming the gate to promote (section 16 defines when the
   check it announces is due); and a `substitute-check` kind recording that the
   substitute check of section 16 was done, by whom, and its result, and naming
-  by `seq` the one `promotion-due` line it answers, which must precede it
-  (section 7). A `ruling` whose subject is `classification` may come before or
-  after `close`, but not after `score` (section 7). One whose subject is `item`
-  needs an earlier `items` line naming that id, so it too can only follow
-  `close`. Which kinds may follow `close` and `unblind` is section 7's list,
-  which F1 enforces, with a self-test row and a mutation for each new kind on
-  it.
+  by `seq` the one `promotion-due` line it answers, under section 16's rule,
+  which F1 enforces. A `ruling` whose subject is `classification` may come
+  before or after `close`, but not after `score` (section 7). One whose subject
+  is `item` needs an earlier `items` line naming that id, so it too can only
+  follow `close`. Which kinds may follow `close` and `unblind` is section 7's
+  list, which F1 enforces, with a self-test row and a mutation for each new kind
+  on it.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
   signature covers them and no separate document needs a pin. A written copy may
@@ -2174,10 +2203,11 @@ refuses every form until then.
     carries `NOPASSWD` for any runas and command, no `Defaults` line in any
     scope that sets `!authenticate`, no `+netgroup`, `%:group` or `%:#gid`
     user-list entry, no `pam_service` or `pam_login_service` setting other than
-    `sudo` in any scope, and a resolved sudo PAM `auth` stack with
-    `pam_opendirectory.so` as `required` or `requisite` and only `required`,
-    `requisite` or `optional` controls (precondition 15); it records both hashes
-    in its `preflight` line;
+    `sudo` in any scope and `sudo` as the build default of both in `sudo -V`, no
+    `targetpw`, `runaspw` or `rootpw` setting in any scope, and a resolved sudo
+    PAM `auth` stack with `pam_opendirectory.so` as `required` or `requisite`
+    and only `required`, `requisite` or `optional` controls (precondition 15);
+    it records both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
