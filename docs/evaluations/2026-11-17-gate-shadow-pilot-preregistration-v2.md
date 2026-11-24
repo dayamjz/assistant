@@ -429,21 +429,27 @@ it equals git's default unified context.
   stage to have run: a run that ended before review is UNMEASURED for O1, though
   an earlier stage may have reported findings. **The usage ceiling.** A stage
   whose agent call the usage ceiling refused still reports `ran: true`, by two
-  paths. A refused stage body becomes a report holding only one `ask` finding,
-  id `usage-ceiling`, marked not started (`internal/service/observe.go:113`,
-  `internal/service/ceiling.go:160-166`, `internal/machine/ceiling.go:305-337`).
-  A refused fix round returns that hold, and the stage's next execution, which
-  did run, reports it with its own findings
+  paths. A refused stage body reports the `ask` finding `usage-ceiling`, marked
+  not started (`internal/service/observe.go:113`,
+  `internal/service/ceiling.go:160-166`, `internal/machine/ceiling.go:305-337`),
+  and for a stage with fix rounds the node then appends the earlier round's
+  holds to that report (`internal/pipeline/node.go:87-93`), so it can carry
+  findings its body never produced. A refused fix round returns that hold, which
+  the stage's next execution reports with its own findings
   (`internal/service/ceiling.go:171-179`, `internal/pipeline/doc.go:58-60`).
   `StageRan` checks only that a report exists
-  (`internal/pipeline/outcome.go:173-180`). So, for every oracle here, a stage
-  has run only when `ran` is true and its findings are not just `usage-ceiling`
-  ones; such a stage is UNMEASURED, never a miss or a false hold. A stage that
-  ran and also carries a `usage-ceiling` hold counts as run, and its other
-  findings count; the `usage-ceiling` finding itself never matches planted truth
-  and is never a hold O2 counts. Precondition 13 also forbids a usage ceiling in
-  either gate home, so this rule is a backstop. As built, `pilot-score.py`
-  checks neither `ran` nor the ceiling finding (F4).
+  (`internal/pipeline/outcome.go:173-180`), and a recorded report that does not
+  decode leaves `ran: true` with no `report`
+  (`internal/service/runs.go:2189-2193`). So, for every oracle here, a stage has
+  run only when `ran` is true, its `report` is present, and none of its findings
+  has the id `usage-ceiling`. Any other stage is UNMEASURED for every oracle
+  that reads it, never a miss or a false hold, even when a ceiling hold sits
+  beside a real execution's findings: the rule fails toward UNMEASURED. O5's
+  `hold-not-made` and `pass-refused` counts are UNMEASURED for a head with any
+  stage that has not run by this rule, so a `usage-ceiling` hold is never a
+  `hold-not-made` item. Precondition 13 also forbids a usage ceiling in either
+  gate home, so this rule is a backstop. As built, `pilot-score.py` checks
+  neither `ran`, `report` nor the ceiling finding (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
@@ -982,9 +988,10 @@ when all of these hold:
    *sequence heads* are frozen **and compared** (section 5). A sequence head is
    an enrolled head whose `case` and `provenance` are both `live`, whose
    `work_kind` equals `pr_kind` (`fleet-tools-reliability-fix`, section 12), and
-   whose `pr_created_at` is not after the window's close (section 12). C1's live
+   whose `pr_created_at` is in the window: at or after its opening, the `at` of
+   the first `preflight` line, and not after its close (section 12). C1's live
    minimum counts compared heads of `case` `live`, leaving out a live head
-   created after the close, and so includes every sequence head, so it can
+   created outside the window, and so includes every sequence head, so it can
    always be met when this holds. Every window PR is enrolled with `case` `live`
    (section 12), so no eligible PR can leave the sequence by its case; planted
    heads never count. As built, `pilot-unblind.py` counts frozen heads of
@@ -1008,7 +1015,7 @@ it (section 7). A refusal prints no record content and publishes nothing.
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
 replayed head and every compared live head created in the window (a live head
-created after the window's close is left out, section 12) except `matched`
+created outside the window is left out, section 12) except `matched`
 ones, each `unlocatable` finding as its own
 item, and the outcome of every enrolled race and recovery head except a
 `base_mismatch` or pin-failed one for C7. Each item gets an id. It never reads a
@@ -1359,10 +1366,13 @@ left out only by a rule written here.
   line in the ledger, so a later preflight never moves it. It closes at the `at`
   of the first `freeze` after which 10 sequence heads (section 8, end condition
   4) are compared heads (section 5). A PR is in the window when its GitHub
-  `created_at` falls in it. Enrollment continues in order until then, so an
-  enrolled PR that is never compared, for example one closed before review,
-  stays enrolled and reported, and a later PR in the order makes up the 10. No
-  PR is replaced: the uncompared one keeps its record.
+  `created_at` falls in it, at or after the opening and not after the close. A
+  PR created before the window opens is not a window PR: it gets no record, is
+  never reconciled, and F1 refuses a live `enroll` for it, so a PR reviewed
+  before signing cannot be picked into the sequence. Enrollment continues in
+  order until then, so an enrolled PR that is never compared, for example one
+  closed before review, stays enrolled and reported, and a later PR in the order
+  makes up the 10. No PR is replaced: the uncompared one keeps its record.
 - **After the window closes.** No live `enroll` is written once the window has
   closed. Before each live `enroll`, the writer runs `pilot-unblind.py window`
   (F6), which checks end condition 4 alone, computing the window's close from
@@ -1371,8 +1381,9 @@ left out only by a rule written here.
   gets an `exclude` under the first of E1 to E6 that applies (the precedence
   below), so E5 or E6 only when E1 to E4 do not. A PR created after the window's
   close gets no record and is never reconciled. If a live head whose
-  `pr_created_at` is after the close is enrolled anyway, it is not a sequence
-  head, it is left out of C1, C3 and C5, and the report lists it (F4).
+  `pr_created_at` is after the close is enrolled anyway, or one created before
+  the opening gets past F1, it is not a sequence head, it is left out of C1, C3
+  and C5, and the report lists it (F4).
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
   with `case` `live` and `provenance` `live`. This replaces the original's lines
   279 and 280 for v2: a race or recovery head is planted or replayed, never a
@@ -1586,14 +1597,19 @@ key_fingerprint: UNPINNED I5
 ```
 - **Key rotation.** The anchor is the `key_fingerprint` in the ledger's first
   `preflight` line (section 7), which is hash-chained and covered by the chain
-  head Joel posts right after it, so once that head is posted a rewrite of the
-  trust file cannot also move it. The trust file
+  head Joel posts right after it, so once that head is posted, moving the
+  anchor breaks the chain against that head. The trust file
   keeps every key since that one, in order, each later key with a statement
   signed by the key before it that names the new key and the signing commit.
   `check` verifies that chain from the ledger's anchor to the trust file's
   current key, and refuses when a link is missing or its signature fails (F3).
-  So once that head is posted, neither an agent's PR nor a rewrite of the
-  trust file without the old key can swap it. Before it is posted there is no
+  An agent's PR cannot swap the key, since no script trusts a copy in a
+  repository. A rewrite of the trust file without the old key is refused unless
+  the ledger's anchor is rewritten too, and once the head is posted that second
+  rewrite is detected only by comparing the ledger with the posted heads, which
+  `check` does not do (it reads the anchor from the ledger it checks); who makes
+  that comparison is open item 4. So the posted head gives detection, not
+  prevention (section 6, residual gaps). Before it is posted there is no
   anchor outside the trust file and the ledger, which the same user can rewrite
   together (section 6, residual gaps), so a key change then is only as safe as
   the trust file itself: only Joel writes it, and uid 501 cannot.
@@ -1739,7 +1755,8 @@ refuses every form until then.
   7) unique per `pr`, so the ledger refuses a second window record naming a PR
   that already has one (section 12), with a self-test row and a mutation that
   turns it red; refuse a window `enroll` whose `case` or `provenance` is not
-  `live` or whose `work_kind` differs from the `preflight` line's `pr_kind`, and
+  `live`, whose `work_kind` differs from the `preflight` line's `pr_kind`, or
+  whose `pr_created_at` is before the `at` of the first `preflight` line, and
   an `enroll` of provenance `live` that is not a window record, while a replayed
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
   ledger; and a `ruling` kind with section 8's body. A `ruling` whose subject is
@@ -1845,8 +1862,9 @@ refuses every form until then.
     (section 5, O5);
   - a planted diff that parses but adds no truth line is UNMEASURED, never a
     miss (O1);
-  - a live head whose `pr_created_at` is after the window's close is left out
-    of C1, C3 and C5 and listed (section 12);
+  - a live head whose `pr_created_at` is outside the window, before its
+    opening or after its close, is left out of C1, C3 and C5 and listed
+    (section 12);
   - it lists every enrolled live head that is not compared, with its reason
     (captured late, moved after enrollment, no review, or another), every E5
     exclusion, and every E4 exclusion, and marks the pilot possibly selected
@@ -1879,7 +1897,8 @@ refuses every form until then.
   applies, F5 is empty.
 - **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose sequence
   head (section 8: `case` and `provenance` both `live`, `work_kind` equal to
-  `pr_kind`, `pr_created_at` not after the window's close) is frozen and
+  `pr_kind`, `pr_created_at` at or after the first `preflight` line's `at` and
+  not after the window's close) is frozen and
   compared (section 5), reading each head's frozen captures, not `enroll` lines
   or frozen heads of provenance `live` alone, so a doubled record can never
   count twice. It owns the *compared* predicate of section 7, including the
