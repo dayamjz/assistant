@@ -347,11 +347,9 @@ files it reads.
 **manifest** of the original's section 3 is, in v2, the ledger's `enroll` lines
 (section 7). A **planted head** is one whose `enroll` names a sealed record
 (`sealed_id`). A **compared head** is an enrolled, frozen head that meets
-section 7's one definition ("One owner for the review fields"): a review verdict
-of `APPROVE` or `CHANGES REQUESTED` that its `.verdicts` capture agrees with,
-captured on time for a live head, one head throughout,
-`base_check.base_mismatch` false and `pin_check` `pass`. There is no
-adjudication pending and no reduced-voter head.
+section 7's one definition ("One owner for the review fields"), which this
+section does not restate. There is no adjudication pending and no reduced-voter
+head.
 
 **K = 3.** A finding within 3 lines of a changed line (O1), or of a review
 finding's location (O5), counts as at that line. K is a fixed rule. It does not
@@ -493,28 +491,33 @@ covers:
 
 The original's line 315 leaves a `base_mismatch` head out of C1, C3, C5 and C7
 only, which this split follows. A pin-failed head (`pin_check` `fail`: a stage
-model off the pin, missing stage evidence or an untrusted configuration) is
-"not a compared head" under the original's lines 332-336, so it is out of every
-criterion but C2 and C8. Leaving it out reads nothing sealed, since
-`pin_check` is in `gate.json`. The `default-1` run is captured apart (section
-7), reported apart, never pooled, and decides nothing. This restates the
-original's lines 455-457, with the per-criterion scope above in place of their
-"compared heads". Each criterion is required or report-only, as the table
-says. A criterion that is UNMEASURED cannot pass. The pilot passes only when
-every required criterion, C1 to C7, has a measured PASS. No success is
-declared while any required criterion is UNMEASURED (relay point 3, which
-answers J2's second half), and no report calls the pilot successful in that
-state. As built, `pilot-score.py` prints `pilot: PASS` only when C1 to C7 all
-PASS and `NOT PASSED` otherwise. Its self-test row "an UNMEASURED criterion never
-passes: every scripted criterion PASS, the pilot still NOT PASSED" shows it.
+model off the pin, missing stage evidence or an untrusted configuration) is "not
+a compared head" under the original's lines 332-336, so it is out of every
+criterion but C2 and C8. Leaving it out reads nothing sealed, since `pin_check`
+is in `gate.json`. The `default-1` run is captured apart (section 7), reported
+apart, never pooled, and decides nothing. This restates the original's lines
+455-457, with the per-criterion scope above in place of their "compared heads".
+Each criterion is required or report-only, as the table says. A criterion that
+is UNMEASURED cannot pass. A criterion is UNMEASURED, never PASS, when any head
+in its scope has the oracle it reads UNMEASURED, or, except for C1 and C2, whose
+rules are a count and an all-heads check, when its scope holds no head, even if
+every item that was listed is ruled: a head that adds no items because its
+oracle is UNMEASURED is never treated as a head with nothing wrong. The pilot
+passes only when every required criterion, C1 to C7, has a measured PASS. No
+success is declared while any required criterion is UNMEASURED (relay point 3,
+which answers J2's second half), and no report calls the pilot successful in
+that state. As built, `pilot-score.py` prints `pilot: PASS` only when C1 to C7
+all PASS and `NOT PASSED` otherwise. Its self-test row "an UNMEASURED criterion
+never passes: every scripted criterion PASS, the pilot still NOT PASSED" shows
+it.
 
 | # | v1 definition | v2 definition | Decided by | Required |
 | --- | --- | --- | --- | --- |
 | C1 | line 461 | At least 10 compared heads, with every case of the original's section 3 at its minimum among them. | script | required |
 | C2 | line 462 | `gate.activated` is true for every enrolled head. A head with no gate capture is not activated. | script | required |
-| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled and none is; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C3 | line 463 | Over every `missed`, `pass-refused` and `unlocatable` item of the compared live and replayed heads: FAIL when any is ruled `review right` with severity `blocker`; PASS when every one is ruled, none is, and no compared live or replayed head has its O5 UNMEASURED; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C4 | line 464 | Every planted real-finding and hold head that is not pin-failed has a `planted_match` that is a finding id (O1). FAIL on any `null`; UNMEASURED when none is `null` and any is `unmeasured`, or when no such head exists. | script | required |
-| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, and every such item is ruled; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
+| C5 | line 465 | FAIL when any clean head has a false hold (O2), or when more than one compared live or replayed head that is not clean has a `hold-not-made` item ruled `review right` with severity `not-real`. PASS when neither holds, every clean head in its scope has a measured O2, at least one such clean head exists, every such item is ruled, and no compared live or replayed head that is not clean has its O5 UNMEASURED; otherwise UNMEASURED. | script for clean heads; the rest Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C6 | line 466 | O4 on every CI-failure head that is not pin-failed. FAIL on any failure; UNMEASURED when none fails and any is unmeasured, or when no such head exists. | script | required |
 | C7 | line 467 | Over the outcome item of every enrolled race and recovery head except a `base_mismatch` or pin-failed one: FAIL when any is ruled not `correct`; PASS when every one is ruled `correct`; otherwise UNMEASURED. | Joel's `ruling` lines under J1 within the budget (I3), applied by script | required |
 | C8 | line 468 | Report only, with no pass mark: the count of heads missing `gate.usage` or stage times. | script | report-only |
