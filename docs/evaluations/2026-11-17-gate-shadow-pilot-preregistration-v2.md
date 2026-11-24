@@ -711,13 +711,17 @@ items Joel rules.
   check, and that a *pre-run write-denied record* exists for
   `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
   is not precondition 10's record, which is dated after signing. Since only F3
-  adds write probes, neither run happens before F3 lands, and each `access` line
-  records the pre-run record's SHA-256 (`prerun_record_sha256`). The trust
-  file's location is I8 (section 11), so neither runs until I8 is settled and
-  the trust file exists there; the reference holds only from then. If the trust
-  file holds no scoring hash yet, Joel runs neither until he has written one, as
-  pilotseal, for a `pilot-score.py` blob he has read from a landed F4 or F5
-  merge in section 10's history clone. The `access` line records that hash
+  adds write probes, neither run happens before F3 lands. Joel copies the
+  pre-run record, as pilotseal, into `/Users/pilotseal/pilot/records/`, its one
+  home, and each `access` line records its SHA-256 (`prerun_record_sha256`).
+  `check` later finds the file in that directory with that hash and refuses the
+  line unless the file is a write-denied record for `/Users/pilotseal/bin` whose
+  every probe was denied and whose date is before the line's `at` (F3). The
+  trust file's location is I8 (section 11), so neither runs until I8 is settled
+  and the trust file exists there; the reference holds only from then. If the
+  trust file holds no scoring hash yet, Joel runs neither until he has written
+  one, as pilotseal, for a `pilot-score.py` blob he has read from a landed F4 or
+  F5 merge in section 10's history clone. The `access` line records that hash
   (`script_sha256`). `check` later accepts that line only when its
   `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
   history clone's `main` first-parent history at or after `f4_first`, the first
@@ -1278,11 +1282,15 @@ fails:
     `/Users/pilotseal/pilot/fleet-tools.git` and
     `/Users/pilotseal/pilot/assistant.git` that creating a file in either is
     denied the same way. For the trust file it shows that opening the file for
-    writing, and creating a file in its directory and in each ancestor directory
-    up to `/`, are denied with `EACCES`, so the file cannot be replaced from a
-    directory uid 501 can write, wherever I8 puts it. Read probes alone do not
-    show it: a directory can deny listing and still allow traversal and writes
-    by group.
+    writing is denied with `EACCES`, and that creating a file is denied in each
+    directory along two paths: the path as I8 writes it, and the path with every
+    symlink resolved (`realpath`), from the file's directory up to `/`. A create
+    there is denied with `EACCES`, or with `EROFS` in a directory on a read-only
+    mount, which is what uid 501 gets in `/` on this host, a sealed read-only
+    system volume. So the file cannot be replaced from a directory uid 501 can
+    write, whether reached by the name I8 gives or through a symlink. Read
+    probes alone do not show it: a directory can deny listing and still allow
+    traversal and writes by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
@@ -1344,7 +1352,7 @@ fails:
       value other than `sudo`, since either option makes sudo apply another PAM
       policy (`sudoers(5)`) and the record judges only `sudo`'s; and a record
       whose `sudo -V` output (below) does not report `sudo` as the value of
-      both, or reports neither;
+      both;
     - any setting, in any scope, of `targetpw`, `runaspw` or `rootpw`, under
       which sudo asks for the target's, the runas user's or root's password
       instead of Joel's;
@@ -2113,13 +2121,18 @@ it. **A residual gap:** the posts are made as `dayamjz`, which every agent posts
 as, so an agent could post a false head. A false `promotion-due` head would
 start the arbiter early, and a false `substitute-check` head would stop it; the
 comparison of posted heads with the ledger (open item 4) exposes either, after
-the fact. **The break-glass half is unchanged.** The original's "an auditable
-break-glass" and "Both must exist" stand as written: Joel's answer names no
-break-glass, so that half is still **unmet**. Promotion stays blocked until a
-break-glass log that agents cannot alter exists and a signed owner record
-(section 13) names it, and until this text is signed, whatever the pilot shows.
-This section is a direction to resolve the conflict. It enables no branch
-protection and promotes no gate.
+the fact. **A second gap:** the coordinator, an agent, posts the heads, so it
+can post a genuine `substitute-check` head late, past the 48 hours, and make the
+arbiter's check count instead of Joel's. Every posted head then matches the
+ledger, so that comparison does not expose it. No script applies the counting
+rule: whoever makes the promotion decision applies it to the posted times, and
+the record of that decision names which check counted. **The break-glass half is
+unchanged.** The original's "an auditable break-glass" and "Both must exist"
+stand as written: Joel's answer names no break-glass, so that half is still
+**unmet**. Promotion stays blocked until a break-glass log that agents cannot
+alter exists and a signed owner record (section 13) names it, and until this
+text is signed, whatever the pilot shows. This section is a direction to resolve
+the conflict. It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2230,7 +2243,10 @@ refuses every form until then.
   - it refuses an `access` line from `bind --census` or `parse-check` whose
     `script_sha256` is not the blob of `pilot-score.py` at some merge commit on
     the history clone's `main` first-parent history at or after `f4_first`, or
-    that carries no `prerun_record_sha256` (sections 6 and 10);
+    whose `prerun_record_sha256` names no file in
+    `/Users/pilotseal/pilot/records/` that is a write-denied record for
+    `/Users/pilotseal/bin`, every probe denied, dated before the line's `at`
+    (sections 6 and 10);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2244,7 +2260,8 @@ refuses every form until then.
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
-    file and a create-file probe of its directory and each ancestor up to `/`,
+    file and a create-file probe of every directory on its written and its
+    resolved path up to `/`, accepting `EROFS` on a read-only mount,
     `/Users/pilotseal/bin` and each installed script there, and the two history
     clones), which also make section 6's pre-run write-denied record, a probe of
     the key's location, precondition 9's signing probe (an attempt from an agent
@@ -2271,10 +2288,10 @@ refuses every form until then.
     prints only counts, a `parse-check` mode that appends an `access` line
     (`by: parse-check`) and prints only how many records parse under O1's
     record rules, refusing without git on `PATH` (section 6), each of the two
-    recording the `script_sha256` Joel checked, a
-    refusal to bind a construction spec whose case is race or recovery, and a
-    check at scoring that every planted `enroll` agrees with its record (section
-    7, "Building and binding a planted head");
+    recording the `script_sha256` and the `prerun_record_sha256` Joel checked
+    (section 6), a refusal to bind a construction spec whose case is race or
+    recovery, and a check at scoring that every planted `enroll` agrees with its
+    record (section 7, "Building and binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone,
     and refuses, appending `score-refused`, unless the ledger already has a
     `close` line, so no item list, and no near-score, exists mid-pilot and the
