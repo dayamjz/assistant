@@ -21,6 +21,17 @@ the original owner questions of section 11 (now answered or narrowed), "I1" to
 "I8" the owner inputs (section 11), "E1" to "E5" the exclusion rules
 of section 12 and "F1" to "F6" the script follow-ups of section 17.
 
+**Where the review records are (`ftw:`).** Fleet-tools publishes its `reviews/`
+files to `main` only in occasional batches. The last `.verdicts` commit there is
+`9ee59b94` (ft#748), and newer records, such as ft#790's `.verdicts`, exist only
+as untracked files in the coordinator's working checkout. So an `ftw:` path is
+in that working checkout, `~/Projects/fleet-tools` in the account the
+coordinator runs as (uid 501), where the review scripts write. v2 reads every
+review record and `.verdicts` file of a live or replayed head there, never at
+fleet-tools `main`. A known limit follows: uid 501 can write that directory, so
+a record could change before it is captured. After capture its bytes are fixed
+by their hash in `freeze` `raw[]`.
+
 **Where an `ft:` path is.** In the sections kept by reference, an `ft:` path is
 at fleet-tools `5b1b73d2`, as the original says (its line 28). In this text's
 own sections, an `ft:` path is at fleet-tools `main`, except the four pilot
@@ -116,7 +127,10 @@ text is what makes every value folded in here binding.
 
 These parts of blob `32424c20` are incorporated by reference, by line range, as
 written there. Where section 3's table removes or replaces a line inside one of
-these ranges, the table wins.
+these ranges, the table wins. Where a kept line names the manifest, a
+collator or the operator as the source or a reader of a field, section 7's
+"One owner for each field" and section 6's access rules win: v2 has no
+collator, and only pilotseal reads a sealed record.
 
 - **Terms**, lines 38-42 and 51-52 (head, gate run, the review, item,
   disagreement, hold, park). The voter, collator, compared-head and
@@ -135,19 +149,26 @@ these ranges, the table wins.
 - **Section 3, case mix and enrollment**, lines 267-352, except line 281 (the
   "Live PRs" row: at least 4, in the order of `REVIEW-REQUEST full` relays),
   which section 12 replaces, and the opening words of lines 279 and 280 (the
-  Race row's "A live or planted head" and the Recovery row's "A head"), which
-  in v2 both read "A planted or replayed head" (section 12),
-  and the "manifest entry" clauses of lines 275-278 (the clean, real finding,
-  hold and CI-failure rows), which put planted truth in the manifest. In v2 the
-  manifest is Joel's `enroll` lines, so that truth lives only in the head's
-  sealed record `sNN.md` (section 7, "Bodies"). Live heads are the eligible
-  sequence, in PR creation order, until 10 sequence heads are compared, which
-  can take more than 10 enrolled PRs (section 12).
-- **Section 4's capture fields**, lines 354-396 (the field table from
-  `head_id` to `review.record_commit`). Rows 397-405 and the example record
-  (lines 407-448) are not kept. For a live head, section 12 restates the
-  sources of `origin_ci` (line 391) and of `review.head`, `review.kind`,
-  `review.reviewer` and `review.verdict` (lines 392-393).
+  Race row's "A live or planted head" and the Recovery row's "A head"), which in
+  v2 both read "A planted or replayed head" (section 12), and the "manifest
+  entry" clauses of lines 275-278 (the clean, real finding, hold and CI-failure
+  rows), which put planted truth in the manifest. In v2 the manifest is Joel's
+  `enroll` lines, so that truth lives only in the head's sealed record `sNN.md`
+  (section 7, "Bodies"). Lines 306-316 have the manifest record the base facts
+  before the push; in v2 the operator records them in `gate.json` (section 7).
+  Live heads are the eligible sequence, in PR creation order, until 10 sequence
+  heads are compared, which can take more than 10 enrolled PRs (section 12).
+- **Section 4's capture fields**, lines 354-396 (the field table from `head_id`
+  to `review.record_commit`), except three sources. Line 366's `planted_truth`
+  comes only from the sealed record `sNN.md`, which only pilotseal reads, never
+  from the manifest or a collator. Line 368's `mirror_reset` and
+  `mirror_main_after_reset` are `gate.json`'s, written by the operator, not the
+  manifest's. Line 396's `review.record_commit` is not recorded, since a review
+  record need not be committed anywhere (the `ftw:` note above section 1); the
+  captured bytes are identified by their hash in `freeze` `raw[]`. Rows 397-405
+  and the example record (lines 407-448) are not kept. For a live head, section
+  12 restates the sources of `origin_ci` (line 391) and of `review.head`,
+  `review.kind`, `review.reviewer` and `review.verdict` (lines 392-393).
 - **Section 5's prerequisites**, lines 485-488.
 - **Section 6, known limits**, lines 490-526.
 - **Section 8, what does not change**, lines 873-902.
@@ -610,7 +631,8 @@ items Joel rules.
 
 **Bodies.**
 
-- `enroll`: `head_id` (`hNN`), `case` (`clean`, `real-finding`, `hold`,
+- `enroll`: `head_id` (`hNN`), `head` (the 40-hex commit the head is; for a
+  window PR it equals `enroll_head`), `case` (`clean`, `real-finding`, `hold`,
   `ci-failure`, `race`, `recovery` or `live`), `provenance` (`live`, `replayed`
   or `planted`), `sealed_id` (`sNN` for a planted head, else `null`) and
   `work_kind` (for a live head, its kind of work, which must equal `pr_kind` for
@@ -638,10 +660,11 @@ items Joel rules.
   own `pr` (an assistant PR) and no such evidence, so it is never a window
   record, and its `pr` never collides with a fleet-tools PR number.
 - `items` and `ruling`: not in the landed kind set either, and F1 adds both.
-  They are allowed after `close`, since Joel rules only once enrollment is
-  sealed (section 8). `items` is unique per ledger and lists the items Joel
-  may rule. Each `ruling` names one item, its ruling and its place in the J1
-  budget.
+  Both are allowed after `close`: `items` and every item ruling come only after
+  it (section 8), and a `classification` ruling may come before or after it, so
+  the writer can follow one at enrollment (section 12, F1). `items` is unique
+  per ledger and lists the items Joel may rule. Each `ruling` names one item,
+  its ruling and its place in the J1 budget.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head, and for a planted head
   one more for its sealed review record (section 7).
@@ -658,7 +681,7 @@ items Joel rules.
 among them `pin_check`, `pass` or `fail`, the item 3 pin check of line 332),
 `review.md` (the review record, for a live or replayed head that has one),
 `verdicts.txt` (for a live or replayed head, the bytes of
-`ft:reviews/ft-<N>.verdicts` for a live head, or of `ft:reviews/<N>.verdicts`
+`ftw:reviews/ft-<N>.verdicts` for a live head, or of `ftw:reviews/<N>.verdicts`
 for a replayed one, taken when the review record is captured) and `tree.txt`
 (`git ls-tree -r -z --name-only <head>`: NUL-separated, so no path is quoted).
 Each is listed in that head's `freeze` `raw[]`, and the scripts read no capture
@@ -692,7 +715,8 @@ and it appears nowhere else:
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
   `base_check`), the `gate.*` fields (among them `gate.checks_basis`),
   `origin_ci` and `pin_check`.
-- **The review record:** every `review.*` field (above).
+- **The review record:** every `review.*` field (above) except
+  `review.record_commit`, which v2 does not record (section 2).
 - **The sealed record `sNN.md`:** planted truth.
 
 A field found in a file that does not own it makes every oracle for that head
@@ -761,22 +785,24 @@ when all of these hold:
 2. Exactly one `close` exists, and its `at` is not later than the clock.
 3. Every `enroll` has a `freeze` with a 40-hex `frozen_commit` and a non-empty
    `raw[]` of `{file, sha256}`.
-4. The end rule of section 7's parameters holds, read from the `preflight`
-   line. Joel ruled it (J3): the pilot ends after one consistent sequence of
-   PRs, the same kind of work, chosen to measure cost and efficiency. It holds
-   once 10 *sequence heads* are frozen **and compared** (section 5). A sequence
-   head is an enrolled head whose `case` and `provenance` are both `live` and
-   whose `work_kind` equals `pr_kind` (`fleet-tools-reliability-fix`, section
-   12). C1's live minimum counts compared heads of `case` `live`, which include
-   every sequence head, so it can always be met when this holds. Every window PR
-   is enrolled with `case` `live` (section 12), so no eligible PR can leave the
-   sequence by its case; planted heads never count. As built, `pilot-unblind.py`
-   counts frozen heads of provenance `live`, not compared sequence heads, so F6
-   must land before activation (section 9, precondition 12). The condition fails
-   closed if the parameters ever stop naming a kind or a count of 10, so nothing
-   is scored or unblinded then. No calendar deadline ends the pilot until Joel
-   says otherwise (I4, still open: he wrote "No deadline, maybe 48 hrs" in
-   7121929832, and #claude asked him which he means).
+4. The end rule of section 7's parameters holds, read from the `preflight` line.
+   Joel ruled it (J3): the pilot ends after one consistent sequence of PRs, the
+   same kind of work, chosen to measure cost and efficiency. It holds once 10
+   *sequence heads* are frozen **and compared** (section 5). A sequence head is
+   an enrolled head whose `case` and `provenance` are both `live`, whose
+   `work_kind` equals `pr_kind` (`fleet-tools-reliability-fix`, section 12), and
+   whose `pr_created_at` is not after the window's close (section 12). C1's live
+   minimum counts compared heads of `case` `live`, leaving out a live head
+   created after the close, and so includes every sequence head, so it can
+   always be met when this holds. Every window PR is enrolled with `case` `live`
+   (section 12), so no eligible PR can leave the sequence by its case; planted
+   heads never count. As built, `pilot-unblind.py` counts frozen heads of
+   provenance `live`, not compared sequence heads, so F6 must land before
+   activation (section 9, precondition 12). The condition fails closed if the
+   parameters ever stop naming a kind or a count of 10, so nothing is scored or
+   unblinded then. No calendar deadline ends the pilot until Joel says otherwise
+   (I4, still open: he wrote "No deadline, maybe 48 hrs" in 7121929832, and
+   #claude asked him which he means).
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -1120,6 +1146,14 @@ left out only by a rule written here.
   enrolled PR that is never compared, for example one closed before review,
   stays enrolled and reported, and a later PR in the order makes up the 10. No
   PR is replaced: the uncompared one keeps its record.
+- **After the window closes.** No live `enroll` is written once the window has
+  closed. Before each live `enroll`, the writer runs `pilot-unblind.py ready`
+  (F6), which computes the window's close from the ledger and the frozen
+  captures, and writes no `enroll` once it says the end rule holds. A PR
+  created after the window's close gets no record and is never reconciled. If
+  a live head whose `pr_created_at` is after the close is enrolled anyway, it
+  is not a sequence head, it is left out of C1, C3 and C5, and the report lists
+  it (F4).
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
   with `case` `live` and `provenance` `live`. This replaces the original's lines
   279 and 280 for v2: a race or recovery head is planted or replayed, never a
@@ -1144,13 +1178,13 @@ left out only by a rule written here.
     operator resets the fleet-tools mirror's `main` to it before the push, and
     the original's base check (lines 310-316) applies unchanged.
   - **Review record.** The full verdict at that head under the landing rules is
-    a line of `ft:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
+    a line of `ftw:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
     <short sha> (full): VERDICT: ...`. When a head has several full verdicts,
     the last such line in `.verdicts` is the review, as in the original's lines
     68-69. The review it records is found by content, never by file name,
     since archived copies are named in more than one way (for example
     `ft-787-full-ff23425.md` and `ft-791-claude-full-a787e4f.md`). It is the
-    file in `ft:reviews/` named `ft-<N>.md` or `ft-<N>-<anything>.md` whose
+    file in `ftw:reviews/` named `ft-<N>.md` or `ft-<N>-<anything>.md` whose
     line 1 is exactly `reviewed at <40-hex>` naming that head, with no
     `(delta from ...)`, and whose verdict, as `ft:review-findings.py
     --verdict` prints it, equals that last line's. That line 1 gives
@@ -1217,7 +1251,7 @@ left out only by a rule written here.
     `review-size.sh`).
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer
-    comes to record it, `ft:reviews/ft-<N>.verdicts` already exists with any
+    comes to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any
     line. The record states that. The report counts E5 exclusions apart and
     lists each with its `created_at` and the time of its first `.verdicts`
     line, so a PR can't be excluded quietly.
@@ -1411,6 +1445,8 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it reconciles every window PR against the ledger before each `enroll` and
     before `close`, and refuses on a missing or doubled record;
   - it runs the pinned `review-size.sh` at the enrollment head;
+  - before each live `enroll`, it runs `pilot-unblind.py ready` and writes no
+    `enroll` once that says the end rule holds (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`.
 - **F3. `pilot-preflight.py`:**
@@ -1455,6 +1491,8 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     (section 5, O5);
   - a planted diff that parses but adds no truth line is UNMEASURED, never a
     miss (O1);
+  - a live head whose `pr_created_at` is after the window's close is left out
+    of C1, C3 and C5 and listed (section 12);
   - it takes review fields only from the review record, reads a planted
     head's review record only from the sealed directory and only for the
     compared verdict, and makes a head UNMEASURED when its `gate.json` holds
@@ -1475,11 +1513,12 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   applies, F5 is empty.
 - **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose sequence
   head (section 8: `case` and `provenance` both `live`, `work_kind` equal to
-  `pr_kind`) is frozen and compared (section 5), reading each head's frozen
-  captures, not `enroll` lines or frozen heads of provenance `live` alone, so a
-  doubled record can never count twice. It also adds a `ready` mode that checks
-  end conditions 1, 3 and 4 without a `close` and appends nothing, so Joel
-  appends `close` only when it says the end rule holds (section 7). Its `run`
-  mode also publishes each planted head's sealed review record from
+  `pr_kind`, `pr_created_at` not after the window's close) is frozen and
+  compared (section 5), reading each head's frozen captures, not `enroll` lines
+  or frozen heads of provenance `live` alone, so a doubled record can never
+  count twice. It also adds a `ready` mode that checks end conditions 1, 3 and 4
+  without a `close` and appends nothing, so Joel appends `close` only when it
+  says the end rule holds (section 7). Its `run` mode also publishes each
+  planted head's sealed review record from
   `/Users/pilotseal/pilot/sealed/reviews/`, with its hash in `published` checked
   against that head's `freeze` `raw[]` (section 7).
