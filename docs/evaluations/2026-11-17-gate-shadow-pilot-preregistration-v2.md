@@ -710,12 +710,14 @@ items Joel rules.
   the run exists (the probe of precondition 10). The `access` line records that
   hash (`script_sha256`). `check` later accepts that line only when its
   `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
-  history clone's `main` first-parent history at or after F4's merge, so the
-  copy that read the records was a landed, reviewed one (F3). It need not equal
-  the final scoring pin: if a later fix re-pins `pilot-score.py`, the earlier
-  line still passes, nothing in the sealed ledger is rewritten, and the read
-  stays logged. A copy that lies in its own `access` line is not caught by that
-  check; what bars it is that uid 501 cannot write `/Users/pilotseal/bin`.
+  history clone's `main` first-parent history at or after `f4_first`, the first
+  F4 merge, which section 10 records once and never moves, so the copy that read
+  the records was a landed, reviewed one (F3). It need not equal the final
+  scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
+  `f4_first` stays put, the earlier line still passes, nothing in the sealed
+  ledger is rewritten, and the read stays logged. A copy that lies in its own
+  `access` line is not caught by that check; what bars it is that uid 501 cannot
+  write `/Users/pilotseal/bin`.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1101,8 +1103,9 @@ original's lines 199-200 require. Three refusals are printed but cannot be
 logged. A ledger that does not verify (condition 1) takes no append, and the
 posted chain heads show where the chain broke. A second `pilot-unblind.py run`
 refuses with "already unblinded" before it reaches its logging step. And any
-refusal after `unblind` cannot be logged, since only a `correction` may follow
-it (section 7). A refusal prints no record content and publishes nothing.
+refusal after `unblind` cannot be logged, since only a `correction`, and F1's
+`promotion-due` (section 16), may follow it (section 7). A refusal prints no
+record content and publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
@@ -1296,29 +1299,37 @@ fails:
     501, the uid agents run as, so the `sudo -u pilotseal` Joel runs starts from
     the agents' own uid. A sudo-denied record, dated after the signing commit
     and made from an agent session as uid 501, shows that
-    `sudo -n -u pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid
-    501 reach pilotseal, and no sudo ticket usable from that session is cached.
-    uid 501 cannot read the sudoers policy (`/etc/sudoers` is readable only by
-    root and `wheel`), and the text relies on no uid-501 view of it. The
-    policy comes from a second record, the *sudoers record*: in his own
-    terminal Joel uses `/usr/bin/sudo` to copy, as root, the bytes of
-    `/etc/sudoers` and of every file it includes (each `#include`,
-    `@include`, `#includedir` and `@includedir` target, recursively), with each
-    path, and the output of `visudo -c`, into one file owned by pilotseal. The
-    record must show `visudo -c` reporting every file parsed OK, a global
-    `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and
-    no other line that sets `timestamp_type` in any scope: none for a user
-    (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
-    (`Defaults!`). Nor may any line in any scope set `tty_tickets`, either way:
-    `!tty_tickets` uses a single ticket record for all login sessions
-    (`sudoers(5)`), which is the sharing this precondition rules out. The text
-    relies on that explicit `timestamp_type` line, not on sudo's default.
-    `check`, as pilotseal, validates both records and records both hashes in its
-    `preflight` line (F3). No field of either is typed in. The sudoers record
-    passes through Joel's uid-501 terminal, so section 14's terminal gap applies
-    to it. The sudo-denied record shows only that an agent session cannot use
-    sudo by itself. It does not show that an agent cannot tamper with the
-    terminal Joel uses, which section 14 states as a residual gap.
+    `sudo -n -u pilotseal /usr/bin/true` is refused, so no sudo ticket usable
+    from that session is cached. That probe covers one command, so the claim
+    that **no `NOPASSWD` rule lets uid 501 reach pilotseal** rests on the
+    sudoers record below: `check` rejects it if any rule in it, in any file it
+    includes and with every alias expanded, lets uid 501's user, any group that
+    user is in, or `ALL` run any command as pilotseal, as root (an empty runas
+    list included) or as `ALL`, with the `NOPASSWD` tag or under a `Defaults`
+    line that sets `!authenticate` in any scope that covers that user. Root is
+    covered because root can become pilotseal. uid 501 cannot read the sudoers
+    policy (`/etc/sudoers` is readable only by root and `wheel`), and the text
+    relies on no uid-501 view of it. The policy comes from a second record, the
+    *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo` to copy, as
+    root, the bytes of `/etc/sudoers` and of every file it includes (each
+    `#include`, `@include`, `#includedir` and `@includedir` target,
+    recursively), with each path, the output of `visudo -c`, and the output of
+    `id -un 501` and `id -Gn 501` (the user and groups the scan above matches),
+    into one file owned by pilotseal. The record must show `visudo -c` reporting
+    every file parsed OK, a global `Defaults timestamp_type=tty` or
+    `Defaults timestamp_type=ppid` line, and no other line that sets
+    `timestamp_type` in any scope: none for a user (`Defaults:`), host
+    (`Defaults@`), runas user (`Defaults>`) or command (`Defaults!`). Nor may
+    any line in any scope set `tty_tickets`, either way: `!tty_tickets` uses a
+    single ticket record for all login sessions (`sudoers(5)`), which is the
+    sharing this precondition rules out. The text relies on that explicit
+    `timestamp_type` line, not on sudo's default. `check`, as pilotseal,
+    validates both records and records both hashes in its `preflight` line (F3).
+    No field of either is typed in. The sudoers record passes through Joel's
+    uid-501 terminal, so section 14's terminal gap applies to it. The
+    sudo-denied record shows only that an agent session cannot use sudo by
+    itself. It does not show that an agent cannot tamper with the terminal Joel
+    uses, which section 14 states as a residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1361,12 +1372,15 @@ follow-up, as the block below records it.
 f1: UNPINNED F1
 f3: UNPINNED F3
 f4: UNPINNED F4
+f4_first: UNPINNED F4
 f6: UNPINNED F6
 f5: UNPINNED F5
 ```
 
 Each value becomes `ft#<N> <40-hex merge commit>`, the follow-up's PR and the
-merge commit that landed it.
+merge commit that landed it. `f4_first` is the merge commit of the first F4 PR,
+recorded once and never moved, even when `f4` moves to a later fix: it anchors
+section 6's rule for the census and parse-check copies.
 
 **Containment, checked by preflight (F3).** Preflight reads fleet-tools history
 only from the *history clone*, `/Users/pilotseal/pilot/fleet-tools.git`, a bare
@@ -1538,7 +1552,8 @@ and to #claude's three proposals that followed, verbatim:
 Read narrowly, as #claude relayed them:
 
 - **J3 (I4):** the pilot ends at 10 eligible PRs or 48 hours, whichever comes
-  first (section 8, end condition 4).
+  first. In this text "10 eligible PRs" is 10 compared sequence heads, which
+  can take more than 10 enrolled PRs (section 8, end condition 4).
 - **J1 order (I2):** "First, any disagreement on a head whose window is open.
   Then the rest, oldest first by the time the disagreement was posted. Ties go
   to the lower PR number. The 48-hour budget per ruling is unchanged, and
@@ -1550,7 +1565,9 @@ Read narrowly, as #claude relayed them:
   and planted heads have none, so the tie-break is made total by this order over
   every `items` entry, which F4's out-of-order list uses exactly: first live
   heads, by fleet-tools PR number; then replayed heads, by assistant PR number;
-  then planted heads, by `head_id`; and within one head, by item id. Inside each
+  then planted heads, by `head_id`; and within one head, by item id. PR numbers
+  compare as numbers; `head_id`s and item ids compare as O1 compares finding
+  ids, shorter first, then bytewise. Inside each
   repository that is Joel's lower-PR-number rule; the repository order only
   fills the gap his rule leaves. Past the budget period an item is UNMEASURED.
   As section 8 says, the order guides Joel's work and decides nothing, and the
@@ -1754,10 +1771,13 @@ left out only by a rule written here.
     gets E5
     (`verdicts_seen: true`), and the rest get E6 (`verdicts_seen: false`). F2
     runs `window` right after every live `freeze`, and again when the 48 hours
-    run out, so the gap between the window's close and Joel's record is only
-    his own delay, which the report
-    shows as the difference between the two lines' `at`. A PR reviewed in that
-    gap counts as E5. That over-reports the lever, never under-reports it.
+    run out, so the gap between the window's close and Joel's record is only his
+    own delay. The report shows it as one value, the *recording delay*: from the
+    window's close (the closing `freeze`'s `at` for a close by count, the
+    opening plus 48 hours for a close by time) to the `at` of the first E5 or E6
+    `exclude` written after it, or none when there is no such line (F4). A PR
+    reviewed in that gap counts as E5. That over-reports the lever, never
+    under-reports it.
   - **Residual selection levers.** The agents decide when reviews are
     requested, and they author, push and close the PRs, so they can drop a
     chosen eligible PR from the compared ten. That is the lever #juno's fix 1
@@ -1986,15 +2006,18 @@ of the conflict with a local substitute (I7: answer 8 of 7121929832, and
 7135308036 and 7135401609 on Nov 24): Joel does the local substitute check for
 the server-protected required check himself, and if he has not done it within 48
 hours of its being due, #claude (the arbiter) does it. The check is *due* at the
-`created_at` of the comment that puts a promotion decision to Joel, naming the
-gate to promote. This is his change to ORDER r2 item 13's first half, and this
-text's signature records it. **The break-glass half is unchanged.** The
-original's "an auditable break-glass" and "Both must exist" stand as written:
-Joel's answer names no break-glass, so that half is still **unmet**. Promotion
-stays blocked until a break-glass log that agents cannot alter exists and a
-signed owner record (section 13) names it, and until this text is signed,
-whatever the pilot shows. This section is a direction to resolve the conflict.
-It enables no branch protection and promotes no gate.
+`at` of the first `promotion-due` line in the sealed ledger (F1). Joel appends
+it himself, as pilotseal, when a promotion decision is put to him, naming the
+gate to promote; no agent can append to that ledger, and only the first such
+line counts. Until Joel appends one, nothing is due, the arbiter's 48 hours
+never start, and promotion stays blocked. This is his change to ORDER r2 item
+13's first half, and this text's signature records it. **The break-glass half is
+unchanged.** The original's "an auditable break-glass" and "Both must exist"
+stand as written: Joel's answer names no break-glass, so that half is still
+**unmet**. Promotion stays blocked until a break-glass log that agents cannot
+alter exists and a signed owner record (section 13) names it, and until this
+text is signed, whatever the pilot shows. This section is a direction to resolve
+the conflict. It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2017,12 +2040,13 @@ refuses every form until then.
   an `enroll` of provenance `live` that is not a window record, while a replayed
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
   ledger and refused unless a `close` line precedes it, with a self-test row
-  and a mutation that turns it red; and a `ruling` kind with section 8's
-  body. A `ruling` whose subject is
+  and a mutation that turns it red; a `ruling` kind with section 8's body; and a
+  `promotion-due` kind naming the gate to promote, allowed after `unblind`,
+  whose first line sets section 16's due time. A `ruling` whose subject is
   `classification` may come before or after `close`. One whose subject is `item`
   needs an earlier `items` line naming that id, so it too can only follow
-  `close`. `items` and `ruling` join the
-  kinds allowed after `close`, and no `items` or `ruling` may follow `score`.
+  `close`. `items` and `ruling` join the kinds allowed after `close`, and no
+  `items` or `ruling` may follow `score`.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
   signature covers them and no separate document needs a pin. A written copy may
@@ -2045,9 +2069,8 @@ refuses every form until then.
     the `preflight` line: Joel runs `pilot-unblind.py window` as pilotseal at
     or after that time, before he appends any other ledger line, and then
     records the unrecorded window PRs as below. If he runs it late, every
-    unrecorded PR is still recorded then, a review in the gap counts as E5
-    (section 12), and the report shows the delay as the difference between
-    the due time and the first E5 or E6 line's `at`;
+    unrecorded PR is still recorded then, a review in the gap counts as E5,
+    and the report shows section 12's recording delay;
   - right after each live head's `freeze` is appended, and before each live
     `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
     closed, it writes no more live `enroll` and records every unrecorded window
@@ -2082,15 +2105,18 @@ refuses every form until then.
     commit in its `preflight` line;
   - it validates precondition 15's sudo-denied record and its sudoers record,
     made through sudo as root: `visudo -c` OK, one global `timestamp_type` of
-    `tty` or `ppid`, no `timestamp_type` line in any other scope, and no
-    `tty_tickets` setting in any scope; it records
+    `tty` or `ppid`, no `timestamp_type` line in any other scope, no
+    `tty_tickets` setting in any scope, and no rule, with aliases expanded,
+    that lets uid 501's user, its groups or `ALL` run any command as
+    pilotseal, root or `ALL` with `NOPASSWD` or `!authenticate` (precondition
+    15); it records
     both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
     `script_sha256` is not the blob of `pilot-score.py` at some merge commit on
-    the history clone's `main` first-parent history at or after F4's merge
-    (section 6);
+    the history clone's `main` first-parent history at or after `f4_first`
+    (sections 6 and 10);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2171,6 +2197,8 @@ refuses every form until then.
     (section 5, O5);
   - a planted diff that parses but adds no truth line is UNMEASURED, never a
     miss (O1);
+  - it reports section 12's recording delay, from the window's close (by count
+    or by time) to the first E5 or E6 `exclude` written after it;
   - a live head whose `pr_created_at` is outside the window, before its
     opening or after its close, or whose `enroll` line's `at` is later than the
     window's close, is not a sequence head, so it is in none of C1,
