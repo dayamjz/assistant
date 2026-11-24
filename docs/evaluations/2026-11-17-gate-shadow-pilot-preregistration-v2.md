@@ -650,22 +650,37 @@ items Joel rules.
 | s08 | C4 spec | `9b86a1d331e3a933048b16a1559b41101445c4a10e5972042e2a768045fee3a4` | SHA-256 |
 
 - **Who runs the scripts.** Scoring and unblinding run only as pilotseal, and
-  only when Joel invokes them, as
-  `sudo -u pilotseal /Users/pilotseal/bin/<script>` (7065248343 item 3). No
-  agent session can use sudo to become pilotseal without Joel's password, as far
-  as precondition 15 checks the sudo policy and the sudo PAM stack, and no
-  sudoers entry is recommended. Precondition 15 does not cover `su pilotseal` or
-  what password pilotseal itself has (section 14, "Other routes to pilotseal").
-  An agent can still tamper with the uid-501 terminal Joel runs `sudo` from
-  (section 14, "Joel's terminal is the agents' uid"). Scoring needs git on
-  pilotseal's `PATH` (O1 above) for any planted record that reaches O1's git
-  step. If one does and git is missing, scoring refuses and logs `score-refused`
-  rather than marking heads UNMEASURED. If every planted record is UNMEASURED by
-  an earlier O1 rule, git is never called and scoring completes without it. This
-  is relay point 6. Both are deterministic: the early-unblinding refusal is
-  shown by `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment"
-  by `pilot-score.py`'s rows "the dry run makes no agent or network call" and
-  "the CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
+  only when Joel invokes them (7065248343 item 3). **Every pinned script run
+  as pilotseal** (scoring, unblinding, preflight's `check`, `census`,
+  `parse-check`, and `pilot-ledger.py` for Joel's appends and chain heads) is
+  started in one form, never through the script's own `#!/usr/bin/env python3`
+  line:
+
+  ```sh
+  /usr/bin/sudo -u pilotseal /usr/bin/env -i PATH=/usr/bin:/bin \
+    HOME=/Users/pilotseal /usr/bin/python3 /Users/pilotseal/bin/<script>
+  ```
+
+  The interpreter is `/usr/bin/python3`, and `git` resolves to `/usr/bin/git`
+  through that fixed `PATH`; on this host both are on the sealed read-only
+  system volume (`mount` shows `/` as `sealed` and `read-only`), and `env -i`
+  drops every variable Joel's shell would pass, such as a `PATH` with a
+  uid-501-writable directory first, or `DEVELOPER_DIR`. Elsewhere this text says
+  `sudo -u pilotseal` for short; it means this form. No agent session can use
+  sudo to become pilotseal without Joel's password, as far as precondition 15
+  checks the sudo policy and the sudo PAM stack, and no sudoers entry is
+  recommended. Precondition 15 does not cover `su pilotseal` or what password
+  pilotseal itself has (section 14, "Other routes to pilotseal"). An agent can
+  still tamper with the uid-501 terminal Joel runs `sudo` from (section 14,
+  "Joel's terminal is the agents' uid"). Scoring needs `/usr/bin/git` (O1 above)
+  for any planted record that reaches O1's git step. If one does and git is
+  missing, scoring refuses and logs `score-refused` rather than marking heads
+  UNMEASURED. If every planted record is UNMEASURED by an earlier O1 rule, git
+  is never called and scoring completes without it. This is relay point 6. Both
+  are deterministic: the early-unblinding refusal is shown by
+  `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
+  `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
+  CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
 - **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
   from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
@@ -699,48 +714,57 @@ items Joel rules.
     not parse, `git apply --numstat -z` rejecting it, and a diff that adds no
     truth line. The rules that need a head (its tree list, its gate capture,
     whether its `review` ran) are not applied, so a record that parses can
-    still be UNMEASURED at scoring. It needs git on pilotseal's `PATH`, as
+    still be UNMEASURED at scoring. It needs `/usr/bin/git`, as
     scoring does (section 6), and refuses without it. It appends one `access`
     line (`by: parse-check`) naming every record it read, and marks no head.
 
   A run before signing creates the sealed ledger if it does not exist yet, so
   these lines come before the first `preflight`, and the report lists them with
-  the rest. **Both run only from a pinned copy.** Before either, Joel checks, as
-  pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
-  the scoring hash in the trust file (section 13), the one reference for this
-  check, and that a *pre-run write-denied record* exists for
-  `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
-  is not precondition 10's record, which is dated after signing. Since only F3
-  adds write probes, neither run happens before F3 lands. Joel copies the
-  pre-run record, as pilotseal, into `/Users/pilotseal/pilot/records/`, its one
-  home, and each `access` line records its SHA-256 (`prerun_record_sha256`).
-  `check` later finds the file in that directory with that hash and refuses the
-  line unless the file is a write-denied record for `/Users/pilotseal/bin`
-  holding at least these two probes, each denied with `EACCES`: creating a file
-  in `/Users/pilotseal/bin`, and opening `/Users/pilotseal/bin/pilot-score.py`
-  for writing. Every probe in it must be denied, and every probe's `date` must
-  be before the line's `at` (F3). The trust file's location is I8 (section 11),
-  so neither runs until I8 is settled and the trust file exists there; the
-  reference holds only from then. If the trust file holds no scoring hash yet,
-  Joel runs neither until he has written one, as pilotseal, for a
-  `pilot-score.py` blob he has read from a landed F4 or F5 merge in section 10's
-  history clone. The `access` line records that hash (`script_sha256`). `check`
-  later accepts that line only when its `script_sha256` is the blob of
-  `pilot-score.py` at a merge commit on the history clone's `main` first-parent
-  history at or after `f4_first`, the first F4 merge, which section 10 records
-  once and never moves (F3). That shows only that the copy was on fleet-tools
-  `main` at or after the first F4 merge, not that it was reviewed: fleet-tools
-  has no branch protection (section 16) and every agent pushes as `dayamjz`.
-  What ties the copy to the trust file's scoring hash at the time of the run is
-  Joel's pre-run check above; `check` does not verify that tie, and the
-  procedure guarantees no more than it. The line need not equal the final
-  scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
+  the rest. **Both run only from pinned copies.** `pilot-score.py` loads
+  `pilot-unblind.py` and `review-findings.py` from its own directory, and
+  `pilot-unblind.py` loads `pilot-ledger.py`, so one rule covers the whole
+  directory. Before either run, Joel checks, as pilotseal, that the SHA-256 of
+  every file in `/Users/pilotseal/bin` equals that file's hash in the trust file
+  (section 13), the one reference for this check, and that `bin` holds no file
+  the trust file does not hash. He also checks that a *pre-run write-denied
+  record* exists for `/Users/pilotseal/bin`, made by uid 501 before the run with
+  F3's `probe`. It is not precondition 10's record, which is dated after
+  signing. Since only F3 adds write probes, neither run happens before F3 lands.
+  Joel copies the pre-run record, as pilotseal, into
+  `/Users/pilotseal/pilot/records/`, its one home, and each `access` line
+  records its SHA-256 (`prerun_record_sha256`). `check` later finds the file in
+  that directory with that hash and refuses the line unless the file is a
+  write-denied record for `/Users/pilotseal/bin` holding at least precondition
+  10's directory walk of `/Users/pilotseal/bin` and an open-for-write probe,
+  denied with `EACCES`, of every file the line's `bin_sha256` names. Every probe
+  in it must be denied, and every probe's `date` must be before the line's `at`
+  (F3). The record speaks only for the time it was taken: `check` sets no lower
+  bound on its age, so Joel takes it right before each run, and the report shows
+  each record's age beside its line. The trust file's location is I8 (section
+  11), so neither runs until I8 is settled and the trust file exists there; the
+  reference holds only from then. If the trust file lacks a hash for any file in
+  `bin`, Joel runs neither until he has written it, as pilotseal, for a blob he
+  has read from a landed merge in section 10's history clone (for
+  `pilot-score.py`, an F4 or F5 merge). The `access` line records
+  `pilot-score.py`'s hash (`script_sha256`) and every file's hash in `bin`
+  (`bin_sha256`). `check` later accepts that line only when its `script_sha256`
+  is the blob of `pilot-score.py` at a merge commit on the history clone's
+  `main` first-parent history at or after `f4_first`, the first F4 merge, which
+  section 10 records once and never moves (F3). That shows only that the copy
+  was on fleet-tools `main` at or after the first F4 merge, not that it was
+  reviewed: fleet-tools has no branch protection (section 16) and every agent
+  pushes as `dayamjz`. What ties the copies to the trust file's hashes at the
+  time of the run is Joel's pre-run check above; `check` does not verify that
+  tie, and the procedure guarantees no more than it. The line need not equal the
+  final scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
   `f4_first` stays put, the earlier line still passes, nothing in the sealed
   ledger is rewritten, and the read stays logged. A copy that lies in its own
-  `access` line is not caught by that check; what bars it is that uid 501 can
-  neither create a file in `/Users/pilotseal/bin` nor open `pilot-score.py`
-  there for writing, as the pre-run record shows, within the
-  self-attesting-record gap of section 9.
+  `access` line is not caught by that check, and `check` verifies only
+  `pilot-score.py`'s hash: for the other files in `bin` the tie is Joel's
+  pre-run check alone. What bars a lying copy is that uid 501 could neither
+  create a file in any directory of `bin`'s walk nor open a file in `bin` for
+  writing when the pre-run record was taken, within the self-attesting-record
+  gap of section 9.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1281,24 +1305,26 @@ fails:
 10. A write-denied record as uid 501 against the sealed ledger, the trust file,
     the checker's directory, section 10's history clone and section 1's
     assistant history clone exists, dated after the signing commit (sections 6,
-    13 and 14). For `/Users/pilotseal/bin` it shows that creating a file in the
-    directory, and opening each installed script there for writing, are both
-    denied with `EACCES`, and for the history clones
+    13 and 14). A *directory walk* of a path is a create probe in every
+    directory along two paths, the path as written and the path with every
+    symlink resolved (`realpath`), from the path's own directory up to `/`, each
+    denied as described below for the trust file. For `/Users/pilotseal/bin` the
+    record holds its directory walk and an open-for-write probe of each
+    installed file there, denied with `EACCES`, and for the history clones
     `/Users/pilotseal/pilot/fleet-tools.git` and
     `/Users/pilotseal/pilot/assistant.git` that creating a file in either is
-    denied the same way. For the trust file it shows that opening the file for
-    writing is denied with `EACCES`, and that creating a file is denied in each
-    directory along two paths: the path as I8 writes it, and the path with every
-    symlink resolved (`realpath`), from the file's directory up to `/`. A create
-    there is denied with `EACCES`. The one exception is `/` itself, where uid
-    501 gets `EROFS` on this host: `EROFS` is accepted there only, and only when
-    the record also carries `mount`'s line for `/` and that line shows it
-    `sealed` and `read-only`, the signed system volume, which uid 501 cannot
-    remount writable. `EROFS` in any other directory fails the record, since a
-    read-only mount uid 501 attached could be reattached writable. So the file
-    cannot be replaced from a directory uid 501 can write, whether reached by
-    the name I8 gives or through a symlink. Read probes alone do not show it: a
-    directory can deny listing and still allow traversal and writes by group.
+    denied the same way. For the trust file it holds an open-for-write probe of
+    the file, denied with `EACCES`, and the directory walk of its path as I8
+    writes it. A create in a walk is denied with `EACCES`. The one exception is
+    `/` itself, where uid 501 gets `EROFS` on this host: `EROFS` is accepted
+    there only, and only when the record also carries `mount`'s line for `/` and
+    that line shows it `sealed` and `read-only`, the signed system volume, which
+    uid 501 cannot remount writable. `EROFS` in any other directory fails the
+    record, since a read-only mount uid 501 attached could be reattached
+    writable. So neither the trust file nor `bin` can be replaced from a
+    directory uid 501 can write, whether reached by its written name or through
+    a symlink. Read probes alone do not show it: a directory can deny listing
+    and still allow traversal and writes by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
@@ -2042,11 +2068,12 @@ Relay point 5.
   can use the key, holds only while this gap and the "other routes to pilotseal"
   gap above are not exploited, since an agent with Joel's captured password, or
   with pilotseal's own, acts as pilotseal.
-  - **What narrows it:** Joel runs `/usr/bin/sudo -u pilotseal` by absolute
-    path, from a shell started with no startup files (`/bin/zsh -f`), ends the
-    ticket with `sudo -k` when he is done, and reads what he signs with tools
-    outside uid 501's writable paths. This only narrows it: a shell that was
-    already started with tampered files can intercept what is typed into it.
+  - **What narrows it:** Joel runs pinned scripts only in section 6's fixed form
+    (absolute `/usr/bin/sudo`, `env -i`, a fixed `PATH`, `/usr/bin/python3`),
+    from a shell started with no startup files (`/bin/zsh -f`), ends the ticket
+    with `sudo -k` when he is done, and reads what he signs with tools outside
+    uid 501's writable paths. This only narrows it: a shell that was already
+    started with tampered files can intercept what is typed into it.
   - **What closes it:** a separate account for Joel's `sudo` and signing,
     other than uid 501, whose home, startup files and `PATH` no agent can
     write. Until he has one, this is a stated residual gap, and the report
@@ -2253,9 +2280,9 @@ refuses every form until then.
     the history clone's `main` first-parent history at or after `f4_first`, or
     whose `prerun_record_sha256` names no file in
     `/Users/pilotseal/pilot/records/` that is a write-denied record for
-    `/Users/pilotseal/bin` holding a denied create in that directory and a
-    denied open-for-write of `pilot-score.py` there, every probe denied and
-    every probe's `date` before the line's `at` (sections 6 and 10);
+    `/Users/pilotseal/bin` holding its directory walk and a denied
+    open-for-write of every file the line's `bin_sha256` names, every probe
+    denied and every probe's `date` before the line's `at` (sections 6 and 10);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2269,15 +2296,14 @@ refuses every form until then.
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
-    file and a create-file probe of every directory on its written and its
-    resolved path up to `/`, accepting `EROFS` only for `/` when the `mount`
-    line for `/`, which the probe captures into the record, shows `sealed` and
-    `read-only`, `/Users/pilotseal/bin` and each installed script there, and the
-    two history clones), which also make section 6's pre-run write-denied
-    record, a probe of the key's location, precondition 9's signing probe (an
-    attempt from an agent session to sign a test message with the pinned key
-    through each agent the key could be reached by, `ssh-agent` and
-    `gpg-agent`), and precondition 15's sudo probe;
+    file and its directory walk, `/Users/pilotseal/bin`'s directory walk and
+    each installed file there, and the two history clones; a walk accepts
+    `EROFS` only for `/` when the `mount` line for `/`, which the probe captures
+    into the record, shows `sealed` and `read-only`), which also make section
+    6's pre-run write-denied record, a probe of the key's location, precondition
+    9's signing probe (an attempt from an agent session to sign a test message
+    with the pinned key through each agent the key could be reached by,
+    `ssh-agent` and `gpg-agent`), and precondition 15's sudo probe;
   - each probe writes a record file in the shape `probe` writes today: a
     `probes[]` list of entries with the fields `tester_uid`, `target`,
     `target_owner_uid`, `owner_from`, `command`, `exit`, `errno` and `date`,
@@ -2297,11 +2323,12 @@ refuses every form until then.
     a `bind --census` mode that appends an `access` line (`by: census`) and
     prints only counts, a `parse-check` mode that appends an `access` line
     (`by: parse-check`) and prints only how many records parse under O1's
-    record rules, refusing without git on `PATH` (section 6), each of the two
-    recording the `script_sha256` and the `prerun_record_sha256` Joel checked
-    (section 6), a refusal to bind a construction spec whose case is race or
-    recovery, and a check at scoring that every planted `enroll` agrees with its
-    record (section 7, "Building and binding a planted head");
+    record rules, refusing without `/usr/bin/git` (section 6), each of the two
+    recording the `script_sha256`, the `bin_sha256` and the
+    `prerun_record_sha256` Joel checked (section 6), a refusal to bind a
+    construction spec whose case is race or recovery, and a check at scoring
+    that every planted `enroll` agrees with its record (section 7, "Building and
+    binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone,
     and refuses, appending `score-refused`, unless the ledger already has a
     `close` line, so no item list, and no near-score, exists mid-pilot and the
