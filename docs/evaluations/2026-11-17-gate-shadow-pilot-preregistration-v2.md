@@ -756,10 +756,11 @@ items Joel rules.
   count window records only.
 - `items` and `ruling`: not in the landed kind set either, and F1 adds both.
   Both are allowed after `close`: `items` and every item ruling come only after
-  it (section 8), and a `classification` ruling may come before or after it, so
-  the writer can follow one at enrollment (section 12, F1). `items` is unique
-  per ledger and lists the items Joel may rule. Each `ruling` names one item,
-  its ruling and its place in the J1 budget.
+  it (section 8), which F1 enforces by refusing an `items` line before `close`
+  (an item ruling needs that line), and a `classification` ruling may come
+  before or after it, so the writer can follow one at enrollment (section 12,
+  F1). `items` is unique per ledger and lists the items Joel may rule. Each
+  `ruling` names one item, its ruling and its place in the J1 budget.
 - `freeze`: `head_id`, `frozen_commit` (40-hex) and `raw[]` of
   `{file, sha256}`, one per capture file of the head, and for a planted head
   one more for its sealed review record (section 7).
@@ -1060,11 +1061,12 @@ both, C3, C5 outside clean heads and C7 can be measured.
   before or after `close`, so it is not timed; it is inside, and the report
   counts it apart.
 
-**What the budget costs.** Since the budget is hours, classification rulings
-do not draw on the window, and O5 items are limited only by time. An item Joel
-has not ruled when the window closes is UNMEASURED, so C3, C5 outside clean
-heads and C7 can stay UNMEASURED and the pilot then cannot pass. Joel may
-leave any dispute unruled, which costs nothing (section 12).
+**What the budget costs.** Since the budget is hours, classification rulings are
+not timed and do not draw on the budget period, and O5 items are limited only by
+time. An item Joel has not ruled when the budget period ends, 48 hours after the
+`items` line's `at`, is UNMEASURED, so C3, C5 outside clean heads and C7 can
+stay UNMEASURED and the pilot then cannot pass. Joel may leave any dispute
+unruled, which costs nothing (section 12).
 
 No voter rules, and no split vote exists. The four-way meanings and the
 severity scale serve only as the vocabulary of Joel's lines.
@@ -1779,9 +1781,12 @@ refuses every form until then.
   whose `pr_created_at` is before the `at` of the first `preflight` line, and
   an `enroll` of provenance `live` that is not a window record, while a replayed
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
-  ledger; and a `ruling` kind with section 8's body. A `ruling` whose subject is
+  ledger and refused unless a `close` line precedes it, with a self-test row
+  and a mutation that turns it red; and a `ruling` kind with section 8's
+  body. A `ruling` whose subject is
   `classification` may come before or after `close`. One whose subject is `item`
-  needs an earlier `items` line naming that id. `items` and `ruling` join the
+  needs an earlier `items` line naming that id, so it too can only follow
+  `close`. `items` and `ruling` join the
   kinds allowed after `close`, and no `items` or `ruling` may follow `score`.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
@@ -1856,7 +1861,10 @@ refuses every form until then.
     construction spec whose case is race or recovery, and a check at scoring
     that every planted `enroll` agrees with its record (section 7, "Building and
     binding a planted head");
-  - an `items` mode that appends section 8's `items` line from captures alone;
+  - an `items` mode that appends section 8's `items` line from captures alone,
+    and refuses, appending `score-refused`, unless the ledger already has a
+    `close` line, so no item list, and no near-score, exists mid-pilot and the
+    budget period cannot start early;
   - the `items` line covers the O5 items of every compared replayed head and
     every compared sequence head (section 8, end condition 4), and the outcome
     of every enrolled race and recovery head except a `base_mismatch` or
