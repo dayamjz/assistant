@@ -83,15 +83,18 @@ section 9 holds.
 
 **The signing commit.** The signature names one assistant `main` commit, the
 signing commit. It must be a commit on `main`'s first-parent history at which
-this text holds no `UNRULED` and no `UNPINNED` value, so every owner input is
-answered and every pin is filled there. This text may reach `main` earlier as an
-unsigned draft, and each later PR that answers an input or fills a pin is still
-a draft. Preflight check 4 must verify all three conditions: the commit is on
-`main`'s first-parent history, this text there has no `UNRULED` or `UNPINNED`
-value, and this text at `origin/main` is byte-identical to this text there. As
-built, check 4 refuses every signing form, and these checks are F3. So any
-later edit leaves the text unsigned until Joel signs again. Every "after
-the signing commit" in this text means after that commit's time.
+this text holds no `UNRULED` and no `UNPINNED` value, so every owner input that
+blocks signing is answered and every pin is filled there (section 11 says which
+inputs block). A value is the value of a `key: value` line in one of this text's
+fenced `pilot-v2-` blocks, or a cell of a pin table (sections 10 and 12). The
+word in prose, as in this sentence, is not a value. This text may reach `main`
+earlier as an unsigned draft, and each later PR that answers an input or fills a
+pin is still a draft. Preflight check 4 must verify all three conditions: the
+commit is on `main`'s first-parent history, this text there has no `UNRULED` or
+`UNPINNED` value, and this text at `origin/main` is byte-identical to this text
+there. As built, check 4 refuses every signing form, and these checks are F3. So
+any later edit leaves the text unsigned until Joel signs again. Every "after the
+signing commit" in this text means after that commit's time.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -104,8 +107,9 @@ unresolved disagreements, with an order and budget frozen before enrollment
 scoped writer (section 14); (6) deterministic scoring and unblinding under
 pilotseal (sections 6 and 8); (7) reconciling the server-protected promotion
 requirement with Joel's no-branch-protection decision before any promotion
-(section 16). The relay is #A1's report of Joel's reply, and #claude has asked
-Joel to confirm it directly (7114424384 point 3). Joel's key signature of this
+(section 16). The relay is #A1's report of Joel's reply. #claude asked Joel to
+confirm it directly (7114424384 point 3), and he did: answer 1 of 7121929832
+("Yes", section 11). Joel's key signature of this
 text is what makes every value folded in here binding.
 
 ## 2. What is kept
@@ -472,7 +476,9 @@ items Joel rules.
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
   from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
   13 pins,
-  so no agent can edit the checker that verifies the signature. Its `probe`
+  so no agent can edit the checker that verifies the signature, as long as
+  uid 501 cannot write that directory or its files. Precondition 10's
+  write-denied record shows that (F3). Its `probe`
   mode is the one exception, by design: it runs as uid 501 to show that uid 501
   is denied (section 9, precondition 6), from a copy of the same pinned blob.
   Making `check` refuse to run as any other user is F3.
@@ -660,8 +666,9 @@ C3, C5 outside clean heads and C7 can be measured.
   recomputes it from recorded bytes. The budget is 48 hours (Joel,
   7121929832, answer 3): the window opens at the `at` of the `items` line and
   lasts 48 hours. An item ruling is inside it when its `at` falls in the
-  window. A classification ruling comes before that line, so it is not timed;
-  it is inside, and the report counts it apart.
+  window. A classification ruling is not tied to the `items` line, and F1 lets
+  it come before or after `close`, so it is not timed; it is inside, and the
+  report counts it apart.
 
 **What the budget costs.** Since the budget is hours, classification rulings
 do not draw on the window, and O5 items are limited only by time. An item Joel
@@ -738,8 +745,13 @@ fails:
 9. Each owner record of section 13 that the pilot relies on is signed with the
    pinned key, and if the private key is a file, a denied-read record as uid
    501 against its location exists (section 13).
-10. A write-denied record as uid 501 against the sealed ledger and the trust
-    file exists, dated after the signing commit (sections 13 and 14).
+10. A write-denied record as uid 501 against the sealed ledger, the trust file
+    and the checker's directory exists, dated after the signing commit
+    (sections 6, 13 and 14). For `/Users/pilotseal/bin` it shows that creating
+    a file in the directory, and opening each installed script there for
+    writing, are both denied with `EACCES`. Read probes alone do not show it:
+    a directory can deny listing and still allow traversal and writes by
+    group.
 11. The pinned `review-size.sh` is in the `install` record, at the hash the
     trust file pins. No enroll script exists (section 14).
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
@@ -760,8 +772,16 @@ fails:
     copy block, section 10's table, and section 12's row. Any
     mismatch, or a trust file that is missing or unreadable, refuses
     enrollment.
+15. **No agent reaches pilotseal through sudo.** Joel's account is uid 501,
+    the uid agents run as, so the `sudo -u pilotseal` Joel runs starts from
+    the agents' own uid. A sudo-denied record, dated after the signing commit
+    and made from an agent session as uid 501, shows that `sudo -n -u
+    pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid 501 reach
+    pilotseal, and no sudo ticket usable from that session is cached. It also
+    records the sudoers `timestamp_type` in force, which must keep tickets per
+    terminal (`tty` or `ppid`), never `global`.
 
-On success it appends a `preflight` line. It never enrolls. Items 8 to 14 are
+On success it appends a `preflight` line. It never enrolls. Items 8 to 15 are
 not yet checked by `pilot-preflight.py`; F3 adds them. Until F3 lands, item 4
 refuses every signing form, so no enrollment can pass preflight without them.
 
@@ -784,10 +804,23 @@ and the two must agree (F3).
 
 ## 11. Owner questions for v2
 
-This text is not signed while any input below is open. Once Joel answers, his
-answers are quoted here verbatim with their comment ids, as a#977 folded in
-section 7.12, and his key signature of this text (section 13) is what makes
-them binding.
+This text is not signed while any input below that blocks signing is open.
+Each one that blocks has an `UNRULED` value (section 1): `j1_order` (I2) and
+`j4` (I5) in section 7's parameters, `trust_file` (I8) and `key_fingerprint`
+(I5) in section 13's copy block, and `deadline` (I4) in the block below. I7 is
+the one open input that does not block signing: it governs only promotion,
+which section 16 keeps blocked until Joel names the substitute, and its choice
+is recorded after signing as its own signed owner record (section 13). Once
+Joel answers, his answers are quoted here verbatim with their comment ids, as
+a#977 folded in section 7.12, and his key signature of this text (section 13)
+is what makes them binding.
+
+```pilot-v2-open-inputs
+deadline: UNRULED I4
+```
+
+When Joel answers I4, `deadline` becomes `none` or the deadline he names. A
+deadline also gets its key in the parameters (F5).
 
 **Answered or narrowed by the Nov 23 direction** (#A1's relay 7111628611,
 translated in 7114296700):
@@ -818,9 +851,10 @@ translated in 7114296700):
   > 2. Yes"
 
   Relay point 1 names the kind: fleet-tools reliability-fix PRs, so `pr_kind`
-  is `fleet-tools-reliability-fix` (section 12). The pilot ends at 10 eligible
-  PRs (Joel, 7121929832, answer 5). Whether a deadline applies is still open
-  (I4).
+  is `fleet-tools-reliability-fix` (section 12). The count of 10 is Joel's
+  (7083761337, above). The pilot ends once 10 enrolled live heads of the kind
+  are compared, which can take more than 10 enrolled PRs (sections 8 and 12).
+  Whether a deadline applies is still open (I4).
 - **J4. How Joel signs: direction answered.** Relay point 4: a locally signed
   owner artifact that agents cannot impersonate (section 13). Which key and
   where its public key is pinned are open (I5).
@@ -867,11 +901,12 @@ keeps its number, answered or not.
   C7 are required criteria, ruled by Joel under J1 within the budget, and
   UNMEASURED past it (answer 4), so a pilot with any of them UNMEASURED is not
   a pass.
-- **I4. J3 deadline: open.** The pilot ends at 10 eligible PRs. On a
+- **I4. J3 deadline: open.** The count of 10 is settled (J3). On a
   deadline Joel wrote "No deadline, maybe 48 hrs" (answer 5), which is not
   settled, and #claude asked him which he means. Until he answers, no deadline
-  applies. A deadline he adds before signing goes into section 8's end
-  condition and the parameters (F5).
+  applies. `deadline: UNRULED I4` (above) blocks signing until he answers. A
+  deadline he adds goes into section 8's end condition and the parameters
+  (F5).
 - **I5. J4 key custody: open.** Joel asked for a recommendation (answer 6),
   which #claude is giving him directly. Which key Joel signs with is not
   chosen. Its public key is pinned in the trust file of section 13. This fills
@@ -982,7 +1017,9 @@ left out only by a rule written here.
 - **Reconciliation.** Before each `enroll` and before `close`, the writer lists
   every `dayamjz/fleet-tools` PR created in the window, open or closed, from
   GitHub, and checks that each has exactly one `enroll` or `exclude` line. A PR
-  with none, or with two, refuses the `enroll` or the `close`.
+  with none, or with two, refuses the `enroll` or the `close`. Joel does this
+  by hand under F2's procedure, and the ledger enforces the "two" half (F1):
+  it refuses an `enroll` or `exclude` naming a PR that already has a record.
 - **The exclusion rules.** These are the only ones. Each `exclude` line names
   its rule:
   - **E1.** It fails the kind test above.
@@ -1068,9 +1105,9 @@ Relay point 5.
   write.
 - **Who.** Joel, by hand, as pilotseal via `sudo -u pilotseal` (I6, answered:
   "I'll add them", 7121929832). No script enrolls a head, and no enroll path
-  exists that an agent can invoke: no agent can run as pilotseal, and the
-  ledger is not writable by uid 501 (precondition 10). So the pilot pins no
-  enroll script.
+  exists that an agent can invoke: the ledger is not writable by uid 501
+  (precondition 10), and uid 501 cannot reach pilotseal through sudo without
+  Joel's password (precondition 15). So the pilot pins no enroll script.
 - **Scope.** Joel's enrollment does one thing: it appends `enroll` and
   `exclude` lines that meet section 12, after section 12's reconciliation, and
   planted heads' `enroll` lines under the original's section 3, following F2's
@@ -1083,6 +1120,20 @@ Relay point 5.
   section 6's rule that Joel opens no sealed record before unblinding. Only a
   writer uid other than pilotseal, able to append to the ledger and nothing
   else, would make that bar a mechanism.
+- **A residual gap: sudo from the agents' uid.** Precondition 15 shows that an
+  agent session cannot use sudo without the password. It cannot show that no
+  agent can act inside Joel's own terminal while his sudo ticket is live,
+  since he and the agents share uid 501. What bars that is Joel running
+  `sudo -u pilotseal` only in a terminal no agent drives, and ending the
+  ticket (`sudo -k`) when he is done. A separate account for Joel, other than
+  uid 501, would make it a mechanism.
+- **A gap until F1 and F6: one record per PR.** By hand, nothing refuses a
+  doubled record. The landed ledger keeps `enroll` unique per head only, so a
+  PR enrolled twice as two heads, or both enrolled and excluded, is accepted,
+  and `pilot-unblind.py` as built counts `enroll` lines, so one PR could count
+  twice toward the 10. F1 makes the ledger refuse a second record naming a PR,
+  and F6 counts distinct PRs. Both must land before activation (precondition
+  12).
 - **The denied-write test.** A record as uid 501, in the shape of section 9's
   denied-read record, shows that opening the sealed ledger or the trust file
   for writing is denied with `EACCES` (section 9, precondition 10).
@@ -1128,8 +1179,11 @@ ft#793, ft#794, ft#804) do not do yet. None widens a held PR. Each is its own
 reviewed PR, and each pin is filled by the signing commit. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
-- **F1. `pilot-ledger.py`:** add an `exclude` kind, unique per `pr`; an
-  `items` kind, unique per ledger; and a `ruling` kind with section 8's body.
+- **F1. `pilot-ledger.py`:** add an `exclude` kind; make a live head's
+  `enroll` and every `exclude` unique per `pr` together, so the ledger refuses
+  a second record naming a PR that already has one (section 12), with a
+  self-test row and a mutation that turns it red; an `items` kind, unique per
+  ledger; and a `ruling` kind with section 8's body.
   A `ruling` whose subject is `classification` may come before or after
   `close`. One whose subject is `item` needs an earlier `items` line naming
   that id. `items` and `ruling` join the kinds allowed after `close`, and no
@@ -1156,9 +1210,10 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     table, section 12's row) differs from it. A self-test row
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
-  - it checks preconditions 8 to 13;
-  - it adds the write probes of sections 13 and 14 and a probe of the key's
-    location;
+  - it checks preconditions 8 to 13 and 15;
+  - it adds the write probes of precondition 10 (the sealed ledger, the trust
+    file, `/Users/pilotseal/bin` and each installed script there), a probe of
+    the key's location, and precondition 15's sudo probe;
   - its `install` check covers `review-size.sh`.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
@@ -1177,6 +1232,7 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   signing, F5 adds its key to the parameters, to section 8's end condition, to
   `pilot-unblind.py`'s end condition and to preflight check 5. If no deadline
   applies, F5 is empty.
-- **F6. `pilot-unblind.py`:** end condition 4 counts frozen live heads of the
-  kind that are compared (section 5), reading each head's frozen captures, not
-  frozen live heads alone.
+- **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose live
+  head of the kind is frozen and compared (section 5), reading each head's
+  frozen captures, not `enroll` lines or frozen live heads alone, so a doubled
+  record can never count twice.
