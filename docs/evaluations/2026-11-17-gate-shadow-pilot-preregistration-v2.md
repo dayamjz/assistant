@@ -134,13 +134,15 @@ these ranges, the table wins.
   replaced by O5.
 - **Section 3, case mix and enrollment**, lines 267-352, except line 281 (the
   "Live PRs" row: at least 4, in the order of `REVIEW-REQUEST full` relays),
-  which section 12 replaces, and the words "A live or" in line 279 (the Race
-  row), since a race or recovery head is planted or replayed in v2 (section 12),
+  which section 12 replaces, and the opening words of lines 279 and 280 (the
+  Race row's "A live or planted head" and the Recovery row's "A head"), which
+  in v2 both read "A planted or replayed head" (section 12),
   and the "manifest entry" clauses of lines 275-278 (the clean, real finding,
   hold and CI-failure rows), which put planted truth in the manifest. In v2 the
   manifest is Joel's `enroll` lines, so that truth lives only in the head's
   sealed record `sNN.md` (section 7, "Bodies"). Live heads are the eligible
-  sequence, 10 of them, in PR creation order.
+  sequence, in PR creation order, until 10 sequence heads are compared, which
+  can take more than 10 enrolled PRs (section 12).
 - **Section 4's capture fields**, lines 354-396 (the field table from
   `head_id` to `review.record_commit`). Rows 397-405 and the example record
   (lines 407-448) are not kept. For a live head, section 12 restates the
@@ -349,7 +351,9 @@ it equals git's default unified context.
     in the record's one fenced unified diff. An added line is truth at its
     new-side line. A removed line is truth at the new-side line it was removed
     before. A file the diff deletes adds no truth. Consecutive truth lines of
-    one path form one range.
+    one path form one range. A diff that parses but adds no truth line (a pure
+    rename, a mode change, or deletions at the end of a file) is UNMEASURED,
+    never a miss (F4).
   - Match: a gate finding matches when its `path` is equal and its `line` lies
     in a range widened by K lines on each side.
   - `planted_match` is the first matching gate finding, ordered by its
@@ -374,7 +378,7 @@ it equals git's default unified context.
   all nine stages for every run (`internal/service/runs.go:2177-2196`). A
   stage that never ran has `ran: false` (`internal/machine/wire.go:189-192`)
   and no holds, and its outcome is `""` (`internal/pipeline/outcome.go:19`)
-  or `skipped` (`internal/pipeline/outcome.go:43-51`: a skip-listed stage,
+  or `skipped` (`internal/pipeline/outcome.go:44-52`: a skip-listed stage,
   nothing left to change after the rebase, or the pull request or checks
   stage of a run with no code host). `skipped` also has one producer that
   did run, so the outcome never says whether a stage ran; only `ran` does.
@@ -411,8 +415,13 @@ it equals git's default unified context.
     block order.
   - A review finding located as a file only, or with no location, or from a
     review with no findings block, is `unlocatable` and matches nothing. A
-    malformed findings block makes the head's O5 counts UNMEASURED, and so
-    does a `review` stage that did not run, since `hold-not-made` and
+    review with no findings block gives one `unlocatable` item for each finding
+    `ft:review-findings.py` lists from its prose, and when its verdict is
+    `CHANGES REQUESTED` at least one, standing for the review as a whole. So a
+    blocker named in prose only still becomes an item Joel rules for C3. As
+    built, a review whose prose `review-findings.py` cannot parse gives none
+    (F4). A malformed findings block makes the head's O5 counts UNMEASURED, and
+    so does a `review` stage that did not run, since `hold-not-made` and
     `pass-refused` read it.
   - Counts: `matched`, `missed` (a locatable review finding with no match),
     `extra` (a gate finding with no match), `hold-not-made` (a `review` hold
@@ -602,24 +611,32 @@ items Joel rules.
 **Bodies.**
 
 - `enroll`: `head_id` (`hNN`), `case` (`clean`, `real-finding`, `hold`,
-  `ci-failure`, `race`, `recovery` or `live`), `provenance` (`live`,
-  `replayed` or `planted`), `sealed_id` (`sNN` for a planted head, else
-  `null`) and `work_kind` (for a live head, its kind of work, which must equal
-  `pr_kind` for the head to count toward the end condition), plus the
-  original's manifest fields (lines 306-330). A live head's `enroll` also
-  records section 12's evidence: `pr` (its fleet-tools PR number),
-  `pr_created_at` (GitHub's `created_at`), `enroll_head` (the 40-hex head it is
-  enrolled at), `code_lines` (the pinned `review-size.sh` at that head),
-  `incident` (the issue number and that issue's `created_at`) and `rule`
-  (`eligible`). The first live `enroll` also records `landing_regime`
-  (section 15); the landed ledger checks no body fields, so this needs no
-  ledger change. A planted head's `enroll` carries no planted truth: no
-  defect, location, family, expected action, `ask` or failing check. Those
-  are only in its sealed record `sNN.md`, the one owner of planted truth,
-  which O1 reads and Joel never opens before unblinding (section 6).
+  `ci-failure`, `race`, `recovery` or `live`), `provenance` (`live`, `replayed`
+  or `planted`), `sealed_id` (`sNN` for a planted head, else `null`) and
+  `work_kind` (for a live head, its kind of work, which must equal `pr_kind` for
+  the head to count toward the end condition), plus the manifest fields of the
+  original's lines 317-330 that are fixed before the run: `injection` (race and
+  recovery), `intent_sha256`, `roles_pin_sha256`, `run_set` and
+  `fix_rounds_review`. The base facts of lines 310-316 are the operator's and
+  live only in `gate.json` (section 7). A live head's `enroll` also records
+  section 12's evidence: `pr` (its fleet-tools PR number), `pr_created_at`
+  (GitHub's `created_at`), `enroll_head` (the 40-hex head it is enrolled at),
+  `code_lines` (the pinned `review-size.sh` at that head), `incident` (the issue
+  number and that issue's `created_at`) and `rule` (`eligible`). The first live
+  `enroll` also records `landing_regime` (section 15); the landed ledger checks
+  no body fields, so this needs no ledger change. A planted head's `enroll`
+  carries no planted truth: no defect, location, family, expected action, `ask`
+  or failing check. Those are only in its sealed record `sNN.md`, the one owner
+  of planted truth, which O1 reads and Joel never opens before unblinding
+  (section 6).
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
-  unique per `pr`, with the same evidence fields and the exclusion rule (`E1`
-  to `E5`) in place of `rule`.
+  with the same evidence fields and the exclusion rule (`E1` to `E5`) in
+  place of `rule`.
+- **Window records.** An `enroll` or `exclude` that carries section 12's
+  evidence (`pr_created_at`, `enroll_head`, `code_lines`) is a window record:
+  only a fleet-tools window PR has one. A replayed head's `enroll` carries its
+  own `pr` (an assistant PR) and no such evidence, so it is never a window
+  record, and its `pr` never collides with a fleet-tools PR number.
 - `items` and `ruling`: not in the landed kind set either, and F1 adds both.
   They are allowed after `close`, since Joel rules only once enrollment is
   sealed (section 8). `items` is unique per ledger and lists the items Joel
@@ -637,10 +654,10 @@ items Joel rules.
   (section 10).
 
 **Captures.** For each head the operator writes, under `<captures>/<head_id>/`:
-`gate.json` (the original's section 4 fields of lines 361-391 except
-`planted_truth` at line 366, plus `pin_check`, `pass` or `fail`, the item 3 pin
-check of line 332), `review.md` (the review record, for a live or replayed head
-that has one), `verdicts.txt` (for a live or replayed head, the bytes of
+`gate.json` (exactly the fields section 7's "One owner for each field" gives it,
+among them `pin_check`, `pass` or `fail`, the item 3 pin check of line 332),
+`review.md` (the review record, for a live or replayed head that has one),
+`verdicts.txt` (for a live or replayed head, the bytes of
 `ft:reviews/ft-<N>.verdicts` for a live head, or of `ft:reviews/<N>.verdicts`
 for a replayed one, taken when the review record is captured) and `tree.txt`
 (`git ls-tree -r -z --name-only <head>`: NUL-separated, so no path is quoted).
@@ -664,24 +681,34 @@ review record's verdict differs from it, the head has no review (section 12),
 is not compared, and the report names both. That one definition serves C1,
 O5 and the `items` line.
 
-**One owner for the manifest fields.** The `enroll` line owns every field the
-original's section 4 sources from the manifest: `head_id`, `head`, `case`,
-`provenance`, `pr`, `mirror_reset`, `injection`, `intent_sha256`,
-`roles_pin_sha256`, `run_set` and `fix_rounds_review`, and for a live head
-section 12's evidence. The scripts read them only from it. `gate.json` owns
-what the run and the operator's checks produce: `review_base`,
-`mirror_main_after_reset`, `base_check`, the `gate.*` fields, `origin_ci` and
-`pin_check`. If `gate.json` repeats a manifest field, that is only a copy, and
-a copy that differs from the `enroll` line makes every oracle for that head
-UNMEASURED (F4).
+**One owner for each field.** Every section 4 field has exactly one owner,
+and it appears nowhere else:
 
-**One head.** `gate.json`'s `head` and the head the review record names (line
-1's `reviewed at <40-hex>` for a fleet-tools review) must both equal the
-`enroll` line's `head`, and for a live head `head` must equal `enroll_head`, the
-head that was sized and classified (section 12). If any of them differs, for
-example because the author pushed after enrollment and the review is of the new
-head, the head is not compared. It stays enrolled, and the report lists it as
-moved after enrollment.
+- **The `enroll` line**, written by Joel before the head runs: `head_id`,
+  `head`, `case`, `provenance`, `pr`, `sealed_id`, `work_kind`, `injection`,
+  `intent_sha256`, `roles_pin_sha256`, `run_set`, `fix_rounds_review`, and for
+  a window PR section 12's evidence and `landing_regime`.
+- **`gate.json`**, written by the operator: the base facts of the original's
+  lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
+  `base_check`), the `gate.*` fields (among them `gate.checks_basis`),
+  `origin_ci` and `pin_check`.
+- **The review record:** every `review.*` field (above).
+- **The sealed record `sNN.md`:** planted truth.
+
+A field found in a file that does not own it makes every oracle for that head
+UNMEASURED (F4), so no two copies can disagree. The original's lines 306-308
+have the base facts recorded before the push. In v2 they are the operator's,
+in `gate.json`, whose bytes are fixed only at `freeze`, so the ledger does not
+show that they predate the push. That is a known limit.
+
+**One head.** The revision the gate's review stage reviewed
+(`gate.reviewed_revision`) and the head the review record names (line 1's
+`reviewed at <40-hex>` for a fleet-tools review) must both equal the `enroll`
+line's `head`, and for a live head `head` must equal `enroll_head`, the head
+that was sized and classified (section 12). If any of them differs, for example
+because the author pushed after enrollment and the review is of the new head,
+the head is not compared. It stays enrolled, and the report lists it as moved
+after enrollment.
 
 **Where a planted head's review record lives.** A planted head's review record
 is a sealed record (O5). It is written to
@@ -786,8 +813,9 @@ C3, C5 outside clean heads and C7 can be measured.
   (`blocker`, `should-fix`, `nit`, `not-real`);
 - for a race or recovery outcome, `correct` is `true` or `false`;
 - for a classification, `class` is `eligible` or one of E1 to E5;
-- `budget` records where the line falls in the J1 budget, and the script
-  recomputes it from recorded bytes. The budget is 48 hours (Joel,
+- `budget` records where the line falls in the J1 budget. The script
+  recomputes it from recorded bytes, and the recomputed value wins; a recorded
+  value that differs is reported beside the line. The budget is 48 hours (Joel,
   7121929832, answer 3): the window opens at the `at` of the `items` line and
   lasts 48 hours. An item ruling is inside it when its `at` falls in the
   window. A classification ruling is not tied to the `items` line, and F1 lets
@@ -1093,11 +1121,15 @@ left out only by a rule written here.
   stays enrolled and reported, and a later PR in the order makes up the 10. No
   PR is replaced: the uncompared one keeps its record.
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
-  with `case` `live` and `provenance` `live`. This replaces the original's
-  line 279 for v2: a race or recovery head is planted or replayed, never a
+  with `case` `live` and `provenance` `live`. This replaces the original's lines
+  279 and 280 for v2: a race or recovery head is planted or replayed, never a
   window PR, so the writer cannot move an eligible PR out of the sequence by
-  giving it another case. F1 makes the ledger refuse an `enroll` with a `pr`
-  whose `case` or `provenance` is not `live`.
+  giving it another case, or another kind. F1 makes the ledger refuse a window
+  `enroll` (section 7, "Window records") whose `case` or `provenance` is not
+  `live`, or whose `work_kind` differs from the `pr_kind` of the `preflight`
+  line; and an `enroll` of provenance `live` that is not a window record. A
+  window PR that fails the kind test gets an `exclude` under E1, never an
+  `enroll` with another kind.
 - **The live case.** This replaces the original's line 281: the live case's
   minimum is 10 compared heads, and its heads are this sequence. As built,
   `pilot-score.py` still holds the original's live minimum of 4, so F4 must land
@@ -1186,8 +1218,15 @@ left out only by a rule written here.
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer
     comes to record it, `ft:reviews/ft-<N>.verdicts` already exists with any
-    line. The record states that. The report counts E5 exclusions apart,
-    since each one is a lapse in recording, so a PR can't be excluded quietly.
+    line. The record states that. The report counts E5 exclusions apart and
+    lists each with its `created_at` and the time of its first `.verdicts`
+    line, so a PR can't be excluded quietly.
+  - **A residual selection gap in E5.** The agents decide when a review is
+    requested, so by requesting one before Joel records a PR they could
+    exclude a chosen eligible PR under E5. That is the lever #juno's fix 1
+    took away from ordering. Nothing here prevents it. What limits it is that
+    every E5 exclusion is listed with its times, and a pilot with any E5
+    exclusion is reported as possibly selected, beside its result.
 - **The pinned `review-size.sh`.** The fleet-tools blob current when the
   signing commit is made, filled in by then like section 10:
 
@@ -1293,10 +1332,10 @@ Relay point 5.
   ticket (`sudo -k`) when he is done. A separate account for Joel, other than
   uid 501, would make it a mechanism.
 - **A gap until F1 and F6: one record per PR.** By hand, nothing refuses a
-  doubled record. The landed ledger keeps `enroll` unique per head only, so a
-  PR enrolled twice as two heads, or both enrolled and excluded, is accepted,
-  and `pilot-unblind.py` as built counts `enroll` lines, so one PR could count
-  twice toward the 10. F1 makes the ledger refuse a second record naming a PR,
+  doubled record. The landed ledger keeps `enroll` unique per head only, so a PR
+  enrolled twice as two heads, or both enrolled and excluded, is accepted, and
+  `pilot-unblind.py` as built counts `enroll` lines, so one PR could count twice
+  toward the 10. F1 makes the ledger refuse a second window record naming a PR,
   and F6 counts distinct PRs. Both must land before activation (precondition
   12).
 - **The denied-write test.** A record as uid 501, in the shape of section 9's
@@ -1354,16 +1393,17 @@ not do yet. None widens a held PR. Each is its own
 reviewed PR, and each pin is filled by the signing commit. Enrollment
 cannot pass preflight before F3, since check 4 refuses every form until then.
 
-- **F1. `pilot-ledger.py`:** add an `exclude` kind; make a live head's
-  `enroll` and every `exclude` unique per `pr` together, so the ledger refuses
-  a second record naming a PR that already has one (section 12), with a
-  self-test row and a mutation that turns it red; refuse an `enroll` with a
-  `pr` whose `case` or `provenance` is not `live` (section 12); an `items`
-  kind, unique per ledger; and a `ruling` kind with section 8's body.
-  A `ruling` whose subject is `classification` may come before or after
-  `close`. One whose subject is `item` needs an earlier `items` line naming
-  that id. `items` and `ruling` join the kinds allowed after `close`, and no
-  `items` or `ruling` may follow `score`.
+- **F1. `pilot-ledger.py`:** add an `exclude` kind; make window records (section
+  7) unique per `pr`, so the ledger refuses a second window record naming a PR
+  that already has one (section 12), with a self-test row and a mutation that
+  turns it red; refuse a window `enroll` whose `case` or `provenance` is not
+  `live` or whose `work_kind` differs from the `preflight` line's `pr_kind`, and
+  an `enroll` of provenance `live` that is not a window record, while a replayed
+  head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
+  ledger; and a `ruling` kind with section 8's body. A `ruling` whose subject is
+  `classification` may come before or after `close`. One whose subject is `item`
+  needs an earlier `items` line naming that id. `items` and `ruling` join the
+  kinds allowed after `close`, and no `items` or `ruling` may follow `score`.
 - **F2. The enrollment procedure (I6):** a written procedure Joel follows by
   hand as pilotseal. It is a document, not a script, and it applies section
   12:
@@ -1405,11 +1445,16 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     UNMEASURED, whatever the outcome says (section 5; as built, no oracle
     checks `ran`: not O2, O3, O4 or O5's `hold-not-made` and `pass-refused`);
   - it reads `verdicts.txt` and decides compared by section 7's one
-    definition, the `.verdicts` line winning; it reads manifest fields only
-    from the `enroll` line, makes a head UNMEASURED when a `gate.json` copy
-    differs, and does not compare a head that fails the one-head rule (as
-    built, `score_head` reads the verdict from `review.md` alone and
-    `base_check` from `gate.json` with no such checks);
+    definition, the `.verdicts` line winning; it reads each field only from
+    its one owner (section 7), makes a head UNMEASURED when a field appears
+    in a file that does not own it, and does not compare a head that fails
+    the one-head rule on `gate.reviewed_revision` (as built, `score_head`
+    reads the verdict from `review.md` alone, with no such checks);
+  - a review with no findings block gives an `unlocatable` item per prose
+    finding, and at least one when its verdict is `CHANGES REQUESTED`
+    (section 5, O5);
+  - a planted diff that parses but adds no truth line is UNMEASURED, never a
+    miss (O1);
   - it takes review fields only from the review record, reads a planted
     head's review record only from the sealed directory and only for the
     compared verdict, and makes a head UNMEASURED when its `gate.json` holds
