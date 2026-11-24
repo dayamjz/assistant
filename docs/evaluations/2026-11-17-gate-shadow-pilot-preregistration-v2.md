@@ -668,29 +668,31 @@ items Joel rules.
   `/usr/bin/env -i PATH=/usr/bin:/bin HOME=/Users/pilotseal`) and names its tool
   by absolute path: `/usr/bin/git` for the history clones' fetch,
   `/usr/bin/shasum -a 256` for the `bin` comparison, `/bin/cp` for the copies
-  into `records/` and `sealed/reviews/`, `/usr/bin/tee` for the sudoers record
-  (precondition 15), and `/bin/rm -r` to remove a `__pycache__` from `bin`.
-  Inside the prefix sudo resolves only `/usr/bin/env`, an absolute path, and
-  `env` would find a bare tool name through its own fixed `PATH=/usr/bin:/bin`;
-  the absolute tool path names exactly which file runs. A command typed without
-  the prefix is different: sudo then finds a bare name through Joel's `PATH`
-  unless `secure_path` is set, which precondition 15 does not require. `env -i`
-  drops every variable Joel's shell would pass, such as a `PATH` with a
-  uid-501-writable directory first, or `DEVELOPER_DIR`. `-B` stops the Python
-  process it is given to from writing bytecode, and nothing more. Pinned
-  `pilot-score.py` (`9b2d4e27`, line 249) starts `pilot-unblind.py` as a child
-  with `-I` and no `-B`, and that child loads `pilot-ledger.py` by a sibling
-  load, so whether the child writes `bin/__pycache__` depends on the
+  into `records/` and `sealed/reviews/`, and `/usr/bin/tee` for the sudoers
+  record (precondition 15). Inside the prefix sudo resolves only `/usr/bin/env`,
+  an absolute path, and `env` would find a bare tool name through its own fixed
+  `PATH=/usr/bin:/bin`; the absolute tool path names exactly which file runs. A
+  command typed without the prefix is different: sudo then finds a bare name
+  through Joel's `PATH` unless `secure_path` is set, which precondition 15 does
+  not require. `env -i` drops every variable Joel's shell would pass, such as a
+  `PATH` with a uid-501-writable directory first, or `DEVELOPER_DIR`. `-B` stops
+  the Python process it is given to from writing bytecode, and nothing more.
+  Pinned `pilot-score.py` (`9b2d4e27`, line 249) starts `pilot-unblind.py` as a
+  child with `-I` and no `-B`, and that child loads `pilot-ledger.py` by a
+  sibling load, so whether the child writes a bytecode cache depends on the
   interpreter's own default. On this host the Command Line Tools Python reports
-  `sys.flags.dont_write_bytecode` as set even with `-I` and no `-B` (observed
-  2026-11-24), so no cache is written today, but no record checks that default,
-  and an update can change it (section 14, "What the system launchers run"). If
-  a cache is written, pilotseal writes it from the pinned source, a later run
-  such as `unblind` may load from it with no `bin` check of its own, and section
-  6's `bin` rule refuses every later census and parse-check until Joel removes
-  it in this form. That fails closed: it stops runs, never changes a result.
-  `-B` does not stop Python reading a cache that is already there. Elsewhere
-  this text says `sudo -u pilotseal` for short; it means this form.
+  `sys.flags.dont_write_bytecode` as set under `env -i`, with or without `-I`
+  and `-B` (observed 2026-11-24), so no cache is written today, but no record
+  checks that default, and an update can change it. If a cache is written, it
+  does not land in `bin`: with `HOME` set, this Python's cache prefix is
+  `$HOME/Library/Caches/com.apple.python`, mirroring each source's absolute path
+  (here `/Users/pilotseal/Library/Caches/com.apple.python/Users/pilotseal/bin/`;
+  uid 501's own caches sit under its `HOME` the same way). Section 6's `bin`
+  rule never sees that directory, nothing in this text checks it, and a later
+  run, `-B` or not, reads a cache that is already there. Only pilotseal or root
+  can write it while precondition 6 holds. This is part of section 14's "What
+  the system launchers run" gap. Elsewhere this text says `sudo -u pilotseal`
+  for short; it means this form.
 
   **What actually runs is not fully checked.** `/usr/bin/python3` and
   `/usr/bin/git` are on the sealed read-only system volume (`mount` shows `/` as
@@ -717,13 +719,14 @@ items Joel rules.
   refuses and logs `score-refused` only when git cannot be started at all. On
   this host `/usr/bin/git` is a launcher that always starts, so a missing or
   broken Command Line Tools install makes `git apply` exit non-zero instead:
-  every planted record that reaches the git step is UNMEASURED as "git does not
-  accept the diff", and C4 is UNMEASURED, never PASS. If every planted record is
-  UNMEASURED by an earlier O1 rule, git is never called. This is relay point 6.
-  Both are deterministic: the early-unblinding refusal is shown by
-  `pilot-unblind.py`'s self-test rows, and "no agent or voter judgment" by
-  `pilot-score.py`'s rows "the dry run makes no agent or network call" and "the
-  CLI dry run calls no roles.sh, claude, codex, cursor-agent, gh or curl".
+  every planted record that reaches the git step is UNMEASURED as "the diff does
+  not parse" (the reason the pinned script records), and C4 is UNMEASURED, never
+  PASS. If every planted record is UNMEASURED by an earlier O1 rule, git is
+  never called. This is relay point 6. Both are deterministic: the
+  early-unblinding refusal is shown by `pilot-unblind.py`'s self-test rows, and
+  "no agent or voter judgment" by `pilot-score.py`'s rows "the dry run makes no
+  agent or network call" and "the CLI dry run calls no roles.sh, claude, codex,
+  cursor-agent, gh or curl".
 - **Preflight runs the same way.** `pilot-preflight.py check`, which verifies
   Joel's signature and appends the `preflight` line, runs only as pilotseal,
   from the `/Users/pilotseal/bin` copy whose SHA-256 the trust file of section
@@ -771,42 +774,42 @@ items Joel rules.
   every file in `/Users/pilotseal/bin` equals that file's hash in the trust file
   (section 13), the one reference for this check, and that `bin` holds no entry,
   file or directory, the trust file does not hash, so a `__pycache__` there
-  refuses the run (the fixed form's `-B` covers only the process it starts;
-  "Who runs the scripts" above says what that leaves). He
-  also checks that a *pre-run write-denied record* exists for
-  `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
-  is not precondition 10's record, which is dated after signing. Since only F3
-  adds write probes, neither run happens before F3 lands. Joel copies the
-  pre-run record, as pilotseal, into `/Users/pilotseal/pilot/records/`, its one
-  home, and each `access` line records its SHA-256 (`prerun_record_sha256`).
-  `check` later finds the file in that directory with that hash and refuses the
-  line unless the file is a write-denied record for `/Users/pilotseal/bin`
-  holding at least precondition 10's directory walk of `/Users/pilotseal/bin`
-  and an open-for-write probe, denied with `EACCES`, of every file the line's
-  `bin_sha256` names. Every probe in it must be denied, and every probe's `date`
-  must be before the line's `at` (F3). The record speaks only for the time it
-  was taken: `check` sets no upper bound on its age, so Joel takes it right
-  before each run, and F4's report shows each record's age beside its line. The
-  trust file's location is I8 (section 11), so neither runs until I8 is settled
-  and the trust file exists there; the reference holds only from then. If the
-  trust file lacks a hash for any file in `bin`, Joel runs neither until he has
-  written it, as pilotseal, for a blob he has read from a landed merge in
-  section 10's history clone (for `pilot-score.py`, an F4 or F5 merge). The
-  `access` line records `pilot-score.py`'s hash (`script_sha256`) and every
-  file's hash in `bin` (`bin_sha256`). `check` later accepts that line only when
-  its `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
-  history clone's `main` first-parent history at or after `f4_first`, the first
-  F4 merge, which section 10 records once and never moves (F3). That shows only
-  that the copy was on fleet-tools `main` at or after the first F4 merge, not
-  that it was reviewed: fleet-tools has no branch protection (section 16) and
-  every agent pushes as `dayamjz`. What ties the copies to the trust file's
-  hashes at the time of the run is Joel's pre-run check above; `check` does not
-  verify that tie, and the procedure guarantees no more than it. The line need
-  not equal the final scoring pin: if a later fix moves `f4` and re-pins
-  `pilot-score.py`, `f4_first` stays put, the earlier line still passes, nothing
-  in the sealed ledger is rewritten, and the read stays logged. A copy that lies
-  in its own `access` line is not caught by that check, and `check` verifies
-  only `pilot-score.py`'s hash: for the other files in `bin` the tie is Joel's
+  refuses the run. A bytecode cache would not land in `bin` ("Who runs the
+  scripts" above), so this rule does not cover one. He also checks that a
+  *pre-run write-denied record* exists for `/Users/pilotseal/bin`, made by uid
+  501 before the run with F3's `probe`. It is not precondition 10's record,
+  which is dated after signing. Since only F3 adds write probes, neither run
+  happens before F3 lands. Joel copies the pre-run record, as pilotseal, into
+  `/Users/pilotseal/pilot/records/`, its one home, and each `access` line
+  records its SHA-256 (`prerun_record_sha256`). `check` later finds the file in
+  that directory with that hash and refuses the line unless the file is a
+  write-denied record for `/Users/pilotseal/bin` holding at least precondition
+  10's directory walk of `/Users/pilotseal/bin` and an open-for-write probe,
+  denied with `EACCES`, of every file the line's `bin_sha256` names. Every probe
+  in it must be denied, and every probe's `date` must be before the line's `at`
+  (F3). The record speaks only for the time it was taken: `check` sets no upper
+  bound on its age, so Joel takes it right before each run, and F4's report
+  shows each record's age beside its line. The trust file's location is I8
+  (section 11), so neither runs until I8 is settled and the trust file exists
+  there; the reference holds only from then. If the trust file lacks a hash for
+  any file in `bin`, Joel runs neither until he has written it, as pilotseal,
+  for a blob he has read from a landed merge in section 10's history clone (for
+  `pilot-score.py`, an F4 or F5 merge). The `access` line records
+  `pilot-score.py`'s hash (`script_sha256`) and every file's hash in `bin`
+  (`bin_sha256`). `check` later accepts that line only when its `script_sha256`
+  is the blob of `pilot-score.py` at a merge commit on the history clone's
+  `main` first-parent history at or after `f4_first`, the first F4 merge, which
+  section 10 records once and never moves (F3). That shows only that the copy
+  was on fleet-tools `main` at or after the first F4 merge, not that it was
+  reviewed: fleet-tools has no branch protection (section 16) and every agent
+  pushes as `dayamjz`. What ties the copies to the trust file's hashes at the
+  time of the run is Joel's pre-run check above; `check` does not verify that
+  tie, and the procedure guarantees no more than it. The line need not equal the
+  final scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
+  `f4_first` stays put, the earlier line still passes, nothing in the sealed
+  ledger is rewritten, and the read stays logged. A copy that lies in its own
+  `access` line is not caught by that check, and `check` verifies only
+  `pilot-score.py`'s hash: for the other files in `bin` the tie is Joel's
   pre-run check alone. What bars a lying copy is that uid 501 could neither
   create a file in any directory of `bin`'s walk nor open a file in `bin` for
   writing when the pre-run record was taken, within the self-attesting-record
@@ -1443,20 +1446,22 @@ fails:
     - a sudo PAM stack whose `auth` facility can succeed without the password
       module. The record also carries, copied as root, `/etc/pam.d/sudo` and
       every file its `auth` lines `include` or `substack`, recursively, each
-      with the path it resolves to (on this host `sudo_local` resolves through
-      `/etc/static` into `/nix/store`, so a nix-darwin rebuild can change it).
-      An `include` or `substack` line is not judged as a control: it is replaced
-      by its target's `auth` lines, which are judged. In the resolved `auth`
-      stack `check` requires `pam_opendirectory.so` as `required` or
-      `requisite`, and accepts on an `auth` line only the controls `required`,
-      `requisite` and `optional`. It rejects every other control, whether
-      `sufficient`, `binding` (OpenPAM's "If this module succeeds, the chain is
-      broken and the result is success", `pam.conf(5)`), bracketed or unknown,
-      and any `pam_permit.so` or `pam_tid.so` on an `auth` line. Only the `auth`
-      facility is judged: the stock `account` and `session` lines use
-      `pam_permit.so` and grant no authentication. As configured today this host
-      fails the rule, since `/etc/pam.d/sudo` has
-      `auth sufficient pam_smartcard.so`.
+      read with `/usr/bin/tail -n +1` (which heads it with its path) and with
+      the path it resolves to printed by `/bin/realpath`, both in the root form
+      below (on this host `sudo_local` resolves through `/etc/static` into
+      `/nix/store`, so a nix-darwin rebuild can change it; section 14, "Sudo and
+      PAM are rebuilt from agent-writable files"). An `include` or `substack`
+      line is not judged as a control: it is replaced by its target's `auth`
+      lines, which are judged. In the resolved `auth` stack `check` requires
+      `pam_opendirectory.so` as `required` or `requisite`, and accepts on an
+      `auth` line only the controls `required`, `requisite` and `optional`. It
+      rejects every other control, whether `sufficient`, `binding` (OpenPAM's
+      "If this module succeeds, the chain is broken and the result is success",
+      `pam.conf(5)`), bracketed or unknown, and any `pam_permit.so` or
+      `pam_tid.so` on an `auth` line. Only the `auth` facility is judged: the
+      stock `account` and `session` lines use `pam_permit.so` and grant no
+      authentication. As configured today this host fails the rule, since
+      `/etc/pam.d/sudo` has `auth sufficient pam_smartcard.so`.
 
     So no line of the copied sudoers files lets uid 501 reach another user
     through sudo without Joel's password, and no chain through another user can
@@ -1474,29 +1479,36 @@ fails:
     `sudo -V` run as root (what it reports for the two PAM service names), and
     the output of `id -un 501`, `id -Gn 501` and `id -G 501` (the user, group
     names and gids the scan above matches), into one file owned by pilotseal in
-    `/Users/pilotseal/pilot/records/`. Each reader runs in the root fixed form,
+    `/Users/pilotseal/pilot/records/`. Each file is read with
+    `/usr/bin/tail -n +1`, which heads each file's bytes with a `==> <path> <==`
+    line, so every path comes from the tool, not from typing. All the files go
+    on one `tail` command line: `tail` prints the headers only when given two or
+    more files, so `check` refuses a record with no header line. The set of
+    paths in those header lines must equal the set of files `visudo -c` reports
+    as parsed, no more and no fewer. Each reader runs in the root fixed form,
     `/usr/bin/sudo /usr/bin/env -i PATH=/usr/bin:/bin` followed by the tool's
-    absolute path (`/bin/cat`, `/usr/sbin/visudo -c`, `/usr/bin/sudo -V`,
-    `/usr/bin/id`), never a bare name, and its output is piped straight into
-    `/usr/bin/tee -a` on that file, run as pilotseal in section 6's fixed form.
-    So the bytes never sit in a file uid 501 can edit; they pass only through a
-    pipe between processes Joel's uid-501 shell starts, which section 14's
-    terminal gap covers. A redirect into a uid-501 file followed by a copy is
-    not this form, and leaves a window in which an agent could edit the bytes.
-    The record must show `visudo -c` reporting every file parsed OK, a global
-    `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
-    other line that sets `timestamp_type` in any scope: none for a user
-    (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
-    (`Defaults!`). Nor may any line in any scope set `tty_tickets`, either way:
-    `!tty_tickets` uses a single ticket record for all login sessions
-    (`sudoers(5)`), which is the sharing this precondition rules out. The text
-    relies on that explicit `timestamp_type` line, not on sudo's default.
-    `check`, as pilotseal, validates both records and records both hashes in its
-    `preflight` line (F3). No field of either is typed in. The sudoers record
-    passes through Joel's uid-501 terminal, so section 14's terminal gap applies
-    to it. The sudo-denied record shows only that an agent session cannot use
-    sudo by itself. It does not show that an agent cannot tamper with the
-    terminal Joel uses, which section 14 states as a residual gap.
+    absolute path (`/usr/bin/tail -n +1`, `/usr/sbin/visudo -c`,
+    `/usr/bin/sudo -V`, `/usr/bin/id`), never a bare name, and its output is
+    piped straight into `/usr/bin/tee -a` on that file, run as pilotseal in
+    section 6's fixed form. So the bytes never sit in a file uid 501 can edit;
+    they pass only through a pipe between processes Joel's uid-501 shell starts,
+    which section 14's terminal gap covers. A redirect into a uid-501 file
+    followed by a copy is not this form, and leaves a window in which an agent
+    could edit the bytes. The record must show `visudo -c` reporting every file
+    parsed OK, a global `Defaults timestamp_type=tty` or
+    `Defaults timestamp_type=ppid` line, and no other line that sets
+    `timestamp_type` in any scope: none for a user (`Defaults:`), host
+    (`Defaults@`), runas user (`Defaults>`) or command (`Defaults!`). Nor may
+    any line in any scope set `tty_tickets`, either way: `!tty_tickets` uses a
+    single ticket record for all login sessions (`sudoers(5)`), which is the
+    sharing this precondition rules out. The text relies on that explicit
+    `timestamp_type` line, not on sudo's default. `check`, as pilotseal,
+    validates both records and records both hashes in its `preflight` line (F3).
+    No field of either is typed in. The sudoers record passes through Joel's
+    uid-501 terminal, so section 14's terminal gap applies to it. The
+    sudo-denied record shows only that an agent session cannot use sudo by
+    itself. It does not show that an agent cannot tamper with the terminal Joel
+    uses, which section 14 states as a residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -2115,15 +2127,28 @@ Relay point 5.
   pilotseal with `su` and read the sealed records and write the ledger, and no
   record of this text would show it. Giving pilotseal no usable password closes
   it; this text does not check that.
+- **A residual gap: sudo and PAM are rebuilt from agent-writable files.** On
+  this host `/etc/sudoers.d/10-nix-darwin-extra-config` and
+  `/etc/pam.d/sudo_local` are symlinks through `/etc/static` into `/nix/store`,
+  generated by nix-darwin from `~/Projects/dotfiles`, a checkout uid 501 owns,
+  so agents can write it. Joel's `./rebuild.sh` installs it as root. An agent
+  that adds a `NOPASSWD` rule or a PAM line there gets it installed the next
+  time Joel rebuilds, and precondition 15's records, taken before, still
+  validate: no record is retaken after a rebuild. Joel not rebuilding from the
+  time the sudoers record is taken until the pilot ends closes it; this text
+  does not check that.
 - **A residual gap: what the system launchers run.** `/usr/bin/python3` and
   `/usr/bin/git` are launchers on the sealed volume that run the copies under
   `/Library/Developer/CommandLineTools`, chosen by `/var/db/xcode_select_link`,
   on the writable data volume (section 6). No record checks those copies or the
   link, nor `/Library/Python/3.9/site-packages`, whose `.pth` files run code at
-  every Python start, nor the Perl library path `/usr/bin/shasum` loads from.
-  Whoever can change any of them changes what runs as pilotseal or what the
-  `bin` comparison reports, and no record of this text would show it. They are
-  root-owned or absent today; this text does not check that they stay so.
+  every Python start, nor the Perl library path `/usr/bin/shasum` loads from,
+  nor pilotseal's Python bytecode cache under
+  `/Users/pilotseal/Library/Caches/com.apple.python` (section 6), which a later
+  run reads. Whoever can change any of them changes what runs as pilotseal or
+  what the `bin` comparison reports, and no record of this text would show it.
+  They are root-owned or absent today; this text does not check that they stay
+  so.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -2331,18 +2356,20 @@ refuses every form until then.
     for check 4 and preconditions 1 and 2, and records that clone's `main`
     commit in its `preflight` line;
   - it validates precondition 15's sudo-denied record and its sudoers record,
-    made through sudo as root: `visudo -c` OK, one global `timestamp_type` of
-    `tty` or `ppid`, no `timestamp_type` line in any other scope, no
-    `tty_tickets` setting in any scope, no rule (aliases expanded) whose user
-    list can match uid 501 by name, `%group`, `%#gid`, `#501` or `ALL` that
-    carries `NOPASSWD` for any runas and command, no `Defaults` line in any
-    scope that sets `!authenticate`, no `+netgroup`, `%:group` or `%:#gid`
-    user-list entry, no `pam_service` or `pam_login_service` setting other than
-    `sudo` in any scope and `sudo` reported for both by `sudo -V`, no
-    `targetpw`, `runaspw`, `rootpw` or `exempt_group` setting in any scope, and
-    a resolved sudo PAM `auth` stack with `pam_opendirectory.so` as `required`
-    or `requisite` and only `required`, `requisite` or `optional` controls
-    (precondition 15); it records both hashes in its `preflight` line;
+    made through sudo as root: `visudo -c` OK, the set of paths in the record's
+    `tail` header lines equal to the set `visudo -c` reports as parsed, one
+    global `timestamp_type` of `tty` or `ppid`, no `timestamp_type` line in any
+    other scope, no `tty_tickets` setting in any scope, no rule (aliases
+    expanded) whose user list can match uid 501 by name, `%group`, `%#gid`,
+    `#501` or `ALL` that carries `NOPASSWD` for any runas and command, no
+    `Defaults` line in any scope that sets `!authenticate`, no `+netgroup`,
+    `%:group` or `%:#gid` user-list entry, no `pam_service` or
+    `pam_login_service` setting other than `sudo` in any scope and `sudo`
+    reported for both by `sudo -V`, no `targetpw`, `runaspw`, `rootpw` or
+    `exempt_group` setting in any scope, and a resolved sudo PAM `auth` stack
+    with `pam_opendirectory.so` as `required` or `requisite` and only
+    `required`, `requisite` or `optional` controls (precondition 15); it records
+    both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
