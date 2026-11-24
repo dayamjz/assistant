@@ -105,14 +105,17 @@ verify all three conditions: the commit is on `main`'s first-parent history,
 this text there has no `UNRULED` or `UNPINNED` value, and this text on `main` is
 byte-identical to this text there. Preflight reads assistant history only from
 the *assistant history clone*, `/Users/pilotseal/pilot/assistant.git`, a bare
-clone of `dayamjz/assistant` that Joel fetches as pilotseal right before each
-`check` and that uid 501 cannot write (precondition 10). Its `main` is what
-"assistant `main`" means in section 9, and the `preflight` line records that
-`main` commit (F3). As built, check 4 refuses every signing form, and these
-checks are F3. So any later edit leaves the text unsigned until Joel signs
-again. Every "after the signing commit" in this text means after that commit's
-committer date (`git log --format=%ct`), the time preflight dates records
-against.
+clone of `dayamjz/assistant` that uid 501 cannot write (precondition 10).
+**Freshness.** A bare clone has no fetch refspec, so a plain `git fetch` can
+leave its `main` behind. Right before each `check`, Joel runs, as pilotseal,
+`git fetch origin +refs/heads/main:refs/heads/main` in that clone, and `check`
+compares the clone's `main` with `git ls-remote origin refs/heads/main` and
+refuses on a mismatch. That `main` is what "assistant `main`" means in section
+9, and the `preflight` line records it (F3). As built, check 4 refuses every
+signing form, and these checks are F3. So any later edit leaves the text
+unsigned until Joel signs again. Every "after the signing commit" in this text
+means after that commit's committer date (`git log --format=%ct`), the time
+preflight dates records against.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -689,12 +692,26 @@ items Joel rules.
     (`by: census`) naming every record it read, and marks no head;
   - **`pilot-score.py parse-check`**, open item 3's parse-only check, run as
     pilotseal before signing, which reads every record and prints only how
-    many parse under O1. It appends one `access` line (`by: parse-check`)
-    naming every record it read, and marks no head.
+    many parse under O1's record rules. Those are the rules that need no head:
+    the fence rules, diff text outside the one fenced diff, a diff that does
+    not parse, `git apply --numstat -z` rejecting it, and a diff that adds no
+    truth line. The rules that need a head (its tree list, its gate capture,
+    whether its `review` ran) are not applied, so a record that parses can
+    still be UNMEASURED at scoring. It needs git on pilotseal's `PATH`, as
+    scoring does (section 6), and refuses without it. It appends one `access`
+    line (`by: parse-check`) naming every record it read, and marks no head.
 
   A run before signing creates the sealed ledger if it does not exist yet, so
   these lines come before the first `preflight`, and the report lists them with
-  the rest.
+  the rest. **Both run only from a pinned copy.** Before either, Joel checks,
+  as pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
+  the blob of `pilot-score.py` at F4's merge commit in section 10's history
+  clone, and that a write-denied record for `/Users/pilotseal/bin` made before
+  the run exists (the probe of precondition 10). The `access` line records that
+  hash (`script_sha256`), and `check` later refuses an `access` line whose
+  `script_sha256` differs from section 10's scoring pin (F3). A copy that lies
+  in its own `access` line is not caught by that check; what bars it is that
+  uid 501 cannot write `/Users/pilotseal/bin`.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -1013,8 +1030,8 @@ pr_count: 10
 pr_kind: fleet-tools-reliability-fix
 j1: option-2
 j1_budget: 48 hours
-j1_order: UNRULED I2
-j4: UNRULED I5
+j1_order: open-window-first-then-oldest-posted-then-lower-pr
+j4: ssh-keygen-Y-sign-ed25519-sk-touch
 ```
 
 `k` is a whole number; `end_rule` is `pr-sequence` (J3, section 11); `pr_count`
@@ -1022,12 +1039,15 @@ is 10, the number of compared sequence heads that ends it (section 8; Joel,
 7083761337; section 12); `pr_kind` is
 `fleet-tools-reliability-fix`, the kind relay point 1 names, defined in section
 12; `j1` is `option-2` (relay point 2); `j1_budget` is `48 hours` (Joel,
-7121929832, answer 3); `j1_order` stays `UNRULED` until Joel names the order
-(I2); `j4` names the signing form, which stays `UNRULED` until I5. The size
-bound and the exclusion rules have no key here: they are section 12's text,
-covered by Joel's signature of this text. No deadline applies until Joel says
-otherwise (I4, still open), so the end rule has no date key. If he adds one
-before signing, this block gains its key (F5).
+7121929832, answer 3); `j1_order` is the order Joel agreed on Nov 24 (I2,
+section 11); `j4` names the signing form Joel agreed on Nov 24: `ssh-keygen -Y
+sign` with an ed25519 SSH key on a hardware token that requires a touch (I5,
+section 13). The size bound and the exclusion rules have no key here: they are
+section 12's text, covered by Joel's signature of this text. The 48-hour
+deadline (I4, answered Nov 24) has no key here either, since this block's keys
+are frozen: its one home is the `deadline` line of section 11's open-inputs
+block, which preflight copies into the `preflight` line and the scripts read
+from there (F5), as they read the adapter pin.
 
 ## 8. End condition and unblinding
 
@@ -1042,25 +1062,33 @@ when all of these hold:
 4. The end rule of section 7's parameters holds, read from the `preflight` line.
    Joel ruled it (J3): the pilot ends after one consistent sequence of PRs, the
    same kind of work, chosen to measure cost and efficiency. It holds once 10
-   *sequence heads* are frozen **and compared** (section 5). A sequence head is
-   an enrolled head whose `case` and `provenance` are both `live`, whose
-   `work_kind` equals `pr_kind` (`fleet-tools-reliability-fix`, section 12), and
-   whose `pr_created_at` is in the window: at or after its opening, the `at` of
-   the first `preflight` line, and not after its close (section 12), and whose
-   `enroll` line's `at` is not later than the closing `freeze`'s `at`. A head
-   enrolled after that `freeze` cannot be frozen before it, so this condition
-   never moves where the window closes. This definition is the one owner of
-   which live heads C1, C3, C5 and the `items` line cover (section 5). C1's
-   live minimum counts compared sequence heads, so it can always be met when
-   this holds. Every window PR is enrolled with `case` `live`
-   (section 12), so no eligible PR can leave the sequence by its case; planted
-   heads never count. As built, `pilot-unblind.py` counts frozen heads of
-   provenance `live`, not compared sequence heads, so F6 must land before
-   signing (section 9, precondition 12). The condition fails closed if the
-   parameters ever stop naming a kind or a count of 10, so nothing is scored or
-   unblinded then. No calendar deadline ends the pilot until Joel says otherwise
-   (I4, still open: he wrote "No deadline, maybe 48 hrs" in 7121929832, and
-   #claude asked him which he means).
+   *sequence heads* are frozen **and compared** (section 5), or once 48 hours
+   have passed since the window opened, whichever comes first (the window's
+   close, below). A sequence head is an enrolled head whose `case` and
+   `provenance` are both `live`, whose `work_kind` equals `pr_kind`
+   (`fleet-tools-reliability-fix`, section 12), and whose `pr_created_at` is in
+   the window: at or after its opening, the `at` of the first `preflight` line,
+   and not after its close (section 12), and whose `enroll` line's `at` is not
+   later than the window's close. A head enrolled after the close cannot be
+   frozen before it, so this condition never moves where the window closes.
+   **The window's close** is the earlier of two times (J3, Joel 7135308036 and
+   7135401609): the `at` of the first `freeze` after which 10 sequence heads are
+   compared, and the window's opening plus 48 hours (the `deadline` of section
+   11, read from the `preflight` line). The rule holds once the window has
+   closed, by count or by time. The sequence-head definition above is the one
+   owner of which live heads C1, C3, C5 and the `items` line cover (section 5).
+   C1's live minimum counts compared sequence heads, so it is met when the
+   window closes by count. When it closes by time with fewer than 10 compared
+   sequence heads, C1 FAILs and the pilot is not a pass; the report says the
+   window closed by time and how many sequence heads were compared. Every window
+   PR is enrolled with `case` `live` (section 12), so no eligible PR can leave
+   the sequence by its case; planted heads never count. As built,
+   `pilot-unblind.py` counts frozen heads of provenance `live`, not compared
+   sequence heads, so F6 must land before signing (section 9, precondition 12).
+   The condition fails closed if the parameters ever stop naming a kind or a
+   count of 10, so nothing is scored or unblinded then. As built,
+   `pilot-unblind.py` has no deadline, so F5 must land before signing too
+   (precondition 12).
 5. For unblinding only: a `score` line exists after the `close`.
 
 **Refusal.** A refused unblinding appends `unblind-refused` with the reason. A
@@ -1164,10 +1192,9 @@ fails:
    exact line.
 4. Joel's signature of this text is recorded, naming the signing commit, which
    meets section 1's three conditions, and made with the key pinned in the
-   trust file of section 13 (I5). Until `j4` is ruled this check fails
-   with "J4 unruled". Once it is ruled, it still fails with "has no check yet"
-   until F3 lands the verification, so no enrollment can pass this check before
-   then.
+   trust file of section 13 (I5). `j4` is ruled (I5), so as built this check
+   fails with "has no check yet" until F3 lands the verification, so no
+   enrollment can pass this check before then.
 5. J3 is ruled: the `pr-sequence` end rule with `pr_count` 10 and a named
    `pr_kind`. J1 is ruled, and since it is option 2, this text states a numeric
    budget and an item order (I2).
@@ -1227,7 +1254,7 @@ fails:
     14).
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
     script this text pins, and every script follow-up of section 17 (F1, F3, F4,
-    F6, and F5 if Joel picks a deadline), has landed through the landing gates
+    F5 and F6), has landed through the landing gates
     with its review before the signing commit, so the pin section 10 fills there
     is a blob that contains it. Section 10's `pilot-v2-followups` block names
     each follow-up's PR and merge commit, and the trust file holds the same
@@ -1267,18 +1294,24 @@ fails:
     `sudo -n -u pilotseal /usr/bin/true` is refused: no `NOPASSWD` rule lets uid
     501 reach pilotseal, and no sudo ticket usable from that session is cached.
     uid 501 cannot read the sudoers policy (`/etc/sudoers` is readable only by
-    root and `wheel`, and `sudo -n -l` is refused by this same precondition), so
-    the `timestamp_type` in force comes from a second record: in his own
-    terminal Joel runs `/usr/bin/sudo /usr/bin/sudo -V`, so `sudo -V` runs as
-    root and prints sudo's defaults, including its authentication timestamp
-    type, and he saves that output as a sudoers record owned by pilotseal. It
-    must show tickets kept per terminal (`tty` or `ppid`), never `global`.
-    `check`, as pilotseal, validates both records and records both hashes in
-    its `preflight` line (F3). No field of either is typed in. The sudoers
-    record passes through Joel's uid-501 terminal, so section 14's terminal gap
-    applies to it. The sudo-denied record shows only that an agent session
-    cannot use sudo by itself. It does not show that an agent cannot tamper with
-    the terminal Joel uses, which section 14 states as a residual gap.
+    root and `wheel`), and the text relies on no uid-501 view of it. The
+    policy comes from a second record, the *sudoers record*: in his own
+    terminal Joel uses `/usr/bin/sudo` to copy, as root, the bytes of
+    `/etc/sudoers` and of every file it includes (each `#include`,
+    `@include`, `#includedir` and `@includedir` target, recursively), with each
+    path, and the output of `visudo -c`, into one file owned by pilotseal. The
+    record must show `visudo -c` reporting every file parsed OK, a global
+    `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and
+    no other line that sets `timestamp_type` in any scope: none for a user
+    (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
+    (`Defaults!`). The text relies on that explicit line, not on sudo's
+    default. `check`, as pilotseal, validates both records and records both
+    hashes in its `preflight` line (F3). No field of either is typed in. The
+    sudoers record passes through Joel's uid-501 terminal, so section 14's
+    terminal gap applies to it. The sudo-denied record shows only that an agent
+    session cannot use sudo by itself. It does not show that an agent cannot
+    tamper with the terminal Joel uses, which section 14 states as a residual
+    gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1313,8 +1346,8 @@ refuses every signing form, so no enrollment can pass preflight without them.
 By the signing commit each row names a fleet-tools `main` merge commit and the
 SHA-256 of the script's bytes there. For a script with a follow-up (F1 for
 `pilot-ledger.py`, F3 for `pilot-preflight.py`, F4 for `pilot-score.py`, F6 for
-`pilot-unblind.py`, and F5 for `pilot-unblind.py` and `pilot-preflight.py` if
-Joel picks a deadline), that commit is the merge of the script's latest
+`pilot-unblind.py`, and F5 for `pilot-unblind.py` and `pilot-preflight.py`),
+that commit is the merge of the script's latest
 follow-up, as the block below records it.
 
 ```pilot-v2-followups
@@ -1322,17 +1355,19 @@ f1: UNPINNED F1
 f3: UNPINNED F3
 f4: UNPINNED F4
 f6: UNPINNED F6
-f5: UNRULED I4
+f5: UNPINNED F5
 ```
 
 Each value becomes `ft#<N> <40-hex merge commit>`, the follow-up's PR and the
-merge commit that landed it; `f5` becomes `none` if Joel picks no deadline.
+merge commit that landed it.
 
 **Containment, checked by preflight (F3).** Preflight reads fleet-tools history
 only from the *history clone*, `/Users/pilotseal/pilot/fleet-tools.git`, a bare
-clone that Joel fetches as pilotseal from `dayamjz/fleet-tools` and uid 501
-cannot write (precondition 10's write probes cover it). For each script with a
-follow-up it checks that:
+clone of `dayamjz/fleet-tools` that uid 501 cannot write (precondition 10's
+write probes cover it), kept fresh as section 1 keeps the assistant clone:
+fetched with `+refs/heads/main:refs/heads/main` right before each `check`, and
+compared with `git ls-remote origin refs/heads/main`, refusing on a mismatch.
+For each script with a follow-up it checks that:
 - the row's merge commit equals the merge commit of the script's latest
   follow-up in the block, and that commit is on the clone's `main`
   first-parent history;
@@ -1358,25 +1393,23 @@ repository an agent can write, and the two must agree (F3).
 
 This text is not signed while any input below that blocks signing is open. Each
 one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `j1_order`
-(I2) and `j4` (I5) in section 7's parameters, `trust_file` (I8) and
-`key_fingerprint` (I5) in section 13's copy block, and `deadline` (I4),
+`trust_file` (I8) and `key_fingerprint` in section 13's copy block,
 `freeze_writer` (open item 2) and `chain_head_checker` (open item 4) in the
 block below, and the follow-up merges in section 10's `pilot-v2-followups`
-block. I7 is the one open input that does not block signing: it governs
-only promotion, which section 16 keeps blocked until Joel names the substitute,
-and its choice is recorded after signing as its own signed owner record (section
-13). Once Joel answers, his answers are quoted here verbatim with their comment
+block. `key_fingerprint` is filled once Joel makes the key of I5 (answered).
+Once Joel answers, his answers are quoted here verbatim with their comment
 ids, as a#977 folded in section 7.12, and his key signature of this text
 (section 13) is what makes them binding.
 
 ```pilot-v2-open-inputs
-deadline: UNRULED I4
+deadline: 48 hours
 freeze_writer: UNRULED open item 2
 chain_head_checker: UNRULED open item 4
 ```
 
-When Joel answers I4, `deadline` becomes `none` or the deadline he names. A
-deadline also gets its key in the parameters (F5).
+`deadline` is I4's answer: the window closes 48 hours after it opens if 10
+sequence heads are not compared first (section 8, end condition 4). This line
+is its one home; preflight copies it into the `preflight` line (F5).
 
 **Answered or narrowed by the Nov 23 direction** (#A1's relay 7111628611,
 translated in 7114296700):
@@ -1384,11 +1417,10 @@ translated in 7114296700):
 - **J1. Live-head disagreements: option 2.** Relay point 2: Joel adjudicates
   unresolved disagreements, with the order and budget frozen before
   enrollment. So O5's items are ruled by Joel alone, as an endpoint different
-  from the frozen text, and an item past the budget is UNMEASURED. The budget
-  is 48 hours (I2, answered); the order is still open (I2). A disputed
-  eligibility classification (section 12) is also a J1 item, ruled but not
-  timed (section 8). Ruling needs a ledger kind the landed closed set lacks
-  (F1).
+  from the frozen text, and an item past the budget is UNMEASURED. The budget is
+  48 hours and the order is Joel's Nov 24 agreement (I2, answered). A disputed
+  eligibility classification (section 12) is also a J1 item, ruled but not timed
+  (section 8). Ruling needs a ledger kind the landed closed set lacks (F1).
 - **J2. Criteria: answered.** Relay point 3: no success while any required
   criterion is UNMEASURED (section 5). The first half: C3, C5 outside clean
   heads and C7 are required, ruled by Joel under J1, and UNMEASURED past the
@@ -1409,11 +1441,12 @@ translated in 7114296700):
   Relay point 1 names the kind: fleet-tools reliability-fix PRs, so `pr_kind`
   is `fleet-tools-reliability-fix` (section 12). The count of 10 is Joel's
   (7083761337, above). The pilot ends once 10 sequence heads are compared,
-  which can take more than 10 enrolled PRs (sections 8 and 12).
-  Whether a deadline applies is still open (I4).
+  which can take more than 10 enrolled PRs (sections 8 and 12), or once 48
+  hours have passed since the window opened, whichever comes first (I4).
 - **J4. How Joel signs: direction answered.** Relay point 4: a locally signed
-  owner artifact that agents cannot impersonate (section 13). Which key and
-  where its public key is pinned are open (I5).
+  owner artifact that agents cannot impersonate (section 13). The key is
+  answered (I5): an ed25519 SSH key on a hardware token with touch required,
+  signing with `ssh-keygen -Y sign`.
 - **J5. Installing and running the scripts: answered.** Relay point 6:
   deterministic scoring and unblinding under pilotseal (sections 6 and 8). As
   pilotseal, Joel installs the landed scripts of section 10 into
@@ -1449,40 +1482,73 @@ keeps its number, answered or not.
   code lines by `review-size.sh` (answer 2, "300 or less"). This replaces the
   interim "fewer than 300" of #A1's r2 (7114817207), so the pilot bound and
   the landing cap now match.
-- **I2. J1 budget and order: the budget is answered, the order is open.** The
-  budget is 48 hours (answer 3), which fills `j1_budget` (section 7). The
-  order Joel rules live-head disagreements and disputed classifications in is
-  still open, and fills `j1_order`.
+- **I2. J1 budget and order: answered.** The budget is 48 hours (answer 3),
+  which fills `j1_budget` (section 7). The order is Joel's Nov 24 agreement
+  (below), which fills `j1_order`.
 - **I3. J2 first half: answered, required.** C3, C5 outside clean heads and
   C7 are required criteria, ruled by Joel under J1 within the budget, and
   UNMEASURED past it (answer 4), so a pilot with any of them UNMEASURED is not
   a pass.
-- **I4. J3 deadline: open.** The count of 10 is settled (J3). On a
-  deadline Joel wrote "No deadline, maybe 48 hrs" (answer 5), which is not
-  settled, and #claude asked him which he means. Until he answers, no deadline
-  applies. `deadline: UNRULED I4` (above) blocks signing until he answers. A
-  deadline he adds goes into section 8's end condition and the parameters
-  (F5).
-- **I5. J4 key custody: open.** Joel asked for a recommendation (answer 6),
-  which #claude is giving him directly. Which key Joel signs with is not
-  chosen. Its public key is pinned in the trust file of section 13. This fills
-  `j4` and the fingerprint copy.
+- **I4. J3 deadline: answered, 48 hours.** On Nov 23 Joel wrote "No deadline,
+  maybe 48 hrs" (answer 5); on Nov 24 he wrote "Stop at 48 hours" (below). The
+  pilot ends at 10 compared sequence heads or 48 hours after the window opens,
+  whichever comes first. This fills `deadline` (above) and section 8's end
+  condition, and F5 builds it.
+- **I5. J4 key custody: answered.** Joel agreed on Nov 24 (below): an ed25519
+  SSH key on a hardware token, a YubiKey or similar, with touch required, so
+  the private key is never on disk; its public key pinned outside the repo in a
+  file pilotseal owns, with a copy here; a pin change needs a signature from
+  the old key; signing uses `ssh-keygen -Y sign`. This fills `j4`. The
+  fingerprint copy is filled once the key is made.
 - **I6. The writer of section 14: answered, Joel by hand.** Joel adds the
   enrollments himself, as pilotseal (answer 7). No script enrolls a head.
-- **I7. The promotion conflict of section 16: direction answered, substitute
-  not named.** Joel will name a local substitute for the server-protected
-  required check (answer 8): a locally enforced required check plus a
-  break-glass log agents cannot alter. He has not named it yet. When he does,
-  it is recorded as his change to ORDER r2 item 13 in its own signed owner
-  record (section 13), not by editing this text, which would unsign it
-  (section 1). Until then section 16's prerequisite is unmet and promotion
-  stays blocked.
+- **I7. The promotion conflict of section 16: answered.** Joel does the local
+  substitute check for the server-protected required check himself. If he has
+  not done it within 48 hours of its being due, #claude (the arbiter) does it
+  (Nov 24, below). Section 16 records this, and this text's signature covers
+  it.
 - **I8. Where the trust file lives: open** (#juno 7115601439). It was not
   among the questions put to Joel on Nov 23. It must meet section 13's rules:
   outside every repository and every agent's home, not writable by uid 501,
   and written only by Joel. A path under `/Users/pilotseal` would meet them,
   as would another location Joel names. This fills `trust_file` in section
   13's copy block.
+
+**Answered on Nov 24** (#claude's relays 7135308036, 06:41 PT, and
+7135401609, 07:03 PT, on fleet-tools#545). To the four open items, Joel wrote,
+verbatim:
+
+> 1. Stop at 48 hours
+> 2. Show me a proposed order
+> 3. I will be the substitute, else the arbiter
+> 4. If safe close
+
+and to #claude's three proposals that followed, verbatim:
+
+> Agreed on proposals
+
+Read narrowly, as #claude relayed them:
+
+- **J3 (I4):** the pilot ends at 10 eligible PRs or 48 hours, whichever comes
+  first (section 8, end condition 4).
+- **J1 order (I2):** "First, any disagreement on a head whose window is open.
+  Then the rest, oldest first by the time the disagreement was posted. Ties go
+  to the lower PR number. The 48-hour budget per ruling is unchanged, and
+  anything past it is UNMEASURED." In this text every item is posted at once,
+  by the one `items` line, and every item ruling's window is that line's budget
+  period (section 8). So every item's window is open together, every item was
+  posted at the same time, and the order comes down to the lower PR number
+  first, by item id within one head. Past the budget period an item is
+  UNMEASURED. As section 8 says, the order guides Joel's work and decides
+  nothing, and the report lists a ruling made out of it.
+- **(7) substitute (I7):** Joel does the local substitute check for the
+  server-protected required check; if he has not done it within 48 hours of its
+  being due, #claude (the arbiter) does it (section 16).
+- **J4 key custody (I5):** the key of section 13.
+- Item 4 (an idle pane) is not about this text.
+
+None of these enrolls a head, promotes a gate, or changes rule #68 or a landing
+control.
 
 **Open before signing, for the coordinator (not owner questions).**
 
@@ -1509,16 +1575,18 @@ Relay point 1, with #juno's fixes 1 to 3 (7114355345) and #claude's point 3
 left out only by a rule written here.
 
 - **The window.** The live window opens at the `at` of the **first** `preflight`
-  line in the ledger, so a later preflight never moves it. It closes at the `at`
-  of the first `freeze` after which 10 sequence heads (section 8, end condition
-  4) are compared heads (section 5). A PR is in the window when its GitHub
-  `created_at` falls in it, at or after the opening and not after the close. A
-  PR created before the window opens is not a window PR: it gets no record, is
-  never reconciled, and F1 refuses a live `enroll` for it, so a PR reviewed
-  before signing cannot be picked into the sequence. Enrollment continues in
-  order until then, so an enrolled PR that is never compared, for example one
-  closed before review, stays enrolled and reported, and a later PR in the order
-  makes up the 10. No PR is replaced: the uncompared one keeps its record.
+  line in the ledger, so a later preflight never moves it. It closes at the
+  window's close of section 8, end condition 4: the `at` of the first `freeze`
+  after which 10 sequence heads are compared heads (section 5), or 48 hours
+  after the opening, whichever comes first. A PR is in the window when its
+  GitHub `created_at` falls in it, at or after the opening and not after the
+  close. A PR created before the window opens is not a window PR: it gets no
+  record, is never reconciled, and F1 refuses a live `enroll` for it, so a PR
+  reviewed before signing cannot be picked into the sequence. Enrollment
+  continues in order until then, so an enrolled PR that is never compared, for
+  example one closed before review, stays enrolled and reported, and a later PR
+  in the order makes up the 10, unless the 48 hours run out first. No PR is
+  replaced: the uncompared one keeps its record.
 - **After the window closes.** No live `enroll` is written once the window has
   closed. Before each live `enroll`, the writer runs `pilot-unblind.py window`
   (F6), which checks end condition 4 alone, computing the window's close from
@@ -1529,7 +1597,7 @@ left out only by a rule written here.
   close gets no record and is never reconciled. If a live head whose
   `pr_created_at` is after the close is enrolled anyway, or one created before
   the opening gets past F1, or a live `enroll` for any PR is written after the
-  closing `freeze` (its `at` later than that `freeze`'s `at`), it is not a
+  window's close (its `at` later than the close), it is not a
   sequence head by end condition 4, so it is in none of C1, C3, C5 or the
   `items` line (section 5), and the report lists it (F4). The last case takes
   the place of the PR's E5 or E6 record, so it also marks the pilot "possibly
@@ -1670,8 +1738,9 @@ left out only by a rule written here.
     `ftw:reviews/ft-<N>.verdicts` already exists then with at least one line
     gets E5
     (`verdicts_seen: true`), and the rest get E6 (`verdicts_seen: false`). F2
-    runs `window` right after every live `freeze`, so the gap between the
-    closing `freeze` and Joel's record is only his own delay, which the report
+    runs `window` right after every live `freeze`, and again when the 48 hours
+    run out, so the gap between the window's close and Joel's record is only
+    his own delay, which the report
     shows as the difference between the two lines' `at`. A PR reviewed in that
     gap counts as E5. That over-reports the lever, never under-reports it.
   - **Residual selection levers.** The agents decide when reviews are
@@ -1718,10 +1787,12 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
 - **The key.** Joel signs with a key that no agent can read or use, within
   section 14's residual gap ("Joel's terminal is the agents' uid"): not readable
   by uid 501, and not under any agent's home or `~/Projects`. Agents run as uid
-  501, so uid 501's home is ruled out too. Which key, for example an SSH or GPG
-  key on a hardware token or in the pilotseal account, is I5. If the private key
-  is a file, a denied-read record as uid 501 against its location is made in the
-  shape of 7065533093. Reading is not the only risk: a key served to uid 501 by
+  501, so uid 501's home is ruled out too. The key is I5's answer (Joel, Nov
+  24, 7135401609): an ed25519 SSH key on a hardware token, a YubiKey or
+  similar, with touch required, so the private key is never on disk where an
+  agent running as Joel's user could read or use it. Joel signs with
+  `ssh-keygen -Y sign`, and F3 verifies with `ssh-keygen -Y verify` against the
+  pinned public key. Reading is not the only risk: a key served to uid 501 by
   `ssh-agent` or `gpg-agent`, or a token with no touch policy, can be used by an
   agent without being read. So whatever the key, precondition 9's use-denied
   record shows that an agent session cannot sign with it.
@@ -1734,8 +1805,9 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   no agent can write, would close both gaps.
 - **The trust file.** The trust root is pinned outside any repository an agent
   can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It must be
-  outside every repository and every agent's home, not writable by uid 501, and
-  written only by Joel, as the user that owns it. It holds the public key and
+  outside every repository and every agent's home, not writable by uid 501,
+  owned by pilotseal (Joel, 7135401609), and written only by Joel acting as
+  pilotseal. It holds the public key and
   its fingerprint, every earlier key with its rotation statement (the key
   rotation rule below), the signing form, the signing commit and this text's
   blob there, the landing baseline at signing (the fleet-tools `main` commit
@@ -1755,7 +1827,7 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
 
 ```pilot-v2-trust-copy
 trust_file: UNRULED I8
-key_fingerprint: UNPINNED I5
+key_fingerprint: UNPINNED key not yet made
 ```
 - **Key rotation.** The anchor is the `key_fingerprint` in the ledger's first
   `preflight` line (section 7), which is hash-chained and covered by the chain
@@ -1893,12 +1965,14 @@ waiver, changes admin bypass, enables branch protection or promotes a gate.
 Relay point 7. The original's lines 485-488, kept by section 2, require "a
 server-protected required check and an auditable break-glass" before a promotion
 decision, per ORDER r2 item 13. Joel's standing decision is that there is no
-branch protection (7114296700, point 7). Joel will resolve the conflict by
-naming a local substitute (I7, answer 8 of 7121929832): a locally enforced
-required check plus a break-glass log agents cannot alter. Until he names it in
-a signed owner record (section 13) as his change to ORDER r2 item 13, that
-prerequisite stays as written and is **unmet**, so no promotion decision can be
-made, whatever the pilot shows. This section is a direction to resolve the
+branch protection (7114296700, point 7). Joel resolved the conflict with a
+local substitute (I7: answer 8 of 7121929832, and 7135308036 and 7135401609 on
+Nov 24): Joel does the local substitute check for the server-protected required
+check himself, and if he has not done it within 48 hours of its being due,
+#claude (the arbiter) does it. This is his change to ORDER r2 item 13, and this
+text's signature records it. Until this text is signed, the prerequisite stays
+as the original wrote it and is **unmet**, so no promotion decision can be made,
+whatever the pilot shows. This section is a direction to resolve the
 conflict. It enables no branch protection and promotes no gate.
 
 ## 17. Script follow-ups
@@ -1906,10 +1980,9 @@ conflict. It enables no branch protection and promotes no gate.
 What this text requires that the landed and held scripts (ft#790, ft#792,
 ft#793, ft#794, and ft#804, the open fix that makes `pilot-ledger.py append`
 refuse a ledger it cannot open for writing with one line, not a traceback) do
-not do yet. None widens a held PR. F1, F3, F4 and F6 are script changes,
+not do yet. None widens a held PR. F1, F3, F4, F5 and F6 are script changes,
 each its own reviewed PR. F2 is the bullets below, in this text, so this text's
-review and signature cover it and it lands with this text. F5 exists only if
-Joel picks a deadline (I4), and is then its own reviewed PR. Each pin is filled
+review and signature cover it and it lands with this text. Each pin is filled
 by the signing commit. Enrollment cannot pass preflight before F3, since check 4
 refuses every form until then.
 
@@ -1980,8 +2053,13 @@ refuses every form until then.
     for check 4 and preconditions 1 and 2, and records that clone's `main`
     commit in its `preflight` line;
   - it validates precondition 15's sudo-denied record and its sudoers record,
-    made through sudo as root, and records both hashes in its `preflight`
-    line;
+    made through sudo as root: `visudo -c` OK, one global `timestamp_type` of
+    `tty` or `ppid`, and no `timestamp_type` line in any other scope; it records
+    both hashes in its `preflight` line;
+  - it compares each history clone's `main` with `git ls-remote` of its remote
+    and refuses on a mismatch (sections 1 and 10);
+  - it refuses an `access` line from `bind --census` or `parse-check` whose
+    `script_sha256` differs from section 10's scoring pin (section 6);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2019,7 +2097,9 @@ refuses every form until then.
     (`by: bind`) and prints only the case and any commit a sealed record names,
     a `bind --census` mode that appends an `access` line (`by: census`) and
     prints only counts, a `parse-check` mode that appends an `access` line
-    (`by: parse-check`) and prints only how many records parse under O1, a
+    (`by: parse-check`) and prints only how many records parse under O1's
+    record rules, refusing without git on `PATH` (section 6), each of the two
+    recording the `script_sha256` Joel checked, a
     refusal to bind a construction spec whose case is race or recovery, and a
     check at scoring that every planted `enroll` agrees with its record (section
     7, "Building and binding a planted head");
@@ -2062,7 +2142,7 @@ refuses every form until then.
     miss (O1);
   - a live head whose `pr_created_at` is outside the window, before its
     opening or after its close, or whose `enroll` line's `at` is later than the
-    closing `freeze`'s `at`, is not a sequence head, so it is in none of C1,
+    window's close, is not a sequence head, so it is in none of C1,
     C3, C5 or the `items` line (section 5); it is listed, and the last case
     marks the pilot possibly selected (section 12);
   - it lists each item ruling made out of the `j1_order` order (section 8);
@@ -2092,14 +2172,17 @@ refuses every form until then.
   - it reports the `default-1` run apart, heads that grew past the size bound,
     disputed classifications, E5 exclusions counted apart, and every
     `correction` line beside the line it names, with no result changed by one.
-- **F5. A deadline, only if Joel adds one (I4).** If he picks a deadline before
-  signing, F5 adds its key to the parameters, to section 8's end condition, to
-  `pilot-unblind.py`'s end condition and to preflight check 5. If no deadline
-  applies, F5 is empty.
+- **F5. The 48-hour deadline (I4, answered).** Preflight copies section 11's
+  `deadline` into its `preflight` line and refuses unless it is `48 hours`
+  (check 5). `pilot-unblind.py` computes the window's close of section 8, end
+  condition 4, as the earlier of the count close and the opening plus that
+  deadline, read from the `preflight` line, in its `window`, `ready` and `run`
+  modes and in the sequence-head test. `pilot-score.py`'s report says whether
+  the window closed by count or by time.
 - **F6. `pilot-unblind.py`:** end condition 4 counts distinct PRs whose sequence
   head (section 8: `case` and `provenance` both `live`, `work_kind` equal to
   `pr_kind`, `pr_created_at` at or after the first `preflight` line's `at` and
-  not after the window's close, `enroll` not after the closing `freeze`) is
+  not after the window's close, `enroll` not after the window's close) is
   frozen and compared (section 5), reading each head's frozen captures, not
   `enroll` lines or frozen heads of provenance `live` alone, so a doubled record
   can never count twice. It owns the *compared* predicate of section 7,
