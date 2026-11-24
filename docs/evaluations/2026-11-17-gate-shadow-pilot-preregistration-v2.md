@@ -709,20 +709,22 @@ items Joel rules.
   pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
   the scoring hash in the trust file (section 13), the one reference for this
   check, and that a *pre-run write-denied record* exists for
-  `/Users/pilotseal/bin`, made by uid 501 before the run in the shape of
-  precondition 10's probe. It is not precondition 10's record, which is dated
-  after signing. The trust file's location is I8 (section 11), so neither runs
-  until I8 is settled and the trust file exists there; the reference holds only
-  from then. If the trust file holds no scoring hash yet, Joel runs neither
-  until he has written one, as pilotseal, for a `pilot-score.py` blob he has
-  read from a landed F4 or F5 merge in section 10's history clone. The `access`
-  line records that hash (`script_sha256`). `check` later accepts that line only
-  when its `script_sha256` is the blob of `pilot-score.py` at a merge commit on
-  the history clone's `main` first-parent history at or after `f4_first`, the
-  first F4 merge, which section 10 records once and never moves (F3). That shows
-  only that the copy was on fleet-tools `main` at or after the first F4 merge,
-  not that it was reviewed: fleet-tools has no branch protection (section 16)
-  and every agent pushes as `dayamjz`. What ties the copy to the trust file's
+  `/Users/pilotseal/bin`, made by uid 501 before the run with F3's `probe`. It
+  is not precondition 10's record, which is dated after signing. Since only F3
+  adds write probes, neither run happens before F3 lands, and each `access` line
+  records the pre-run record's SHA-256 (`prerun_record_sha256`). The trust
+  file's location is I8 (section 11), so neither runs until I8 is settled and
+  the trust file exists there; the reference holds only from then. If the trust
+  file holds no scoring hash yet, Joel runs neither until he has written one, as
+  pilotseal, for a `pilot-score.py` blob he has read from a landed F4 or F5
+  merge in section 10's history clone. The `access` line records that hash
+  (`script_sha256`). `check` later accepts that line only when its
+  `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
+  history clone's `main` first-parent history at or after `f4_first`, the first
+  F4 merge, which section 10 records once and never moves (F3). That shows only
+  that the copy was on fleet-tools `main` at or after the first F4 merge, not
+  that it was reviewed: fleet-tools has no branch protection (section 16) and
+  every agent pushes as `dayamjz`. What ties the copy to the trust file's
   scoring hash at the time of the run is Joel's pre-run check above; `check`
   does not verify that tie, and the procedure guarantees no more than it. The
   line need not equal the final scoring pin: if a later fix moves `f4` and
@@ -1275,8 +1277,12 @@ fails:
     denied with `EACCES`, and for the history clones
     `/Users/pilotseal/pilot/fleet-tools.git` and
     `/Users/pilotseal/pilot/assistant.git` that creating a file in either is
-    denied the same way. Read probes alone do not show it: a directory can deny
-    listing and still allow traversal and writes by group.
+    denied the same way. For the trust file it shows that opening the file for
+    writing, and creating a file in its directory and in each ancestor directory
+    up to `/`, are denied with `EACCES`, so the file cannot be replaced from a
+    directory uid 501 can write, wherever I8 puts it. Read probes alone do not
+    show it: a directory can deny listing and still allow traversal and writes
+    by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
@@ -1315,14 +1321,14 @@ fails:
     copy block, section 10's table, and section 12's rows. Any
     mismatch, or a trust file that is missing or unreadable, refuses
     enrollment.
-15. **No agent session can use sudo to reach pilotseal.** Joel's account is uid
-    501, the uid agents run as, so the `sudo -u pilotseal` Joel runs starts from
-    the agents' own uid. A sudo-denied record, dated after the signing commit
-    and made from an agent session as uid 501, shows that
-    `sudo -n -u pilotseal /usr/bin/true` is refused, so no sudo ticket usable
-    from that session is cached. That probe covers one command, so the claim
-    that **no `NOPASSWD` rule lets uid 501 reach pilotseal** rests on the
-    sudoers record below, and `check` makes it hold at the first hop. In the
+15. **Sudo from an agent session needs Joel's password, within what is checked
+    here.** Joel's account is uid 501, the uid agents run as, so the
+    `sudo -u pilotseal` Joel runs starts from the agents' own uid. A sudo-denied
+    record, dated after the signing commit and made from an agent session as uid
+    501, shows that `sudo -n -u pilotseal /usr/bin/true` is refused, so no sudo
+    ticket usable from that session is cached. That probe covers one command, so
+    the claim that **no `NOPASSWD` rule lets uid 501 reach pilotseal** rests on
+    the sudoers record below, and `check` makes it hold at the first hop. In the
     record, in every file it includes and with every alias expanded, `check`
     rejects:
     - any rule whose user list can match uid 501 (its user name, `%group` or
@@ -1336,13 +1342,14 @@ fails:
       would match, since the record cannot resolve those;
     - any setting of `pam_service` or `pam_login_service`, in any scope, to a
       value other than `sudo`, since either option makes sudo apply another PAM
-      policy (`sudoers(5)`) and the record judges only `sudo`'s; and, since an
-      unset option falls back to a value fixed when sudo was built, a record
-      whose `sudo -V` output (below) does not show `sudo` as the build default
-      for both, or does not show them at all;
+      policy (`sudoers(5)`) and the record judges only `sudo`'s; and a record
+      whose `sudo -V` output (below) does not report `sudo` as the value of
+      both, or reports neither;
     - any setting, in any scope, of `targetpw`, `runaspw` or `rootpw`, under
       which sudo asks for the target's, the runas user's or root's password
       instead of Joel's;
+    - any setting, in any scope, of `exempt_group`, whose members sudo does
+      not ask for a password (`sudoers(5)`, under "PASSWD and NOPASSWD");
     - a sudo PAM stack whose `auth` facility can succeed without the password
       module. The record also carries, copied as root, `/etc/pam.d/sudo` and
       every file its `auth` lines `include` or `substack`, recursively, each
@@ -1361,16 +1368,20 @@ fails:
       fails the rule, since `/etc/pam.d/sudo` has
       `auth sufficient pam_smartcard.so`.
 
-    So no sudo rule lets uid 501 reach another user without Joel's password, and
-    no chain through another user can start through sudo. The record carries the
-    names and gids it matches against. uid 501 cannot read the sudoers policy
-    (`/etc/sudoers` is readable only by root and `wheel`), and the text relies
-    on no uid-501 view of it. The policy comes from a second record, the
-    *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo` to copy, as
-    root, the bytes of `/etc/sudoers` and of every file it includes (each
-    `#include`, `@include`, `#includedir` and `@includedir` target,
+    So no line of the copied sudoers files lets uid 501 reach another user
+    through sudo without Joel's password, and no chain through another user can
+    start there. That is all this precondition shows. It does not judge sudo's
+    compiled-in defaults (for example of `authenticate` or `exempt_group`), or
+    `/etc/sudo.conf`, which can point sudo at a policy file the record does not
+    copy; those are part of section 14's "other routes to pilotseal" gap. The
+    record carries the names and gids it matches against. uid 501 cannot read
+    the sudoers policy (`/etc/sudoers` is readable only by root and `wheel`),
+    and the text relies on no uid-501 view of it. The policy comes from a second
+    record, the *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo`
+    to copy, as root, the bytes of `/etc/sudoers` and of every file it includes
+    (each `#include`, `@include`, `#includedir` and `@includedir` target,
     recursively), with each path, the output of `visudo -c`, the output of
-    `sudo -V` run as root (for the PAM service names sudo was built with), and
+    `sudo -V` run as root (what it reports for the two PAM service names), and
     the output of `id -un 501`, `id -Gn 501` and `id -G 501` (the user, group
     names and gids the scan above matches), into one file owned by pilotseal.
     The record must show `visudo -c` reporting every file parsed OK, a global
@@ -1588,10 +1599,10 @@ keeps its number, answered or not.
   stays blocked until a break-glass log agents cannot alter exists.
 - **I8. Where the trust file lives: open** (#juno 7115601439). It was not
   among the questions put to Joel on Nov 23. It must meet section 13's rules:
-  outside every repository and every agent's home, not writable by uid 501,
-  and written only by Joel. A path under `/Users/pilotseal` would meet them,
-  as would another location Joel names. This fills `trust_file` in section
-  13's copy block.
+  outside every repository and every agent's home, not writable by uid 501, in a
+  directory chain uid 501 cannot write (precondition 10), and written only by
+  Joel. A path under `/Users/pilotseal` would meet them, as would another
+  location Joel names. This fills `trust_file` in section 13's copy block.
 
 **Answered on Nov 24** (#claude's relays 7135308036, 06:41 PT, and
 7135401609, 07:03 PT, on fleet-tools#545). To the four open items, Joel wrote,
@@ -1899,17 +1910,17 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   no agent can write, would close both gaps.
 - **The trust file.** The trust root is pinned outside any repository an agent
   can write (#A1 7114817207, #juno 7115601439). Where it lives is I8. It must be
-  outside every repository and every agent's home, not writable by uid 501,
-  owned by pilotseal (Joel, 7135401609), and written only by Joel acting as
-  pilotseal. It holds the public key and
-  its fingerprint, every earlier key with its rotation statement (the key
-  rotation rule below), the signing form, the signing commit and this text's
-  blob there, the landing baseline at signing (the fleet-tools `main` commit
-  when the signing commit is made, and the path and blob of each landing script
-  and gate the coordinator runs there), and the SHA-256 of every executable the
-  pilot runs: section 10's scripts and section 12's `review-size.sh` and
-  `pilot-review.sh`, and section 10's follow-up PRs and merge commits. No enroll
-  script exists (section 14).
+  outside every repository and every agent's home, not writable by uid 501, in a
+  directory chain uid 501 cannot write (precondition 10), owned by pilotseal
+  (Joel, 7135401609), and written only by Joel acting as pilotseal. It holds the
+  public key and its fingerprint, every earlier key with its rotation statement
+  (the key rotation rule below), the signing form, the signing commit and this
+  text's blob there, the landing baseline at signing (the fleet-tools `main`
+  commit when the signing commit is made, and the path and blob of each landing
+  script and gate the coordinator runs there), and the SHA-256 of every
+  executable the pilot runs: section 10's scripts and section 12's
+  `review-size.sh` and `pilot-review.sh`, and section 10's follow-up PRs and
+  merge commits. No enroll script exists (section 14).
 - **This text holds only copies.** The block below copies the fingerprint, and
   section 10's table and section 12's rows copy the executable hashes. No script
   trusts a copy read from a repository. Only preflight opens the trust file;
@@ -1994,12 +2005,14 @@ Relay point 5.
   able to append to the ledger and nothing else, would make that bar a
   mechanism.
 - **A residual gap: other routes to pilotseal.** Precondition 15 checks only
-  sudo. It does not check `su pilotseal`, which asks for pilotseal's own
-  password, or what that password is. If pilotseal has an empty or known
-  password, an agent session can become pilotseal with `su` and read the
-  sealed records and write the ledger, and no record of this text would show
-  it. Giving pilotseal no usable password closes it; this text does not check
-  that.
+  sudo, and within sudo only the copied sudoers files, what `sudo -V` reports
+  for the PAM service names, and the sudo PAM stack: not sudo's other
+  compiled-in defaults or `/etc/sudo.conf`. It does not check `su pilotseal`,
+  which asks for pilotseal's own password, or what that password is. If
+  pilotseal has an empty or known password, an agent session can become
+  pilotseal with `su` and read the sealed records and write the ledger, and no
+  record of this text would show it. Giving pilotseal no usable password closes
+  it; this text does not check that.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -2085,27 +2098,28 @@ When Joel has done the check he appends a `substitute-check` line naming by
 head after it the same way, with that `seq`. If no head after a
 `substitute-check` naming that `promotion-due` is posted within 48 hours of its
 due time, the arbiter does that check, and Joel appends its `substitute-check`
-line (`by: arbiter`, naming the same `seq`) when he can. **One answer per
-`promotion-due`.** A `substitute-check` names by `seq` one earlier
-`promotion-due`, and the ledger refuses one that names none, and a second one
-that names a `promotion-due` already answered (F1). So each `promotion-due` has
-at most one `substitute-check`, and its result is the one that counts, whoever
-did the check. If Joel and the arbiter both checked, Joel records the second
-result as a `correction` naming the first `substitute-check`, which annotates it
-and changes nothing (section 7). A check for one gate never stops the arbiter's
-clock for another. Until a head after `promotion-due` is posted, nothing is due
-and promotion stays blocked. This is his change to ORDER r2 item 13's first
-half, and this text's signature records it. **A residual gap:** the posts are
-made as `dayamjz`, which every agent posts as, so an agent could post a false
-head. A false `promotion-due` head would start the arbiter early, and a false
-`substitute-check` head would stop it; the comparison of posted heads with the
-ledger (open item 4) exposes either, after the fact. **The break-glass half is
-unchanged.** The original's "an auditable break-glass" and "Both must exist"
-stand as written: Joel's answer names no break-glass, so that half is still
-**unmet**. Promotion stays blocked until a break-glass log that agents cannot
-alter exists and a signed owner record (section 13) names it, and until this
-text is signed, whatever the pilot shows. This section is a direction to resolve
-the conflict. It enables no branch protection and promotes no gate.
+line (`by: arbiter`, naming the same `seq`) when he can. **Which answer
+counts.** A `substitute-check` names by `seq` one earlier `promotion-due` and
+says `by: joel` or `by: arbiter`. The ledger refuses one that names none, and a
+second with the same `by` for the same `promotion-due` (F1). Which one counts is
+decided by the due time, never by append order (Joel, 7135401609): Joel's counts
+if the head after it was posted within 48 hours of the due time; if not, the
+arbiter's counts, whenever either was appended. A `by: joel` line whose head was
+posted later is reported beside the arbiter's and decides nothing. A check for
+one gate never stops the arbiter's clock for another. Until a head after
+`promotion-due` is posted, nothing is due and promotion stays blocked. This is
+his change to ORDER r2 item 13's first half, and this text's signature records
+it. **A residual gap:** the posts are made as `dayamjz`, which every agent posts
+as, so an agent could post a false head. A false `promotion-due` head would
+start the arbiter early, and a false `substitute-check` head would stop it; the
+comparison of posted heads with the ledger (open item 4) exposes either, after
+the fact. **The break-glass half is unchanged.** The original's "an auditable
+break-glass" and "Both must exist" stand as written: Joel's answer names no
+break-glass, so that half is still **unmet**. Promotion stays blocked until a
+break-glass log that agents cannot alter exists and a signed owner record
+(section 13) names it, and until this text is signed, whatever the pilot shows.
+This section is a direction to resolve the conflict. It enables no branch
+protection and promotes no gate.
 
 ## 17. Script follow-ups
 
@@ -2131,14 +2145,17 @@ refuses every form until then.
   and a mutation that turns it red; a `ruling` kind with section 8's body; and a
   `promotion-due` kind naming the gate to promote (section 16 defines when the
   check it announces is due); and a `substitute-check` kind recording that the
-  substitute check of section 16 was done, by whom, and its result, and naming
-  by `seq` the one `promotion-due` line it answers, under section 16's rule,
-  which F1 enforces. A `ruling` whose subject is `classification` may come
-  before or after `close`, but not after `score` (section 7). One whose subject
-  is `item` needs an earlier `items` line naming that id, so it too can only
-  follow `close`. Which kinds may follow `close` and `unblind` is section 7's
-  list, which F1 enforces, with a self-test row and a mutation for each new kind
-  on it.
+  substitute check of section 16 was done, by whom (`joel` or `arbiter`), and
+  its result, and naming by `seq` the one `promotion-due` line it answers, under
+  section 16's rule, which F1 enforces with a self-test row and a mutation that
+  turns it red for each refusal: a `substitute-check` naming no earlier
+  `promotion-due`, and a second one with the same `by` for the same
+  `promotion-due`. A `ruling` whose subject is `classification` may come before
+  or after `close`, but not after `score` (section 7). One whose subject is
+  `item` needs an earlier `items` line naming that id, so it too can only follow
+  `close`. Which kinds may follow `close` and `unblind` is section 7's list,
+  which F1 enforces, with a self-test row and a mutation for each new kind on
+  it.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
   signature covers them and no separate document needs a pin. A written copy may
@@ -2203,17 +2220,17 @@ refuses every form until then.
     carries `NOPASSWD` for any runas and command, no `Defaults` line in any
     scope that sets `!authenticate`, no `+netgroup`, `%:group` or `%:#gid`
     user-list entry, no `pam_service` or `pam_login_service` setting other than
-    `sudo` in any scope and `sudo` as the build default of both in `sudo -V`, no
-    `targetpw`, `runaspw` or `rootpw` setting in any scope, and a resolved sudo
-    PAM `auth` stack with `pam_opendirectory.so` as `required` or `requisite`
-    and only `required`, `requisite` or `optional` controls (precondition 15);
-    it records both hashes in its `preflight` line;
+    `sudo` in any scope and `sudo` reported for both by `sudo -V`, no
+    `targetpw`, `runaspw`, `rootpw` or `exempt_group` setting in any scope, and
+    a resolved sudo PAM `auth` stack with `pam_opendirectory.so` as `required`
+    or `requisite` and only `required`, `requisite` or `optional` controls
+    (precondition 15); it records both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
     `script_sha256` is not the blob of `pilot-score.py` at some merge commit on
-    the history clone's `main` first-parent history at or after `f4_first`
-    (sections 6 and 10);
+    the history clone's `main` first-parent history at or after `f4_first`, or
+    that carries no `prerun_record_sha256` (sections 6 and 10);
   - it checks section 10's containment rules against the history clone: each
     row's merge commit is its script's latest follow-up merge from the
     `pilot-v2-followups` block and the trust file, the script's blob there
@@ -2227,12 +2244,13 @@ refuses every form until then.
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
-    file, `/Users/pilotseal/bin` and each installed script there, and the
-    two history clones), a probe of
-    the key's location, precondition 9's signing probe (an attempt from an
-    agent session to sign a test message with the pinned key through each
-    agent the key could be reached by, `ssh-agent` and `gpg-agent`), and
-    precondition 15's sudo probe;
+    file and a create-file probe of its directory and each ancestor up to `/`,
+    `/Users/pilotseal/bin` and each installed script there, and the two history
+    clones), which also make section 6's pre-run write-denied record, a probe of
+    the key's location, precondition 9's signing probe (an attempt from an agent
+    session to sign a test message with the pinned key through each agent the
+    key could be reached by, `ssh-agent` and `gpg-agent`), and precondition 15's
+    sudo probe;
   - each probe writes a record file in the shape `probe` writes today: a
     `probes[]` list of entries with the fields `tester_uid`, `target`,
     `target_owner_uid`, `owner_from`, `command`, `exit`, `errno` and `date`,
