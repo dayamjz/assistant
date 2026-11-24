@@ -453,8 +453,12 @@ unified context.
   UNMEASURED. O5's `hold-not-made` and `pass-refused` counts read only the
   `review` stage, as O5 says, so they are UNMEASURED for a head whose `review`
   stage has not run by this rule; a later stage that never ran, as after a
-  cancel at a review hold, does not affect them. Only a `review` hold can be a
-  `hold-not-made` item, so a `usage-ceiling` hold is never one. Precondition 13
+  cancel at a review hold, does not affect them. A ceiling refusal at the
+  `review` stage is itself a review hold, so it is excluded by rule: a
+  `gate.holds[]` entry whose findings all have the id `usage-ceiling` is not a
+  hold for O2, O3 or O5. After a `retry` answer the stage runs again and its new
+  report replaces the held one, so such a captured entry would otherwise outlive
+  the hold it recorded. Precondition 13
   also forbids a usage ceiling in either gate home, so this rule is a backstop.
   As built, `pilot-score.py` checks neither `ran`, `report` nor the ceiling
   finding (F4).
@@ -464,13 +468,14 @@ unified context.
   `review` stage did not run. **A hold with no capture.** `gate.holds[]` comes
   from the operator's capture at each hold, so a hold answered without one
   leaves no entry. The `review` stage's recorded outcome still shows the hold:
-  `held`, `approved`, `cancelled`, `fix` or `retry`, or `skipped` while the
-  stage ran, since a person answering `skipped` at a hold is the one producer
-  of `skipped` that follows a run (`internal/pipeline/outcome.go:41-70`, the
-  hold node at `internal/pipeline/node.go:245-268`). When that outcome shows a
-  hold and `gate.holds[]` has no `review` entry, O2, O3 and O5's
-  `hold-not-made` count are UNMEASURED for that head, never a measured "no
-  hold".
+  `held`, `approved`, `cancelled` or `fix`, or `skipped` while the stage ran
+  (`retry` does not, since it stands only until the stage runs again,
+  `internal/pipeline/outcome.go:65-71`), since a person answering `skipped` at a
+  hold is the one producer of `skipped` that follows a run
+  (`internal/pipeline/outcome.go:41-70`, the hold node at
+  `internal/pipeline/node.go:245-268`). When that outcome shows a hold and
+  `gate.holds[]` has no `review` entry, O2, O3 and O5's `hold-not-made` count
+  are UNMEASURED for that head, never a measured "no hold".
 - **O3, hold heads.** A hold head is found when `gate.holds[]` has a `review`
   entry whose finding ids include the `id` of a finding O1 matches whose `stage`
   is `review`, so an equal id from another stage never counts. UNMEASURED when
@@ -1152,7 +1157,24 @@ fails:
    the target for its owner uid. If that stat succeeds, the owner comes from
    the target and no stat probe is recorded. If it is denied, the denied stat is
    recorded as a probe, and the owner comes from the nearest ancestor it can
-   stat.
+   stat. Listing is not reaching: a directory can deny listing and still allow
+   traversal (precondition 10). So the record must also show that uid 501
+   cannot reach anything below `/Users/pilotseal`:
+   - **traversal probes:** for each of `/Users/pilotseal`,
+     `/Users/pilotseal/pilot`, `/Users/pilotseal/pilot/sealed` and
+     `/Users/pilotseal/pilot/sealed/reviews`, a stat of a name inside it that
+     need not exist (`<dir>/.pilot-traverse-probe`), denied with `EACCES`. An
+     `ENOENT` means the directory can be traversed, and fails the record;
+   - **read probes:** a read-only open, denied with `EACCES`, of the sealed
+     ledger `/Users/pilotseal/pilot/ledger.jsonl` and of every sealed record
+     `/Users/pilotseal/pilot/sealed/s01.md` to `s08.md`;
+   - **no stat below the top:** a stat that succeeds on any target other than
+     `/Users/pilotseal` fails the record, since it shows a directory above that
+     target can be traversed.
+
+   This is what sections 6 and 7 rest on when they say uid 501 cannot read the
+   ledger, the sealed records or `sealed/reviews/`. As built, `probe` records
+   neither traversal probes nor these targets (F3).
 7. The `install` record shows that the SHA-256 of each script in
    `/Users/pilotseal/bin` equals the blob pinned in section 10 (J5), and the
    trust file of section 13 holds the same hashes.
@@ -1165,30 +1187,32 @@ fails:
    agent the key could be reached by (for example `ssh-agent` or
    `gpg-agent`), or, for a token, fails without a physical touch (section
    13).
-10. A write-denied record as uid 501 against the sealed ledger, the trust file
-    and the checker's directory exists, dated after the signing commit
-    (sections 6, 13 and 14). For `/Users/pilotseal/bin` it shows that creating
-    a file in the directory, and opening each installed script there for
-    writing, are both denied with `EACCES`. Read probes alone do not show it:
-    a directory can deny listing and still allow traversal and writes by
-    group.
+10. A write-denied record as uid 501 against the sealed ledger, the trust file,
+    the checker's directory and section 10's history clone exists, dated after
+    the signing commit (sections 6, 13 and 14). For `/Users/pilotseal/bin` it
+    shows that creating a file in the directory, and opening each installed
+    script there for writing, are both denied with `EACCES`, and for the history
+    clone `/Users/pilotseal/pilot/fleet-tools.git` that creating a file in it is
+    denied the same way. Read probes alone do not show it: a directory can deny
+    listing and still allow traversal and writes by group.
 11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
     record, at the hashes the trust file pins. No enroll script exists (section
     14).
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
-    script this text pins, and every script follow-up of section 17 (F1, F3,
-    F4, F6, and F5 if Joel picks a deadline), has landed through the landing
-    gates with its review before the signing commit, so the pin section 10 fills
-    there is a blob that contains it. Each follow-up's merge commit is an
-    ancestor of the merge commit its script's row names, which preflight checks
-    (F3). A follow-up that lands after signing is not in the pinned blob, so it
-    needs this text amended and re-signed. F2 is part of this text and needs no
-    landing of its own. Every landing requirement that changed between this
-    text's signing and the first live `enroll` has been reconciled explicitly,
-    comparing the trust file's landing baseline (section 13) with
-    `landing_regime` at that `enroll`: either this text is amended and re-signed
-    to adopt it, or a signed owner record says it does not apply to the pilot
-    (section 15).
+    script this text pins, and every script follow-up of section 17 (F1, F3, F4,
+    F6, and F5 if Joel picks a deadline), has landed through the landing gates
+    with its review before the signing commit, so the pin section 10 fills there
+    is a blob that contains it. Section 10's `pilot-v2-followups` block names
+    each follow-up's PR and merge commit, and the trust file holds the same
+    values; preflight checks them (F3) against the history in section 10's
+    history clone, as section 10 says. A follow-up that lands after signing is
+    not in the pinned blob, so it needs this text amended and re-signed. F2 is
+    part of this text and needs no landing of its own. Every landing requirement
+    that changed between this text's signing and the first live `enroll` has
+    been reconciled explicitly, comparing the trust file's landing baseline
+    (section 13) with `landing_regime` at that `enroll`: either this text is
+    amended and re-signed to adopt it, or a signed owner record says it does not
+    apply to the pilot (section 15).
 
 13. The fleet-tools mirror and its gate home of section 12 exist, isolated like
     the assistant mirror (the original's item 9 and lines 349-352), with the
@@ -1251,13 +1275,48 @@ refuses every signing form, so no enrollment can pass preflight without them.
 | preflight | `pilot-preflight.py` | UNPINNED | UNPINNED |
 | review findings, used by scoring | `review-findings.py` | UNPINNED | UNPINNED |
 
-By the signing commit each row names a fleet-tools `main` merge commit that
-contains the script's follow-up (F1 for `pilot-ledger.py`, F3 for
-`pilot-preflight.py`, F4 for `pilot-score.py`, F6 for `pilot-unblind.py`), at or
-after the merge that last changed the script, and the SHA-256 of its bytes
-there. The copies Joel installs in `/Users/pilotseal/bin` must hash to those
-values, and preflight check 7 compares them. These rows are a published copy.
-The authoritative hashes are in the trust file of section 13, outside any
+By the signing commit each row names a fleet-tools `main` merge commit and the
+SHA-256 of the script's bytes there. For a script with a follow-up (F1 for
+`pilot-ledger.py`, F3 for `pilot-preflight.py`, F4 for `pilot-score.py`, F6 for
+`pilot-unblind.py`, and F5 for `pilot-unblind.py` and `pilot-preflight.py` if
+Joel picks a deadline), that commit is the merge of the script's latest
+follow-up, as the block below records it.
+
+```pilot-v2-followups
+f1: UNPINNED F1
+f3: UNPINNED F3
+f4: UNPINNED F4
+f6: UNPINNED F6
+f5: UNRULED I4
+```
+
+Each value becomes `ft#<N> <40-hex merge commit>`, the follow-up's PR and the
+merge commit that landed it; `f5` becomes `none` if Joel picks no deadline.
+
+**Containment, checked by preflight (F3).** Preflight reads fleet-tools history
+only from the *history clone*, `/Users/pilotseal/pilot/fleet-tools.git`, a bare
+clone that Joel fetches as pilotseal from `dayamjz/fleet-tools` and uid 501
+cannot write (precondition 10's write probes cover it). For each script with a
+follow-up it checks that:
+- the row's merge commit equals the merge commit of the script's latest
+  follow-up in the block, and that commit is on the clone's `main`
+  first-parent history;
+- the script's blob at that commit hashes to the row's SHA-256 and to the trust
+  file's, so the pinned bytes are exactly the bytes that follow-up landed. No
+  later change can be in the pin, so a later merge that reverts part of the
+  follow-up is never pinned;
+- when a script has two follow-ups (F5 with F3 or F6), the earlier one's merge
+  commit is an ancestor of the later one's. The later PR was reviewed on a base
+  that held the earlier one, and that review is what keeps the earlier change in
+  it.
+
+A commit id is a hash that covers its tree, so a fetched history that someone
+rewrote cannot give a recorded merge commit different bytes: it can only lack
+the commit, and then the check refuses.
+
+The copies Joel installs in `/Users/pilotseal/bin` must hash to the rows'
+SHA-256 values, and preflight check 7 compares them. These rows are a published
+copy. The authoritative hashes are in the trust file of section 13, outside any
 repository an agent can write, and the two must agree (F3).
 
 ## 11. Owner questions for v2
@@ -1267,7 +1326,8 @@ one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `j1_order`
 (I2) and `j4` (I5) in section 7's parameters, `trust_file` (I8) and
 `key_fingerprint` (I5) in section 13's copy block, and `deadline` (I4),
 `freeze_writer` (open item 2) and `chain_head_checker` (open item 4) in the
-block below. I7 is the one open input that does not block signing: it governs
+block below, and the follow-up merges in section 10's `pilot-v2-followups`
+block. I7 is the one open input that does not block signing: it governs
 only promotion, which section 16 keeps blocked until Joel names the substitute,
 and its choice is recorded after signing as its own signed owner record (section
 13). Once Joel answers, his answers are quoted here verbatim with their comment
@@ -1644,7 +1704,8 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   when the signing commit is made, and the path and blob of each landing script
   and gate the coordinator runs there), and the SHA-256 of every executable the
   pilot runs: section 10's scripts and section 12's `review-size.sh` and
-  `pilot-review.sh`. No enroll script exists (section 14).
+  `pilot-review.sh`, and section 10's follow-up PRs and merge commits. No enroll
+  script exists (section 14).
 - **This text holds only copies.** The block below copies the fingerprint, and
   section 10's table and section 12's rows copy the executable hashes. No
   script trusts a copy read from a repository. Preflight reads the
@@ -1874,12 +1935,19 @@ refuses every form until then.
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
   - it refuses enrollment when the parameters' `k` is not 3 (section 5);
-  - it checks that each script follow-up's merge commit is an ancestor of the
-    merge commit section 10 names for its script (precondition 12);
+  - it checks section 10's containment rules against the history clone: each
+    row's merge commit is its script's latest follow-up merge from the
+    `pilot-v2-followups` block and the trust file, the script's blob there
+    hashes to the pin, and an earlier follow-up of the same script is an
+    ancestor (precondition 12);
+  - it records precondition 6's traversal probes and read probes of the ledger
+    and s01 to s08, and refuses a record whose stat of a target below
+    `/Users/pilotseal` succeeds;
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
-    file, `/Users/pilotseal/bin` and each installed script there), a probe of
+    file, `/Users/pilotseal/bin` and each installed script there, and the
+    history clone), a probe of
     the key's location, precondition 9's signing probe (an attempt from an
     agent session to sign a test message with the pinned key through each
     agent the key could be reached by, `ssh-agent` and `gpg-agent`), and
