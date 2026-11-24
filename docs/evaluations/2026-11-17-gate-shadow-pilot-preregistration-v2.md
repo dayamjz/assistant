@@ -94,19 +94,20 @@ section 9 holds.
 
 **The signing commit.** The signature names one assistant `main` commit, the
 signing commit. It must be a commit on `main`'s first-parent history at which
-this text holds no `UNRULED` and no `UNPINNED` value, so every owner input that
-blocks signing is answered and every pin is filled there (section 11 says which
-inputs block). A value is the value of a `key: value` line in one of this text's
-fenced `pilot-v2-` blocks, or a cell of a pin table (sections 10 and 12). The
-word in prose, as in this sentence, is not a value. This text may reach `main`
-earlier as an unsigned draft, and each later PR that answers an input or fills a
-pin is still a draft. Preflight check 4 must verify all three conditions: the
-commit is on `main`'s first-parent history, this text there has no `UNRULED` or
-`UNPINNED` value, and this text at `origin/main` is byte-identical to this text
-there. As built, check 4 refuses every signing form, and these checks are F3. So
-any later edit leaves the text unsigned until Joel signs again. Every "after the
-signing commit" in this text means after that commit's committer date
-(`git log --format=%ct`), the time preflight dates records against.
+this text holds no `UNRULED` and no `UNPINNED` value, so every input that blocks
+signing, an owner input or a coordinator item, is answered and every pin is
+filled there (section 11 says which inputs block). A value is the value of a
+`key: value` line in one of this text's fenced `pilot-v2-` blocks, or a cell of
+a pin table (sections 10 and 12). The word in prose, as in this sentence, is not
+a value. This text may reach `main` earlier as an unsigned draft, and each later
+PR that answers an input or fills a pin is still a draft. Preflight check 4 must
+verify all three conditions: the commit is on `main`'s first-parent history,
+this text there has no `UNRULED` or `UNPINNED` value, and this text at
+`origin/main` is byte-identical to this text there. As built, check 4 refuses
+every signing form, and these checks are F3. So any later edit leaves the text
+unsigned until Joel signs again. Every "after the signing commit" in this text
+means after that commit's committer date (`git log --format=%ct`), the time
+preflight dates records against.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -362,8 +363,11 @@ head.
 
 **K = 3.** A finding within 3 lines of a changed line (O1), or of a review
 finding's location (O5), counts as at that line. K is a fixed rule. It does not
-depend on how much context the sealed record's diff shows. 3 was chosen because
-it equals git's default unified context.
+depend on how much context the sealed record's diff shows. The scripts read `k`
+from section 7's parameters, and fail closed unless it is 3: preflight refuses
+enrollment and `pilot-score.py` scores nothing (F3, F4), as end condition 4 does
+for a `pr_count` other than 10. 3 was chosen because it equals git's default
+unified context.
 
 - **O1, planted location.**
   - Inputs: the sealed record `<sealed_id>.md`, the head's gate capture and its
@@ -441,17 +445,19 @@ it equals git's default unified context.
   (`internal/pipeline/outcome.go:173-180`), and a recorded report that does not
   decode leaves `ran: true` with no `report`
   (`internal/service/runs.go:2189-2193`). So, for every oracle here, a stage has
-  run only when `ran` is true, its `report` is present, and none of its findings
-  has the id `usage-ceiling`. Any other stage is UNMEASURED for every oracle
-  that reads it, never a miss or a false hold, even when a ceiling hold sits
-  beside a real execution's findings: the rule fails toward UNMEASURED. O5's
-  `hold-not-made` and `pass-refused` counts read only the `review` stage, as O5
-  says, so they are UNMEASURED for a head whose `review` stage has not run by
-  this rule; a later stage that never ran, as after a cancel at a review hold,
-  does not affect them. Only a `review` hold can be a `hold-not-made` item, so a
-  `usage-ceiling` hold is never one. Precondition 13 also forbids a usage
-  ceiling in either gate home, so this rule is a backstop. As built,
-  `pilot-score.py` checks neither `ran`, `report` nor the ceiling finding (F4).
+  run only when `ran` is true, its `report` is present (`report_present`, which
+  `gate.json` records for each `gate.stages[]` entry, section 7), and none of
+  its findings has the id `usage-ceiling`. Any other stage is UNMEASURED for
+  every oracle that reads it, never a miss or a false hold, even when a ceiling
+  hold sits beside a real execution's findings: the rule fails toward
+  UNMEASURED. O5's `hold-not-made` and `pass-refused` counts read only the
+  `review` stage, as O5 says, so they are UNMEASURED for a head whose `review`
+  stage has not run by this rule; a later stage that never ran, as after a
+  cancel at a review hold, does not affect them. Only a `review` hold can be a
+  `hold-not-made` item, so a `usage-ceiling` hold is never one. Precondition 13
+  also forbids a usage ceiling in either gate home, so this rule is a backstop.
+  As built, `pilot-score.py` checks neither `ran`, `report` nor the ceiling
+  finding (F4).
 - **O2, clean heads.** A head whose `enroll` case is `clean` has a false hold
   when `gate.holds[]` has an entry whose `stage` is `review`. This is C5's
   clean-head part. UNMEASURED when the gate capture is missing, or when the
@@ -850,8 +856,11 @@ and it appears nowhere else:
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
   `base_check`), the `gate.*` fields (among them `gate.submitted_head`,
   `gate.checks_basis`, and `gate.findings[]` with each entry's `stage`, taken
-  from the `stages[].report` that holds it), `origin_ci`, `pin_check`, and for a
-  planted head `review_adapter_sha256` (section 12).
+  from the `stages[].report` that holds it), and for each `gate.stages[]` entry
+  `report_present`: `true` when the run's stage view carries a decoded `report`,
+  and `false` when it has none, as when `ran` is true but the report did not
+  decode (`internal/service/runs.go:2189-2193`). Then `origin_ci`, `pin_check`,
+  and for a planted head `review_adapter_sha256` (section 12).
 - **The review record:** every `review.*` field (above) except
   `review.record_commit`, which v2 does not record (section 2).
 - **The sealed record `sNN.md`:** planted truth.
@@ -1238,7 +1247,8 @@ and the two must agree (F3).
 This text is not signed while any input below that blocks signing is open. Each
 one that blocks has an `UNRULED` or `UNPINNED` value (section 1): `j1_order`
 (I2) and `j4` (I5) in section 7's parameters, `trust_file` (I8) and
-`key_fingerprint` (I5) in section 13's copy block, and `deadline` (I4) in the
+`key_fingerprint` (I5) in section 13's copy block, and `deadline` (I4),
+`freeze_writer` (open item 2) and `chain_head_checker` (open item 4) in the
 block below. I7 is the one open input that does not block signing: it governs
 only promotion, which section 16 keeps blocked until Joel names the substitute,
 and its choice is recorded after signing as its own signed owner record (section
@@ -1248,6 +1258,8 @@ ids, as a#977 folded in section 7.12, and his key signature of this text
 
 ```pilot-v2-open-inputs
 deadline: UNRULED I4
+freeze_writer: UNRULED open item 2
+chain_head_checker: UNRULED open item 4
 ```
 
 When Joel answers I4, `deadline` becomes `none` or the deadline he names. A
@@ -1363,12 +1375,18 @@ keeps its number, answered or not.
 
 - Who appends `capture` and `freeze`, and whether uid-501 captures go to a
   second, public ledger (open item 2 of row 8's brief). Joel appends `enroll`
-  and `exclude` himself (I6).
-- Where chain heads are posted, and who checks them at unblinding (open item 4).
+  and `exclude` himself (I6). This blocks signing: `freeze_writer` above is
+  `UNRULED` until it is named.
+- Where chain heads are posted, and who compares them with the ledger, at
+  unblinding and for section 13's rotation detection (open item 4). This blocks
+  signing: `chain_head_checker` above is `UNRULED` until it is named.
 - Whether Joel runs a parse-only check of the real sealed records, as pilotseal,
   printing only how many parse under O1 (open item 3), together with
   `bind --census` (section 7). If none parses, C4 is wholly UNMEASURED, and if
-  too few records can be bound, C1's planted minimums can't be met.
+  too few records can be bound, C1's planted minimums can't be met. This does
+  not block signing and has no value: it only tells in advance whether C4 and
+  C1 can be measured, and skipping it can only leave them UNMEASURED, never
+  produce a PASS.
 
 ## 12. The eligible sequence
 
@@ -1408,10 +1426,10 @@ left out only by a rule written here.
   window PR, so the writer cannot move an eligible PR out of the sequence by
   giving it another case, or another kind. F1 makes the ledger refuse a window
   `enroll` (section 7, "Window records") whose `case` or `provenance` is not
-  `live`, or whose `work_kind` differs from the `pr_kind` of the `preflight`
-  line; and an `enroll` of provenance `live` that is not a window record. A
-  window PR that fails the kind test gets an `exclude` under E1, never an
-  `enroll` with another kind.
+  `live`, or whose `work_kind` differs from the `pr_kind` of the last
+  `preflight` line before the first `enroll` (section 7); and an `enroll` of
+  provenance `live` that is not a window record. A window PR that fails the kind
+  test gets an `exclude` under E1, never an `enroll` with another kind.
 - **The live case.** This replaces the original's line 281: the live case's
   minimum is 10 compared heads, and its heads are this sequence. As built,
   `pilot-score.py` still holds the original's live minimum of 4, so F4 must land
@@ -1478,10 +1496,13 @@ left out only by a rule written here.
   and reported beside it.
 - **Size.** Eligible PRs have at most 300 code lines (I1, answered: "300 or
   less", 7121929832), measured by the pinned `review-size.sh` at the
-  enrollment head: the PR head the `enroll` or `exclude` line records, before
-  its first review.
-  A PR that grows past the bound after it is enrolled stays enrolled. The
-  report lists it with both sizes, and it is never quietly dropped.
+  enrollment head: the PR head the `enroll` or `exclude` line records, at the
+  time the record is written. For a PR recorded before its first review, as
+  every PR should be, that is before the review. For an E5 candidate, tested for
+  E2 first by the precedence below, it is the head at the time Joel records it,
+  which is after a review. A PR that grows past the bound after it is enrolled
+  stays enrolled. The report lists it with both sizes, and it is never quietly
+  dropped.
 - **Order.** Live PRs are taken in order of GitHub's `created_at`, which is
   immutable, with ties broken by PR number, lower first. They are never
   ordered by a relay or request, since the coordinator controls when it relays
@@ -1777,7 +1798,8 @@ refuses every form until then.
   7) unique per `pr`, so the ledger refuses a second window record naming a PR
   that already has one (section 12), with a self-test row and a mutation that
   turns it red; refuse a window `enroll` whose `case` or `provenance` is not
-  `live`, whose `work_kind` differs from the `preflight` line's `pr_kind`, or
+  `live`, whose `work_kind` differs from the `pr_kind` of the last `preflight`
+  line before the first `enroll` (section 7), or
   whose `pr_created_at` is before the `at` of the first `preflight` line, and
   an `enroll` of provenance `live` that is not a window record, while a replayed
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
@@ -1833,6 +1855,7 @@ refuses every form until then.
     table, section 12's rows) differs from it. A self-test row
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
+  - it refuses enrollment when the parameters' `k` is not 3 (section 5);
   - it checks preconditions 8 to 13 and 15, including that neither gate home's
     `config.yaml` sets a `usage_ceiling.*` key;
   - it adds the write probes of precondition 10 (the sealed ledger, the trust
@@ -1872,10 +1895,13 @@ refuses every form until then.
     `unlocatable` finding as its own item (as built, `o5_counts` only counts
     them);
   - it computes each ruling's place in the 48-hour budget (section 8);
-  - every oracle that reads a stage needs that stage's `ran: true`, or it is
-    UNMEASURED, whatever the outcome says (section 5; as built, no oracle
-    checks `ran`: not O1, O2, O3, O4 or O5's `hold-not-made` and
-    `pass-refused`);
+  - it scores nothing, appending `score-refused`, when the frozen parameters'
+    `k` is not 3 (section 5);
+  - every oracle that reads a stage needs that stage to have run by section
+    5's rule, all three conditions: `ran: true`, `report_present: true`, and no
+    finding with the id `usage-ceiling`; otherwise it is UNMEASURED, whatever
+    the outcome says (as built, no oracle checks any of them: not O1, O2, O3,
+    O4 or O5's `hold-not-made` and `pass-refused`);
   - O4 reads the `ci` stage (as built, `stage_outcome(gate, "checks")` looks
     for a stage that `gate.stages[]` never contains, so C6 is always
     UNMEASURED);
