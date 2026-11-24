@@ -18,7 +18,7 @@ id
 `fd80055c522ea2d6b135a30d596e830e63132b97`, and "line N" without a file is a
 line of that text. "O1" to "O5" are the oracle rules of section 5, "J1" to "J5"
 the original owner questions of section 11 (now answered or narrowed), "I1" to
-"I8" the owner inputs (section 11), "E1" to "E5" the exclusion rules
+"I8" the owner inputs (section 11), "E1" to "E6" the exclusion rules
 of section 12 and "F1" to "F6" the script follow-ups of section 17.
 
 **Where the review records are (`ftw:`).** Fleet-tools publishes its `reviews/`
@@ -652,7 +652,7 @@ items Joel rules.
   of planted truth, which O1 reads and Joel never opens before unblinding
   (section 6).
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
-  with the same evidence fields and the exclusion rule (`E1` to `E5`) in
+  with the same evidence fields and the exclusion rule (`E1` to `E6`) in
   place of `rule`.
 - **Window records.** An `enroll` or `exclude` that carries section 12's
   evidence (`pr_created_at`, `enroll_head`, `code_lines`) is a window record:
@@ -685,32 +685,42 @@ among them `pin_check`, `pass` or `fail`, the item 3 pin check of line 332),
 for a replayed one, taken when the review record is captured) and `tree.txt`
 (`git ls-tree -r -z --name-only <head>`: NUL-separated, so no path is quoted).
 Each is listed in that head's `freeze` `raw[]`, and the scripts read no capture
-whose bytes differ from it. The `default-1` run of a head goes under
-`<captures>/<head_id>/default-1/`, with its own `gate.json`, and is listed in
-the same `raw[]`. `pilot-score.py` reads only the file named `gate.json`, so it
-never scores or pools the `default-1` run. Reporting that run apart is F4.
+whose bytes differ from it. **When the review is captured.** The coordinator's
+checkout overwrites `ft-<N>.md` at each later review and archives only some full
+reviews, so the record of the first full review at `enroll_head` is often gone a
+round later. So the operator captures a live head's `review.md` and
+`verdicts.txt` right after the first full verdict line at `enroll_head` appears
+in `ftw:reviews/ft-<N>.verdicts`, before any later review of that PR is
+requested. A head whose review was not captured in time has no review: it is not
+compared, stays enrolled, and the report lists it as captured late. The
+`default-1` run of a head goes under `<captures>/<head_id>/default-1/`, with its
+own `gate.json`, and is listed in the same `raw[]`. `pilot-score.py` reads only
+the file named `gate.json`, so it never scores or pools the `default-1` run.
+Reporting that run apart is F4.
 
-**One owner for the review fields.** `gate.json` never holds `planted_truth`
-or any `review.*` field (the original's lines 392-396). Those come only from
-the review record, by `ft:review-findings.py`, so no second copy can disagree
-with it. A `gate.json` that holds either makes every oracle for that head
-UNMEASURED (F4). A head is *compared* when its `gate.json` exists; its review
-record's verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed
-head, that verdict equals the one on the last full-verdict line for the head
-in its captured `verdicts.txt`; the one-head rule below holds;
+**One owner for the review fields.** `gate.json` never holds `planted_truth` or
+any `review.*` field (the original's lines 392-396). Those come only from the
+review record, by `ft:review-findings.py`, so no second copy can disagree with
+it. A `gate.json` that holds either makes every oracle for that head UNMEASURED
+(F4). A head is *compared* when its `gate.json` exists; its review record's
+verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed head, that
+verdict equals the one on the last full-verdict line for the head in its
+captured `verdicts.txt`; the one-head rule below holds;
 `base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The
 `.verdicts` line wins, as in the original's lines 68-69: when the captured
-review record's verdict differs from it, the head has no review (section 12),
-is not compared, and the report names both. That one definition serves C1,
-O5 and the `items` line.
+review record's verdict differs from it, the head has no review (section 12), is
+not compared, and the report names both. That one definition serves C1, O5, the
+`items` line and end condition 4, and it is implemented once, in
+`pilot-unblind.py`, which `pilot-score.py` calls (F6).
 
 **One owner for each field.** Every section 4 field has exactly one owner,
 and it appears nowhere else:
 
 - **The `enroll` line**, written by Joel before the head runs: `head_id`,
   `head`, `case`, `provenance`, `pr`, `sealed_id`, `work_kind`, `injection`,
-  `intent_sha256`, `roles_pin_sha256`, `run_set`, `fix_rounds_review`, and for
-  a window PR section 12's evidence and `landing_regime`.
+  `intent_sha256`, `roles_pin_sha256`, `run_set`, `fix_rounds_review`,
+  `enrolled_at` (the `enroll` line's own ledger `at`, never a body field), and
+  for a window PR section 12's evidence and `landing_regime`.
 - **`gate.json`**, written by the operator: the base facts of the original's
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
   `base_check`), the `gate.*` fields (among them `gate.checks_basis`),
@@ -737,10 +747,14 @@ after enrollment.
 **Where a planted head's review record lives.** A planted head's review record
 is a sealed record (O5). It is written to
 `/Users/pilotseal/pilot/sealed/reviews/<head_id>.md`, never into `<captures>`,
-and listed by hash in that head's `freeze` `raw[]`. Only `pilot-score.py score`,
-as pilotseal, reads it, and only for the verdict that decides whether the head
-is compared. The `items` step never reads it. It is published at unblinding with
-s01 to s08 (F6).
+and listed by hash in that head's `freeze` `raw[]`, as the entry whose `file` is
+`sealed:reviews/<head_id>.md`. The `sealed:` prefix names
+`/Users/pilotseal/pilot/sealed/`, so readers open that entry there, never under
+`<captures>` (as built, `read_captures` opens every entry under `<captures>`,
+F4). Only `pilot-score.py score`, as pilotseal, reads it, and only for what
+decides whether the head is compared: its verdict and the head its line 1 names
+(the one-head rule). The `items` step never reads it. It is published at
+unblinding with s01 to s08 (F6).
 
 **Streams and chain heads.** The sealed ledger is
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
@@ -838,7 +852,7 @@ C3, C5 outside clean heads and C7 can be measured.
   `neither`), and `severity` is one of the original's line 213 scale
   (`blocker`, `should-fix`, `nit`, `not-real`);
 - for a race or recovery outcome, `correct` is `true` or `false`;
-- for a classification, `class` is `eligible` or one of E1 to E5;
+- for a classification, `class` is `eligible` or one of E1 to E6;
 - `budget` records where the line falls in the J1 budget. The script
   recomputes it from recorded bytes, and the recomputed value wins; a recorded
   value that differs is reported beside the line. The budget is 48 hours (Joel,
@@ -1147,13 +1161,14 @@ left out only by a rule written here.
   stays enrolled and reported, and a later PR in the order makes up the 10. No
   PR is replaced: the uncompared one keeps its record.
 - **After the window closes.** No live `enroll` is written once the window has
-  closed. Before each live `enroll`, the writer runs `pilot-unblind.py ready`
-  (F6), which computes the window's close from the ledger and the frozen
-  captures, and writes no `enroll` once it says the end rule holds. A PR
-  created after the window's close gets no record and is never reconciled. If
-  a live head whose `pr_created_at` is after the close is enrolled anyway, it
-  is not a sequence head, it is left out of C1, C3 and C5, and the report lists
-  it (F4).
+  closed. Before each live `enroll`, the writer runs `pilot-unblind.py window`
+  (F6), which checks end condition 4 alone, computing the window's close from
+  the ledger and the frozen captures, and writes no `enroll` once it says the
+  window has closed. A PR created in the window that still has no record then
+  gets an `exclude` under E6. A PR created after the window's close gets no
+  record and is never reconciled. If a live head whose `pr_created_at` is after
+  the close is enrolled anyway, it is not a sequence head, it is left out of C1,
+  C3 and C5, and the report lists it (F4).
 - **A window PR's case.** Every PR in the window that is enrolled is enrolled
   with `case` `live` and `provenance` `live`. This replaces the original's lines
   279 and 280 for v2: a race or recovery head is planted or replayed, never a
@@ -1255,6 +1270,14 @@ left out only by a rule written here.
     line. The record states that. The report counts E5 exclusions apart and
     lists each with its `created_at` and the time of its first `.verdicts`
     line, so a PR can't be excluded quietly.
+  - **E6.** The window closed before it was recorded: it was created in the
+    window, and when the window closed (above) it had no record, so it can no
+    longer be enrolled. The writer records it under E6 before `close`, so
+    reconciliation can pass. The report counts E6 exclusions apart and lists
+    each with its `created_at`. E6 applies only once the window has closed, so
+    it never removes a PR from the sequence that could still be enrolled. When
+    E5 also applies, because the PR was reviewed before Joel recorded it, E5 is
+    recorded instead, so its selection gap stays reported.
   - **A residual selection gap in E5.** The agents decide when a review is
     requested, so by requesting one before Joel records a PR they could
     exclude a chosen eligible PR under E5. That is the lever #juno's fix 1
@@ -1445,8 +1468,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - it reconciles every window PR against the ledger before each `enroll` and
     before `close`, and refuses on a missing or doubled record;
   - it runs the pinned `review-size.sh` at the enrollment head;
-  - before each live `enroll`, it runs `pilot-unblind.py ready` and writes no
-    `enroll` once that says the end rule holds (section 12);
+  - before each live `enroll`, it runs `pilot-unblind.py window` and writes no
+    `enroll` once that says the window has closed, then records every
+    unrecorded window PR under E6 (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`.
 - **F3. `pilot-preflight.py`:**
@@ -1480,8 +1504,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - every oracle that reads a stage needs that stage's `ran: true`, or it is
     UNMEASURED, whatever the outcome says (section 5; as built, no oracle
     checks `ran`: not O2, O3, O4 or O5's `hold-not-made` and `pass-refused`);
-  - it reads `verdicts.txt` and decides compared by section 7's one
-    definition, the `.verdicts` line winning; it reads each field only from
+  - it decides compared only by calling `pilot-unblind.py`'s compared
+    predicate (F6), which reads `verdicts.txt` with the `.verdicts` line
+    winning, never by a second implementation; it reads each field only from
     its one owner (section 7), makes a head UNMEASURED when a field appears
     in a file that does not own it, and does not compare a head that fails
     the one-head rule on `gate.reviewed_revision` (as built, `score_head`
@@ -1493,6 +1518,8 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     miss (O1);
   - a live head whose `pr_created_at` is after the window's close is left out
     of C1, C3 and C5 and listed (section 12);
+  - it opens a `raw[]` entry whose `file` starts `sealed:` under
+    `/Users/pilotseal/pilot/sealed/`, not `<captures>` (section 7);
   - it takes review fields only from the review record, reads a planted
     head's review record only from the sealed directory and only for the
     compared verdict, and makes a head UNMEASURED when its `gate.json` holds
@@ -1516,8 +1543,12 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   `pr_kind`, `pr_created_at` not after the window's close) is frozen and
   compared (section 5), reading each head's frozen captures, not `enroll` lines
   or frozen heads of provenance `live` alone, so a doubled record can never
-  count twice. It also adds a `ready` mode that checks end conditions 1, 3 and 4
-  without a `close` and appends nothing, so Joel appends `close` only when it
+  count twice. It owns the *compared* predicate of section 7: one function,
+  which `pilot-score.py` calls and never reimplements, so end condition 4 and C1
+  can never disagree on a head. It also adds a `window` mode that checks end
+  condition 4 alone and appends nothing, which the writer runs before each live
+  `enroll` (section 12), and a `ready` mode that checks end conditions 1, 3 and
+  4 without a `close` and appends nothing, so Joel appends `close` only when it
   says the end rule holds (section 7). Its `run` mode also publishes each
   planted head's sealed review record from
   `/Users/pilotseal/pilot/sealed/reviews/`, with its hash in `published` checked
