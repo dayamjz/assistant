@@ -349,8 +349,9 @@ files it reads.
 (`sealed_id`). A **compared head** is an enrolled, frozen head that meets
 section 7's one definition ("One owner for the review fields"): a review verdict
 of `APPROVE` or `CHANGES REQUESTED` that its `.verdicts` capture agrees with,
-one head throughout, `base_check.base_mismatch` false and `pin_check` `pass`.
-There is no adjudication pending and no reduced-voter head.
+captured on time for a live head, one head throughout,
+`base_check.base_mismatch` false and `pin_check` `pass`. There is no
+adjudication pending and no reduced-voter head.
 
 **K = 3.** A finding within 3 lines of a changed line (O1), or of a review
 finding's location (O5), counts as at that line. K is a fixed rule. It does not
@@ -691,12 +692,11 @@ reviews, so the record of the first full review at `enroll_head` is often gone a
 round later. So the operator captures a live head's `review.md` and
 `verdicts.txt` right after the first full verdict line at `enroll_head` appears
 in `ftw:reviews/ft-<N>.verdicts`, before any later review of that PR is
-requested. A head whose review was not captured in time has no review: it is not
-compared, stays enrolled, and the report lists it as captured late. The
-`default-1` run of a head goes under `<captures>/<head_id>/default-1/`, with its
-own `gate.json`, and is listed in the same `raw[]`. `pilot-score.py` reads only
-the file named `gate.json`, so it never scores or pools the `default-1` run.
-Reporting that run apart is F4.
+requested. The *compared* predicate below detects a capture that came too late.
+The `default-1` run of a head goes under `<captures>/<head_id>/default-1/`, with
+its own `gate.json`, and is listed in the same `raw[]`. `pilot-score.py` reads
+only the file named `gate.json`, so it never scores or pools the `default-1`
+run. Reporting that run apart is F4.
 
 **One owner for the review fields.** `gate.json` never holds `planted_truth` or
 any `review.*` field (the original's lines 392-396). Those come only from the
@@ -704,14 +704,24 @@ review record, by `ft:review-findings.py`, so no second copy can disagree with
 it. A `gate.json` that holds either makes every oracle for that head UNMEASURED
 (F4). A head is *compared* when its `gate.json` exists; its review record's
 verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed head, that
-verdict equals the one on the last full-verdict line for the head in its
-captured `verdicts.txt`; the one-head rule below holds;
-`base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The
-`.verdicts` line wins, as in the original's lines 68-69: when the captured
-review record's verdict differs from it, the head has no review (section 12), is
-not compared, and the report names both. That one definition serves C1, O5, the
-`items` line and end condition 4, and it is implemented once, in
-`pilot-unblind.py`, which `pilot-score.py` calls (F6).
+verdict equals the one on the counted line of its captured `verdicts.txt`, and
+for a live head the capture was on time; the one-head rule below holds;
+`base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The counted
+line is:
+
+- **for a live head**, the first full-verdict line at `enroll_head`. The
+  capture was on time only when that line is the last line of `verdicts.txt`.
+  Any later line means another review ran before the capture, so the head is
+  captured late: it is not compared, stays enrolled, and is listed. This
+  replaces the original's lines 68-69 ("the last full verdict") for live heads.
+- **for a replayed head**, the last full-verdict line at that head, as in the
+  original's lines 68-69, since its reviews ended before the pilot.
+
+The counted line wins: when the captured review record's verdict differs from
+it, the head has no review (section 12), is not compared, and the report names
+both. That one definition serves C1, O5, the `items` line and end condition 4,
+and it is implemented once, in `pilot-unblind.py`, which `pilot-score.py` calls
+(F6).
 
 **One owner for each field.** Every section 4 field has exactly one owner,
 and it appears nowhere else:
@@ -751,10 +761,12 @@ and listed by hash in that head's `freeze` `raw[]`, as the entry whose `file` is
 `sealed:reviews/<head_id>.md`. The `sealed:` prefix names
 `/Users/pilotseal/pilot/sealed/`, so readers open that entry there, never under
 `<captures>` (as built, `read_captures` opens every entry under `<captures>`,
-F4). Only `pilot-score.py score`, as pilotseal, reads it, and only for what
-decides whether the head is compared: its verdict and the head its line 1 names
-(the one-head rule). The `items` step never reads it. It is published at
-unblinding with s01 to s08 (F6).
+F4). It has two readers, both in `pilot-unblind.py` and both run as pilotseal:
+the *compared* predicate (F6), which reads only its verdict and the head its
+line 1 names (the one-head rule), whether `pilot-unblind.py` calls it or
+`pilot-score.py` does; and `pilot-unblind.py run`, which publishes it at
+unblinding with s01 to s08 (F6). Nothing else opens it, and the `items` step
+never reads it.
 
 **Streams and chain heads.** The sealed ledger is
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
@@ -1193,24 +1205,25 @@ left out only by a rule written here.
     operator resets the fleet-tools mirror's `main` to it before the push, and
     the original's base check (lines 310-316) applies unchanged.
   - **Review record.** The full verdict at that head under the landing rules is
-    a line of `ftw:reviews/ft-<N>.verdicts` of the form `--- verdict ft#<N> at
-    <short sha> (full): VERDICT: ...`. When a head has several full verdicts,
-    the last such line in `.verdicts` is the review, as in the original's lines
-    68-69. The review it records is found by content, never by file name,
-    since archived copies are named in more than one way (for example
-    `ft-787-full-ff23425.md` and `ft-791-claude-full-a787e4f.md`). It is the
-    file in `ftw:reviews/` named `ft-<N>.md` or `ft-<N>-<anything>.md` whose
-    line 1 is exactly `reviewed at <40-hex>` naming that head, with no
-    `(delta from ...)`, and whose verdict, as `ft:review-findings.py
-    --verdict` prints it, equals that last line's. That line 1 gives
-    `review.head` (the 40-hex), and the absence of `(delta from ...)` gives
-    `review.kind`, which is `full`. Its line 2,
-    `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. If no such
-    file exists, the head has no review, and its `review.verdict` is `none`.
-    If more than one exists, they must have the same line 2 and the same
-    findings block, as `ft:review-findings.py` prints it, so any of them gives
-    the same `review.findings[]`. If they differ in either, the head has no
-    review, and the report lists the files.
+    a line of `ftw:reviews/ft-<N>.verdicts` of the form
+    `--- verdict ft#<N> at <short sha> (full): VERDICT: ...`. The counted line
+    is the first such line at the enrolled head, and a timely capture leaves it
+    as the last line of `verdicts.txt` (section 7, "compared"; this replaces the
+    original's lines 68-69 for live heads). The review it records is found by
+    content, never by file name, since archived copies are named in more than
+    one way (for example `ft-787-full-ff23425.md` and
+    `ft-791-claude-full-a787e4f.md`). It is the file in `ftw:reviews/` named
+    `ft-<N>.md` or `ft-<N>-<anything>.md` whose line 1 is exactly
+    `reviewed at <40-hex>` naming that head, with no `(delta from ...)`, and
+    whose verdict, as `ft:review-findings.py --verdict` prints it, equals the
+    counted line's. That line 1 gives `review.head` (the 40-hex), and the
+    absence of `(delta from ...)` gives `review.kind`, which is `full`. Its line
+    2, `reviewer: <reviewer> <model> ...`, gives `review.reviewer`. If no such
+    file exists, the head has no review, and its `review.verdict` is `none`. If
+    more than one exists, they must have the same line 2 and the same findings
+    block, as `ft:review-findings.py` prints it, so any of them gives the same
+    `review.findings[]`. If they differ in either, the head has no review, and
+    the report lists the files.
   - **CI.** `origin_ci` is
     `gh api repos/dayamjz/fleet-tools/commits/<head>/check-runs`. Fleet-tools
     runs no CI workflow today, so that list is empty, and the gate's
@@ -1276,14 +1289,26 @@ left out only by a rule written here.
     reconciliation can pass. The report counts E6 exclusions apart and lists
     each with its `created_at`. E6 applies only once the window has closed, so
     it never removes a PR from the sequence that could still be enrolled. When
-    E5 also applies, because the PR was reviewed before Joel recorded it, E5 is
-    recorded instead, so its selection gap stays reported.
-  - **A residual selection gap in E5.** The agents decide when a review is
-    requested, so by requesting one before Joel records a PR they could
-    exclude a chosen eligible PR under E5. That is the lever #juno's fix 1
-    took away from ordering. Nothing here prevents it. What limits it is that
-    every E5 exclusion is listed with its times, and a pilot with any E5
-    exclusion is reported as possibly selected, beside its result.
+    the PR was also reviewed before Joel recorded it, the time of its first
+    `.verdicts` line decides: before the window's close, E5 is recorded, since
+    that review could have been timed to exclude it; at or after the close, E6
+    is recorded, since no review then could change the selection.
+  - **Residual selection levers.** The agents decide when reviews are
+    requested, and they author, push and close the PRs, so they can drop a
+    chosen eligible PR from the compared ten. That is the lever #juno's fix 1
+    took away from ordering. The levers are:
+    - an E5 exclusion whose first review came before the window's close (a
+      review requested before Joel records the PR);
+    - a live head captured late (another review requested before the
+      capture, section 7);
+    - a live head moved after enrollment (a push before its first full
+      review, section 7's one-head rule);
+    - any other enrolled live head that ends not compared, for example a PR
+      closed before its first full review.
+
+    Nothing here prevents them. What limits them is that each is listed with
+    its reason and times, and a pilot with any of them is reported as possibly
+    selected, beside its result.
 - **The pinned `review-size.sh`.** The fleet-tools blob current when the
   signing commit is made, filled in by then like section 10:
 
@@ -1518,12 +1543,16 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     miss (O1);
   - a live head whose `pr_created_at` is after the window's close is left out
     of C1, C3 and C5 and listed (section 12);
-  - it opens a `raw[]` entry whose `file` starts `sealed:` under
-    `/Users/pilotseal/pilot/sealed/`, not `<captures>` (section 7);
-  - it takes review fields only from the review record, reads a planted
-    head's review record only from the sealed directory and only for the
-    compared verdict, and makes a head UNMEASURED when its `gate.json` holds
-    `planted_truth` or a `review.*` field (section 7);
+  - it lists every enrolled live head that is not compared, with its reason
+    (captured late, moved after enrollment, no review, or another), and every
+    E5 exclusion whose first review came before the window's close, and marks
+    the pilot possibly selected when any exists (section 12);
+  - it never opens a `raw[]` entry whose `file` starts `sealed:`, and never
+    reads a planted head's review record itself: the compared predicate it
+    calls does (F6, section 7);
+  - it takes review fields only from the review record, and makes a head
+    UNMEASURED when its `gate.json` holds `planted_truth` or a `review.*` field
+    (section 7);
   - it reads Joel's `ruling` lines and applies section 5's C3, C5 and C7 rules,
     within the J1 budget (I3), and anything past the budget is UNMEASURED;
   - the live minimum of C1 becomes 10;
@@ -1543,13 +1572,16 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   `pr_kind`, `pr_created_at` not after the window's close) is frozen and
   compared (section 5), reading each head's frozen captures, not `enroll` lines
   or frozen heads of provenance `live` alone, so a doubled record can never
-  count twice. It owns the *compared* predicate of section 7: one function,
-  which `pilot-score.py` calls and never reimplements, so end condition 4 and C1
-  can never disagree on a head. It also adds a `window` mode that checks end
-  condition 4 alone and appends nothing, which the writer runs before each live
-  `enroll` (section 12), and a `ready` mode that checks end conditions 1, 3 and
-  4 without a `close` and appends nothing, so Joel appends `close` only when it
-  says the end rule holds (section 7). Its `run` mode also publishes each
-  planted head's sealed review record from
+  count twice. It owns the *compared* predicate of section 7, including the
+  on-time capture check for a live head (as built, nothing checks it) and the
+  reading of a planted head's sealed review record, opened from its `sealed:`
+  `raw[]` entry under `/Users/pilotseal/pilot/sealed/` and checked against its
+  hash: one function, which `pilot-score.py` calls and never reimplements, so
+  end condition 4 and C1 can never disagree on a head. It also adds a `window`
+  mode that checks end condition 4 alone and appends nothing, which the writer
+  runs before each live `enroll` (section 12), and a `ready` mode that checks
+  end conditions 1, 3 and 4 without a `close` and appends nothing, so Joel
+  appends `close` only when it says the end rule holds (section 7). Its `run`
+  mode also publishes each planted head's sealed review record from
   `/Users/pilotseal/pilot/sealed/reviews/`, with its hash in `published` checked
   against that head's `freeze` `raw[]` (section 7).
