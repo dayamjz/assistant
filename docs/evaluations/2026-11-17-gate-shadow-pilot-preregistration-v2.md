@@ -596,10 +596,21 @@ items Joel rules.
   (section 9, precondition 6), from a copy of the same pinned blob. Making
   `check` refuse to run as any other user is F3.
 - **Joel and the sealed records.** The original's rule (lines 197-200) is kept
-  and applied to Joel as the only signer, and as the only ruler under J1
-  option 2: he does not open a sealed record before the end condition of
-  section 8 holds and `pilot-unblind.py` has published it. Any earlier access
-  is logged as an `access` line in the ledger, and the head is marked.
+  and applied to Joel as the only signer, and as the only ruler under J1 option
+  2: he does not open a sealed record before the end condition of section 8
+  holds and `pilot-unblind.py` has published it. Any earlier access is logged as
+  an `access` line in the ledger, and the head is marked. v2 has exactly two
+  such accesses, both logged:
+  - **building a planted head** whose record is a construction spec (section 7,
+    "Building and binding a planted head"): Joel reads the record as pilotseal
+    to build the commit, appends an `access` line (`by: build`, the
+    `sealed_id`), and the head is marked;
+  - **`pilot-score.py bind`**, which reads a record and prints only the head and
+    case it names, never its truth. It appends an `access` line (`by: bind`),
+    and since it prints no truth, the head is not marked.
+
+  Joel's rulings never touch a planted head (O5, section 8), so a mark changes
+  no result, and the report lists every `access` line.
 - **Residual gaps.** The original's (lines 202-207) are kept, except that
   step 4's voter order no longer exists. Two are added:
   - Root, or Joel through `sudo`, can read the records or rewrite the ledger,
@@ -673,11 +684,13 @@ items Joel rules.
   no body fields, so this needs no ledger change. A planted head's `enroll`
   carries no planted truth: no defect, location, family, expected action, `ask`
   or failing check. Those are only in its sealed record `sNN.md`, the one owner
-  of planted truth, which O1 reads and Joel never opens before unblinding
-  (section 6).
+  of planted truth, which O1 reads and which Joel opens before unblinding only
+  through section 6's two logged accesses.
 - `exclude`: not in the landed kind set. Section 12 needs it, and F1 adds it,
-  with the same evidence fields and the exclusion rule (`E1` to `E6`) in
-  place of `rule`.
+  with the same evidence fields and the exclusion rule (`E1` to `E6`) in place
+  of `rule`. An E5 or E6 `exclude` also carries `verdicts_seen` (`true` for E5,
+  `false` for E6) and, for E5, `verdicts_sha256`, the SHA-256 of
+  `ftw:reviews/ft-<N>.verdicts` when Joel recorded it.
 - **Window records.** An `enroll` or `exclude` that carries section 12's
   evidence (`pr_created_at`, `enroll_head`, `code_lines`) is a window record:
   only a fleet-tools window PR has one. A replayed head's `enroll` carries its
@@ -782,24 +795,52 @@ because the author pushed after enrollment and the review is of the new head,
 the head is not compared. It stays enrolled, and the report lists it as moved
 after enrollment.
 
-**Binding a planted head.** Joel may not open a sealed record before unblinding
-(section 6), so he never reads one to enroll a planted head. Instead
-`pilot-score.py bind <sealed_id>` (F4), run by Joel as pilotseal, reads that
-record and prints only the commit it names as the head and the case it names,
-never its truth. Joel copies those two values into the planted head's `enroll`.
-A record that names no head or no case cannot be bound, so that planted head is
-not enrolled. At scoring, the script checks again that each planted `enroll`'s
-`head` and `case` equal what its record names, and a planted head that differs
-is UNMEASURED for every oracle (F4). The planted commit and its case are not
-sealed: in the original the case is a manifest field (line 363), and only
-`planted_truth` (line 366) is sealed. Knowing them does not bias Joel, whose
-only rulings are on live heads and on race and recovery outcomes (section 8).
+**Building and binding a planted head.** A planted record either names an
+existing commit, or it is a construction spec that a head is built from, as s02
+and s08, the C4 candidates, are (the original's lines 283-296).
+
+- **Building:** a head built from a spec is built by Joel, as pilotseal, reading
+  the spec under section 6's logged `access` (`by: build`). No uid-501 process
+  ever reads a spec. He commits the result in a pilotseal-owned repository and
+  hands the commit to the operator, who pushes it like any planted head. Its
+  40-hex commit becomes the planted head's `head`. The commit is code the gate
+  has to read anyway; the spec's expected failure mode and scoring rule stay
+  sealed.
+- **Binding:** `pilot-score.py bind <sealed_id>` (F4), run by Joel as pilotseal
+  and logged as an `access` (`by: bind`), reads the record and prints only the
+  case it names and, for a record that names a commit, that commit. Joel copies
+  those values into the planted head's `enroll`; for a built head, `head` is the
+  commit he built. A record that names no case, or names neither a commit nor a
+  construction, cannot be bound, so that planted head is not enrolled.
+- **Before signing:** `pilot-score.py bind --census`, as pilotseal, prints only
+  counts: how many records name a commit, how many are construction specs, and
+  how many name a case. It is run before signing with open item 3's parse-only
+  check (section 11), so a pilot whose planted cases can't meet C1's minimums is
+  caught before any live enrollment.
+
+At scoring, the script checks again that each planted `enroll`'s `case`, and its
+`head` where the record names a commit, equal what its record names, and a
+planted head that differs is UNMEASURED for every oracle (F4). The planted
+commit and its case are not sealed: in the original the case is a manifest field
+(line 363), and only `planted_truth` (line 366) is sealed. Knowing them does not
+bias Joel, whose only rulings are on live heads and on race and recovery
+outcomes (section 8).
 
 **Where a planted head's review record lives.** A planted head's review record
-is a sealed record (O5). The operator runs the pinned adapter as uid 501, so its
-output first exists in agent-readable space, where the operator, an agent, can
-read it, as the original's line 169 let the operator read sealed records. That
-is a stated limit. Joel then moves the file, as pilotseal, to
+is a sealed record (O5). **A stated limit:** the operator runs the pinned
+adapter as uid 501, so its output first exists in uid-501 space. There an agent
+can read it, as the original's line 169 let the operator read sealed records,
+and can also rewrite it before Joel copies it. `review_adapter_sha256` is
+written by the operator too, so nothing ties the sealed bytes to a real adapter
+run. Joel copies, not moves, the file: pilotseal cannot delete from uid-501
+space, so the agent's copy stays. The effect is that a planted head's review
+verdict, which decides whether it is compared, rests on bytes an agent could
+have changed. That can move C1's planted-case counts. It cannot move C4, whose
+scope is every planted real-finding and hold head whether compared or not
+(section 5). **What closes it:** Joel runs the pinned adapter himself, as
+pilotseal, writing straight into the sealed directory, so no uid-501 process
+holds the output; that needs the adapter's reviewer to run from the pilotseal
+account. Joel copies the file, as pilotseal, to
 `/Users/pilotseal/pilot/sealed/reviews/<head_id>.md`, never into `<captures>`,
 and listed by hash in that head's `freeze` `raw[]`, as the entry whose `file` is
 `sealed:reviews/<head_id>.md`. The `sealed:` prefix names
@@ -1221,9 +1262,10 @@ keeps its number, answered or not.
   second, public ledger (open item 2 of row 8's brief). Joel appends `enroll`
   and `exclude` himself (I6).
 - Where chain heads are posted, and who checks them at unblinding (open item 4).
-- Whether Joel runs a parse-only check of the real sealed records, as
-  pilotseal, printing only how many parse under O1 (open item 3). If none
-  parses, C4 is wholly UNMEASURED.
+- Whether Joel runs a parse-only check of the real sealed records, as pilotseal,
+  printing only how many parse under O1 (open item 3), together with
+  `bind --census` (section 7). If none parses, C4 is wholly UNMEASURED, and if
+  too few records can be bound, C1's planted minimums can't be met.
 
 ## 12. The eligible sequence
 
@@ -1356,10 +1398,10 @@ left out only by a rule written here.
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer comes
     to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any line.
-    The record states that, with `verdicts_seen: true` and the SHA-256 of that
-    file's bytes when Joel recorded it. The report counts E5 exclusions apart
-    and lists each with its `created_at`, the `at` of its `exclude` line and
-    that hash, so a PR can't be excluded quietly.
+    The record states that, with `verdicts_seen: true` and `verdicts_sha256`
+    (section 7). The report counts E5 exclusions apart and lists each with its
+    `created_at`, the `at` of its `exclude` line and that hash, so a PR can't be
+    excluded quietly.
   - **E6.** The window closed before it was recorded: it was created in the
     window, and when the window closed (above) it had no record, so it can no
     longer be enrolled. The writer records it under E6 before `close`, so
@@ -1371,8 +1413,10 @@ left out only by a rule written here.
     Right after `pilot-unblind.py window` first reports the close, he records
     every unrecorded window PR: one whose `ftw:reviews/ft-<N>.verdicts` already
     exists then gets E5 (`verdicts_seen: true`), and the rest get E6
-    (`verdicts_seen: false`). A PR reviewed in the minutes between the close and
-    Joel's record therefore counts as E5. That over-reports the lever, never
+    (`verdicts_seen: false`). F2 runs `window` right after every live `freeze`,
+    so the gap between the closing `freeze` and Joel's record is only his own
+    delay, which the report shows as the difference between the two lines' `at`.
+    A PR reviewed in that gap counts as E5. That over-reports the lever, never
     under-reports it.
   - **Residual selection levers.** The agents decide when reviews are
     requested, and they author, push and close the PRs, so they can drop a
@@ -1499,12 +1543,13 @@ Relay point 5.
   written procedure. `pilot-ledger.py` has no mode that rewrites or truncates
   a ledger. It only cuts back its own failed partial write to the size it
   verified.
-- **A known limit.** Joel writes as pilotseal, which owns the sealed records,
-  so the operating system does not stop the writer from reading them. What
-  keeps him from doing so is that F2's procedure opens no sealed path, and
-  section 6's rule that Joel opens no sealed record before unblinding. Only a
-  writer uid other than pilotseal, able to append to the ledger and nothing
-  else, would make that bar a mechanism.
+- **A known limit.** Joel writes as pilotseal, which owns the sealed records, so
+  the operating system does not stop the writer from reading them. What keeps
+  him from doing so is that F2's procedure opens a sealed path only through
+  section 6's two logged accesses, and section 6's rule that any other earlier
+  access is logged and marks the head. Only a writer uid other than pilotseal,
+  able to append to the ledger and nothing else, would make that bar a
+  mechanism.
 - **A residual gap: Joel's terminal is the agents' uid.** Joel's account is uid
   501, so the terminal he runs `sudo` and his signing tools from runs uid 501's
   shell startup files (`~/.zshrc`, `~/.zprofile` and the rest), its `PATH` and
@@ -1605,15 +1650,19 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   signature covers them and no separate document needs a pin. A written copy may
   exist for Joel's use, and when it differs from these bullets, these bullets
   win. It applies section 12:
-  - it opens no sealed path: it reads the ledger only through `pilot-ledger.py`
-    and the captures, never `/Users/pilotseal/pilot/sealed/` (section 14);
+  - it opens a sealed path only through section 6's two logged accesses:
+    building a planted head from its spec, and `pilot-score.py bind`. Otherwise
+    it reads the ledger only through `pilot-ledger.py` and the captures, never
+    `/Users/pilotseal/pilot/sealed/` (section 14);
   - it orders by `created_at`, then PR number;
   - it reconciles every window PR against the ledger before each `enroll` and
     before `close`, and refuses on a missing or doubled record;
   - it runs the pinned `review-size.sh` at the enrollment head;
-  - before each live `enroll`, it runs `pilot-unblind.py window` and writes no
-    `enroll` once that says the window has closed, then records every
-    unrecorded window PR under E6 (section 12);
+  - right after each live head's `freeze` is appended, and before each live
+    `enroll`, it runs `pilot-unblind.py window`. Once that says the window has
+    closed, it writes no more live `enroll` and records every unrecorded window
+    PR at once, under E5 when its `.verdicts` file exists then and under E6
+    otherwise (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
     `enroll`, after comparing it with the trust file's landing baseline and
     refusing that `enroll` while a difference is not reconciled (precondition
@@ -1654,9 +1703,11 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     report lists it;
   - its `install` check covers `review-size.sh` and `pilot-review.sh`.
 - **F4. `pilot-score.py`:**
-  - a `bind <sealed_id>` mode that, as pilotseal, prints only the head commit
-    and case a sealed record names (section 7, "Binding a planted head"), and a
-    check at scoring that every planted `enroll` agrees with its record;
+  - a `bind <sealed_id>` mode that, as pilotseal, appends an `access` line
+    (`by: bind`) and prints only the case and any commit a sealed record names,
+    a `bind --census` mode that prints only counts, and a check at scoring that
+    every planted `enroll` agrees with its record (section 7, "Building and
+    binding a planted head");
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared live and replayed
     head and the outcome of every enrolled race and recovery head except a
