@@ -104,7 +104,8 @@ commit is on `main`'s first-parent history, this text there has no `UNRULED` or
 `UNPINNED` value, and this text at `origin/main` is byte-identical to this text
 there. As built, check 4 refuses every signing form, and these checks are F3. So
 any later edit leaves the text unsigned until Joel signs again. Every "after the
-signing commit" in this text means after that commit's time.
+signing commit" in this text means after that commit's committer date
+(`git log --format=%ct`), the time preflight dates records against.
 
 **The Nov 23 direction.** Joel replied "Agree on your recommendations" to #A1's
 ORDER r2 assessment, relayed by #A1 in 7111628611. Its seven points are: (1) an
@@ -599,7 +600,9 @@ items Joel rules.
 - **Residual gaps.** The original's (lines 202-207) are kept, except that
   step 4's voter order no longer exists. Two are added:
   - Root, or Joel through `sudo`, can read the records or rewrite the ledger,
-    and only the posted chain heads of section 7 detect a rewrite.
+    and only the posted chain heads of section 7 detect a rewrite. Joel produces
+    those heads (section 7), so they detect a rewrite of lines already covered
+    by a posted head, not one Joel makes before he posts.
   - **Joel's rulings are not blind.** v1's packet hid each item's side, the
     severity labels and the reviewer, and unblinded only after the rulings
     (the original's lines 154-165). v2 has no packet. Each item Joel rules
@@ -722,9 +725,10 @@ it. A `gate.json` that holds either makes every oracle for that head UNMEASURED
 (F4). A head is *compared* when its `gate.json` exists; its review record's
 verdict is `APPROVE` or `CHANGES REQUESTED`; for a live or replayed head, that
 verdict equals the one on the counted line of its captured `verdicts.txt`, and
-for a live head the capture was on time; the one-head rule below holds;
-`base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The counted
-line is:
+for a live head the capture was on time; for a planted head
+`review_adapter_sha256` equals section 12's adapter pin; the one-head rule below
+holds; `base_check.base_mismatch` is `false`; and `pin_check` is `pass`. The
+counted line is:
 
 - **for a live head**, the first full-verdict line at `enroll_head`. The
   capture was on time only when that line is the last line of `verdicts.txt`.
@@ -751,7 +755,8 @@ and it appears nowhere else:
 - **`gate.json`**, written by the operator: the base facts of the original's
   lines 310-316 (`review_base`, `mirror_reset`, `mirror_main_after_reset`,
   `base_check`), the `gate.*` fields (among them `gate.checks_basis`),
-  `origin_ci` and `pin_check`.
+  `origin_ci`, `pin_check`, and for a planted head `review_adapter_sha256`
+  (section 12).
 - **The review record:** every `review.*` field (above) except
   `review.record_commit`, which v2 does not record (section 2).
 - **The sealed record `sNN.md`:** planted truth.
@@ -787,10 +792,15 @@ never reads it.
 
 **Streams and chain heads.** The sealed ledger is
 `/Users/pilotseal/pilot/ledger.jsonl`. Whether uid-501 captures go to a second,
-public ledger is coordinator open item 2 (section 11). The coordinator posts the
-chain head (`head`'s line, which reveals no content) at each `freeze`,
-`close`, `score` and `unblind`. Pilot-op's proposal (`cl-pilotop` REPORT.md,
-step 6) suggested posting each `frozen_commit` the same way.
+public ledger is coordinator open item 2 (section 11). The coordinator, as uid
+501, cannot read the sealed ledger (section 6, precondition 6), so it cannot
+compute a chain head. Joel does: right after each `freeze`, `close`, `score` and
+`unblind`, he runs the installed `pilot-ledger.py head` on the sealed ledger as
+pilotseal (`sudo -u pilotseal`) and passes the printed line (`head`'s line,
+which reveals no content) to the coordinator, who posts it as given. That line
+passes through Joel's uid-501 terminal, so section 14's residual gap applies to
+it. Pilot-op's proposal (`cl-pilotop` REPORT.md, step 6) suggested posting each
+`frozen_commit` the same way.
 
 **Parameters.** The scripts read these from this block, through the `preflight`
 line, never from a flag. A value that is Joel's stays `UNRULED` until he rules.
@@ -980,15 +990,17 @@ fails:
     writing, are both denied with `EACCES`. Read probes alone do not show it:
     a directory can deny listing and still allow traversal and writes by
     group.
-11. The pinned `review-size.sh` is in the `install` record, at the hash the
-    trust file pins. No enroll script exists (section 14).
+11. The pinned `review-size.sh` and `pilot-review.sh` are in the `install`
+    record, at the hashes the trust file pins. No enroll script exists (section
+    14).
 12. **No activation before review and reconciliation** (#A1 7114817207). Every
-    script this text pins, and every follow-up of section 17, has landed
-    through the landing gates with its review. Every landing requirement that
-    changed between this text's signing and the first `enroll` has been
-    reconciled explicitly: either this text is amended and re-signed to adopt
-    it, or a signed owner record says it does not apply to the pilot (section
-    15).
+    script this text pins, and every follow-up of section 17, has landed through
+    the landing gates with its review. Every landing requirement that changed
+    between this text's signing and the first live `enroll` has been reconciled
+    explicitly, comparing the trust file's landing baseline (section 13) with
+    `landing_regime` at that `enroll`: either this text is amended and re-signed
+    to adopt it, or a signed owner record says it does not apply to the pilot
+    (section 15).
 
 13. The fleet-tools mirror and its gate home of section 12 exist, isolated
     like the assistant mirror (the original's item 9 and lines 349-352), with
@@ -1003,7 +1015,7 @@ fails:
     `trust_file` value in section 13's copy block is only a copy of that
     constant, and preflight refuses when they differ. Each copy
     in this text must equal the trust file: the fingerprint in section 13's
-    copy block, section 10's table, and section 12's row. Any
+    copy block, section 10's table, and section 12's rows. Any
     mismatch, or a trust file that is missing or unreadable, refuses
     enrollment.
 15. **No agent session can use sudo to reach pilotseal.** Joel's account is uid
@@ -1016,7 +1028,19 @@ fails:
     tickets per terminal (`tty` or `ppid`), never `global`. It shows only that
     an agent session cannot use sudo by itself. It does not show that an agent
     cannot tamper with the terminal Joel uses, which section 14 states as a
-    residual gap.
+    residual     gap.
+
+**A residual gap: uid-501 records attest themselves.** The denied-read,
+use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
+15 are files written by a process running as uid 501, the uid they restrain.
+`check` validates their fields and hashes them, but nothing ties a record to a
+probe that really ran: an agent whose session can in fact reach `ssh-agent` or a
+sudo ticket could write a well-formed record by hand. What narrows it: Joel runs
+each probe himself, under section 14's terminal practice, and checks that the
+hash `check` records is the hash of the file he saw written. What closes it:
+running each probe as uid 501 from the separate account of section 14 (`sudo -u`
+from there) and signing each record with the pinned key, so a record an agent
+wrote fails its signature. Until then this is a stated residual gap.
 
 On success it appends a `preflight` line. It never enrolls. As built
 (`6adbd531`), `pilot-preflight.py` checks items 1 to 7 only in part: item 4
@@ -1304,8 +1328,8 @@ left out only by a rule written here.
   as E5, and only an otherwise eligible PR can count as an E5 selection lever:
   - **E1.** It fails the kind test above.
   - **E2.** It has more than 300 code lines at the enrollment head.
-  - **E3.** It changes a file the pilot pins (section 10, or this section's
-    `review-size.sh`).
+  - **E3.** It changes a file the pilot pins (section 10, or this section's pin
+    table: `review-size.sh` and `pilot-review.sh`).
   - **E4.** It was closed unmerged with no review.
   - **E5.** It was reviewed before its record was written: when the writer
     comes to record it, `ftw:reviews/ft-<N>.verdicts` already exists with any
@@ -1333,17 +1357,30 @@ left out only by a rule written here.
     - a live head moved after enrollment (a push before its first full
       review, section 7's one-head rule);
     - any other enrolled live head that ends not compared, for example a PR
-      closed before its first full review.
+      closed before its first full review;
+    - an E4 exclusion: a PR closed unmerged before any review, before Joel
+      records it;
+    - an E1, E2 or E3 exclusion: an agent leaves out or alters the PR body's
+      `Observed incident` field, pushes the PR past 300 code lines, or touches a
+      pinned file.
 
-    Nothing here prevents them. What limits them is that each is listed with
-    its reason and times, and a pilot with any of them is reported as possibly
-    selected, beside its result.
-- **The pinned `review-size.sh`.** The fleet-tools blob current when the
-  signing commit is made, filled in by then like section 10:
+    Nothing here prevents them. What limits them is that each is listed with its
+    reason and times, and a pilot with any of the first five is reported as
+    possibly selected, beside its result. E1 to E3 exclusions are counted and
+    listed too, but they do not set the mark: those rules say what the PR is,
+    its kind, size and files, which its author always decides by writing it, and
+    a PR they exclude is not the work the pilot measures.
+- **The pinned `review-size.sh` and planted-review adapter.** The fleet-tools
+  blobs current when the signing commit is made, filled in by then like section
+  10. The adapter `pilot-review.sh` produces every planted head's review
+  (section 2), so a planted head's `gate.json` records `review_adapter_sha256`,
+  the SHA-256 of the adapter copy that produced its review, and a planted head
+  whose value differs from this pin is not compared (section 7):
 
 | script | fleet-tools path | commit | blob SHA-256 |
 | --- | --- | --- | --- |
 | size | `review-size.sh` | UNPINNED | UNPINNED |
+| adapter | `pilot-review.sh` | UNPINNED | UNPINNED |
 
 ## 13. Owner records and the signing key
 
@@ -1371,11 +1408,13 @@ Relay point 4, with #juno's fix 4 and #claude's point 2.
   outside every repository and every agent's home, not writable by uid 501, and
   written only by Joel, as the user that owns it. It holds the public key and
   its fingerprint, the signing form, the signing commit and this text's blob
-  there, and the SHA-256 of every executable the pilot runs: section 10's
-  scripts and section 12's `review-size.sh`. No enroll script exists
-  (section 14).
+  there, the landing baseline at signing (the fleet-tools `main` commit when the
+  signing commit is made, and the path and blob of each landing script and gate
+  the coordinator runs there), and the SHA-256 of every executable the pilot
+  runs: section 10's scripts and section 12's `review-size.sh` and
+  `pilot-review.sh`. No enroll script exists (section 14).
 - **This text holds only copies.** The block below copies the fingerprint, and
-  section 10's table and section 12's row copy the executable hashes. No
+  section 10's table and section 12's rows copy the executable hashes. No
   script trusts a copy read from a repository. Preflight reads the
   trust file and refuses enrollment when any copy here differs from it
   (section 9, precondition 14). So an agent's PR that edits a copy makes
@@ -1470,8 +1509,9 @@ Relay point 5.
   denied-read record, shows that opening the sealed ledger or the trust file
   for writing is denied with `EACCES` (section 9, precondition 10).
   `pilot-preflight.py probe` opens read-only today, so the write probe is F3.
-- **Chain heads.** The coordinator posts the chain head at each `freeze`,
-  `close`, `score` and `unblind` (section 7).
+- **Chain heads.** Joel produces the chain head as pilotseal at each `freeze`,
+  `close`, `score` and `unblind`, and the coordinator posts the line he passes
+  it (section 7).
 
 ## 15. Landing during the pilot
 
@@ -1482,22 +1522,23 @@ does not apply to enrolled PRs during the pilot unless this text is amended and
 re-signed before enrollment.
 
 **The landing regime is a rule, recorded and reported, not enforced.** So that
-enrolled PRs are measured under the same rules, no change to the landing
-scripts or gates should land between the first live `enroll` and `close`,
-unless this text is amended and re-signed (#A1 7114817207). The first live
-`enroll` records `landing_regime`: the fleet-tools `main` commit at that time,
-and the path and blob of each landing script and gate the coordinator runs
-there. Nothing in fleet-tools stops a later change from landing: an enrolled
-PR may itself be a reliability fix to a landing script. What makes a change
-visible is the report (F4). For each enrolled PR that landed, it compares
-those blobs on fleet-tools `main` at the PR's merge, its first parent, with
-`landing_regime`, and flags each PR that landed under a changed regime. Such a
-PR stays enrolled and is never dropped, and no result changes because of the
-flag. Section 9's precondition 12 reconciles any change made before the first
-`enroll`. Every
-existing landing control stays. Nothing in this text
-changes rule #68, delegates a waiver, changes admin bypass, enables branch
-protection or promotes a gate.
+enrolled PRs are measured under the same rules, no change to the landing scripts
+or gates should land between the first live `enroll` and `close`, unless this
+text is amended and re-signed (#A1 7114817207). The first live `enroll` records
+`landing_regime`: the fleet-tools `main` commit at that time, and the path and
+blob of each landing script and gate the coordinator runs there. Nothing in
+fleet-tools stops a later change from landing: an enrolled PR may itself be a
+reliability fix to a landing script. What makes a change visible is the report
+(F4). For each enrolled PR that landed, it compares those blobs on fleet-tools
+`main` at the PR's merge, its first parent, with `landing_regime`, and flags
+each PR that landed under a changed regime. Such a PR stays enrolled and is
+never dropped, and no result changes because of the flag. Section 9's
+precondition 12 reconciles any change made between the trust file's landing
+baseline at signing and the first live `enroll`. Preflight runs before that
+`enroll`, so it can see only changes up to its own run; Joel's F2 procedure
+makes the final comparison at the first live `enroll` itself. Every existing
+landing control stays. Nothing in this text changes rule #68, delegates a
+waiver, changes admin bypass, enables branch protection or promotes a gate.
 
 ## 16. The promotion prerequisite and no branch protection
 
@@ -1543,7 +1584,9 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     `enroll` once that says the window has closed, then records every
     unrecorded window PR under E6 (section 12);
   - it records the evidence fields, and `landing_regime` on the first live
-    `enroll`.
+    `enroll`, after comparing it with the trust file's landing baseline and
+    refusing that `enroll` while a difference is not reconciled (precondition
+    12).
 - **F3. `pilot-preflight.py`:**
   - check 4 verifies the signing commit's three conditions (section 1), and
     preconditions 6 and 10 date their records against the signing commit, not
@@ -1556,7 +1599,7 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     refuses to run as any user but pilotseal;
   - precondition 14: it refuses enrollment when the trust file is missing or
     unreadable, or when any copy in this text (the fingerprint, section 10's
-    table, section 12's row) differs from it. A self-test row
+    table, section 12's rows) differs from it. A self-test row
     shows the refusal for a changed copy, and a mutation that skips the
     comparison turns that row red;
   - it checks preconditions 8 to 13 and 15;
@@ -1574,9 +1617,11 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
     `denied-read`, `denied-write`, `denied-sign` or `denied-sudo`. `check` takes
     each record by its own flag, validates it, and records its SHA-256 in the
     `preflight` line, as it does the denied-read record today
-    (`denied_read_sha256`). The record files are their one home: no ledger kind
-    holds them, so F1 adds none;
-  - its `install` check covers `review-size.sh`.
+    (`denied_read_sha256`). The record files are their one home. v2 writes no
+    ledger line for them, so F1 adds no kind, and the landed `denied-read` kind
+    stays unused: a `denied-read` line, if one appears, decides nothing and the
+    report lists it;
+  - its `install` check covers `review-size.sh` and `pilot-review.sh`.
 - **F4. `pilot-score.py`:**
   - an `items` mode that appends section 8's `items` line from captures alone;
   - the `items` line covers the O5 items of every compared live and replayed
@@ -1607,9 +1652,10 @@ cannot pass preflight before F3, since check 4 refuses every form until then.
   - a live head whose `pr_created_at` is after the window's close is left out
     of C1, C3 and C5 and listed (section 12);
   - it lists every enrolled live head that is not compared, with its reason
-    (captured late, moved after enrollment, no review, or another), and every
-    E5 exclusion whose first review came before the window's close, and marks
-    the pilot possibly selected when any exists (section 12);
+    (captured late, moved after enrollment, no review, or another), every E5
+    exclusion whose first review came before the window's close, and every E4
+    exclusion, and marks the pilot possibly selected when any exists; it counts
+    and lists E1 to E3 exclusions without the mark (section 12);
   - it never opens a `raw[]` entry whose `file` starts `sealed:`, and never
     reads a planted head's review record itself: the compared predicate it
     calls does (F6, section 7);
