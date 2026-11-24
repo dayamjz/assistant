@@ -703,21 +703,22 @@ items Joel rules.
 
   A run before signing creates the sealed ledger if it does not exist yet, so
   these lines come before the first `preflight`, and the report lists them with
-  the rest. **Both run only from a pinned copy.** Before either, Joel checks,
-  as pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
-  the blob of `pilot-score.py` at F4's merge commit in section 10's history
-  clone, and that a write-denied record for `/Users/pilotseal/bin` made before
-  the run exists (the probe of precondition 10). The `access` line records that
-  hash (`script_sha256`). `check` later accepts that line only when its
-  `script_sha256` is the blob of `pilot-score.py` at a merge commit on the
-  history clone's `main` first-parent history at or after `f4_first`, the first
-  F4 merge, which section 10 records once and never moves, so the copy that read
-  the records was a landed, reviewed one (F3). It need not equal the final
-  scoring pin: if a later fix moves `f4` and re-pins `pilot-score.py`,
-  `f4_first` stays put, the earlier line still passes, nothing in the sealed
-  ledger is rewritten, and the read stays logged. A copy that lies in its own
-  `access` line is not caught by that check; what bars it is that uid 501 cannot
-  write `/Users/pilotseal/bin`.
+  the rest. **Both run only from a pinned copy.** Before either, Joel checks, as
+  pilotseal, that the SHA-256 of `/Users/pilotseal/bin/pilot-score.py` equals
+  the blob of `pilot-score.py` at the current `f4` merge commit: he pipes
+  `git show <f4>:pilot-score.py`, run in section 10's history clone after its
+  freshness fetch, through `shasum -a 256`, and that a write-denied record for
+  `/Users/pilotseal/bin` made before the run exists (the probe of precondition
+  10). The `access` line records that hash (`script_sha256`). `check` later
+  accepts that line only when its `script_sha256` is the blob of
+  `pilot-score.py` at a merge commit on the history clone's `main` first-parent
+  history at or after `f4_first`, the first F4 merge, which section 10 records
+  once and never moves, so the copy that read the records was a landed, reviewed
+  one (F3). It need not equal the final scoring pin: if a later fix moves `f4`
+  and re-pins `pilot-score.py`, `f4_first` stays put, the earlier line still
+  passes, nothing in the sealed ledger is rewritten, and the read stays logged.
+  A copy that lies in its own `access` line is not caught by that check; what
+  bars it is that uid 501 cannot write `/Users/pilotseal/bin`.
 
   One more touch of the sealed directory is a write, not an access: Joel, as
   pilotseal, copies each planted head's review record into
@@ -759,18 +760,20 @@ items Joel rules.
   `unblind`, `unblind-refused`, `score-refused`, `denied-read`, `preflight`,
   `install`, `access`, `correction`. `enroll` and `freeze` are unique per
   `head_id`; `close`, `score` and `unblind` are unique per ledger. A `freeze`
-  needs an earlier `enroll` of its `head_id`. **`close` seals enrollment and
-  captures:** in the landed set, only `score`, `score-refused`, `unblind`,
-  `unblind-refused`, `access` and `correction` may be appended after it, and
-  F1 adds `items` and `ruling` to that list, so no head, freeze, capture or
-  preflight can join after the end. Nothing but a `correction` may follow
-  `unblind`. Joel appends `close` by hand as pilotseal, and only after
-  `pilot-unblind.py ready` (F6) reports that end condition 4 holds over the
-  frozen heads. A `close` appended earlier cannot be undone: `close` is
-  unique and no `enroll` may follow it, so end condition 4 can never hold and
-  the pilot is never scored or unblinded. There is no recovery inside this
-  pilot. The report then says the pilot ended without a result, and a new
-  attempt needs a new version of this text.
+  needs an earlier `enroll` of its `head_id`. **What may follow `close` and
+  `unblind`.** This bullet is the one place that lists it; section 8 and F1
+  refer here. After `close`, only `score`, `score-refused`, `unblind`,
+  `unblind-refused`, `access` and `correction` may be appended in the landed
+  set, and F1 adds `items`, `ruling`, `promotion-due` and `substitute-check`, so
+  no head, freeze, capture or preflight can join after the end. After `unblind`,
+  only `correction`, `promotion-due` and `substitute-check` may follow (the last
+  two for section 16). No `items` or `ruling` may follow `score`. Joel appends
+  `close` by hand as pilotseal, and only after `pilot-unblind.py ready` (F6)
+  reports that end condition 4 holds over the frozen heads. A `close` appended
+  earlier cannot be undone: `close` is unique and no `enroll` may follow it, so
+  end condition 4 can never hold and the pilot is never scored or unblinded.
+  There is no recovery inside this pilot. The report then says the pilot ended
+  without a result, and a new attempt needs a new version of this text.
 - An append locks, verifies the whole chain, writes one line with `O_APPEND`
   and syncs it. A caller may name the chain head it expects, and the append
   then refuses, under the lock, if the ledger has moved past that head. A write
@@ -1018,10 +1021,13 @@ never reads it.
 public ledger is coordinator open item 2 (section 11). The coordinator, as uid
 501, cannot read the sealed ledger (section 6, precondition 6), so it cannot
 compute a chain head. Joel does: right after the first `preflight` and after
-each `freeze`, `close`, `score` and `unblind`, he runs the installed
+each `freeze`, `close`, `score`, `unblind`, `promotion-due` and
+`substitute-check`, he runs the installed
 `pilot-ledger.py head` on the sealed ledger as pilotseal (`sudo -u pilotseal`)
-and passes the printed line (`head`'s line, which reveals no content) to the
-coordinator, who posts it as given. That line passes through Joel's uid-501
+and passes the printed line (`head`'s line, which reveals no content), with the
+kind of the line it follows, to the coordinator, who posts it as given in the
+one place open item 4 names for chain heads (`chain_head_checker`, section 11).
+The first post for a given line counts. That line passes through Joel's uid-501
 terminal, so section 14's residual gap applies to it. Pilot-op's proposal
 (`cl-pilotop` REPORT.md, step 6) suggested posting each `frozen_commit` the same
 way.
@@ -1103,9 +1109,9 @@ original's lines 199-200 require. Three refusals are printed but cannot be
 logged. A ledger that does not verify (condition 1) takes no append, and the
 posted chain heads show where the chain broke. A second `pilot-unblind.py run`
 refuses with "already unblinded" before it reaches its logging step. And any
-refusal after `unblind` cannot be logged, since only a `correction`, and F1's
-`promotion-due` (section 16), may follow it (section 7). A refusal prints no
-record content and publishes nothing.
+refusal after `unblind` cannot be logged, since no refusal kind is among the
+kinds section 7 lets follow `unblind`. A refusal prints no record content and
+publishes nothing.
 
 **Joel's rulings come before the score.** After `close`, `pilot-score.py items`
 (F4) appends the one `items` line. It lists every O5 item of every compared
@@ -1162,13 +1168,12 @@ and prints only scores, ids and counts, never a sealed record's bytes.
 
 **What `close` fixes, and what each script is bound to.** `close` fixes the set
 of heads and their captures: after it, no `enroll`, `freeze`, `capture` or
-`preflight` may be appended. Lines that are meant to come after it still can:
-`items` and `ruling` (F1), `score`, `score-refused`, `unblind`,
-`unblind-refused`, `access` and `correction`. So the score covers every head
-that was enrolled, and it also reads the `ruling` lines written after `close`.
-Each of `pilot-score.py` and `pilot-unblind.py` is bound to the chain head it
-read when it started. It reads that head before the entries, and appends its
-`score` or `unblind` line only if the ledger is still at that head (the
+`preflight` may be appended. Lines that are meant to come after it still can,
+the kinds section 7 lists as allowed after `close`. So the score covers every
+head that was enrolled, and it also reads the `ruling` lines written after
+`close`. Each of `pilot-score.py` and `pilot-unblind.py` is bound to the chain
+head it read when it started. It reads that head before the entries, and appends
+its `score` or `unblind` line only if the ledger is still at that head (the
 expected-head append of section 7). If any line was written in between, it
 refuses and logs the refusal, and unblinding publishes nothing.
 
@@ -1302,34 +1307,40 @@ fails:
     `sudo -n -u pilotseal /usr/bin/true` is refused, so no sudo ticket usable
     from that session is cached. That probe covers one command, so the claim
     that **no `NOPASSWD` rule lets uid 501 reach pilotseal** rests on the
-    sudoers record below: `check` rejects it if any rule in it, in any file it
-    includes and with every alias expanded, lets uid 501's user, any group that
-    user is in, or `ALL` run any command as pilotseal, as root (an empty runas
-    list included) or as `ALL`, with the `NOPASSWD` tag or under a `Defaults`
-    line that sets `!authenticate` in any scope that covers that user. Root is
-    covered because root can become pilotseal. uid 501 cannot read the sudoers
-    policy (`/etc/sudoers` is readable only by root and `wheel`), and the text
-    relies on no uid-501 view of it. The policy comes from a second record, the
-    *sudoers record*: in his own terminal Joel uses `/usr/bin/sudo` to copy, as
-    root, the bytes of `/etc/sudoers` and of every file it includes (each
-    `#include`, `@include`, `#includedir` and `@includedir` target,
-    recursively), with each path, the output of `visudo -c`, and the output of
-    `id -un 501` and `id -Gn 501` (the user and groups the scan above matches),
-    into one file owned by pilotseal. The record must show `visudo -c` reporting
-    every file parsed OK, a global `Defaults timestamp_type=tty` or
-    `Defaults timestamp_type=ppid` line, and no other line that sets
-    `timestamp_type` in any scope: none for a user (`Defaults:`), host
-    (`Defaults@`), runas user (`Defaults>`) or command (`Defaults!`). Nor may
-    any line in any scope set `tty_tickets`, either way: `!tty_tickets` uses a
-    single ticket record for all login sessions (`sudoers(5)`), which is the
-    sharing this precondition rules out. The text relies on that explicit
-    `timestamp_type` line, not on sudo's default. `check`, as pilotseal,
-    validates both records and records both hashes in its `preflight` line (F3).
-    No field of either is typed in. The sudoers record passes through Joel's
-    uid-501 terminal, so section 14's terminal gap applies to it. The
-    sudo-denied record shows only that an agent session cannot use sudo by
-    itself. It does not show that an agent cannot tamper with the terminal Joel
-    uses, which section 14 states as a residual gap.
+    sudoers record below, and `check` makes it hold at the first hop. In the
+    record, in every file it includes and with every alias expanded, `check`
+    rejects:
+    - any rule whose user list can match uid 501 (its user name, `%group` or
+      `%#gid` for any of its groups, `#501`, `ALL`, or an alias that expands to
+      any of these) and that carries the `NOPASSWD` tag, for any runas user
+      and any command;
+    - any `Defaults` line, in any scope (global, user, runas, host or
+      command), that sets `!authenticate`.
+
+    So uid 501 can reach no user without a password, and no chain through
+    another user can start. The record carries the names and gids it matches
+    against. uid 501 cannot read the sudoers policy (`/etc/sudoers` is readable
+    only by root and `wheel`), and the text relies on no uid-501 view of it. The
+    policy comes from a second record, the *sudoers record*: in his own terminal
+    Joel uses `/usr/bin/sudo` to copy, as root, the bytes of `/etc/sudoers` and
+    of every file it includes (each `#include`, `@include`, `#includedir` and
+    `@includedir` target, recursively), with each path, the output of
+    `visudo -c`, and the output of `id -un 501`, `id -Gn 501` and `id -G 501`
+    (the user, group names and gids the scan above matches), into one file owned
+    by pilotseal. The record must show `visudo -c` reporting every file parsed
+    OK, a global `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid`
+    line, and no other line that sets `timestamp_type` in any scope: none for a
+    user (`Defaults:`), host (`Defaults@`), runas user (`Defaults>`) or command
+    (`Defaults!`). Nor may any line in any scope set `tty_tickets`, either way:
+    `!tty_tickets` uses a single ticket record for all login sessions
+    (`sudoers(5)`), which is the sharing this precondition rules out. The text
+    relies on that explicit `timestamp_type` line, not on sudo's default.
+    `check`, as pilotseal, validates both records and records both hashes in its
+    `preflight` line (F3). No field of either is typed in. The sudoers record
+    passes through Joel's uid-501 terminal, so section 14's terminal gap applies
+    to it. The sudo-denied record shows only that an agent session cannot use
+    sudo by itself. It does not show that an agent cannot tamper with the
+    terminal Joel uses, which section 14 states as a residual gap.
 
 **A residual gap: uid-501 records attest themselves.** The denied-read,
 use-denied, write-denied and sudo-denied records of preconditions 6, 9, 10 and
@@ -1364,9 +1375,9 @@ refuses every signing form, so no enrollment can pass preflight without them.
 By the signing commit each row names a fleet-tools `main` merge commit and the
 SHA-256 of the script's bytes there. For a script with a follow-up (F1 for
 `pilot-ledger.py`, F3 for `pilot-preflight.py`, F4 for `pilot-score.py`, F6 for
-`pilot-unblind.py`, and F5 for `pilot-unblind.py` and `pilot-preflight.py`),
-that commit is the merge of the script's latest
-follow-up, as the block below records it.
+`pilot-unblind.py`, and F5 for `pilot-unblind.py`, `pilot-preflight.py` and
+`pilot-score.py`, whose report says how the window closed), that commit is the
+merge of the script's latest follow-up, as the block below records it.
 
 ```pilot-v2-followups
 f1: UNPINNED F1
@@ -1396,10 +1407,10 @@ For each script with a follow-up it checks that:
   file's, so the pinned bytes are exactly the bytes that follow-up landed. No
   later change can be in the pin, so a later merge that reverts part of the
   follow-up is never pinned;
-- when a script has two follow-ups (F5 with F3 or F6), the earlier one's merge
-  commit is an ancestor of the later one's. The later PR was reviewed on a base
-  that held the earlier one, and that review is what keeps the earlier change in
-  it.
+- when a script has two follow-ups (F5 with F3, F4 or F6), the earlier one's
+  merge commit is an ancestor of the later one's. The later PR was reviewed on a
+  base that held the earlier one, and that review is what keeps the earlier
+  change in it.
 
 A commit id is a hash that covers its tree, so a fetched history that someone
 rewrote cannot give a recorded merge commit different bytes: it can only lack
@@ -1966,8 +1977,9 @@ Relay point 5.
   for writing is denied with `EACCES` (section 9, precondition 10).
   `pilot-preflight.py probe` opens read-only today, so the write probe is F3.
 - **Chain heads.** Joel produces the chain head as pilotseal after the first
-  `preflight` and at each `freeze`, `close`, `score` and `unblind`, and the
-  coordinator posts the line he passes it (section 7).
+  `preflight` and at each `freeze`, `close`, `score`, `unblind`,
+  `promotion-due` and `substitute-check`, and the coordinator posts the line he
+  passes it, with the kind it follows (section 7).
 
 ## 15. Landing during the pilot
 
@@ -2005,19 +2017,30 @@ branch protection (7114296700, point 7). Joel resolved the required-check half
 of the conflict with a local substitute (I7: answer 8 of 7121929832, and
 7135308036 and 7135401609 on Nov 24): Joel does the local substitute check for
 the server-protected required check himself, and if he has not done it within 48
-hours of its being due, #claude (the arbiter) does it. The check is *due* at the
-`at` of the first `promotion-due` line in the sealed ledger (F1). Joel appends
-it himself, as pilotseal, when a promotion decision is put to him, naming the
-gate to promote; no agent can append to that ledger, and only the first such
-line counts. Until Joel appends one, nothing is due, the arbiter's 48 hours
-never start, and promotion stays blocked. This is his change to ORDER r2 item
-13's first half, and this text's signature records it. **The break-glass half is
-unchanged.** The original's "an auditable break-glass" and "Both must exist"
-stand as written: Joel's answer names no break-glass, so that half is still
-**unmet**. Promotion stays blocked until a break-glass log that agents cannot
-alter exists and a signed owner record (section 13) names it, and until this
-text is signed, whatever the pilot shows. This section is a direction to resolve
-the conflict. It enables no branch protection and promotes no gate.
+hours of its being due, #claude (the arbiter) does it. The check is *due* when
+Joel appends the first `promotion-due` line to the sealed ledger (F1), as
+pilotseal, when a promotion decision is put to him, naming the gate to promote;
+no agent can append to that ledger, and only the first such line counts. The
+arbiter runs as uid 501 and cannot read the ledger, so both facts are made
+visible through posted chain heads (section 7): Joel posts the head after
+`promotion-due`, and after the `substitute-check` line he appends when he has
+done the check. The arbiter's 48 hours run from the post time of the first
+posted `promotion-due` head. If no `substitute-check` head is posted within
+those 48 hours, the arbiter does the check and Joel appends its
+`substitute-check` line (`by: arbiter`) when he can. Until a `promotion-due`
+head is posted, nothing is due and promotion stays blocked. This is his change
+to ORDER r2 item 13's first half, and this text's signature records it. **A
+residual gap:** the posts are made as `dayamjz`, which every agent posts as, so
+an agent could post a false head. A false `promotion-due` head would start the
+arbiter early, and a false `substitute-check` head would stop it; the comparison
+of posted heads with the ledger (open item 4) exposes either, after the fact.
+**The break-glass half is unchanged.** The original's "an auditable break-glass"
+and "Both must exist" stand as written: Joel's answer names no break-glass, so
+that half is still **unmet**. Promotion stays blocked until a break-glass log
+that agents cannot alter exists and a signed owner record (section 13) names it,
+and until this text is signed, whatever the pilot shows. This section is a
+direction to resolve the conflict. It enables no branch protection and promotes
+no gate.
 
 ## 17. Script follow-ups
 
@@ -2041,12 +2064,14 @@ refuses every form until then.
   head's `enroll` keeps its `pr` (section 12); an `items` kind, unique per
   ledger and refused unless a `close` line precedes it, with a self-test row
   and a mutation that turns it red; a `ruling` kind with section 8's body; and a
-  `promotion-due` kind naming the gate to promote, allowed after `unblind`,
-  whose first line sets section 16's due time. A `ruling` whose subject is
-  `classification` may come before or after `close`. One whose subject is `item`
-  needs an earlier `items` line naming that id, so it too can only follow
-  `close`. `items` and `ruling` join the kinds allowed after `close`, and no
-  `items` or `ruling` may follow `score`.
+  `promotion-due` kind naming the gate to promote, whose first line sets section
+  16's due time; and a `substitute-check` kind recording that the substitute
+  check of section 16 was done, by whom, and its result. A `ruling` whose
+  subject is `classification` may come before or after `close`. One whose
+  subject is `item` needs an earlier `items` line naming that id, so it too can
+  only follow `close`. Which kinds may follow `close` and `unblind` is section
+  7's list, which F1 enforces, with a self-test row and a mutation for each new
+  kind on it.
 - **F2. The enrollment procedure (I6):** the procedure Joel follows by hand as
   pilotseal. Its binding steps are the bullets below, in this text, so the
   signature covers them and no separate document needs a pin. A written copy may
@@ -2106,10 +2131,10 @@ refuses every form until then.
   - it validates precondition 15's sudo-denied record and its sudoers record,
     made through sudo as root: `visudo -c` OK, one global `timestamp_type` of
     `tty` or `ppid`, no `timestamp_type` line in any other scope, no
-    `tty_tickets` setting in any scope, and no rule, with aliases expanded,
-    that lets uid 501's user, its groups or `ALL` run any command as
-    pilotseal, root or `ALL` with `NOPASSWD` or `!authenticate` (precondition
-    15); it records
+    `tty_tickets` setting in any scope, no rule (aliases expanded) whose user
+    list can match uid 501 by name, `%group`, `%#gid`, `#501` or `ALL` that
+    carries `NOPASSWD` for any runas and command, and no `Defaults` line in any
+    scope that sets `!authenticate` (precondition 15); it records
     both hashes in its `preflight` line;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
