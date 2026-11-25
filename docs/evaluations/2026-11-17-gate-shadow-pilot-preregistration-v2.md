@@ -1541,10 +1541,12 @@ fails:
     `id -Gn 501`, `id -G 501`, `wc -c` and `tail`; the PAM record's are
     `wc -c` and `tail` (above). The `wc -c` section is `/usr/bin/wc -c <files>`
     with the same `<files>` as `tail`, in the same order: one `<bytes> <path>`
-    line for each file, the path as typed, and a `total` line when there are
-    two or more. Both records then end with the line `==== record: end ====`,
-    appended with `/usr/bin/printf '\n%s\n'`, so it starts a line even after a
-    last file with no final newline. A section is the lines after its section
+    line for each file, the path as typed, then, when there are two or more,
+    one `<bytes> total` line, and nothing else. `check` refuses any other line
+    in that section, and a `total` that is not last or not the sum. Both
+    records then end with the line `==== record: end ====`, appended with
+    `/usr/bin/printf '\n%s\n'`, so it starts a line even after a last file
+    with no final newline. A section is the lines after its section
     line up to the next one. `check` refuses a record that does not start with
     its first section line, whose section lines are not exactly its own, each
     once and in this order (so a carried file that holds one is refused), or
@@ -1557,11 +1559,12 @@ fails:
     missing file and `wc -c` follows a symlink to its target. So a
     `==> <path> <==` line inside a carried file is that file's bytes, never a
     file the record carries, and `check` refuses a file in one list and not
-    the other, a `total` that is not the sum, and any byte between the last
-    file and `end`. A section line binds position only: output Joel appends
-    without its own section line, anywhere before the `wc -c` section line,
-    reads as part of the section before it, and `check` refuses it only when
-    that leaves its own section missing. The record must
+    the other and any byte between the last file and `end`. From the `wc -c`
+    section line on, every byte of the record is bound. A section line binds
+    position only: output Joel appends without its own section line,
+    anywhere before the `wc -c` section line, reads as part of the section
+    before it, and `check` refuses it only when that leaves its own section
+    missing. The record must
     show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -2431,12 +2434,14 @@ refuses every form until then.
     same way, none twice, each record starting with its first section line,
     its section lines exactly its own, once each, in precondition 15's order,
     and no byte after `end`, its `tail` section read by the `wc -c` lengths
-    with each header path the `wc -c` path in the same place, the `total`
-    their sum, and no byte between the last file and `end`, the PAM record's
-    files each `/etc/pam.d/<name>`, none twice, and exactly `sudo` and the
-    targets its `auth` `include` and `substack` lines reach, recursively,
-    refusing a target that is absent, is not a plain name or closes a cycle,
-    one global `timestamp_type` of `tty` or `ppid`, no
+    with each header path the `wc -c` path in the same place, no line in the
+    `wc -c` section but one `<bytes> <path>` line for each file and, for two
+    or more, a last `total` that is their sum, and no byte between the last
+    file and `end`, the PAM record's files each `/etc/pam.d/<name>`, none
+    twice, and exactly `sudo` and the targets its `auth` `include` and
+    `substack` lines reach, recursively, refusing a target that is absent, is
+    not a plain name or closes a cycle, one global `timestamp_type` of `tty`
+    or `ppid`, no
     `timestamp_type` line in any other scope, no `tty_tickets` setting in any
     scope, no rule (aliases expanded) whose user list can match uid 501 by name,
     `%group`, `%#gid`, `#501` or `ALL` that carries `NOPASSWD` for any runas and
@@ -2448,7 +2453,7 @@ refuses every form until then.
     with `pam_opendirectory.so` as `required` or `requisite` and only
     `required`, `requisite` or `optional` controls (precondition 15); it records
     the three hashes in its `preflight` line. Self-test rows show `check`
-    refusing five PAM records, each bad only in the way its row names. Row 1:
+    refusing these records, each bad only in the way its row names. Row 1:
     `sudo_local` has `auth include sudo_extra`, and `sudo_extra`, which holds
     `auth sufficient pam_permit.so`, is absent from the record. Row 2: row 1
     with a `==> /etc/pam.d/sudo_extra <==` line, then
@@ -2463,7 +2468,19 @@ refuses every form until then.
     that reads past `end` turns row 5 red. A sudoers row refuses a record
     whose `/etc/sudoers.d` file holds a forged header for a file `visudo -c`
     parsed and the record omits, and the first of those `tail` mutations
-    turns it red. A row whose last carried file has no final newline passes;
+    turns it red. A bare `==> <path> <==` line is not sudoers syntax
+    (`visudo -c` reports a syntax error), so the row carries it as the
+    continuation of a command line, `root ALL = /bin/echo \` and then the
+    header line, which `visudo -c` 1.9.17p2 on this host reports as parsed
+    OK (measured with `visudo -c -f` on a scratch copy as uid 501). Row 6
+    names one file twice in both lists of a PAM record and row 7 does so in
+    a sudoers record, and a mutation that skips the none-twice check turns
+    both red. Row 8 has a `wc -c` `total` edited so it is not the sum, and a
+    mutation that skips that comparison turns it red. Row 9, a sudoers
+    record, has the output of `id -un 501` under the `wc -c` section line,
+    before the `wc -c` output, and a mutation that skips lines in that
+    section that are not `<bytes> <path>` turns it red. A row whose last
+    carried file has no final newline passes;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
