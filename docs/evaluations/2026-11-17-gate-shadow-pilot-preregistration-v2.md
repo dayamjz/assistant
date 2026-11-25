@@ -1465,16 +1465,26 @@ fails:
     - a sudo PAM stack whose `auth` facility can succeed without the password
       module. A third record, the *PAM record*, made the same way as the sudoers
       record below, carries `/etc/pam.d/sudo` and every file its `auth` lines
-      `include` or `substack`, recursively, read as root in one
-      `/usr/bin/tail -n +1 /dev/null <files>` command, and the path each
-      resolves to printed by `/bin/realpath`. `check` refuses the PAM record
-      unless its file set, every path resolved with `realpath` and the
-      `/dev/null` header ignored, equals `/etc/pam.d/sudo` and the targets its
-      lines name, resolved the same way (on this host `sudo_local` resolves
-      through `/etc/static` into `/nix/store`, so a nix-darwin rebuild can
-      change it; section 14, "Sudo and PAM are rebuilt from agent-writable
-      files"). An `include` or `substack` line is not judged as a control: it is
-      replaced by its target's `auth` lines, which are judged. In the resolved
+      `include` or `substack`, recursively. Its sections (below) are, in this
+      order, `wc -c` and `tail`, the files read as root, each typed as
+      `/etc/pam.d/<name>`. `check` refuses the PAM record unless every file it
+      carries is `/etc/pam.d/<name>` and none appears twice. From `sudo`,
+      `check` follows every `auth` line whose control is `include` or
+      `substack`, in every carried file, to its target, a plain name `N` read
+      as `/etc/pam.d/N`. It refuses the record when a target is not a plain name
+      (one with a `/`), when a target is absent from the record, when the
+      includes form a cycle, and unless the carried files are exactly `sudo`
+      and the targets so reached. An absent target is refused, never skipped:
+      `pam.conf(5)` on this host lists the places PAM searches for a policy
+      (`/etc/pam.d/<name>`, `/etc/pam.conf`, `/usr/local/etc/pam.d/<name>`,
+      `/usr/local/etc/pam.conf`, then a default policy), so a target missing
+      from the record leaves unjudged whatever policy PAM would use for it. Only
+      `auth` lines are followed, since only `auth` is judged (below). On this
+      host `sudo_local` resolves through `/etc/static` into `/nix/store`, so a
+      nix-darwin rebuild can change it (section 14, "Sudo and PAM are rebuilt
+      from agent-writable files"). An `include` or `substack` line is not
+      judged as a control: it is replaced by its target's `auth` lines, which
+      are judged. In the resolved
       `auth` stack `check` requires `pam_opendirectory.so` as `required` or
       `requisite`, and accepts on an `auth` line only the controls `required`,
       `requisite` and `optional`. It rejects every other control, whether
@@ -1508,21 +1518,72 @@ fails:
     two or more files, which the leading `/dev/null` guarantees, and `check`
     ignores the `/dev/null` header. Each header echoes the path as Joel typed
     it, so what binds the paths is `check`: the set of header paths must equal
-    the set of files `visudo -c` reports as parsed, no more and no fewer, with
-    every path on both sides resolved with `realpath` first, so `/etc/...` and
-    `/private/etc/...` spellings of one file compare equal. The PAM record has
+    the set of files `visudo -c` reports as parsed, no more and no fewer, and
+    none may appear twice, with every path on both sides resolved with
+    `realpath` first, so `/etc/...` and `/private/etc/...` spellings of one
+    file compare equal. The PAM record has
     its own rule (above), and `visudo -c` never reports a PAM file, so this
     equality covers the sudoers record only. How `visudo -c` spells its paths
     was not measured here, since it needs root. Each reader runs in the root
     fixed form, `/usr/bin/sudo /usr/bin/env -i PATH=/usr/bin:/bin` followed by
     the tool's absolute path (`/usr/bin/tail -n +1`, `/usr/sbin/visudo -c`,
-    `/usr/bin/sudo -V`, `/usr/bin/id`, and for the PAM record `/bin/realpath`),
+    `/usr/bin/sudo -V`, `/usr/bin/id`, `/usr/bin/wc -c`),
     never a bare name, and its output is piped straight into `/usr/bin/tee -a`
     on that file, run as pilotseal in section 6's fixed form. So the bytes never
     sit in a file uid 501 can edit; they pass only through a pipe between
     processes Joel's uid-501 shell starts, which section 14's terminal gap
     covers. A redirect into a uid-501 file followed by a copy is not this form,
-    and leaves a window in which an agent could edit the bytes. The record must
+    and leaves a window in which an agent could edit the bytes. Each tool's
+    output is one *section* of its record, headed by a section line,
+    `==== record: <section> ====`, that Joel appends just before it with
+    `/usr/bin/printf '%s\n'` piped into the same `tee -a`. The sudoers record's
+    sections are, in this order, `visudo -c`, `sudo -V`, `id -un 501`,
+    `id -Gn 501`, `id -G 501`, `wc -c` and `tail`; the PAM record's are
+    `wc -c` and `tail` (above). The `wc -c` section is `/usr/bin/wc -c <files>`
+    with the same `<files>` as `tail`, in the same order: one `<bytes> <path>`
+    line for each file, the path as typed, then, when there are two or more,
+    one `<bytes> total` line, and nothing else. `/usr/bin/wc` on this host
+    right-aligns `<bytes>` with leading spaces (`       4 f1`), so `check`
+    accepts any number of spaces before `<bytes>` and no other character there.
+    `check` refuses any other line in that section, and a `total` that is not
+    last or not the sum. Both
+    records then end with the line `==== record: end ====`, appended with
+    `/usr/bin/printf '\n%s\n'`, so it starts a line even after a last file
+    with no final newline. A section is the lines after its section
+    line up to the next one. `check` refuses a record that does not start with
+    its first section line, whose section lines are not exactly its own, each
+    once and in this order (so a carried file that holds one is refused), or
+    that has any byte after the `end` line. It reads the `tail` section by the
+    `wc -c` lengths, never by its header lines: the section must be the
+    `/dev/null` header, then for each `wc -c` line in turn a newline,
+    `==> <path> <==` with that line's path, a newline and exactly that many
+    bytes, then the newline before `end`, and nothing else. That is `tail`'s
+    framing as measured on this host, where `wc -c` and `tail` both skip a
+    missing file and `wc -c` follows a symlink to its target. So a
+    `==> <path> <==` line inside a carried file is that file's bytes, never a
+    file the record carries, and `check` refuses a file in one list and not
+    the other and any byte between the last file and `end`. From the `wc -c`
+    section line on, every byte of the record is bound. A section line binds
+    position only, so output Joel appends without its own section line,
+    anywhere before the `wc -c` section line, reads as part of the section
+    before it. `check` holds each of those sections to the shape below and
+    refuses one that is not that shape, so such output is refused rather than
+    read one way or another. The `visudo -c` section is one `<path>: parsed OK`
+    line for each file it parsed, no path twice, and nothing else; `visudo`
+    writes its warnings and errors to stderr, which the record does not carry
+    (measured with `visudo -c -f` on a scratch copy as uid 501). Each `id`
+    section is exactly one line: `id -un 501`'s a single name, `id -Gn 501`'s
+    the group names separated by single spaces, and `id -G 501`'s decimal gids
+    separated by single spaces. So a second `id -G 501` run appended without
+    its section line is a second line, and the record is refused, never matched
+    against one line or the other. The `sudo -V` section starts with its one
+    `Sudo version` line, the first line `sudo -V` prints as uid 501 on this
+    host, and holds exactly one line reporting each of the two PAM service
+    names, the only lines `check` reads from it. Root's `sudo -V` output was
+    not measured here, since it needs root, so `check` binds no other line of
+    that section: a stray line there is refused only when it is a second
+    version line or a second line for either service name, and is otherwise not
+    read. The record must
     show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -1533,7 +1594,8 @@ fails:
     relies on that explicit `timestamp_type` line, not on sudo's default.
     `check`, as pilotseal, validates the three records and records their hashes
     in its `preflight` line (F3). No field of them is typed in, though the paths
-    given to `tail` are, which the two set rules above bind. The sudoers and PAM
+    given to `wc -c` and `tail` and the section lines are, which the two set
+    rules and the section rule above bind. The sudoers and PAM
     records pass through Joel's uid-501 terminal, so section 14's terminal gap
     applies to it. The sudo-denied record shows only that an agent session
     cannot use sudo by itself. It does not show that an agent cannot tamper with
@@ -2388,8 +2450,21 @@ refuses every form until then.
     last two made through sudo as root: `visudo -c` OK, the sudoers record's
     `tail` header paths, `/dev/null` ignored and every path resolved with
     `realpath`, equal to the set `visudo -c` reports as parsed, resolved the
-    same way, the PAM record's file set equal to `/etc/pam.d/sudo` and the
-    targets its lines name, one global `timestamp_type` of `tty` or `ppid`, no
+    same way, none twice, each record starting with its first section line,
+    its section lines exactly its own, once each, in precondition 15's order,
+    and no byte after `end`, its `tail` section read by the `wc -c` lengths
+    with each header path the `wc -c` path in the same place, no line in the
+    `wc -c` section but one `<bytes> <path>` line for each file and, for two
+    or more, a last `total` that is their sum, spaces before `<bytes>`
+    accepted, and no byte between the last file and `end`, the `visudo -c`
+    section only `<path>: parsed OK` lines with no path twice, each `id`
+    section exactly one line of its shape, the `sudo -V` section starting
+    with its one `Sudo version` line and holding exactly one line for each
+    PAM service name, the PAM record's files each `/etc/pam.d/<name>`, none
+    twice, and exactly `sudo` and the targets its `auth` `include` and
+    `substack` lines reach, recursively, refusing a target that is absent, is
+    not a plain name or closes a cycle, one global `timestamp_type` of `tty`
+    or `ppid`, no
     `timestamp_type` line in any other scope, no `tty_tickets` setting in any
     scope, no rule (aliases expanded) whose user list can match uid 501 by name,
     `%group`, `%#gid`, `#501` or `ALL` that carries `NOPASSWD` for any runas and
@@ -2400,7 +2475,57 @@ refuses every form until then.
     `exempt_group` setting in any scope, and a resolved sudo PAM `auth` stack
     with `pam_opendirectory.so` as `required` or `requisite` and only
     `required`, `requisite` or `optional` controls (precondition 15); it records
-    the three hashes in its `preflight` line;
+    the three hashes in its `preflight` line. Self-test rows show `check`
+    refusing these records, each bad only in the way its row names. Row 1:
+    `sudo_local` has `auth include sudo_extra`, and `sudo_extra`, which holds
+    `auth sufficient pam_permit.so`, is absent from the record. Row 2: row 1
+    with an empty line, a `==> /etc/pam.d/sudo_extra <==` line and
+    `auth required pam_opendirectory.so` added to `sudo_local`, which frames
+    the forged header as `tail` frames a real one: after the `/dev/null`
+    header `tail` prints a newline before each header, and a header after a
+    file ending in a newline thus has an empty line before it. Row 3: row 2
+    with `sudo_extra` in the `wc -c` list but not in `tail`'s. Row 4: output
+    with no section line between `tail`'s last file and `end`. Row 5: output
+    after `end`. A mutation that follows includes one hop only, dropping or
+    ignoring the include line it does not follow, or skips an absent target,
+    turns row 1 red; one that follows one hop and judges the line it does not
+    follow as a control refuses it as an unknown control, so it only adds
+    refusals. One that reads the `tail` section by its header lines and ignores
+    `wc -c` turns row 2 red, whether it splits at every header line or only at
+    `tail`'s exact framing, an empty line and then the header; one that reads
+    it by its header lines, split either way, but still compares their paths
+    with `wc -c`'s turns row 3 red; one that accepts bytes after the last file
+    turns row 4 red; and one that reads past `end` turns row 5 red. A sudoers
+    row refuses a record whose `/etc/sudoers.d` file holds a forged header for
+    a file `visudo -c` parsed and the record omits, and a mutation that splits
+    the `tail` section at every header line and ignores `wc -c` turns it red. A
+    bare `==> <path> <==` line is not sudoers syntax (`visudo -c` reports a
+    syntax error), so the row carries it as the continuation of a command line,
+    `root ALL = /bin/echo \` and then the header line, which `visudo -c`
+    1.9.17p2 on this host reports as parsed OK (measured with `visudo -c -f` on
+    a scratch copy as uid 501). That carrier cannot hold the empty line of rows
+    2 and 3: an empty line ends the `\` continuation and leaves the header
+    standing alone, which `visudo -c` reports as a syntax error (measured the
+    same way). So a mutation that splits only at the exact framing leaves this
+    row refused, and rows 2 and 3 are the rows that catch it. Row 6 names one
+    file twice in both lists of a PAM record and row 7 does so in a sudoers
+    record, and a mutation that skips the none-twice check turns both red. Row
+    8 has a `wc -c` `total` edited so it is not the sum, and a mutation that
+    skips that comparison turns it red. Row 9, a sudoers record, has a
+    well-formed `id -un 501` section and, in addition, the output of a second
+    `id -un 501` run under the `wc -c` section line, before the `wc -c` output,
+    and a mutation that skips lines in that section that are not
+    `<bytes> <path>` turns it red. Row 10, a sudoers record, has a second
+    `id -G 501` run's output, with no section line of its own, after the first
+    in the `id -G 501` section, and a mutation that reads one line of an `id`
+    section without checking that it is the only one turns it red. Rows 11 and
+    12, sudoers records, have `visudo -c`'s output and `sudo -V`'s,
+    respectively, twice in that tool's section; a mutation that skips the
+    no-path-twice check turns row 11 red, and one that skips the once-only
+    checks on the `sudo -V` lines turns row 12 red. A row whose last carried
+    file has no final newline passes; its `wc -c` section, like every row's, is
+    real `wc -c` output with padded counts, so a mutation that refuses spaces
+    before `<bytes>` turns it red;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
