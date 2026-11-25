@@ -1542,8 +1542,11 @@ fails:
     `wc -c` and `tail` (above). The `wc -c` section is `/usr/bin/wc -c <files>`
     with the same `<files>` as `tail`, in the same order: one `<bytes> <path>`
     line for each file, the path as typed, then, when there are two or more,
-    one `<bytes> total` line, and nothing else. `check` refuses any other line
-    in that section, and a `total` that is not last or not the sum. Both
+    one `<bytes> total` line, and nothing else. `/usr/bin/wc` on this host
+    right-aligns `<bytes>` with leading spaces (`       4 f1`), so `check`
+    accepts any number of spaces before `<bytes>` and no other character there.
+    `check` refuses any other line in that section, and a `total` that is not
+    last or not the sum. Both
     records then end with the line `==== record: end ====`, appended with
     `/usr/bin/printf '\n%s\n'`, so it starts a line even after a last file
     with no final newline. A section is the lines after its section
@@ -1561,10 +1564,26 @@ fails:
     file the record carries, and `check` refuses a file in one list and not
     the other and any byte between the last file and `end`. From the `wc -c`
     section line on, every byte of the record is bound. A section line binds
-    position only: output Joel appends without its own section line,
+    position only, so output Joel appends without its own section line,
     anywhere before the `wc -c` section line, reads as part of the section
-    before it, and `check` refuses it only when that leaves its own section
-    missing. The record must
+    before it. `check` holds each of those sections to the shape below and
+    refuses one that is not that shape, so such output is refused rather than
+    read one way or another. The `visudo -c` section is one `<path>: parsed OK`
+    line for each file it parsed, no path twice, and nothing else; `visudo`
+    writes its warnings and errors to stderr, which the record does not carry
+    (measured with `visudo -c -f` on a scratch copy as uid 501). Each `id`
+    section is exactly one line: `id -un 501`'s a single name, `id -Gn 501`'s
+    the group names separated by single spaces, and `id -G 501`'s decimal gids
+    separated by single spaces. So a second `id -G 501` run appended without
+    its section line is a second line, and the record is refused, never matched
+    against one line or the other. The `sudo -V` section starts with its one
+    `Sudo version` line, the first line `sudo -V` prints as uid 501 on this
+    host, and holds exactly one line reporting each of the two PAM service
+    names, the only lines `check` reads from it. Root's `sudo -V` output was
+    not measured here, since it needs root, so `check` binds no other line of
+    that section: a stray line there is refused only when it is a second
+    version line or a second line for either service name, and is otherwise not
+    read. The record must
     show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -2436,8 +2455,12 @@ refuses every form until then.
     and no byte after `end`, its `tail` section read by the `wc -c` lengths
     with each header path the `wc -c` path in the same place, no line in the
     `wc -c` section but one `<bytes> <path>` line for each file and, for two
-    or more, a last `total` that is their sum, and no byte between the last
-    file and `end`, the PAM record's files each `/etc/pam.d/<name>`, none
+    or more, a last `total` that is their sum, spaces before `<bytes>`
+    accepted, and no byte between the last file and `end`, the `visudo -c`
+    section only `<path>: parsed OK` lines with no path twice, each `id`
+    section exactly one line of its shape, the `sudo -V` section starting
+    with its one `Sudo version` line and holding exactly one line for each
+    PAM service name, the PAM record's files each `/etc/pam.d/<name>`, none
     twice, and exactly `sudo` and the targets its `auth` `include` and
     `substack` lines reach, recursively, refusing a target that is absent, is
     not a plain name or closes a cycle, one global `timestamp_type` of `tty`
@@ -2456,31 +2479,53 @@ refuses every form until then.
     refusing these records, each bad only in the way its row names. Row 1:
     `sudo_local` has `auth include sudo_extra`, and `sudo_extra`, which holds
     `auth sufficient pam_permit.so`, is absent from the record. Row 2: row 1
-    with a `==> /etc/pam.d/sudo_extra <==` line, then
-    `auth required pam_opendirectory.so`, added to `sudo_local`. Row 3: row 2
+    with an empty line, a `==> /etc/pam.d/sudo_extra <==` line and
+    `auth required pam_opendirectory.so` added to `sudo_local`, which frames
+    the forged header as `tail` frames a real one: after the `/dev/null`
+    header `tail` prints a newline before each header, and a header after a
+    file ending in a newline thus has an empty line before it. Row 3: row 2
     with `sudo_extra` in the `wc -c` list but not in `tail`'s. Row 4: output
     with no section line between `tail`'s last file and `end`. Row 5: output
-    after `end`. A mutation that follows includes one hop only, or skips an
-    absent target, turns row 1 red. One that reads the `tail` section by its
-    header lines and ignores `wc -c` turns row 2 red, one that reads it by its
-    header lines but still compares their paths with `wc -c`'s turns row 3
-    red, one that accepts bytes after the last file turns row 4 red, and one
-    that reads past `end` turns row 5 red. A sudoers row refuses a record
-    whose `/etc/sudoers.d` file holds a forged header for a file `visudo -c`
-    parsed and the record omits, and the first of those `tail` mutations
-    turns it red. A bare `==> <path> <==` line is not sudoers syntax
-    (`visudo -c` reports a syntax error), so the row carries it as the
-    continuation of a command line, `root ALL = /bin/echo \` and then the
-    header line, which `visudo -c` 1.9.17p2 on this host reports as parsed
-    OK (measured with `visudo -c -f` on a scratch copy as uid 501). Row 6
-    names one file twice in both lists of a PAM record and row 7 does so in
-    a sudoers record, and a mutation that skips the none-twice check turns
-    both red. Row 8 has a `wc -c` `total` edited so it is not the sum, and a
-    mutation that skips that comparison turns it red. Row 9, a sudoers
-    record, has the output of `id -un 501` under the `wc -c` section line,
-    before the `wc -c` output, and a mutation that skips lines in that
-    section that are not `<bytes> <path>` turns it red. A row whose last
-    carried file has no final newline passes;
+    after `end`. A mutation that follows includes one hop only, dropping or
+    ignoring the include line it does not follow, or skips an absent target,
+    turns row 1 red; one that follows one hop and judges the line it does not
+    follow as a control refuses it as an unknown control, so it only adds
+    refusals. One that reads the `tail` section by its header lines and ignores
+    `wc -c` turns row 2 red, whether it splits at every header line or only at
+    `tail`'s exact framing, an empty line and then the header; one that reads
+    it by its header lines, split either way, but still compares their paths
+    with `wc -c`'s turns row 3 red; one that accepts bytes after the last file
+    turns row 4 red; and one that reads past `end` turns row 5 red. A sudoers
+    row refuses a record whose `/etc/sudoers.d` file holds a forged header for
+    a file `visudo -c` parsed and the record omits, and a mutation that splits
+    the `tail` section at every header line and ignores `wc -c` turns it red. A
+    bare `==> <path> <==` line is not sudoers syntax (`visudo -c` reports a
+    syntax error), so the row carries it as the continuation of a command line,
+    `root ALL = /bin/echo \` and then the header line, which `visudo -c`
+    1.9.17p2 on this host reports as parsed OK (measured with `visudo -c -f` on
+    a scratch copy as uid 501). That carrier cannot hold the empty line of rows
+    2 and 3: an empty line ends the `\` continuation and leaves the header
+    standing alone, which `visudo -c` reports as a syntax error (measured the
+    same way). So a mutation that splits only at the exact framing leaves this
+    row refused, and rows 2 and 3 are the rows that catch it. Row 6 names one
+    file twice in both lists of a PAM record and row 7 does so in a sudoers
+    record, and a mutation that skips the none-twice check turns both red. Row
+    8 has a `wc -c` `total` edited so it is not the sum, and a mutation that
+    skips that comparison turns it red. Row 9, a sudoers record, has a
+    well-formed `id -un 501` section and, in addition, the output of a second
+    `id -un 501` run under the `wc -c` section line, before the `wc -c` output,
+    and a mutation that skips lines in that section that are not
+    `<bytes> <path>` turns it red. Row 10, a sudoers record, has a second
+    `id -G 501` run's output, with no section line of its own, after the first
+    in the `id -G 501` section, and a mutation that reads one line of an `id`
+    section without checking that it is the only one turns it red. Rows 11 and
+    12, sudoers records, have `visudo -c`'s output and `sudo -V`'s,
+    respectively, twice in that tool's section; a mutation that skips the
+    no-path-twice check turns row 11 red, and one that skips the once-only
+    checks on the `sudo -V` lines turns row 12 red. A row whose last carried
+    file has no final newline passes; its `wc -c` section, like every row's, is
+    real `wc -c` output with padded counts, so a mutation that refuses spaces
+    before `<bytes>` turns it red;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
