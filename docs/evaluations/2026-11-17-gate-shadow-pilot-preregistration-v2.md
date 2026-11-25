@@ -1465,14 +1465,31 @@ fails:
     - a sudo PAM stack whose `auth` facility can succeed without the password
       module. A third record, the *PAM record*, made the same way as the sudoers
       record below, carries `/etc/pam.d/sudo` and every file its `auth` lines
-      `include` or `substack`, recursively, read as root in one
-      `/usr/bin/tail -n +1 /dev/null <files>` command, and the path each
-      resolves to printed by `/bin/realpath`. `check` refuses the PAM record
-      unless its file set, every path resolved with `realpath` and the
-      `/dev/null` header ignored, equals `/etc/pam.d/sudo` and the targets its
-      lines name, resolved the same way (on this host `sudo_local` resolves
-      through `/etc/static` into `/nix/store`, so a nix-darwin rebuild can
-      change it; section 14, "Sudo and PAM are rebuilt from agent-writable
+      `include` or `substack`, recursively. Its sections (below) are, in this
+      order, `realpath`, the path each file resolves to, printed by
+      `/bin/realpath <files>`, and `tail`, the files read as root in one
+      `/usr/bin/tail -n +1 /dev/null <files>` command, with the same `<files>`
+      in the same order, each typed as `/etc/pam.d/<name>`. `check` refuses
+      the PAM record unless every `tail` header but the leading `/dev/null` is
+      `/etc/pam.d/<name>`, none appears twice, and there are as many of them as
+      `realpath` lines. `tail` prints one header for each file it reads and
+      `realpath` one line (measured on this host: a missing file gets neither),
+      so a `==> <path> <==` line inside a carried file is one header too many
+      and is refused, never read as a file the record carries. From `sudo`,
+      `check` follows every `auth` line whose control is `include` or
+      `substack`, in every carried file, to its target, a plain name `N` read
+      as `/etc/pam.d/N`. It refuses the record when a target is not a plain name
+      (one with a `/`), when a target is absent from the record, when the
+      includes form a cycle, and unless the carried files are exactly `sudo`
+      and the targets so reached. An absent target is refused, never skipped:
+      `pam.conf(5)` on this host lists the places PAM searches for a policy
+      (`/etc/pam.d/<name>`, `/etc/pam.conf`, `/usr/local/etc/pam.d/<name>`,
+      `/usr/local/etc/pam.conf`, then a default policy), so a target missing
+      from the record leaves unjudged whatever policy PAM would use for it. Only
+      `auth` lines are followed, since only `auth` is judged (below). The
+      `realpath` lines show where each file resolves (on this host `sudo_local`
+      resolves through `/etc/static` into `/nix/store`, so a nix-darwin rebuild
+      can change it; section 14, "Sudo and PAM are rebuilt from agent-writable
       files"). An `include` or `substack` line is not judged as a control: it is
       replaced by its target's `auth` lines, which are judged. In the resolved
       `auth` stack `check` requires `pam_opendirectory.so` as `required` or
@@ -1522,7 +1539,23 @@ fails:
     sit in a file uid 501 can edit; they pass only through a pipe between
     processes Joel's uid-501 shell starts, which section 14's terminal gap
     covers. A redirect into a uid-501 file followed by a copy is not this form,
-    and leaves a window in which an agent could edit the bytes. The record must
+    and leaves a window in which an agent could edit the bytes. Each tool's
+    output is one *section* of its record, headed by a section line,
+    `==== record: <section> ====`, that Joel appends just before it with
+    `/usr/bin/printf '%s\n'` piped into the same `tee -a`. The sudoers record's
+    sections are, in this order, `visudo -c`, `sudo -V`, `id -un 501`,
+    `id -Gn 501`, `id -G 501` and `tail`; the PAM record's are `realpath` and
+    `tail` (above). Both then end with the section line `==== record: end ====`,
+    because `tail`'s last file has no end marker of its own. A section is the
+    lines after its section line up to the next one. `check` refuses a record
+    that does not start with its first section line, whose section lines are
+    not exactly its own, each once and in this order, or that has any byte
+    after the `end` line. So output appended after `tail` under its own
+    section line, after the `end` line, or as a section line inside a carried
+    file is refused, never read as the last file's bytes. A section line binds
+    position only: output Joel appends before the `end` line without its own
+    section line reads as part of the section before it, and `check` refuses
+    it only when that leaves its own section missing. The record must
     show `visudo -c` reporting every file parsed OK, a global
     `Defaults timestamp_type=tty` or `Defaults timestamp_type=ppid` line, and no
     other line that sets `timestamp_type` in any scope: none for a user
@@ -1533,7 +1566,8 @@ fails:
     relies on that explicit `timestamp_type` line, not on sudo's default.
     `check`, as pilotseal, validates the three records and records their hashes
     in its `preflight` line (F3). No field of them is typed in, though the paths
-    given to `tail` are, which the two set rules above bind. The sudoers and PAM
+    given to `tail` and `realpath` and the section lines are, which the two set
+    rules and the section rule above bind. The sudoers and PAM
     records pass through Joel's uid-501 terminal, so section 14's terminal gap
     applies to it. The sudo-denied record shows only that an agent session
     cannot use sudo by itself. It does not show that an agent cannot tamper with
@@ -2388,8 +2422,13 @@ refuses every form until then.
     last two made through sudo as root: `visudo -c` OK, the sudoers record's
     `tail` header paths, `/dev/null` ignored and every path resolved with
     `realpath`, equal to the set `visudo -c` reports as parsed, resolved the
-    same way, the PAM record's file set equal to `/etc/pam.d/sudo` and the
-    targets its lines name, one global `timestamp_type` of `tty` or `ppid`, no
+    same way, each record's section lines exactly its own, once each, in
+    precondition 15's order and ending with `end`, the PAM record's `tail`
+    headers each `/etc/pam.d/<name>`, none twice and as many as its `realpath`
+    lines, and its files exactly `sudo` and the targets its `auth` `include`
+    and `substack` lines reach, recursively, refusing a target that is absent,
+    is not a plain name or closes a cycle, one global `timestamp_type` of
+    `tty` or `ppid`, no
     `timestamp_type` line in any other scope, no `tty_tickets` setting in any
     scope, no rule (aliases expanded) whose user list can match uid 501 by name,
     `%group`, `%#gid`, `#501` or `ALL` that carries `NOPASSWD` for any runas and
@@ -2400,7 +2439,13 @@ refuses every form until then.
     `exempt_group` setting in any scope, and a resolved sudo PAM `auth` stack
     with `pam_opendirectory.so` as `required` or `requisite` and only
     `required`, `requisite` or `optional` controls (precondition 15); it records
-    the three hashes in its `preflight` line;
+    the three hashes in its `preflight` line. Self-test rows show `check`
+    refusing a PAM record whose `sudo_local` has `auth include sudo_extra`
+    while `sudo_extra`, which holds `auth sufficient pam_permit.so`, is absent
+    from it, one with a `==> <path> <==` line inside a carried file, and one
+    with output after `tail`, and a mutation that follows includes one hop
+    only, skips an absent target, drops the header count or reads past the
+    `end` line turns its row red;
   - it compares each history clone's `main` with `git ls-remote` of its remote
     and refuses on a mismatch (sections 1 and 10);
   - it refuses an `access` line from `bind --census` or `parse-check` whose
